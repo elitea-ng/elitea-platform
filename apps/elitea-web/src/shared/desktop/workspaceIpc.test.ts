@@ -32,6 +32,7 @@ describe('createWorkspaceIpc', () => {
     await ipc.cancelTurn('t1');
     await ipc.turnStatus('t1');
     await ipc.respondApproval('r1', 'allow_always');
+    await ipc.respondApproval('r2', 'decline', 'Keep the old name');
     await ipc.turnChanges('t1');
     await ipc.restore('t1');
     await ipc.restore('t1', 'a/b.txt');
@@ -54,6 +55,7 @@ describe('createWorkspaceIpc', () => {
       ['agent_turn_cancel', { turn_id: 't1' }],
       ['agent_turn_status', { turn_id: 't1' }],
       ['approval_respond', { request_id: 'r1', decision: 'allow_always' }],
+      ['approval_respond', { request_id: 'r2', decision: 'decline', feedback: 'Keep the old name' }],
       ['turn_changes', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1', path: 'a/b.txt' }],

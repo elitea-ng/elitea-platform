@@ -328,6 +328,11 @@ export function SessionNotices({ error, commands }: { error: string | null; comm
           {t('workspace.undoNothing', 'The last turn here changed no files.')}
         </Alert>
       )}
+      {commands.notice === 'modelFixed' && (
+        <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-model-fixed">
+          {t('workspace.model.fixed', 'This agent runs on its own model here: it pins its model, or this folder’s settings keep it.')}
+        </Alert>
+      )}
       {commands.notice === 'compactNext' && (
         <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-compact-next">
           {t('workspace.compactNext', 'Your next message first summarizes this conversation, so the agent continues with more room.')}

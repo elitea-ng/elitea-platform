@@ -51,6 +51,20 @@ describe('the activity feed', () => {
     expect(buildActivities(facts(store))[0]?.kind).toBe('turn');
   });
 
+  it('a proposed plan waits like an approval until it is answered or the turn ends', () => {
+    emit({ ...at(1), kind: 'status', payload: { phase: 'running' } });
+    emit({ ...at(2), kind: 'plan_updated', payload: { plan: null } });
+    expect(buildActivities(facts(store))[0]?.kind).toBe('turn');
+    emit({ ...at(3), kind: 'plan_proposed', payload: { request_id: 'p1', call_id: 'c1', plan: '# Plan' } });
+    expect(buildActivities(facts(store))[0]).toMatchObject({ kind: 'approval', label: 'Approve: plan' });
+    store.getState().answerApproval('p1');
+    emit({ ...at(4), kind: 'plan_accepted', payload: { call_id: 'c1' } });
+    expect(buildActivities(facts(store))[0]?.kind).toBe('turn');
+    emit({ ...at(5), kind: 'plan_proposed', payload: { request_id: 'p2', call_id: 'c2', plan: '# Plan' } });
+    emit({ ...at(6), kind: 'status', payload: { phase: 'cancelled' } });
+    expect(buildActivities(facts(store)).some((activity) => activity.kind === 'approval')).toBe(false);
+  });
+
   it('drops a turn refused at the start (an error and a terminal status, no `done`)', () => {
     emit({ ...at(1), kind: 'status', payload: { phase: 'resolving' } });
     expect(buildActivities(facts(store))).toHaveLength(1);

@@ -8,11 +8,13 @@
 
 use std::sync::Arc;
 
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_core::Event;
+use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use elitea_agent_runtime::host::StateStore as _;
 use elitea_local_tools::policy::LocalWorkPolicy;
 
 use super::api::{AnsweringParticipant, ApiError, PlatformApi};
+use super::definition::{MODEL_CHOICE_KEY, ModelChoice};
 use crate::history::Owner;
 use crate::seed::{self, SEED_MESSAGE_GROUPS};
 use crate::sessions::{
@@ -24,6 +26,11 @@ use crate::sessions::{
 /// agent with it): seeded events carry it so the runner's per-agent history
 /// filter keeps them.
 pub const AGENT_AUTHOR: &str = "elitea_agent";
+
+/// The session state a re-seed keeps (the thread's own settings, which the
+/// server's transcript does not hold): the thread's model choice (#1228).
+/// A trim keeps all of it (`crate::sessions`, `carry_state`).
+const CARRIED_ON_SEED: &[&str] = &[MODEL_CHOICE_KEY];
 
 /// What one turn runs its agent on.
 pub struct SessionPlan {
@@ -143,7 +150,8 @@ impl SessionPlan {
                 let store = state_store.store().clone();
                 if needs_seed {
                     // Empty conversation or not, the session now agrees.
-                    if let Err(error) = store.seed(&key, events, cursor_now).await {
+                    if let Err(error) = store.seed(&key, events, cursor_now, CARRIED_ON_SEED).await
+                    {
                         log::warn!("the session could not be seeded: {error}");
                     }
                 }
@@ -191,6 +199,42 @@ impl SessionPlan {
             .and_then(|durable| durable.scope.as_mut())
         {
             scope.retag(execution_id);
+        }
+    }
+
+    /// The thread's model choice kept in the session (#1228,
+    /// [`MODEL_CHOICE_KEY`]); `None` for none, or an unreadable session.
+    pub async fn model_choice(&self) -> Option<ModelChoice> {
+        let session = self
+            .service
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: ADK_USER.to_owned(),
+                session_id: self.session_id.clone(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .ok()?;
+        ModelChoice::from_state(&session.state().get(MODEL_CHOICE_KEY)?)
+    }
+
+    /// Keep `choice` as the thread's model (`None`: the agent's again): one
+    /// event of this turn with only a state delta (no content, so no model
+    /// request ever folds it). Like every event of the turn it is dropped
+    /// when the turn is cancelled; a trim of the session's oldest turns and
+    /// a re-seed from the server keep it (`CARRIED_ON_SEED`). Only an
+    /// unwritable session fails it, logged; the turn runs on its choice
+    /// either way.
+    pub async fn keep_model_choice(&self, choice: Option<&ModelChoice>) {
+        let mut event = Event::new(uuid::Uuid::new_v4().to_string());
+        event.author = AGENT_AUTHOR.to_owned();
+        event.actions.state_delta.insert(
+            MODEL_CHOICE_KEY.to_owned(),
+            choice.map_or(serde_json::Value::Null, ModelChoice::to_state),
+        );
+        if let Err(error) = self.service.append_event(&self.session_id, event).await {
+            log::warn!("the thread's model choice was not kept: {error}");
         }
     }
 

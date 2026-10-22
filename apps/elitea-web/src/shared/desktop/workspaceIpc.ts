@@ -7,7 +7,12 @@
  * side serialises them) and are NOT renamed here: a rename layer is one more
  * place for the two halves to drift apart.
  */
+import type { ContextMeter } from './contextMeter';
 import type { HostInvoke } from './hostBridge';
+import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel, TurnModelChoice } from './turnModel';
+
+export type { ContextMeter } from './contextMeter';
 
 export interface Workspace {
   id: string;
@@ -31,20 +36,8 @@ export interface TurnStartRequest {
   skills: string[];
   /** `/compact`: the host compacts the conversation's context at the turn's first model call (IPC.md "Context window"). */
   compact?: boolean;
-}
-
-/** A model call's request occupancy, as the host measured it before sending (IPC.md "Context window"): estimates, never content. */
-export interface ContextMeter {
-  used_tokens: number;
-  /** The window the budget uses: the model's, at most 272k. */
-  window_tokens: number;
-  phase: 'measured' | 'compacting' | 'compacted';
-  /** The turn compacted the context. */
-  compacted: boolean;
-  /** When it last did (RFC 3339). */
-  compacted_at?: string;
-  /** The catalogue did not name the model's window: the host's 128k default. */
-  window_fallback: boolean;
+  /** Another chat model of the project for this turn and the thread's next ones (IPC.md "Model per turn"). */
+  model?: TurnModelChoice | undefined;
 }
 
 /** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
@@ -74,8 +67,11 @@ export interface TurnStarted {
   execution_id: string;
 }
 
-/** `continue` / `cancel` answer an `mcp_authorization` request; the rest answer a tool's approval (`continue` takes `allow_once` too). */
-export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'continue' | 'cancel';
+/**
+ * `continue` / `cancel` answer an `mcp_authorization` request; `accept` / `decline` a `plan_proposed` card; the rest a tool's
+ * approval (`continue` takes `allow_once` too). `deny_with_feedback` denies any card with the person's text (IPC.md "Decline with feedback").
+ */
+export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'deny_with_feedback' | 'continue' | 'cancel' | 'accept' | 'decline';
 type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface ChangedFile {
@@ -173,6 +169,8 @@ export type AgentEvent =
         phase: TurnPhase;
         message?: string;
         project_instructions?: string[];
+        /** On the first `running`: the model the turn runs on. */
+        model?: TurnModel;
         /** On `running` again: the run went on past its step limit, for the n-th time, from the host's own `host_prompt` (never the person's message). */
         continued?: number;
         host_prompt?: string;
@@ -183,15 +181,22 @@ export type AgentEvent =
       };
     })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
+  | (EventBase & { kind: 'thinking_delta'; payload: ThinkingDeltaPayload })
+  | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
   /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
-  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; context?: ContextMeter } })
+  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number; context?: ContextMeter } })
   /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
   | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   /** The host closed an open request nobody answered within its wait (an MCP sign-in): it no longer waits. */
   | (EventBase & { kind: 'approval_closed'; payload: { request_id: string; reason: string } })
+  /** The agent's checklist changed: the whole plan, `null` once deleted. */
+  | (EventBase & { kind: 'plan_updated'; payload: { plan: PlanView | null } })
+  | (EventBase & { kind: 'plan_proposed'; payload: PlanProposalPayload })
+  /** The person accepted the plan: the session left plan mode and the turn goes on with every tool. */
+  | (EventBase & { kind: 'plan_accepted'; payload: { call_id: string } })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
@@ -277,7 +282,8 @@ export interface WorkspaceIpc {
   cancelTurn(turnId: string): Promise<void>;
   /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
   turnStatus(turnId: string): Promise<TurnStatus>;
-  respondApproval(requestId: string, decision: ApprovalDecision): Promise<void>;
+  /** `feedback` (the person's text for the agent) goes only with `decline` / `deny_with_feedback`. */
+  respondApproval(requestId: string, decision: ApprovalDecision, feedback?: string): Promise<void>;
   turnChanges(turnId: string): Promise<TurnChanges>;
   /** Undo the newest turn (or one file of a turn), or with `confirmOlder` restore the folder to before an older turn. */
   restore(turnId: string, path?: string, options?: RestoreOptions): Promise<{ restored: string[] }>;
@@ -326,7 +332,8 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
-    respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
+    respondApproval: (requestId, decision, feedback) =>
+      invoke<void>('approval_respond', feedback === undefined ? { request_id: requestId, decision } : { request_id: requestId, decision, feedback }),
     turnChanges: (turnId) => invoke<TurnChanges>('turn_changes', { turn_id: turnId }),
     restore: (turnId, path, options) =>
       invoke<{ restored: string[] }>('checkpoint_restore', {

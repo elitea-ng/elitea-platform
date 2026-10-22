@@ -45,7 +45,7 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     prewarmed: TurnPrewarmRequest[];
     commitRetries: string[];
     cancelled: string[];
-    approvals: { requestId: string; decision: ApprovalDecision }[];
+    approvals: { requestId: string; decision: ApprovalDecision; feedback?: string | undefined }[];
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
     fileQueries: { workspaceId: string; query: string; limit?: number }[];
     forks: ThreadForkRequest[];
@@ -156,8 +156,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       if (failed !== undefined) return failed;
       return Promise.resolve(statuses.get(turnId) ?? { state: 'running', done: null });
     },
-    respondApproval(requestId, decision) {
-      calls.approvals.push({ requestId, decision });
+    respondApproval(requestId, decision, feedback) {
+      calls.approvals.push(feedback === undefined ? { requestId, decision } : { requestId, decision, feedback });
       const failed = failure('respondApproval');
       if (failed !== undefined) return failed;
       return Promise.resolve();

@@ -1,6 +1,7 @@
 /**
- * The live transcript of one turn: streamed text (Markdown, as in chat), tool rows (local or remote,
- * with a collapsible result), the status line and the cancel button.
+ * The live transcript of one turn: streamed text (Markdown, as in chat), each step's reasoning as a
+ * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
+ * the status line and the cancel button.
  */
 import { useState, type MouseEvent } from 'react';
 
@@ -23,6 +24,7 @@ import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
+import { ThinkingBlock } from './ThinkingBlock';
 
 type ToolItem = Extract<TranscriptItem, { type: 'tool' }>;
 
@@ -204,6 +206,8 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
               {item.text}
             </Markdown>
           </Box>
+        ) : item.type === 'thinking' ? (
+          <ThinkingBlock key={item.key} item={item} />
         ) : (
           <ToolRow key={item.key} item={item} />
         ),

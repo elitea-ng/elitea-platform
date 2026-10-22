@@ -43,6 +43,8 @@ import * as zod from "zod";
 import { LocalTurnHITLExchange } from "./localTurnHITLExchange.zod";
 import { LocalTurnWorkReport } from "./localTurnWorkReport.zod";
 
+export const localTurnCommitRequestAssistantMessageModelNameMax = 256;
+
 export const localTurnCommitRequestThinkingStepsMax = 512;
 
 export const localTurnCommitRequestHitlExchangesMax = 64;
@@ -69,6 +71,13 @@ export const LocalTurnCommitRequest = zod
         .string()
         .optional()
         .describe("At most 4 KiB, only with `is_error`."),
+      model_name: zod
+        .string()
+        .max(localTurnCommitRequestAssistantMessageModelNameMax)
+        .optional()
+        .describe(
+          "Client contract 1.17. The model the turn ran on: the agent's own, or the chat model the person chose for the turn. Stored as the answer's `meta.model_name`, as a cloud turn's answer carries it; absent leaves it out.",
+        ),
     }),
     tool_calls: zod
       .record(zod.string(), zod.record(zod.string(), zod.unknown()))

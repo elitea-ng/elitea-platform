@@ -83,12 +83,17 @@ impl Tracker {
     pub fn observe(&mut self, event: &AgentEvent) -> Observed {
         let turn = event.turn_id.as_str();
         match event.kind {
-            "approval_request" => {
+            // A plan card (#1225) waits for the person like an approval.
+            "approval_request" | "plan_proposed" => {
                 let Some(request_id) = event.payload["request_id"].as_str() else {
                     return Observed::default();
                 };
                 self.pending.insert(request_id.to_owned(), turn.to_owned());
-                let tool = event.payload["tool"].as_str().unwrap_or("a tool");
+                let tool = if event.kind == "plan_proposed" {
+                    "the plan"
+                } else {
+                    event.payload["tool"].as_str().unwrap_or("a tool")
+                };
                 Observed {
                     badge_changed: true,
                     notice: Some(Notice::Approval {
@@ -343,6 +348,23 @@ mod tests {
 
     fn done(turn: &str) -> AgentEvent {
         event(turn, "done", json!({"committed": true}))
+    }
+
+    /// #1225: a plan card waits for the person like an approval: it counts
+    /// until answered, and its notice never carries the plan text.
+    #[test]
+    fn a_plan_card_is_pending_until_answered() {
+        let mut tracker = Tracker::default();
+        let seen = tracker.observe(&event(
+            "t1",
+            "plan_proposed",
+            json!({"request_id": "p1", "call_id": "c1", "plan": "# Secret plan"}),
+        ));
+        assert!(seen.badge_changed);
+        assert_eq!(tracker.pending(), 1);
+        assert!(!format!("{:?}", seen.notice).contains("Secret"));
+        assert!(tracker.answered("p1"));
+        assert_eq!(tracker.pending(), 0);
     }
 
     #[test]

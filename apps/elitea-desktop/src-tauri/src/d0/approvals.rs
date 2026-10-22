@@ -9,6 +9,10 @@
 //! ([`WAIT_PAYLOAD_KEY`]) and is not answered within it is closed: an
 //! `approval_closed` event, a `timeout` exchange, and the asker reads
 //! [`TIMEOUT_ACTION`]; a late answer then finds it closed.
+//!
+//! A plan an `exit_plan_mode` call proposes (#1225) is a `plan_proposed`
+//! event instead, answered `accept` or `decline`: only `accept` accepts it,
+//! and no rule or remembered choice ever answers it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -19,7 +23,10 @@ use elitea_agent_runtime::host::{
     ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, HostErrorCode,
 };
 use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
-use elitea_local_tools::approvals::{APPROVE_ALWAYS, PAYLOAD_KEY, ToolCall};
+use elitea_local_tools::approvals::{
+    ACCEPT, APPROVE_ALWAYS, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
+};
+use elitea_local_tools::session::{BY_PERSON, DECIDED_BY};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -39,22 +46,55 @@ pub const WAIT_PAYLOAD_KEY: &str = "wait_ms";
 /// The action a question closed by its wait is answered with.
 pub const TIMEOUT_ACTION: &str = "timeout";
 
+impl UiDecision {
+    /// The person's text for the model, carried by a denial or a decline.
+    fn feedback(&self) -> Option<String> {
+        match self {
+            Self::Decline(feedback) => feedback.clone(),
+            Self::DenyWithFeedback(feedback) => Some(feedback.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// The `hitl_exchanges` kind of a plan card.
+pub const PLAN_KIND: &str = "plan_approval";
+
 /// The person's answer, as `approval_respond` names it (`continue` and
-/// `cancel`, the MCP sign-in card's answers, are `allow_once` and `deny`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// `cancel`, the MCP sign-in card's answers, are `allow_once` and `deny`;
+/// `accept` and `decline` answer a plan card).
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UiDecision {
     AllowOnce,
     AllowAlways,
     Deny,
+    /// Accept a proposed plan. On any other card it is a denial.
+    Accept,
+    /// Decline a proposed plan, with the person's feedback for the model.
+    Decline(Option<String>),
+    /// Deny any card and tell the agent why (#1225): the model reads the
+    /// text as the call's typed failure (`declined_by_person`).
+    DenyWithFeedback(String),
 }
 
 impl UiDecision {
+    /// `decision` as `approval_respond` sends it, with its `feedback`
+    /// (taken by `decline` and `deny_with_feedback`; without any,
+    /// `deny_with_feedback` is a plain `deny`).
     #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
+    pub fn parse(value: &str, feedback: Option<&str>) -> Option<Self> {
+        // Feedback is never an approval: it only travels with a denial.
+        let feedback = feedback
+            .map(clean)
+            .map(|text| cut(text.trim(), FEEDBACK_BYTES))
+            .filter(|text| !text.is_empty());
         match value {
             "allow_once" | "continue" => Some(Self::AllowOnce),
             "allow_always" => Some(Self::AllowAlways),
             "deny" | "cancel" => Some(Self::Deny),
+            "accept" => Some(Self::Accept),
+            "decline" => Some(Self::Decline(feedback)),
+            "deny_with_feedback" => Some(feedback.map_or(Self::Deny, Self::DenyWithFeedback)),
             _ => None,
         }
     }
@@ -158,6 +198,9 @@ impl ApprovalChannel for UiPrompt {
         let Some(binding) = self.binding() else {
             return Ok(ApprovalOutcome::Deferred);
         };
+        if let Some(plan) = request.payload.get(PLAN_PAYLOAD_KEY) {
+            return self.propose_plan(&binding, &request, plan).await;
+        }
         let described = describe(&request);
         let can_remember = described["can_remember"] == Value::Bool(true);
         let (request_id, answer) = self.broker.register(binding.events.turn_id());
@@ -210,14 +253,19 @@ impl ApprovalChannel for UiPrompt {
                 }
             }
         };
-        let approved = decision != UiDecision::Deny;
-        binding.recorder.hitl_exchange(exchange_of(
+        let approved = matches!(decision, UiDecision::AllowOnce | UiDecision::AllowAlways);
+        let feedback = decision.feedback();
+        let mut exchange = exchange_of(
             &request,
             &request_id,
             kind,
             &title,
             if approved { "approve" } else { "reject" },
-        ));
+        );
+        if let Some(feedback) = &feedback {
+            exchange["value"] = Value::String(feedback.clone());
+        }
+        binding.recorder.hitl_exchange(exchange);
         Ok(match decision {
             UiDecision::AllowAlways if can_remember => ApprovalOutcome::Decided {
                 action: APPROVE_ALWAYS.to_owned(),
@@ -227,13 +275,72 @@ impl ApprovalChannel for UiPrompt {
                 action: "approve".to_owned(),
                 value: json!({}),
             },
-            UiDecision::Deny => ApprovalOutcome::Decided {
-                action: "reject".to_owned(),
-                value: json!({ "reason": "the person rejected it" }),
-            },
+            // `accept` and `decline` belong to plan cards: here they deny.
+            UiDecision::Deny
+            | UiDecision::Accept
+            | UiDecision::Decline(_)
+            | UiDecision::DenyWithFeedback(_) => {
+                let mut value = json!({
+                    "reason": "the person rejected it",
+                    DECIDED_BY: BY_PERSON,
+                });
+                if let Some(feedback) = feedback {
+                    value["feedback"] = Value::String(feedback);
+                }
+                ApprovalOutcome::Decided {
+                    action: "reject".to_owned(),
+                    value,
+                }
+            }
         })
     }
 }
+
+impl UiPrompt {
+    /// A plan card: `plan_proposed {request_id, call_id, plan}`, answered
+    /// `accept` (the only answer that accepts) or `decline`, with feedback.
+    async fn propose_plan(
+        &self,
+        binding: &TurnBinding,
+        request: &ApprovalRequest,
+        proposal: &Value,
+    ) -> Result<ApprovalOutcome, HostError> {
+        let plan = proposal
+            .get("plan")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let (request_id, answer) = self.broker.register(binding.events.turn_id());
+        binding.events.send(
+            "plan_proposed",
+            json!({
+                "request_id": request_id,
+                "call_id": request.subject,
+                "plan": plan,
+            }),
+        );
+        let decision = answer.await.map_err(|_| ended())?;
+        let (action, value) = match decision {
+            UiDecision::Accept => (ACCEPT, json!({})),
+            UiDecision::Decline(Some(feedback)) | UiDecision::DenyWithFeedback(feedback) => {
+                (DECLINE, json!({ "feedback": feedback }))
+            }
+            _ => (DECLINE, json!({})),
+        };
+        let mut exchange = exchange_of(request, &request_id, PLAN_KIND, &clean(plan), action);
+        if let Some(feedback) = value.get("feedback").and_then(Value::as_str) {
+            exchange["value"] = Value::String(cut(feedback, FEEDBACK_BYTES));
+        }
+        binding.recorder.hitl_exchange(exchange);
+        Ok(ApprovalOutcome::Decided {
+            action: action.to_owned(),
+            value,
+        })
+    }
+}
+
+/// The most of a person's feedback a `hitl_exchanges` entry keeps (the
+/// tool result bounds it the same way).
+const FEEDBACK_BYTES: usize = elitea_local_tools::session::MAX_FEEDBACK_BYTES;
 
 /// One `hitl_exchanges` entry.
 fn exchange_of(
@@ -256,15 +363,16 @@ fn exchange_of(
     exchange
 }
 
+/// `text` without control characters other than newlines and tabs (the
+/// server refuses a NUL in a stored exchange).
+fn clean(text: &str) -> String {
+    text.chars()
+        .filter(|c| matches!(c, '\n' | '\t') || !c.is_control())
+        .collect()
+}
+
 fn cut(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_owned();
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
+    elitea_agent_runtime::text::clip_bytes(text, max).to_owned()
 }
 
 /// The `approval_request` payload (without `request_id`).

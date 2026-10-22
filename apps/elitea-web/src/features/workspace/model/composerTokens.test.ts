@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { matchingCommands } from './composerCommands';
+import { matchingCommands, modelCommandName } from './composerCommands';
 import { activeToken, mentionText, referencedPaths } from './composerTokens';
 
 describe('activeToken', () => {
@@ -36,8 +36,19 @@ describe('referencedPaths', () => {
 
 describe('matchingCommands', () => {
   it('filters by prefix, case-insensitively', () => {
-    expect(matchingCommands('').map((c) => c.name)).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/compact', '/help']);
+    expect(matchingCommands('').map((c) => c.name)).toEqual(['/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help']);
     expect(matchingCommands('P').map((c) => c.id)).toEqual(['plan']);
     expect(matchingCommands('zzz')).toEqual([]);
+  });
+});
+
+describe('modelCommandName', () => {
+  it('names the model of a whole-message `/model <name>`, and nothing else', () => {
+    expect(modelCommandName('/model gpt-5')).toBe('gpt-5');
+    expect(modelCommandName('  /model   claude-sonnet  ')).toBe('claude-sonnet');
+    expect(modelCommandName('/model')).toBeNull();
+    expect(modelCommandName('/model a b')).toBeNull();
+    expect(modelCommandName('use /model gpt-5')).toBeNull();
+    expect(modelCommandName('/modelx gpt-5')).toBeNull();
   });
 });

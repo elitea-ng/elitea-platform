@@ -132,8 +132,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
-| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
-| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
@@ -225,11 +225,11 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[], compact?: boolean}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}}` | `{turn_id, execution_id}` |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
-| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "continue" \| "cancel"}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
+| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
@@ -268,7 +268,8 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `platform_mcp_unsupported` (a platform MCP server the platform gave no
 `toolkit_ref`: a server older than client contract 1.16),
 `unknown_tool_kind`, `toolkit_ref_missing`,
-`model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
+`model_unresolved`, `model_pinned`, `model_unavailable`,
+`model_override_disabled`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
 `skill_invalid`, `skill_too_large`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
@@ -283,7 +284,103 @@ under another identity. `host_sign_out`, `host_wipe`, `host_sign_in` and a
 ends `cancelled` → `done`, `committed: false`) and forget every workspace
 session and kept turn: an earlier turn then answers `turn_unknown`.
 
-`plan_mode: true` offers read-only local tools only and no remote toolkits.
+**Plan mode** (#1225) is the session's permission profile, not a second
+agent. `plan_mode: true` starts the turn in the `plan` profile: read-only
+local tools, the index tools, the planner (`update_plan`, `start_step`,
+`complete_step`, `get_plan_status`, `delete_plan`, offered to every turn)
+and `exit_plan_mode {plan}` (Markdown, at most 16 KiB; offered only in
+plan mode, and local-only: the cloud executor has no plan mode). No
+writes, no `run_command` or `run_tests` (a remembered "always allow" for a
+test runner does not apply; `read_output` stays) and no remote toolkits.
+`exit_plan_mode` sends `plan_proposed {request_id, call_id, plan}`; it is
+answered with
+`approval_respond` `accept` or `decline` (with `feedback`), never by a rule
+or a remembered choice, and "always" is never offered. On `accept` the
+session switches to the `build` profile and the **same run** goes on: adk
+2.2 resolves the toolsets again after every tool batch, so the model's next
+step is offered every tool (remote toolkits included), and the host sends
+`plan_accepted {call_id}` (the UI turns its plan switch off). The system
+prompt was written for plan mode, so every later model step of the run
+also carries a `## Environment (plan accepted)` system section that
+replaces it: the environment gathered again in `build` (the sandbox line,
+the write and command guidance, the tools offered now). The tool
+answers `{accepted: true, message}`. Unless the model wrote a plan with
+steps in this run (`update_plan`), the host copies the accepted Markdown
+into the planner, replacing a previous turn's plan (done or not), and
+`plan_updated` follows: a `# heading` is the title, each top-level list
+item a step (nested items, fenced code and thematic breaks are not). On
+`decline` the turn
+stays in plan mode and the tool answers `{accepted: false, feedback?,
+message}`; the model revises the plan. The turn's `hitl_exchanges` record
+it as `kind: "plan_approval"`, `decision: "accept" | "decline"`, `value`
+the feedback. The next turn starts in the profile its own `plan_mode` says.
+
+**Decline with feedback** (#1225). A call the person denies (a local tool's
+approval or a remote toolkit's confirmation) answers the model with a typed
+failure: the usual `{status: "error", code, message}` plus `ok: false` and
+`error: {code: "declined_by_person", message, feedback?}`, where `feedback`
+is what the person wrote (`deny_with_feedback`), in their own words. The
+model reads it and adjusts its next step; the turn goes on. The turn's
+`hitl_exchanges` record the denial (`decision: "reject"`) with the feedback
+as `value`. A rule's or the policy's refusal is not a person's and keeps
+its own shape.
+
+**Model per turn** (issue 1228). `model` runs the turn on another chat
+model of the project than the agent's (`reasoning_effort` with it, for a
+model whose catalogue row says `supports_reasoning`), and keeps it as the
+thread's model: a later turn without `model` runs on it too, across
+restarts (the session's state, `elitea.model.v1`; a cancelled turn's choice
+is dropped with the turn, while a trim of the session's oldest turns and a
+re-seed from the server keep it). Choosing the agent's own model without an
+effort of its own goes back to the agent's model. The choice drives the
+turn's model requests only — the model name and effort `/llm` gets, the
+edit tools (`EditProfile` by model name) and the context limits (another
+model's from the catalogue; an effort chosen for the agent's own model
+keeps the version's frozen ones) — and never changes the agent version on
+the server; the agent's `max_tokens` is cut to the chosen model's
+`max_output_tokens`. A reasoning effort goes to `/llm` without a
+temperature (the gateway refuses the two together); for a chosen model
+whose catalogue row says `supports_reasoning: false` the effort is not
+sent at all and the agent's temperature is (a catalogue that cannot answer:
+as chosen). It is checked before the local turn starts,
+against the project's chat models (`GET /configurations/models/{project_id}?section=llm&include_shared=true`,
+on the turn's credentials, kept a minute): a model the catalogue does not
+list is refused `model_unavailable`; when the catalogue cannot answer the
+choice goes to the gateway, which governs every request (a model the
+project may not use fails the turn with `model_gateway.forbidden`, shown
+and committed as a failed turn). The thread's kept choice is checked the
+same way when a turn names no `model`: one the catalogue no longer lists is
+dropped (cleared from the session) and the turn runs on the agent's model,
+with a `status` `starting` `message` that says so and `running`'s
+`model.chosen: false` — the turn is not refused. A refused choice
+(`model_pinned`, `model_override_disabled`, `model_unavailable`) says
+nothing about the agent version: the version the session keeps stays kept
+and is not read again. An agent version whose `llm_settings` has
+`pin_model: true` refuses any other model with `model_pinned`, and a
+workspace whose settings say `allow_model_override: false` refuses it with
+`model_override_disabled` (a kept choice is then not applied: the turn runs
+on the agent's model). The model a turn ran on is on its `status`
+`running` event (`model`) and in the commit (`assistant_message.model_name`,
+client contract 1.17).
+
+**Reasoning** (issue 1228). A model's reasoning streams as `thinking_delta`
+events (a `thinking_end` closes each block) and each model step's reasoning
+is committed as one `thinking_steps` entry in the runtime's shape (`type:
+"ChatGeneration"`, `thinking` cut at 32 KiB, `timestamp_start`,
+`timestamp_finish`, `message.response_metadata.model_name`; at most 512
+steps and 2 MiB in all, the rest is not committed), so the web app shows it
+on the answer (`listMessageTraces`); once a step does not fit the 2 MiB, no
+later step is committed (no gaps), and a cut step ends in `…` within its
+32 KiB. The thread history keeps at most 1 MiB of a turn's `thinking_delta`
+text, a budget of its own beside the turn's 4 MiB of events: past it the
+reasoning is not stored (each `thinking_end` still is), and the turn is not
+marked `events_truncated` for it. The session keeps it as the step's
+`Part::Thinking`; it is sent back to the provider only for a family that
+requires it (`openai_compatible: false` in the catalogue: signed blocks on
+the Anthropic route, which does not exist yet, issue 1227), never on the
+OpenAI-compatible chat route. Reasoning text is stored only in the server
+transcript, the thread history and the session (the same owner-only files)
+and never logged.
 
 **Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
 MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved
@@ -506,8 +603,9 @@ type StoredTurn = {
 
 The host records every event of a started turn as it emits it, so the
 history survives a webview reload or crash; replaying a turn is folding its
-`events` exactly as the live stream (consecutive `text_delta` events are
-stored as appended chunks, each numbered by the last delta it holds; folding
+`events` exactly as the live stream (consecutive `text_delta` events, and
+consecutive `thinking_delta` events, are stored as appended chunks of their
+kind, each numbered by the last delta it holds; folding
 concatenates them as it does live deltas). Recording never blocks the
 stream: events go to a writer thread that commits them in batches (on every
 non-text event, every 500 ms or 64 KiB, before a read, at a turn's end and
@@ -519,7 +617,8 @@ conversation (its id or its UUID) its turns started with: reads, deletes and
 the bounds below all count them together. A refused start is not
 recorded. Bounds: a string in one event is cut at 16 KiB, a turn's events
 at 4 MiB (past it only `status`, `error` and `done` are kept and
-`events_truncated` is set), a stored diff at 64 KiB (1 MiB per turn), and a
+`events_truncated` is set), its `thinking_delta` text at 1 MiB apart (past
+it dropped, the turn not marked), a stored diff at 64 KiB (1 MiB per turn), and a
 thread keeps its newest 200 turns within 32 MiB.
 
 The store is `threads.sqlite` in the app data directory (owner-only, like
@@ -1238,20 +1337,25 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], model?: TurnModel, continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `model` (on the first `running`) is the model the turn runs on, `{name, reasoning_effort?, chosen, pinned}` (`chosen`: the person's choice over the agent's model; `pinned`: the agent pins its model, so no choice is offered); `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
+| `thinking_delta` | `{text}` — the model's reasoning as it streams (the gateway's `reasoning_content` / `reasoning` deltas), sent next to `text_delta` as it arrives; the transcript folds it into a collapsed "Thinking" block of the step (issue 1228). Never logged |
+| `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, context?: ContextMeter}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
+| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, reasoning_tokens?: number, context?: ContextMeter}` — `reasoning_tokens` (of `completion_tokens`) when the gateway names them (`completion_tokens_details.reasoning_tokens`); one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
+| `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
+| `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `approval_closed`, `tool_result`, `usage`, `context`)* →
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

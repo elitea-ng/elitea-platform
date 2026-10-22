@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::api::{ApiError, Bearer, Credentials, PlatformApi};
 use super::approvals::UiDecision;
 use super::definition::RemoteToolSpec;
+use super::environment;
 use super::events::{AgentEvent, VecEmitter};
 use super::remote_tools::{self, RemoteContext, RetryPolicy};
 use super::turn::{AgentHost, HostDeps, PolicySource, TURNS_KEPT_PER_WORKSPACE, TurnRequest};
@@ -301,7 +302,7 @@ fn build_host(
         .lock()
         .unwrap()
         .replace(Box::new(move |event: &AgentEvent| {
-            if event.kind == "approval_request" {
+            if event.kind == "approval_request" || event.kind == "plan_proposed" {
                 let id = event.payload["request_id"].as_str().unwrap().to_owned();
                 let _ = answers.send(id);
             }
@@ -310,7 +311,7 @@ fn build_host(
         let host = host.clone();
         async move {
             while let Some(id) = questions.recv().await {
-                assert!(host.respond(&id, decision));
+                assert!(host.respond(&id, decision.clone()));
             }
         }
     });
@@ -345,7 +346,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         &policy,
         &emitter,
         &index,
-        decision,
+        decision.clone(),
     );
     Harness {
         server,
@@ -374,6 +375,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,
+        model: None,
     }
 }
 
@@ -636,7 +638,10 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         body["user_message"]["content"],
         "Write notes and file a bug"
     );
-    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(
+        body["assistant_message"],
+        json!({"content": "Done.", "model_name": "gpt-test"})
+    );
     let tool_calls = body["tool_calls"].as_object().unwrap();
     assert_eq!(tool_calls.len(), 2);
     assert_eq!(tool_calls["call-local"]["tool_name"], "write_file");
@@ -1570,7 +1575,10 @@ async fn mcp_authorization_cancel_ends_only_the_tool_call() {
         &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
     )[0];
     let body: Value = serde_json::from_str(&commit.body).unwrap();
-    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(
+        body["assistant_message"],
+        json!({"content": "Done.", "model_name": "gpt-test"})
+    );
     assert_eq!(body["hitl_exchanges"][0]["kind"], "mcp_authorization");
     assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
 }
@@ -3217,7 +3225,7 @@ impl Harness {
             &policy,
             &emitter,
             &index,
-            decision,
+            decision.clone(),
         );
         Self {
             server,
@@ -4044,7 +4052,10 @@ async fn step_limit_asks_to_continue_and_continues_same_session() {
         body["user_message"]["content"],
         "Write notes and file a bug"
     );
-    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(
+        body["assistant_message"],
+        json!({"content": "Done.", "model_name": "gpt-test"})
+    );
     assert_eq!(body["tool_calls"].as_object().unwrap().len(), 3);
     assert_eq!(body["hitl_exchanges"][0]["kind"], "continue");
     assert_eq!(body["hitl_exchanges"][0]["decision"], "approve");
@@ -4078,7 +4089,7 @@ async fn continue_is_capped() {
     assert_eq!(commits[0]["hitl_exchanges"].as_array().unwrap().len(), 3);
     assert_eq!(
         commits[0]["assistant_message"],
-        json!({"content": "The agent stopped after using its 2 steps."})
+        json!({"content": "The agent stopped after using its 2 steps.", "model_name": "gpt-test"})
     );
     let done_status = of_kind(&events, "status")
         .into_iter()
@@ -4170,6 +4181,7 @@ async fn the_workspace_step_limit_wins_over_the_agents() {
             &h.workspace_id,
             crate::workspaces::AgentSettings {
                 step_limit: Some(10),
+                ..crate::workspaces::AgentSettings::default()
             },
         )
         .unwrap();
@@ -5540,7 +5552,10 @@ async fn long_session_compacts_under_small_window() {
 async fn compaction_marker_reused_next_turn() {
     let convo = Arc::new(Mutex::new(Convo::default()));
     let summaries = Arc::new(AtomicUsize::new(0));
-    let server = small_window_platform(8_192, convo, reading_script(summaries.clone())).await;
+    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
+    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
+    // leaves room for the next turn's prompt and it would compact again.
+    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     write_big(&h);
     run_turn(&h, "read big.txt 8 times").await;
@@ -5792,4 +5807,862 @@ async fn run_tests_is_offered_only_with_shell() {
             "{system}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// #1225: plan mode as a profile, `exit_plan_mode`, and the planner.
+// ---------------------------------------------------------------------------
+
+const PLAN_MARKDOWN: &str = "# Notes\n\n1. Write notes.txt\n2. Say done";
+
+/// A model that proposes a plan, then (after the answer) writes a file, then
+/// answers; every request is seen by `seen`.
+async fn planning_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "exit_plan_mode",
+                    &json!({ "plan": PLAN_MARKDOWN }),
+                ),
+                1 => tool_call(
+                    "call-write",
+                    "write_file",
+                    &json!({"path": "notes.txt", "content": "hello\n"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn tool_names_of(request: &Req) -> Vec<String> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The tool messages of a model request, as the model reads them.
+fn tool_messages(request: &Req) -> Vec<Value> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| {
+            let content = m["content"].as_str().unwrap_or_default();
+            serde_json::from_str(content).unwrap_or(Value::String(content.to_owned()))
+        })
+        .collect()
+}
+
+/// Accept continues the SAME run on the SAME session in Build: the next
+/// model step is offered the write tools and the remote toolkits (adk
+/// resolves the toolsets again after the tool batch), the write lands, one
+/// turn is committed, and the UI hears `plan_proposed` then `plan_accepted`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepting_the_plan_continues_the_same_session_in_build_mode() {
+    let h = harness(planning_platform().await, allowed(), UiDecision::Accept).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(llm.len(), 3, "one run: plan, write, answer");
+    let planning = tool_names_of(&llm[0]);
+    for name in [
+        "exit_plan_mode",
+        "update_plan",
+        "complete_step",
+        "read_file",
+    ] {
+        assert!(planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    for name in ["write_file", "run_command", "Jira_create_issue"] {
+        assert!(!planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    let building = tool_names_of(&llm[1]);
+    for name in [
+        "write_file",
+        "run_command",
+        "Jira_create_issue",
+        "update_plan",
+    ] {
+        assert!(building.iter().any(|t| t == name), "{name}: {building:?}");
+    }
+    assert!(!building.iter().any(|t| t == "exit_plan_mode"));
+    assert_eq!(tool_messages(&llm[1])[0]["accepted"], true);
+    // The model's instructions follow the mode: the planning step reads the
+    // plan-mode environment only; every step after the accept also reads
+    // the build-mode one, with the write tools' rules.
+    let system = |request: &Req| -> String {
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        body["messages"][0]["content"].as_str().unwrap().to_owned()
+    };
+    let planning_system = system(&llm[0]);
+    assert!(planning_system.contains("- Mode: plan (read-only)"));
+    assert!(!planning_system.contains(environment::ACCEPTED_PLAN_HEADING));
+    for step in &llm[1..] {
+        let text = system(step);
+        assert_eq!(
+            text.matches(environment::ACCEPTED_PLAN_HEADING).count(),
+            1,
+            "{text}"
+        );
+        let accepted = &text[text.find(environment::ACCEPTED_PLAN_HEADING).unwrap()..];
+        for present in [
+            "plan mode is over",
+            "denied paths and .git are not writable",
+            "never use sudo",
+            "edit_file",
+        ] {
+            assert!(accepted.contains(present), "{present}: {accepted}");
+        }
+        assert!(!accepted.contains("- Mode: plan"), "{accepted}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("notes.txt")).unwrap(),
+        "hello\n"
+    );
+
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let proposed = events.iter().find(|e| e.kind == "plan_proposed").unwrap();
+    assert_eq!(proposed.payload["plan"], PLAN_MARKDOWN);
+    assert_eq!(proposed.payload["call_id"], "call-plan");
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("plan_proposed") < at("plan_accepted"));
+    // The model wrote no plan: the host copied the accepted one in, once.
+    let seeded: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(seeded.len(), 1);
+    assert_eq!(seeded[0].payload["plan"]["title"], "Notes");
+    assert_eq!(
+        seeded[0].payload["plan"]["steps"],
+        json!([
+            {"n": 1, "step": "Write notes.txt", "status": "pending"},
+            {"n": 2, "step": "Say done", "status": "pending"}
+        ])
+    );
+    assert_eq!(kinds.iter().filter(|k| **k == "done").count(), 1);
+    assert!(
+        !events.iter().any(|e| e.kind == "approval_request"),
+        "the plan is a plan card, never a tool approval"
+    );
+    // One local turn started, one committed, the plan's exchange in it.
+    assert_eq!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["kind"], "plan_approval");
+    assert_eq!(exchange["decision"], "accept");
+    assert_eq!(exchange["tool_run_id"], "call-plan");
+}
+
+/// Decline with feedback: the model reads the person's text as the tool's
+/// answer, stays in plan mode (no write tool on the next step), and nothing
+/// is changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declining_the_plan_returns_the_feedback_and_stays_in_plan_mode() {
+    let h = harness(
+        planning_platform().await,
+        allowed(),
+        UiDecision::Decline(Some("Keep the old file too.".into())),
+    )
+    .await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answer = &tool_messages(&llm[1])[0];
+    assert_eq!(answer["accepted"], false, "{answer}");
+    assert_eq!(answer["feedback"], "Keep the old file too.");
+    assert!(!tool_names_of(&llm[1]).iter().any(|t| t == "write_file"));
+    assert!(tool_names_of(&llm[1]).iter().any(|t| t == "exit_plan_mode"));
+    assert!(!h.folder.path().join("notes.txt").exists());
+    assert!(!events.iter().any(|e| e.kind == "plan_accepted"));
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["decision"], "decline");
+    assert_eq!(exchange["value"], "Keep the old file too.");
+}
+
+/// #1225: denying a call with feedback returns `declined_by_person` and the
+/// person's text as the call's result, the model's next request carries
+/// it, and the HITL exchange records the denial with the feedback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deny_with_feedback_reaches_the_model() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(
+        server,
+        allowed(),
+        UiDecision::DenyWithFeedback("File it tomorrow, not now.".into()),
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answers = tool_messages(&llm[2]);
+    let declined = &answers[1];
+    assert_eq!(declined["ok"], false, "{declined}");
+    assert_eq!(declined["error"]["code"], "declined_by_person");
+    assert_eq!(declined["error"]["feedback"], "File it tomorrow, not now.");
+    // The remote call was never confirmed.
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
+    assert_eq!(
+        body["hitl_exchanges"][0]["value"],
+        "File it tomorrow, not now."
+    );
+}
+
+#[test]
+fn feedback_travels_only_with_a_denial_and_is_bounded_and_clean() {
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", None),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("  ")),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("no\u{0}pe")),
+        Some(UiDecision::DenyWithFeedback("nope".into()))
+    );
+    assert_eq!(
+        UiDecision::parse("allow_once", Some("ignored")),
+        Some(UiDecision::AllowOnce)
+    );
+    let long = "é".repeat(3000);
+    let Some(UiDecision::DenyWithFeedback(cut)) =
+        UiDecision::parse("deny_with_feedback", Some(&long))
+    else {
+        panic!("a denial");
+    };
+    assert!(cut.len() <= 2048 && cut.chars().all(|c| c == 'é'));
+    assert_eq!(UiDecision::parse("approve_with_feedback", Some("x")), None);
+}
+
+/// #1225 conformance (ADR-0029 Verification): the same Codex-shaped
+/// `update_plan` call as the worker's
+/// `ordinary_tests::internal_tools_graph::a_codex_shaped_update_plan_answers_as_on_the_desktop`
+/// gets the same answer here; the todo pane gets `plan_updated`, live and
+/// from the thread history after a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_plan_conforms_to_the_cloud_and_the_pane_replays_it() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "update_plan",
+                    &json!({
+                        "title": "Rename X",
+                        "steps": [
+                            {"step": "Find the callers", "status": "in_progress"},
+                            "Rename it"
+                        ]
+                    }),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Planned."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(
+        tool_messages(&llm[1])[0],
+        "Plan created:\n\n📋 Rename X\n   Progress: 0/2 completed, 1 in progress\n\n   ▶ 1. Find the callers (in progress)\n   ☐ 2. Rename it"
+    );
+    let expected = json!({"plan": {
+        "title": "Rename X",
+        "status": "in_progress",
+        "steps": [
+            {"n": 1, "step": "Find the callers", "status": "in_progress"},
+            {"n": 2, "step": "Rename it", "status": "pending"}
+        ]
+    }});
+    let updated: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].payload, expected);
+
+    let h = h.restarted(false).await;
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let replayed: Vec<_> = turns[0]
+        .events
+        .iter()
+        .filter(|e| e.kind == "plan_updated")
+        .collect();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].payload, expected);
+}
+
+/// The chat models of project 1 for the model-choice tests (#1228):
+/// the agent's `gpt-test`, `gpt-other` (reasoning, 128 output tokens),
+/// `gpt-blocked` (listed, but the gateway refuses it for this project) and
+/// `gpt-plain` (it cannot reason).
+fn chat_models() -> Value {
+    json!({"total": 4, "items": [
+        {"name": "gpt-test", "project_id": 1, "context_window": 200_000, "max_output_tokens": 25_000},
+        {"name": "gpt-other", "project_id": 1, "context_window": 64_000, "max_output_tokens": 128,
+         "supports_reasoning": true},
+        {"name": "gpt-blocked", "project_id": 1, "context_window": 64_000},
+        {"name": "gpt-plain", "project_id": 1, "context_window": 64_000,
+         "supports_reasoning": false},
+    ]})
+}
+
+/// [`memory_platform`] with [`chat_models`] as its catalogue, and a gateway
+/// that refuses `gpt-blocked` as a model the project may not use.
+fn choosing_platform(details: Value) -> impl Fn(&Req) -> Res {
+    choosing_platform_with(details, Box::new(|_: &Value| say("ok")))
+}
+
+/// [`choosing_platform`] whose `/llm` answers with `script`.
+fn choosing_platform_with(details: Value, script: Script) -> impl Fn(&Req) -> Res {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let inner = memory_platform(convo, script);
+    move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(200, &chat_models());
+        }
+        if req.path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9" {
+            return Res::json(200, &resolved(&details, &[]));
+        }
+        if req.path == "/llm/v1/chat/completions" {
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            if body["model"] == "gpt-blocked" {
+                return Res::json(
+                    403,
+                    &json!({"error": {"type": "forbidden", "code": "model_forbidden",
+                        "message": "the project may not use this model"}}),
+                );
+            }
+        }
+        inner(req)
+    }
+}
+
+fn choose(name: &str, effort: Option<&str>) -> Option<super::definition::ModelChoice> {
+    Some(super::definition::ModelChoice::parse(name, effort).unwrap())
+}
+
+fn local_commits(server: &MockServer) -> Vec<Value> {
+    seen(server, "")
+        .iter()
+        .filter(|req| req.path.contains("/local_turn_commit/"))
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+fn local_starts(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path.contains("/local_turn/prompt_lib/"))
+        .count()
+}
+
+#[tokio::test]
+async fn model_override_reaches_the_gateway_body() {
+    let server = serve(choosing_platform(agent_details())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // The person picks gpt-other with a high effort for this turn.
+    let started = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-other", Some("high")),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    // Then two more turns that name no model: the thread keeps the choice,
+    // across a restart of the app too.
+    run_turn(&h, "and again").await;
+    let h = h.restarted(false).await;
+    run_turn(&h, "after the restart").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    for body in &bodies {
+        assert_eq!(body["model"], "gpt-other");
+        assert_eq!(body["reasoning_effort"], "high");
+        // The agent's 256 tokens, at most the chosen model's 128.
+        assert_eq!(body["max_completion_tokens"], 128);
+        assert!(body.get("temperature").is_none());
+    }
+    // Each turn names its model; each commit carries it.
+    let running: Vec<Value> = of_kind(&h.emitter.all(), "status")
+        .into_iter()
+        .filter(|status| status["phase"] == "running")
+        .collect();
+    assert_eq!(running.len(), 3);
+    for status in &running {
+        assert_eq!(
+            status["model"],
+            json!({"name": "gpt-other", "reasoning_effort": "high", "chosen": true, "pinned": false})
+        );
+    }
+    let commits = local_commits(&h.server);
+    assert_eq!(commits.len(), 3);
+    for commit in &commits {
+        assert_eq!(commit["assistant_message"]["model_name"], "gpt-other");
+    }
+    // Choosing the agent's own model again goes back to it, for good.
+    run_turn_with(&h, "back", choose("gpt-test", None)).await;
+    run_turn(&h, "still back").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies[3]["model"], "gpt-test");
+    assert_eq!(bodies[4]["model"], "gpt-test");
+    assert_eq!(bodies[4]["max_completion_tokens"], 256);
+    assert!(bodies[4].get("reasoning_effort").is_none());
+}
+
+async fn run_turn_with(h: &Harness, prompt: &str, model: Option<super::definition::ModelChoice>) {
+    let started = h
+        .host
+        .start(TurnRequest {
+            model,
+            ..turn(h, prompt)
+        })
+        .await
+        .unwrap();
+    until_done_of(h, &started.turn_id).await;
+}
+
+#[tokio::test]
+async fn pinned_model_refuses_override() {
+    let mut details = agent_details();
+    details["llm_settings"]["pin_model"] = json!(true);
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let error = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-other", None),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "model_pinned");
+    assert_eq!(
+        local_starts(&h.server),
+        0,
+        "a refused turn opens no execution"
+    );
+    // The agent's own model is no override: the turn runs.
+    run_turn_with(&h, "explain", choose("gpt-test", None)).await;
+    let running: Vec<Value> = of_kind(&h.emitter.all(), "status")
+        .into_iter()
+        .filter(|status| status["phase"] == "running")
+        .collect();
+    assert_eq!(running[0]["model"]["pinned"], true);
+    assert_eq!(llm_bodies(&h.server)[0]["model"], "gpt-test");
+}
+
+#[tokio::test]
+async fn unknown_override_is_refused_before_start() {
+    let server = serve(choosing_platform(agent_details())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let error = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-nowhere", None),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "model_unavailable");
+    assert_eq!(local_starts(&h.server), 0, "no local_turn start was made");
+    assert!(llm_bodies(&h.server).is_empty());
+    // A workspace whose settings turn the choice off refuses it too.
+    h.workspaces
+        .set_agent_settings(
+            &h.workspace_id,
+            crate::workspaces::AgentSettings {
+                allow_model_override: Some(false),
+                ..crate::workspaces::AgentSettings::default()
+            },
+        )
+        .unwrap();
+    let error = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-other", None),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "model_override_disabled");
+    assert_eq!(local_starts(&h.server), 0);
+}
+
+#[tokio::test]
+async fn an_override_the_gateway_refuses_fails_the_turn_cleanly() {
+    let server = serve(choosing_platform(agent_details())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "explain", choose("gpt-blocked", None)).await;
+    commits_settled(&h.host).await;
+    let events = h.emitter.all();
+    let error = of_kind(&events, "error");
+    assert_eq!(error[0]["code"], "model_gateway.forbidden");
+    let commits = local_commits(&h.server);
+    assert_eq!(commits[0]["assistant_message"]["is_error"], true);
+    assert_eq!(commits[0]["assistant_message"]["model_name"], "gpt-blocked");
+}
+
+/// A streamed answer that reasons (`reasoning`, in two chunks) before it
+/// says `text` or, with `call`, calls `write_file`.
+fn reasoned(reasoning: &str, text: &str, call: bool) -> Res {
+    let (first, second) = reasoning.split_at(reasoning.len() / 2);
+    let mut chunks = vec![
+        json!({"choices": [{"delta": {"reasoning_content": first}}]}),
+        json!({"choices": [{"delta": {"reasoning_content": second}}]}),
+    ];
+    if call {
+        chunks.push(
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-think",
+            "type": "function", "function": {"name": "write_file",
+            "arguments": json!({"path": "a.txt", "content": "a"}).to_string()}}]}}]}),
+        );
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}));
+    } else {
+        chunks.push(json!({"choices": [{"delta": {"content": text}}]}));
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}));
+    }
+    chunks.push(
+        json!({"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 7,
+        "total_tokens": 16, "completion_tokens_details": {"reasoning_tokens": 5}}}),
+    );
+    sse(&chunks)
+}
+
+#[tokio::test]
+async fn thinking_delta_events_and_thinking_steps_commit() {
+    let script: Script = Box::new(|body: &Value| {
+        if last_message(body)["role"] == "tool" {
+            reasoned("The file is written; say so.", "Wrote a.txt.", false)
+        } else {
+            reasoned("I should write a.txt first.", "", true)
+        }
+    });
+    let server = serve(choosing_platform_with(agent_details(), script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "write a.txt", choose("gpt-other", Some("medium"))).await;
+    commits_settled(&h.host).await;
+    let events = h.emitter.all();
+    // Reasoning streams as it comes, and each block closes before the
+    // step's answer or calls.
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e.kind)
+        .filter(|kind| {
+            matches!(
+                *kind,
+                "thinking_delta" | "thinking_end" | "text_delta" | "tool_call"
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "thinking_delta",
+            "thinking_delta",
+            "thinking_end",
+            "tool_call",
+            "thinking_delta",
+            "thinking_delta",
+            "thinking_end",
+            "text_delta",
+        ]
+    );
+    let thought: String = of_kind(&events, "thinking_delta")
+        .iter()
+        .map(|delta| delta["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        thought,
+        "I should write a.txt first.The file is written; say so."
+    );
+    assert_eq!(of_kind(&events, "thinking_end")[0]["chars"], 27);
+    // Reasoning tokens ride on usage.
+    assert_eq!(of_kind(&events, "usage")[0]["reasoning_tokens"], 5);
+    // The commit carries one thinking step per model step, in order, in the
+    // runtime's shape, with the model it ran on.
+    let commit = &local_commits(&h.server)[0];
+    let steps = commit["thinking_steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["thinking"], "I should write a.txt first.");
+    assert_eq!(steps[1]["thinking"], "The file is written; say so.");
+    for step in steps {
+        assert_eq!(step["type"], "ChatGeneration");
+        assert_eq!(
+            step["message"]["response_metadata"]["model_name"],
+            "gpt-other"
+        );
+        assert!(step["timestamp_start"].is_string() && step["timestamp_finish"].is_string());
+        assert!(step["tool_run_id"].is_string());
+    }
+    // The thread's history keeps the reasoning, merged like text, for the
+    // transcript's replay.
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let stored: String = turns[0]
+        .events
+        .iter()
+        .filter(|event| event.kind == "thinking_delta")
+        .map(|event| event.payload["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(stored, thought);
+    assert!(
+        turns[0]
+            .events
+            .iter()
+            .any(|event| event.kind == "thinking_end")
+    );
+}
+
+#[tokio::test]
+async fn reasoning_not_replayed_on_openai_chat() {
+    let script: Script = Box::new(|_: &Value| reasoned("A private chain of thought.", "ok", false));
+    let server = serve(choosing_platform_with(agent_details(), script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "first").await;
+    run_turn(&h, "second").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 2);
+    let second = bodies[1].to_string();
+    assert!(second.contains("first"), "the history is replayed");
+    assert!(
+        !second.contains("private chain of thought"),
+        "reasoning never goes back on the chat route: {second}"
+    );
+    // The session keeps it (its event log, for a provider that needs it).
+    let conn = rusqlite::Connection::open_with_flags(
+        h.app.path().join(crate::sessions::FILE_NAME),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE event LIKE '%private chain of thought%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(kept >= 1);
+}
+
+fn catalogue_reads(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path.starts_with("/api/v2/configurations/models/"))
+        .count()
+}
+
+const VERSION_PATH: &str = "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9";
+
+/// The unconditional reads of the agent version (a revalidation is not one).
+fn version_reads(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path == VERSION_PATH && !req.headers.contains_key("if-none-match"))
+        .count()
+}
+
+fn running_models(h: &Harness) -> Vec<Value> {
+    of_kind(&h.emitter.all(), "status")
+        .into_iter()
+        .filter(|status| status["phase"] == "running")
+        .map(|status| status["model"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_kept_choice_the_catalogue_no_longer_lists_is_dropped() {
+    let gone = Arc::new(AtomicBool::new(false));
+    let inner = choosing_platform(agent_details());
+    let server = serve({
+        let gone = gone.clone();
+        move |req: &Req| {
+            if gone.load(Ordering::SeqCst)
+                && req.path.starts_with("/api/v2/configurations/models/1?")
+            {
+                return Res::json(
+                    200,
+                    &json!({"total": 1, "items": [{"name": "gpt-test", "project_id": 1}]}),
+                );
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "explain", choose("gpt-other", None)).await;
+    // The project stops offering gpt-other; a new app session reads its
+    // catalogue again.
+    gone.store(true, Ordering::SeqCst);
+    let h = h.restarted(false).await;
+    run_turn(&h, "kept?").await;
+    run_turn(&h, "and now?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies[0]["model"], "gpt-other");
+    assert_eq!(bodies[1]["model"], "gpt-test", "back on the agent's model");
+    assert_eq!(bodies[2]["model"], "gpt-test", "and the choice is gone");
+    let notices: Vec<String> = of_kind(&h.emitter.all(), "status")
+        .iter()
+        .filter_map(|status| status["message"].as_str().map(str::to_owned))
+        .filter(|message| message.contains("gpt-other"))
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let running = running_models(&h);
+    assert_eq!(running.last().unwrap()["chosen"], false);
+}
+
+#[tokio::test]
+async fn a_model_refusal_keeps_the_cached_version() {
+    let mut details = agent_details();
+    details["llm_settings"]["pin_model"] = json!(true);
+    // A version answered with a tag, so the session keeps it.
+    let inner = choosing_platform(details);
+    let server = serve(move |req: &Req| {
+        let tag = "\"v1\"".to_owned();
+        if req.path != VERSION_PATH {
+            return inner(req);
+        }
+        if req.headers.get("if-none-match") == Some(&tag) {
+            return Res {
+                status: 304,
+                headers: vec![("ETag", tag)],
+                body: String::new(),
+                raw: Vec::new(),
+            };
+        }
+        let mut res = inner(req);
+        res.headers.push(("ETag", tag));
+        res
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "first").await;
+    let reads = version_reads(&h.server);
+    assert_eq!(reads, 1);
+    for _ in 0..2 {
+        let error = h
+            .host
+            .start(TurnRequest {
+                model: choose("gpt-other", None),
+                ..turn(&h, "explain")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "model_pinned");
+    }
+    assert_eq!(
+        version_reads(&h.server),
+        reads,
+        "a refused choice neither re-reads nor evicts the version"
+    );
+    // The next turn still starts from the kept version (a revalidation).
+    run_turn(&h, "after").await;
+    assert_eq!(version_reads(&h.server), reads);
+}
+
+#[tokio::test]
+async fn an_effort_on_the_agents_own_model_keeps_its_frozen_limits() {
+    let mut details = agent_details();
+    details["model_context_limits"] = json!({
+        "context_window_tokens": 50_000, "max_output_tokens": 100,
+        "context_window_fallback": false, "max_output_fallback": false,
+    });
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "think hard", choose("gpt-test", Some("high"))).await;
+    let body = &llm_bodies(&h.server)[0];
+    assert_eq!(body["model"], "gpt-test");
+    assert_eq!(body["reasoning_effort"], "high");
+    // The frozen 100 output tokens, not the catalogue's 25 000.
+    assert_eq!(body["max_completion_tokens"], 100);
+}
+
+#[tokio::test]
+async fn frozen_limits_and_no_choice_read_no_catalogue() {
+    let mut details = agent_details();
+    details["model_context_limits"] = json!({
+        "context_window_tokens": 50_000, "max_output_tokens": 1_000,
+        "context_window_fallback": false, "max_output_fallback": false,
+    });
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "one").await;
+    run_turn(&h, "two").await;
+    assert_eq!(catalogue_reads(&h.server), 0);
+    // A chosen model reads it once, for its check and its limits both.
+    run_turn_with(&h, "three", choose("gpt-other", None)).await;
+    assert_eq!(catalogue_reads(&h.server), 1);
+}
+
+#[tokio::test]
+async fn a_model_that_cannot_reason_gets_no_effort_and_keeps_the_temperature() {
+    let mut details = agent_details();
+    details["llm_settings"]["temperature"] = json!(0.5);
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "plain", choose("gpt-plain", Some("high"))).await;
+    run_turn_with(&h, "reasoning", choose("gpt-other", Some("high"))).await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies[0]["model"], "gpt-plain");
+    assert!(bodies[0].get("reasoning_effort").is_none(), "{}", bodies[0]);
+    assert_eq!(bodies[0]["temperature"], 0.5);
+    // A model that reasons gets the effort, and no temperature beside it.
+    assert_eq!(bodies[1]["reasoning_effort"], "high");
+    assert!(bodies[1].get("temperature").is_none());
+    assert_eq!(running_models(&h)[0]["chosen"], true);
 }

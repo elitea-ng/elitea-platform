@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
-import { activeView, earlierViews, initialTurnsState, MAX_UNCLAIMED_TURNS, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
+import { activeView, earlierViews, initialTurnsState, latestPlan, MAX_UNCLAIMED_TURNS, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
 
 const T = 'turn-1';
 const run = (events: AgentEvent[], from: TurnsState = turnReducer(initialTurnsState, { type: 'begin', turnId: T })): TurnsState =>
@@ -27,6 +27,20 @@ const call = (seq: number, id: string): AgentEvent => ({
   kind: 'tool_call',
   payload: { call_id: id, tool: 'read_file', args_summary: 'a.txt', remote: false },
 });
+const plan = (seq: number, title: string | null): AgentEvent => ({
+  turn_id: T,
+  seq,
+  kind: 'plan_updated',
+  payload: {
+    plan: title === null ? null : { title, status: 'in_progress', steps: [{ n: 1, step: 'Find the callers', status: 'in_progress' }] },
+  },
+});
+const proposal = (seq: number, id: string, callId = 'p1'): AgentEvent => ({
+  turn_id: T,
+  seq,
+  kind: 'plan_proposed',
+  payload: { request_id: id, call_id: callId, plan: '# Rename\n\n1. Find the callers' },
+});
 const result = (seq: number, id: string): AgentEvent => ({
   turn_id: T,
   seq,
@@ -34,7 +48,34 @@ const result = (seq: number, id: string): AgentEvent => ({
   payload: { call_id: id, ok: true, summary: 'ok', truncated: false },
 });
 
+const thinking = (seq: number, value: string): AgentEvent => ({ turn_id: T, seq, kind: 'thinking_delta', payload: { text: value } });
+const thought = (seq: number, chars: number): AgentEvent => ({ turn_id: T, seq, kind: 'thinking_end', payload: { chars } });
+
 describe('turnReducer', () => {
+  it('folds each step\'s reasoning into its own Thinking block, closed by thinking_end', () => {
+    const view = activeView(run([thinking(1, 'Look'), thinking(2, 'ing'), thought(3, 7), text(4, 'Answer'), thinking(5, 'Again'), call(6, 'c1')]));
+    expect(view.items.map((i) => i.type)).toEqual(['thinking', 'text', 'thinking', 'tool']);
+    expect(view.items[0]).toEqual({ type: 'thinking', key: 'r1', text: 'Looking', chars: 7 });
+    expect(view.items[2]).toEqual({ type: 'thinking', key: 'r5', text: 'Again' });
+  });
+
+  it('keeps thinking and text runs apart when it stores them, and re-folds them the same way', () => {
+    const live = activeView(run([thinking(1, 'a'), thinking(2, 'b'), text(3, 'c'), text(4, 'd')]));
+    // A late, lower seq re-folds from the stored (merged) runs.
+    const refolded = activeView(run([thinking(2, 'b'), text(3, 'c'), text(4, 'd'), thinking(1, 'a')]));
+    expect(refolded.items).toEqual(live.items);
+    expect(live.items).toEqual([
+      { type: 'thinking', key: 'r1', text: 'ab' },
+      { type: 'text', key: 't3', text: 'cd' },
+    ]);
+  });
+
+  it('keeps the model the running status names', () => {
+    const model = { name: 'gpt-5', reasoning_effort: 'high' as const, chosen: true, pinned: false };
+    const view = activeView(run([{ turn_id: T, seq: 1, kind: 'status', payload: { phase: 'running', model } }, status(2, 'done')]));
+    expect(view.model).toEqual(model);
+  });
+
   it('merges consecutive text deltas into one block and keeps tool rows between blocks', () => {
     const view = activeView(run([text(1, 'Hel'), text(2, 'lo'), call(3, 'c1'), text(4, 'bye')]));
     expect(view.items.map((i) => i.type)).toEqual(['text', 'tool', 'text']);
@@ -215,5 +256,43 @@ describe('turnReducer', () => {
     const view = activeView(after);
     expect(view.items).toEqual([{ type: 'text', key: 't3', text: 'Hel lo!' }]);
     expect(view.phase).toBe('done');
+  });
+
+  it('plan_updated: the latest plan wins, null once deleted, and a replay keeps it', () => {
+    const events = [status(0, 'running'), plan(1, 'First'), plan(2, 'Second')];
+    expect(activeView(run(events)).plan?.title).toBe('Second');
+    expect(replayView(events).plan?.title).toBe('Second');
+    expect(activeView(run([...events, plan(3, null)])).plan).toBeNull();
+    expect(activeView(run([status(0, 'running')])).plan).toBeUndefined();
+  });
+
+  it('latestPlan is the newest turn that sent one, skipping turns that sent none', () => {
+    const withPlan = replayView([plan(1, 'Old')]);
+    const without = replayView([status(1, 'done')]);
+    expect(latestPlan([withPlan, without])?.title).toBe('Old');
+    expect(latestPlan([withPlan, replayView([plan(1, null)])])).toBeNull();
+    expect(latestPlan([])).toBeNull();
+  });
+
+  it('holds a plan proposal until it is answered, and a re-fold does not resurrect it', () => {
+    let state = run([status(0, 'running'), proposal(2, 'r1')]);
+    expect(activeView(state).planProposal?.request_id).toBe('r1');
+    state = turnReducer(state, { type: 'approval-resolved', turnId: T, requestId: 'r1' });
+    expect(activeView(state).planProposal).toBeUndefined();
+    state = run([text(1, 'early')], state);
+    expect(activeView(state).planProposal).toBeUndefined();
+  });
+
+  it('drops the proposal once accepted, its call ends, or the turn ends', () => {
+    const accepted: AgentEvent = { turn_id: T, seq: 3, kind: 'plan_accepted', payload: { call_id: 'p1' } };
+    const view = activeView(run([proposal(2, 'r1'), accepted]));
+    expect(view.planProposal).toBeUndefined();
+    expect(view.planAccepted).toBe('p1');
+    expect(activeView(run([proposal(2, 'r1'), result(3, 'p1')])).planProposal).toBeUndefined();
+    for (const phase of ['done', 'cancelled', 'error'] as const) {
+      expect(activeView(run([proposal(1, 'r1'), status(2, phase)])).planProposal).toBeUndefined();
+    }
+    expect(activeView(run([status(1, 'done'), proposal(2, 'late')])).planProposal).toBeUndefined();
+    expect(replayView([proposal(1, 'r1')]).planProposal).toBeUndefined();
   });
 });

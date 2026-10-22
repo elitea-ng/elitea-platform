@@ -38,13 +38,105 @@ impl Refusal {
     }
 }
 
-/// The frozen model settings (`version_details.llm_settings`).
+/// The frozen model settings (`version_details.llm_settings`), or the
+/// person's choice for the turn over them ([`Admitted::with_model_choice`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelSettings {
     pub model_name: String,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// `llm_settings.pin_model: true`: the agent's model is the only one
+    /// its turns run on (no choice per turn). Absent: not pinned.
+    pub pinned: bool,
+}
+
+/// The model the person chose for a turn (#1228): `agent_turn_start`'s
+/// `model`, or the thread's choice kept in its session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub name: String,
+    /// `None`: the model's own default (or the agent's effort, when the
+    /// choice is the agent's own model).
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// The state key of a thread's model choice in its session (#1212 store).
+pub const MODEL_CHOICE_KEY: &str = "elitea.model.v1";
+
+/// A reasoning effort's wire name.
+#[must_use]
+pub const fn effort_name(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::None => "none",
+    }
+}
+
+/// A reasoning effort from its wire name.
+#[must_use]
+pub fn parse_effort(name: &str) -> Option<ReasoningEffort> {
+    match name {
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "none" => Some(ReasoningEffort::None),
+        _ => None,
+    }
+}
+
+impl ModelChoice {
+    /// A choice as the IPC (or the session) carries it.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`: a name no gateway header could carry, or an
+    /// effort other than `none`, `low`, `medium`, `high`.
+    pub fn parse(name: &str, reasoning_effort: Option<&str>) -> Result<Self, Refusal> {
+        if !elitea_llm_wire::headers::bounded_header_text(name, 256) {
+            return Err(Refusal::new(
+                "invalid_request",
+                "The chosen model name is not valid.",
+            ));
+        }
+        let reasoning_effort = match reasoning_effort {
+            None => None,
+            Some(effort) => Some(parse_effort(effort).ok_or_else(|| {
+                Refusal::new(
+                    "invalid_request",
+                    "The reasoning effort must be none, low, medium or high.",
+                )
+            })?),
+        };
+        Ok(Self {
+            name: name.to_owned(),
+            reasoning_effort,
+        })
+    }
+
+    /// As the session keeps it.
+    #[must_use]
+    pub fn to_state(&self) -> Value {
+        let mut value = Map::new();
+        value.insert("name".into(), Value::String(self.name.clone()));
+        if let Some(effort) = self.reasoning_effort {
+            value.insert(
+                "reasoning_effort".into(),
+                Value::String(effort_name(effort).into()),
+            );
+        }
+        Value::Object(value)
+    }
+
+    /// A kept choice; `None` for none (or one this build cannot read).
+    #[must_use]
+    pub fn from_state(value: &Value) -> Option<Self> {
+        let name = value.get("name")?.as_str()?;
+        let effort = value.get("reasoning_effort").and_then(Value::as_str);
+        Self::parse(name, effort).ok()
+    }
 }
 
 /// One remote tool the model may call.
@@ -96,6 +188,9 @@ pub struct Admitted {
     pub edit_profile: EditProfile,
     /// The version document, for the runtime's instruction authority.
     pub version_details: Map<String, Value>,
+    /// The person chose `model` for this turn over the agent's own
+    /// ([`Admitted::with_model_choice`]).
+    pub model_chosen: bool,
 }
 
 /// Check a resolved definition against what D0 runs.
@@ -166,6 +261,7 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
         step_limit: agent_step_limit(details).unwrap_or(DEFAULT_STEP_LIMIT),
         edit_profile,
         version_details: details.clone(),
+        model_chosen: false,
     })
 }
 
@@ -181,6 +277,96 @@ impl Admitted {
         }
         self
     }
+
+    /// The turn runs on `choice` instead of the agent's model (#1228): the
+    /// model name and effort the gateway gets, and the edit tools and
+    /// context limits that follow from the model. A choice of the agent's
+    /// own model with no effort of its own changes nothing. The agent
+    /// version on the server is never changed.
+    ///
+    /// # Errors
+    ///
+    /// `model_pinned`: the agent pins its model (`llm_settings.pin_model`).
+    pub fn with_model_choice(mut self, choice: &ModelChoice) -> Result<Self, Refusal> {
+        let same_model = choice.name == self.model.model_name;
+        if same_model
+            && choice
+                .reasoning_effort
+                .is_none_or(|e| Some(e) == self.model.reasoning_effort)
+        {
+            return Ok(self);
+        }
+        if self.model.pinned {
+            return Err(Refusal::new(
+                "model_pinned",
+                "This agent always runs on its own model; the model cannot be changed for a turn.",
+            ));
+        }
+        let effort = choice.reasoning_effort.or(if same_model {
+            self.model.reasoning_effort
+        } else {
+            None
+        });
+        self.model.model_name.clone_from(&choice.name);
+        self.set_effort(effort);
+        self.edit_profile = EditProfile::select(
+            &self.model.model_name,
+            agent_edit_format(&self.version_details),
+        );
+        self.model_chosen = true;
+        Ok(self)
+    }
+
+    /// The turn runs on the agent version's own model (no choice, or one of
+    /// an effort only): the version's frozen model facts still apply.
+    #[must_use]
+    pub fn on_own_model(&self) -> bool {
+        self.version_details
+            .get("llm_settings")
+            .and_then(|settings| settings.get("model_name"))
+            .and_then(Value::as_str)
+            == Some(self.model.model_name.as_str())
+    }
+
+    /// A chosen model the project's catalogue describes (`row`, its chat
+    /// model row): one it says cannot reason (`supports_reasoning: false`)
+    /// is sent no reasoning effort, and so the agent's temperature again.
+    /// No row (the catalogue could not answer), a row that says nothing, or
+    /// the agent's own model: as chosen.
+    #[must_use]
+    pub fn fit_reasoning(mut self, row: Option<&Value>) -> Self {
+        let cannot_reason = row
+            .and_then(|row| row.get("supports_reasoning"))
+            .is_some_and(|value| value == &Value::Bool(false));
+        if self.model_chosen && cannot_reason && self.model.reasoning_effort.is_some() {
+            self.set_effort(None);
+        }
+        self
+    }
+
+    /// `effort` for the turn's model, and the temperature that goes with it:
+    /// none next to an effort applied (the gateway refuses the two
+    /// together), else the agent's own.
+    fn set_effort(&mut self, effort: Option<ReasoningEffort>) {
+        self.model.reasoning_effort = effort;
+        self.model.temperature = if effort.is_some_and(|e| e != ReasoningEffort::None) {
+            None
+        } else {
+            self.version_details
+                .get("llm_settings")
+                .and_then(Value::as_object)
+                .and_then(frozen_temperature)
+        };
+    }
+}
+
+/// `llm_settings.temperature`, as the agent sets it.
+#[allow(clippy::cast_possible_truncation)] // a temperature is 0..=2
+fn frozen_temperature(settings: &Map<String, Value>) -> Option<f32> {
+    settings
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
 }
 
 fn invalid_model() -> Refusal {
@@ -207,18 +393,11 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
         .and_then(Value::as_u64)
         .filter(|tokens| *tokens > 0 && !auto)
         .and_then(|tokens| u32::try_from(tokens).ok());
-    #[allow(clippy::cast_possible_truncation)] // a temperature is 0..=2
-    let temperature = settings
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .map(|value| value as f32);
-    let reasoning_effort = match settings.get("reasoning_effort").and_then(Value::as_str) {
-        Some("low") => Some(ReasoningEffort::Low),
-        Some("medium") => Some(ReasoningEffort::Medium),
-        Some("high") => Some(ReasoningEffort::High),
-        Some("none") => Some(ReasoningEffort::None),
-        _ => None,
-    };
+    let temperature = frozen_temperature(settings);
+    let reasoning_effort = settings
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .and_then(parse_effort);
     Ok(ModelSettings {
         model_name,
         max_tokens,
@@ -226,6 +405,7 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
         temperature: temperature
             .filter(|_| reasoning_effort.is_none_or(|e| e == ReasoningEffort::None)),
         reasoning_effort,
+        pinned: settings.get("pin_model") == Some(&Value::Bool(true)),
     })
 }
 
