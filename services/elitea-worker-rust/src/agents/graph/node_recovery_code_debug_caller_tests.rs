@@ -31,7 +31,7 @@ impl ContentFake for OriginalVisitRpc {
         request: tonic::Request<RegisterCodeVisitRequestV1>,
     ) -> Result<tonic::Response<RegisterCodeVisitResponseV1>, tonic::Status> {
         let (claim, fence) = claim_of(&request);
-        assert!(!claim.is_empty());
+        assert_ne!(claim, "");
         assert_eq!(fence.len(), 32);
         let request = request.into_inner();
         let scope = request.scope.unwrap();

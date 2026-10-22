@@ -1235,7 +1235,7 @@ async fn the_office_host_names_its_claim_and_keeps_to_its_conversation() {
         b"data"
     );
     let sent = api.calls();
-    assert!(!sent.is_empty());
+    assert_ne!(sent.len(), 0);
     assert!(
         sent.iter()
             .all(|call| call.claim_id.as_deref() == Some("claim-1")),

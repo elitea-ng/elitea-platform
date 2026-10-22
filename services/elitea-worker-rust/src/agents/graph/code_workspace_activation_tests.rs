@@ -46,7 +46,7 @@ impl ContentFake for MainRpc {
         request: tonic::Request<ResolveCodeWorkspaceRequestV1>,
     ) -> Result<tonic::Response<ResolveCodeWorkspaceResponseV1>, tonic::Status> {
         let (claim, fence) = claim_of(&request);
-        assert!(!claim.is_empty());
+        assert_ne!(claim, "");
         assert_eq!(fence.len(), 32);
         let request = request.into_inner();
         assert!(request.scope.is_some());

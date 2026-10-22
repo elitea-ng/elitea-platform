@@ -78,7 +78,7 @@ fn unpack<T>(
     parts: impl FnOnce(T) -> (Option<pb::RuntimeContentScopeV1>, Vec<u8>),
 ) -> (String, u64, serde_json::Value) {
     let (claim, fence) = claim_of(&request);
-    assert!(!claim.is_empty());
+    assert_ne!(claim, "");
     assert_eq!(fence.len(), 32);
     let (scope, body) = parts(request.into_inner());
     let scope = scope.unwrap();
