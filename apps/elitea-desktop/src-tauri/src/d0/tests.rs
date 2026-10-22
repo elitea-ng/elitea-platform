@@ -382,9 +382,17 @@ fn request(workspace_id: &str) -> TurnRequest {
     }
 }
 
+/// How many 10 ms polls the turn-settling helpers below wait: 30 s. A
+/// healthy turn here settles in well under a second, so the bound only
+/// decides how a loaded CI runner is told apart from a hung turn. At 5 s, a
+/// Linux runner running the whole suite in parallel left the two MCP
+/// authorization turns mid-`write_file` and failed them, although the same
+/// tests pass in about 0.15 s locally and in main's runs.
+const SETTLE_POLLS: usize = 3_000;
+
 /// Until a turn's `done` event (only the event: its commit may still run).
 async fn done_event(emitter: &VecEmitter) -> Vec<AgentEvent> {
-    for _ in 0..500 {
+    for _ in 0..SETTLE_POLLS {
         let events = emitter.all();
         if events.iter().any(|event| event.kind == "done") {
             return events;
@@ -395,7 +403,7 @@ async fn done_event(emitter: &VecEmitter) -> Vec<AgentEvent> {
 }
 
 async fn done_event_of(emitter: &VecEmitter, turn_id: &str) {
-    for _ in 0..500 {
+    for _ in 0..SETTLE_POLLS {
         if emitter
             .all()
             .iter()
@@ -416,7 +424,7 @@ fn settled_done(h: &Harness, turn_id: &str) -> Value {
 
 /// Until no commit of `host` is queued or running (they run after `done`).
 async fn commits_settled(host: &AgentHost) {
-    for _ in 0..500 {
+    for _ in 0..SETTLE_POLLS {
         if host.unsaved_commits().0 == 0 {
             return;
         }
