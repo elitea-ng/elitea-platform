@@ -328,6 +328,10 @@ fn store_error(error: &StoreError) -> EngineError {
         return EngineError::new(ErrorType::Runtime, message.clone())
             .with_code(elitea_engine_core::errors::codes::TOOLKIT_DELETED);
     }
+    if let StoreError::Contended(message) = error {
+        return EngineError::new(ErrorType::Runtime, message.clone())
+            .with_code(elitea_engine_core::errors::codes::BUSY);
+    }
     EngineError::new(
         ErrorType::Runtime,
         format!("the graph store failed: {error}"),

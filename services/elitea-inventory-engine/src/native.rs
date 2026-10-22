@@ -67,6 +67,7 @@ fn store_error(error: &crate::store::StoreError) -> EngineError {
     let failure = EngineError::new(ErrorType::Runtime, error.to_string());
     match error {
         crate::store::StoreError::Deleted(_) => failure.with_code(codes::TOOLKIT_DELETED),
+        crate::store::StoreError::Contended(_) => failure.with_code(codes::BUSY),
         _ => failure,
     }
 }

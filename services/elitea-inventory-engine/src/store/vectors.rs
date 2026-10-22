@@ -48,7 +48,11 @@
 //! that fails is logged and repeated by the next write's. A staged
 //! generation outlives its write only if the process dies between the
 //! upsert and the clean-up; it is never searched, and the toolkit's
-//! deletion removes it with the namespace. A write made WITHOUT vector
+//! deletion removes it with the namespace, unless a write of the graph
+//! comes first: every generation is listed in `vector_staged_generations`
+//! from before its upsert until a commit records it (or its write deletes
+//! it), and a sweep deletes the points of a listed generation older than
+//! [`STAGED_MAX_AGE`] that the row does not record (the janitor). A write made WITHOUT vector
 //! access (the `import-graph` command, which has no invocation bearer)
 //! records no generation, and its graph is backfilled by the first ranking.
 //!
@@ -60,10 +64,14 @@
 //! decided from the graph row before Qdrant is called; the entities scoring at
 //! least `min_score`, best first, ties by entity id. elitea-vector orders
 //! equal scores by point id, so the ties are re-ordered here. The pages are
-//! read until one comes back short; [`MAX_RANKED`] (elitea-vector's search
-//! depth) bounds the ranking: past it the best [`MAX_RANKED`] are returned
-//! and a warning is logged (`semantic_search` keeps at most 50 after its
-//! filters; graphs today hold hundreds to low thousands of entities).
+//! read until one comes back short. elitea-vector serves at most
+//! [`MAX_RANKED`] results of one ranking (its search depth). A graph with
+//! more entities at or above `min_score` is ranked here instead, exactly,
+//! from `entities.embedding` (the float8[] column every write keeps):
+//! `semantic_search` filters the ranking (ACL view, type, layer, file)
+//! before it keeps its best 50, so a cut ranking could miss an entity the
+//! filters would have let through. Graphs today hold hundreds to low
+//! thousands of entities, so the fallback is for the outliers.
 //!
 //! # The backfill
 //!
@@ -349,7 +357,79 @@ impl EntityVectors {
         }
     }
 
+    /// Delete the points of `generation`, staged by a write that did not
+    /// commit it, then its `vector_staged_generations` row. A failure is
+    /// logged and the row kept, for the janitor.
+    async fn discard(&self, pool: &PgPool, key: GraphKey, generation: &str) {
+        let discarded = async {
+            self.delete_generations(key, vec![generation.to_owned()])
+                .await?;
+            sqlx::query(
+                "DELETE FROM inventory_graph.vector_staged_generations
+                  WHERE project_id = $1 AND application_id = $2 AND generation = $3",
+            )
+            .bind(key.project_id)
+            .bind(key.application_id)
+            .bind(generation)
+            .execute(pool)
+            .await?;
+            Ok::<_, StoreError>(())
+        }
+        .await;
+        if let Err(error) = discarded {
+            tracing::warn!(
+                project_id = key.project_id,
+                application_id = key.application_id,
+                %error,
+                "the entity vectors of a write that did not commit were not removed; they are never searched, and the graph's next write removes them once they are old enough"
+            );
+        }
+    }
+
+    /// The janitor: delete the points of the graph's staged generations
+    /// older than [`STAGED_MAX_AGE`] that its row does not record (writes
+    /// that died between their upsert and their clean-up), then their rows.
+    async fn sweep_abandoned(&self, pool: &PgPool, key: GraphKey) -> Result<()> {
+        let abandoned: Vec<String> = sqlx::query_scalar(
+            "SELECT s.generation FROM inventory_graph.vector_staged_generations s
+               LEFT JOIN inventory_graph.graphs g
+                 ON g.project_id = s.project_id AND g.application_id = s.application_id
+              WHERE s.project_id = $1 AND s.application_id = $2
+                AND s.staged_at < clock_timestamp() - make_interval(secs => $3)
+                AND s.generation IS DISTINCT FROM g.vector_generation
+              ORDER BY s.staged_at
+              LIMIT $4",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .bind(STAGED_MAX_AGE.as_secs_f64())
+        .bind(i64::try_from(SWEEP_BATCH).unwrap_or(i64::MAX))
+        .fetch_all(pool)
+        .await?;
+        if abandoned.is_empty() {
+            return Ok(());
+        }
+        self.delete_generations(key, abandoned.clone()).await?;
+        sqlx::query(
+            "DELETE FROM inventory_graph.vector_staged_generations
+              WHERE project_id = $1 AND application_id = $2 AND generation = ANY($3)",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .bind(&abandoned)
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            project_id = key.project_id,
+            application_id = key.application_id,
+            generations = abandoned.len(),
+            "abandoned staged entity vectors removed"
+        );
+        Ok(())
+    }
+
     async fn sweep_stale(&self, pool: &PgPool, key: GraphKey) -> Result<()> {
+        self.sweep_abandoned(pool, key).await?;
         let stale: Option<Vec<String>> = sqlx::query_scalar(
             "SELECT vector_stale_generations FROM inventory_graph.graphs
               WHERE project_id = $1 AND application_id = $2",
@@ -404,7 +484,7 @@ impl EntityVectors {
         generation: &str,
         vector: &[f64],
         min_score: f64,
-    ) -> Result<Vec<(String, f64)>> {
+    ) -> Result<Option<Vec<(String, f64)>>> {
         let namespace = namespace_id(key);
         let mut scope = elitea_vector_index::client::inventory_scope(vec![namespace.clone()]);
         scope.active_generations = vec![pb::ActiveGeneration {
@@ -452,32 +532,29 @@ impl EntityVectors {
                 break;
             }
             if offset >= MAX_RANKED {
-                tracing::warn!(
-                    project_id = key.project_id,
-                    application_id = key.application_id,
-                    limit = MAX_RANKED,
-                    "more entities of the graph reach min_score than one ranking returns; the best are kept"
-                );
-                break;
+                // More reach min_score than elitea-vector returns: the
+                // caller ranks the graph itself.
+                return Ok(None);
             }
         }
         // float32 rounding can put a score a hair under min_score past the
         // float32 threshold; the contract is the float64 comparison.
         ranked.retain(|(_, score)| *score >= min_score);
-        // elitea-vector orders a tie by point id; the contract is entity id.
-        ranked.sort_by(|left, right| {
-            right
-                .1
-                .total_cmp(&left.1)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-        Ok(ranked)
+        sort_ranking(&mut ranked);
+        Ok(Some(ranked))
     }
 }
 
 /// How many stale generations one delete names (elitea-vector takes up to
 /// 1024).
 const SWEEP_BATCH: usize = 256;
+
+/// How old a staged, uncommitted generation must be before the janitor
+/// deletes it: far longer than a write takes from its upsert to its commit
+/// (one elitea-vector call of at most a minute per batch, then one
+/// transaction), and longer than an ingestion run's CPU cap, so no live
+/// write ever loses its points.
+pub const STAGED_MAX_AGE: std::time::Duration = std::time::Duration::from_hours(6);
 
 /// A graph's vectors upserted ahead of its write ([`stage`]).
 #[derive(Debug)]
@@ -505,10 +582,24 @@ pub(super) async fn stage(
 ) -> Result<Staged> {
     let generation = match vectors {
         Some(vectors) => {
-            let generation: String = sqlx::query_scalar("SELECT gen_random_uuid()::text")
-                .fetch_one(pool)
-                .await?;
-            vectors.upsert(key, &space, &generation, entities).await?;
+            // Listed before the upsert, so a write that dies at any point
+            // after it leaves a row the janitor finds.
+            let generation: String = sqlx::query_scalar(
+                "INSERT INTO inventory_graph.vector_staged_generations
+                     (project_id, application_id, generation)
+                 VALUES ($1, $2, gen_random_uuid()::text)
+                 RETURNING generation",
+            )
+            .bind(key.project_id)
+            .bind(key.application_id)
+            .fetch_one(pool)
+            .await?;
+            if let Err(error) = vectors.upsert(key, &space, &generation, entities).await {
+                // Some batches may be in: delete them now, or leave the row
+                // for the janitor.
+                vectors.discard(pool, key, &generation).await;
+                return Err(error);
+            }
             Some(generation)
         }
         None => None,
@@ -528,6 +619,18 @@ pub(super) async fn record(
     key: GraphKey,
     staged: &Staged,
 ) -> Result<()> {
+    if let Some(generation) = &staged.generation {
+        // Committed with the graph row's generation, or not at all.
+        sqlx::query(
+            "DELETE FROM inventory_graph.vector_staged_generations
+              WHERE project_id = $1 AND application_id = $2 AND generation = $3",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .bind(generation)
+        .execute(&mut **transaction)
+        .await?;
+    }
     // Every right-hand side reads the row as it was.
     sqlx::query(
         "UPDATE inventory_graph.graphs
@@ -575,17 +678,8 @@ pub(super) async fn settle(
             // Unknown: keep the points rather than delete a live generation.
             Err(_) => true,
         };
-        if !held
-            && let Err(error) = vectors
-                .delete_generations(key, vec![generation.clone()])
-                .await
-        {
-            tracing::warn!(
-                project_id = key.project_id,
-                application_id = key.application_id,
-                %error,
-                "the entity vectors of a write that did not commit were not removed; they are never searched, and the toolkit's deletion removes them"
-            );
+        if !held {
+            vectors.discard(pool, key, generation).await;
         }
     }
     vectors.sweep(pool, key).await;
@@ -652,9 +746,18 @@ pub async fn rank(
             model_slug: slug,
             dimension: u32::try_from(dimension).unwrap_or_default(),
         };
-        let ranked = vectors
+        let Some(ranked) = vectors
             .search(key, space, &generation, vector, min_score)
-            .await?;
+            .await?
+        else {
+            tracing::info!(
+                project_id = key.project_id,
+                application_id = key.application_id,
+                limit = MAX_RANKED,
+                "more entities of the graph reach min_score than elitea-vector returns; ranking it from the stored vectors"
+            );
+            return Ok(Ok(rank_stored(pool, key, vector, min_score).await?));
+        };
         match vector_row(pool, key).await? {
             Some(now) if now.0.as_deref() != Some(generation.as_str()) => row = now,
             // Unchanged, or the graph was deleted meanwhile (its ranking as
@@ -662,9 +765,65 @@ pub async fn rank(
             _ => return Ok(Ok(ranked)),
         }
     }
-    Err(StoreError::Vectors(
+    Err(StoreError::Contended(
         "the graph was rewritten during every attempt to rank it; try again".to_owned(),
     ))
+}
+
+/// elitea-vector orders a tie by point id; the contract is entity id.
+fn sort_ranking(ranked: &mut [(String, f64)]) {
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+}
+
+/// The exact ranking of `vector` over the graph's stored vectors
+/// (`entities.embedding`), for a graph too large for one elitea-vector
+/// ranking: cosine similarity in float64, every entity at or above
+/// `min_score`, best first, ties by entity id. A vector of another width or
+/// of zero norm is not ranked (the caller refused a width mismatch already).
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn rank_stored(
+    pool: &PgPool,
+    key: GraphKey,
+    vector: &[f64],
+    min_score: f64,
+) -> Result<Vec<(String, f64)>> {
+    let norm = |values: &[f64]| values.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let query_norm = norm(vector);
+    if query_norm == 0.0 {
+        return Ok(Vec::new());
+    }
+    let stored: Vec<(String, Vec<f64>)> = sqlx::query_as(
+        "SELECT entity_id, embedding FROM inventory_graph.entities
+          WHERE project_id = $1 AND application_id = $2
+            AND cardinality(embedding) = $3",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(i32::try_from(vector.len()).unwrap_or(i32::MAX))
+    .fetch_all(pool)
+    .await?;
+    let mut ranked: Vec<(String, f64)> = stored
+        .into_iter()
+        .filter_map(|(id, stored)| {
+            let stored_norm = norm(&stored);
+            if stored_norm == 0.0 {
+                return None;
+            }
+            let dot: f64 = stored.iter().zip(vector).map(|(a, b)| a * b).sum();
+            let score = dot / (stored_norm * query_norm);
+            (score >= min_score).then_some((id, score))
+        })
+        .collect();
+    sort_ranking(&mut ranked);
+    Ok(ranked)
 }
 
 /// How many times [`rank`] searches a graph that keeps being rewritten.

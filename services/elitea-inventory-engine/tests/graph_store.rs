@@ -456,6 +456,120 @@ async fn interleaved_writers_keep_the_committed_generation_whole() {
     assert_eq!(fake.point_count(), 4);
     c.settle(&pool, key, Some(&vectors), false).await;
     assert_eq!(fake.point_count(), 2, "the uncommitted generation is gone");
+    assert_eq!(staged_rows(&pool, key).await, 0, "nothing is left staged");
+}
+
+async fn staged_rows(pool: &PgPool, key: GraphKey) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM inventory_graph.vector_staged_generations
+          WHERE project_id = $1 AND application_id = $2",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_one(pool)
+    .await
+    .expect("count")
+}
+
+/// A write that dies between its upsert and its clean-up leaves its staged
+/// generation listed; the graph's next write deletes its points once it is
+/// older than `STAGED_MAX_AGE` (the janitor), and never a younger one,
+/// which may be a live write's.
+#[tokio::test]
+async fn the_janitor_deletes_what_a_dead_write_staged() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("janitor").await else {
+        return;
+    };
+    let key = key(1, 8);
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let vectors = common::entity_vectors(&origin, BEARER);
+    let mut graph = replay();
+    let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+    for id in ids.iter().take(2) {
+        assert!(graph.set_embedding(id, &[1.0, 0.5, 0.0, 0.0]));
+    }
+    graph
+        .metadata
+        .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+    store::save_with(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("first write");
+    assert_eq!(fake.point_count(), 2);
+    // Two writes die after their upsert: one long ago, one just now.
+    let _dead = store::prepare(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("stage");
+    sqlx::query(
+        "UPDATE inventory_graph.vector_staged_generations SET staged_at = now() - interval '7 hours'
+          WHERE project_id = 1 AND application_id = 8",
+    )
+    .execute(&pool)
+    .await
+    .expect("age it");
+    let _young = store::prepare(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("stage");
+    assert_eq!(fake.point_count(), 6);
+    assert_eq!(staged_rows(&pool, key).await, 2);
+    store::save_with(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("next write");
+    // The committed generation and the young staged one remain.
+    assert_eq!(fake.point_count(), 4, "the old staged generation is gone");
+    assert_eq!(staged_rows(&pool, key).await, 1, "the young one is kept");
+    // The graph's deletion takes the rest with the namespace.
+    assert!(
+        store::PgGraphStore::new(pool.clone())
+            .with_vectors(Some(vectors))
+            .delete(key)
+            .await
+            .expect("delete")
+    );
+    assert_eq!(fake.point_count(), 0);
+    assert_eq!(staged_rows(&pool, key).await, 0);
+}
+
+/// A graph with more entities at or above `min_score` than elitea-vector
+/// returns is ranked from its stored vectors, exactly, in the same order.
+#[tokio::test]
+async fn the_stored_ranking_matches_the_vector_ranking() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("rank_stored").await else {
+        return;
+    };
+    let key = key(1, 9);
+    let (_fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let vectors = common::entity_vectors(&origin, BEARER);
+    let mut graph = replay();
+    let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+    for (index, id) in ids.iter().enumerate() {
+        let x = f64::from(u32::try_from(index % 7).expect("small"));
+        assert!(graph.set_embedding(id, &[1.0, x, 0.25, -0.5]));
+    }
+    graph
+        .metadata
+        .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+    store::save_with(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("write");
+    let query = [0.5, 1.0, 0.0, 0.0];
+    let remote = store::PgGraphStore::new(pool.clone())
+        .with_vectors(Some(vectors))
+        .rank(key, &query, 0.1)
+        .await
+        .expect("rank")
+        .expect("same width");
+    let local = store::vectors::rank_stored(&pool, key, &query, 0.1)
+        .await
+        .expect("rank stored");
+    assert!(!local.is_empty());
+    let order =
+        |ranking: &[(String, f64)]| ranking.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    assert_eq!(order(&local), order(&remote));
+    for ((_, l), (_, r)) in local.iter().zip(&remote) {
+        assert!((l - r).abs() < 1e-6, "{l} vs {r}");
+    }
 }
 
 /// The view cache over the PostgreSQL store: no graph, no view; a view is

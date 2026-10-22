@@ -181,6 +181,16 @@ async fn remove_checked(
         .fetch_one(&mut *transaction)
         .await?;
     }
+    // The staged generations go with the namespace (elitea-main deletes it,
+    // or `PgGraphStore::delete` does).
+    sqlx::query(
+        "DELETE FROM inventory_graph.vector_staged_generations
+          WHERE project_id = $1 AND application_id = $2",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .execute(&mut *transaction)
+    .await?;
     if tombstone == Tombstone::Write {
         sqlx::query(
             "INSERT INTO inventory_graph.deleted_toolkits (project_id, application_id)

@@ -127,6 +127,12 @@ pub enum StoreError {
     /// write its graph again. Nothing was changed.
     #[error("{0}")]
     Deleted(String),
+    /// Concurrent writes kept the call from finishing (a graph rewritten
+    /// during every attempt to rank it). Nothing is wrong with it: the same
+    /// call made again succeeds. The host reads it as `busy`, the retryable
+    /// refusal.
+    #[error("{0}")]
+    Contended(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }

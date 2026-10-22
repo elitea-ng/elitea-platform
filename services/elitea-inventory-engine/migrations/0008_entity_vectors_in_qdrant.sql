@@ -39,6 +39,15 @@
 --                          would delete a concurrent writer's points before
 --                          it commits) and removes them from the list
 --
+-- WHAT IS STAGED BUT NOT COMMITTED. `vector_staged_generations` lists every
+-- generation a write upserted (or is upserting) that no graph row records
+-- yet: inserted before the upsert, deleted in the transaction that records
+-- the generation, or after a write that did not commit deleted its points.
+-- A row older than `store::vectors::STAGED_MAX_AGE` belongs to a write that
+-- died between its upsert and its clean-up: the next write of that graph
+-- (which has a bearer) deletes its points and the row (the janitor). A
+-- graph's deletion deletes its rows with the namespace.
+--
 -- 0001 to 0007 are applied and checksummed; 0004 was rewritten (see it).
 
 ALTER TABLE inventory_graph.entities DROP COLUMN IF EXISTS embedding_vector;
@@ -64,3 +73,11 @@ ALTER TABLE inventory_graph.graphs
     ADD COLUMN vector_dimension       integer,
     ADD COLUMN vector_other_dimension integer,
     ADD COLUMN vector_stale_generations text[] NOT NULL DEFAULT '{}';
+
+CREATE TABLE inventory_graph.vector_staged_generations (
+    project_id     bigint      NOT NULL,
+    application_id bigint      NOT NULL,
+    generation     text        NOT NULL,
+    staged_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (project_id, application_id, generation)
+);
