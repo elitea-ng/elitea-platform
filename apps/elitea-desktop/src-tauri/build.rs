@@ -19,6 +19,7 @@ fn main() {
             "workspace_agent_settings_get",
             "workspace_agent_settings_set",
             "workspace_files",
+            "commands_list",
             "rules_get",
             "rules_put",
             "rules_explain",

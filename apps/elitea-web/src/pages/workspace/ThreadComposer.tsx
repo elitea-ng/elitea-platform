@@ -16,7 +16,7 @@
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
  * a catalogue still loading is said above the composer and sets nothing).
  */
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -27,8 +27,9 @@ import { t } from '@/shared/i18n';
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { firstError, SessionNotices } from './sessionParts';
-import type { ComposerSkill } from './useAgentSkills';
+import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
+import { useCustomCommands } from './useCustomCommands';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import type { SessionCommands } from './useSessionCommands';
@@ -40,7 +41,7 @@ const ContextMeter = lazy(() => import('./ContextMeter'));
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
   workspaceId: string;
-  /** The folder's project: the model chip offers its chat models. */
+  /** The folder's project: the model chip offers its chat models, and the "/" menu its own skills too. */
   projectId: number;
   conversationId: string;
   session: ThreadSession;
@@ -76,17 +77,35 @@ function latestMeter(turn: WorkspaceTurn) {
   return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
 }
 
+/**
+ * What the "/" menu offers besides the host commands: the custom commands and the project's own skills (after the
+ * agent's), both the local host's only (`local`: none for the cloud copy). The project's skills are read once the
+ * composer got focus (which also prewarms the send) or `/help` is open (`helpOpen`), which lists them too.
+ */
+function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: number, local: boolean, skills: readonly ComposerSkill[], prewarm: () => void, helpOpen: boolean) {
+  const customCommands = useCustomCommands(ipc, workspaceId, local);
+  const [focused, setFocused] = useState(false);
+  const projectSkills = useProjectSkills(projectId, (focused || helpOpen) && local, skills);
+  const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
+  const onFocus = (): void => {
+    setFocused(true);
+    prewarm();
+  };
+  return { customCommands, offered, onFocus };
+}
+
 export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
+  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, !cloudMode, skills, session.prewarm, commands.notice === 'help');
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
-    onSend: async (prompt, mentions, picked) => {
+    onSend: async (prompt, mentions, picked, command) => {
       model.dismissNotice();
-      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice);
+      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice, command);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
     },
@@ -99,7 +118,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   return (
     <>
       <HandoffBanner handoff={handoff} />
-      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} />
+      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}
@@ -116,9 +135,10 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
           )
         }
         onPlanModeChange={commands.setPlanMode}
-        skills={skills}
+        skills={offered}
+        customCommands={customCommands}
         onCommand={session.run}
-        onFocus={session.prewarm}
+        onFocus={onFocus}
         {...(cloudMode ? cloudBinding(cloud) : local)}
       />
     </>

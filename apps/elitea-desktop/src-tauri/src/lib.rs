@@ -336,6 +336,7 @@ pub fn run() {
                     sandbox_deny,
                     app_id,
                     user_rules_dir: Some(config_dir.clone()),
+                    user_commands_dir: Some(config_dir.join("commands")),
                 })
                 .map_err(|error| error.message)?,
             );
@@ -417,6 +418,7 @@ pub fn run() {
             local_commands::workspace_agent_settings_get,
             local_commands::workspace_agent_settings_set,
             local_commands::workspace_files,
+            local_commands::commands_list,
             local_commands::rules_get,
             local_commands::rules_put,
             local_commands::rules_explain,

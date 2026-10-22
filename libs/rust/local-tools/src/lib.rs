@@ -39,5 +39,6 @@ pub mod run_tests;
 pub mod sandbox;
 pub mod session;
 pub mod shell;
+pub mod slash_commands;
 pub mod test_report;
 pub mod workspace;

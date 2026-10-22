@@ -17,12 +17,13 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { composer, describeWorkspaceError, replayView, TurnTranscript, type WorkspaceTurn } from '@/features/workspace';
-import type { StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
+import type { CustomCommand, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ForkPoint, SessionFork } from './useForkThread';
+import type { ComposerSkill } from './useAgentSkills';
 import type { SessionCommands } from './useSessionCommands';
 import type { ServerMessage, ThreadHistory } from './useThreadHistory';
 
@@ -34,18 +35,51 @@ const linkSx = (theme: Theme) => ({
 
 export const COLUMN = { width: '100%', maxWidth: '46rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box' } as const;
 
-function HelpNotice({ onClose }: { onClose: () => void }): React.JSX.Element {
+interface HelpNoticeProps {
+  onClose: () => void;
+  customCommands: readonly CustomCommand[];
+  skills: readonly ComposerSkill[];
+}
+
+function HelpRow({ name, text }: { name: string; text: string }): React.JSX.Element {
+  return (
+    <li>
+      <Typography component="span" variant="labelMedium">
+        {name}
+      </Typography>
+      {` — ${text}`}
+    </li>
+  );
+}
+
+/** `/help`: the host commands, the custom commands (with their source), the agent's skills, the project's, then "@". */
+function HelpNotice({ onClose, customCommands, skills }: HelpNoticeProps): React.JSX.Element {
+  const entries = composer.slashMenu('', customCommands, skills);
   return (
     <Alert severity="info" onClose={onClose} data-testid="workspace-help">
       <Box component="ul" sx={{ margin: 0, paddingLeft: 2 }}>
-        {composer.workspaceCommands().map((command) => (
-          <li key={command.id}>
-            <Typography component="span" variant="labelMedium">
-              {command.name}
-            </Typography>
-            {` — ${command.description}`}
-          </li>
-        ))}
+        {entries.map((entry) => {
+          switch (entry.kind) {
+            case 'host':
+              return <HelpRow key={entry.command.id} name={entry.command.name} text={entry.command.description} />;
+            case 'custom':
+              return (
+                <HelpRow
+                  key={`command:${entry.command.name}`}
+                  name={composer.customCommandToken(entry.command)}
+                  text={`${composer.customCommandDetail(entry.command)} (${composer.customCommandSource(entry.command)})`}
+                />
+              );
+            case 'skill':
+              return (
+                <HelpRow
+                  key={`skill:${entry.skill.project === true ? 'project' : 'agent'}:${entry.skill.id}`}
+                  name={composer.skillToken(entry.skill)}
+                  text={entry.skill.description ?? (entry.skill.project === true ? t('workspace.command.projectSkill', 'A skill of this project') : t('workspace.command.skill', 'A skill of this agent'))}
+                />
+              );
+          }
+        })}
         <li>
           <Typography component="span" variant="labelMedium">
             @
@@ -318,11 +352,19 @@ export function ForkNotices({ fork }: { fork: SessionFork }): React.JSX.Element 
   );
 }
 
-export function SessionNotices({ error, commands }: { error: string | null; commands: SessionCommands }): React.JSX.Element {
+interface SessionNoticesProps {
+  error: string | null;
+  commands: SessionCommands;
+  /** What `/help` lists after the host commands. */
+  customCommands: readonly CustomCommand[];
+  skills: readonly ComposerSkill[];
+}
+
+export function SessionNotices({ error, commands, customCommands, skills }: SessionNoticesProps): React.JSX.Element {
   return (
     <>
       {error !== null && <Alert severity="error">{error}</Alert>}
-      {commands.notice === 'help' && <HelpNotice onClose={commands.closeNotice} />}
+      {commands.notice === 'help' && <HelpNotice onClose={commands.closeNotice} customCommands={customCommands} skills={skills} />}
       {commands.notice === 'nothingToUndo' && (
         <Alert severity="info" onClose={commands.closeNotice}>
           {t('workspace.undoNothing', 'The last turn here changed no files.')}

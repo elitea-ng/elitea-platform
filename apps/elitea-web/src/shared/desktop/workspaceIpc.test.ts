@@ -16,6 +16,7 @@ describe('createWorkspaceIpc', () => {
     await ipc.bindProject('w1', 7);
     await ipc.files('w1', 'main');
     await ipc.files('w1', '', 10);
+    await ipc.commands('w1');
     await ipc.startTurn({
       workspace_id: 'w1',
       project_id: 7,
@@ -46,6 +47,7 @@ describe('createWorkspaceIpc', () => {
       ['workspace_bind_project', { id: 'w1', project_id: 7 }],
       ['workspace_files', { workspace_id: 'w1', query: 'main' }],
       ['workspace_files', { workspace_id: 'w1', query: '', limit: 10 }],
+      ['commands_list', { workspace_id: 'w1' }],
       [
         'agent_turn_start',
         { workspace_id: 'w1', project_id: 7, conversation_id: 'c1', application_id: 3, version_id: 9, prompt: 'hi', plan_mode: true, mentions: ['src/main.rs', 'docs/'], skills: ['Style'] },

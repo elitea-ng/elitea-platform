@@ -19,6 +19,7 @@
     "allow-workspace-agent-settings-get",
     "allow-workspace-agent-settings-set",
     "allow-workspace-files",
+    "allow-commands-list",
     "allow-rules-get",
     "allow-rules-put",
     "allow-rules-explain",
