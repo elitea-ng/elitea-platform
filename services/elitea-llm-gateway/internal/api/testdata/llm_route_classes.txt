@@ -30,7 +30,6 @@ inference POST /llm/v1/completions
 inference POST /llm/v1/embeddings
 inference POST /llm/v1/responses
 inference GET  /llm/v1/realtime
-inference POST /llm/v1/realtime
 other     GET  /llm/v1/models
 other     GET  /llm/v1/models/*
 other     POST /llm/v1/check_connection

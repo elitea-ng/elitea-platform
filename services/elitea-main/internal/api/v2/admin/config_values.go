@@ -274,7 +274,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		// Always empty, and honestly so. `requires_restart` in pylon names the
 		// PYLONS whose plugins must reload; the only writable section here has
 		// no field carrying the flag, and this service has no reload signal to
-		// offer even if it did (`plugin_config_restart` answers 501). The page
+		// offer even if it did (no reload route is mounted). The page
 		// therefore renders no restart bar rather than a button that no-ops.
 		Restart: []map[string]any{},
 	})

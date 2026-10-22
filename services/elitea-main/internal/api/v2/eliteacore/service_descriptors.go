@@ -169,9 +169,9 @@ const (
 // string, one place: an operator who reaches the subject from either surface must
 // not be told two different things, and two copies drift the moment one is
 // edited.
-const ServiceDescriptorsUnavailableReason = "service descriptors register EXTERNAL PROVIDERS with pylon's provider " +
-	"hub: a posted descriptor is stored by elitea_core and then health-checked into an in-process dict that " +
-	"lookup_provider reads when an agent calls one of that provider's toolkits. This platform has no descriptor " +
+const ServiceDescriptorsUnavailableReason = "service descriptors registered EXTERNAL PROVIDERS with the legacy " +
+	"runtime's provider hub: a posted descriptor was health-checked into an in-process registry that an agent's " +
+	"toolkit call read to find its provider. This platform has no descriptor " +
 	"store, no provider health probe and no provider lookup, so there is nothing to list and nothing a " +
 	"registration would reach. The replacement is specified — immutable admitted provider manifests, ADR-0012 and " +
 	"the Provider Service Protocol — but both are still In Review and scheduled for migration phase P3, and that " +

@@ -329,8 +329,8 @@ func TestSaveLeavesUnmentionedKeysAlone(t *testing.T) {
 }
 
 // TestSaveRequiresRestartIsEmptyAndHonest — pylon returns the pylons whose
-// plugins must reload. There are none here, and `plugin_config_restart` answers
-// 501, so a non-empty list would put a reload button on screen with nothing
+// plugins must reload. There are none here, and no reload route is mounted, so
+// a non-empty list would put a reload button on screen with nothing
 // behind it.
 func TestSaveRequiresRestartIsEmptyAndHonest(t *testing.T) {
 	_, router := newConfigEnvironment(t)

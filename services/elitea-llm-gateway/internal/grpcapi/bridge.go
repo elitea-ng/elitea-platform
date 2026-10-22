@@ -117,7 +117,7 @@ var (
 	routeImageEdit          = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/images/edits", "/llm/v1/images/variations"}}
 	routeSpeech             = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/audio/speech"}}
 	routeTranscribe         = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/audio/transcriptions", "/llm/v1/audio/translations"}}
-	routeRealtime           = route{methods: []string{http.MethodGet, http.MethodPost}, paths: []string{"/llm/v1/realtime"}, upgrade: true}
+	routeRealtime           = route{methods: []string{http.MethodGet}, paths: []string{"/llm/v1/realtime"}, upgrade: true}
 	routeListModels         = route{methods: []string{http.MethodGet}, paths: []string{"/llm/v1/models"}}
 	routeGetModel           = route{methods: []string{http.MethodGet}, prefix: "/llm/v1/models/"}
 	routeCheckConnection    = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/check_connection"}}

@@ -66,7 +66,7 @@ func TestRetiredPermissionsAgreeBetweenMigrationAndCatalogue(t *testing.T) {
 	}
 	if !slices.Equal(fromMigration, fromCatalogue) {
 		t.Fatalf("retired lists disagree.\n  0136 deletes: %v\n  catalogue hides: %v\n"+
-			"  A name only 0136 knows comes back on the Roles matrix when pylon re-seeds it.\n"+
+			"  A name only 0136 knows comes back on the Roles matrix if a row carrying it is re-seeded.\n"+
 			"  A name only the catalogue knows keeps its rows forever.",
 			fromMigration, fromCatalogue)
 	}

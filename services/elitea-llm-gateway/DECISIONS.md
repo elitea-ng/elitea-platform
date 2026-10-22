@@ -1328,6 +1328,14 @@ in a release note.**
   back into the error text. *Decision:* return the REASON only. Test:
   `TestOpenRealtimeSocket_UnparsableProviderURLIsReported`.
 
+- **[2026-10-21] `/llm/v1/realtime` is GET only.** *Finding:* a POST alias was
+  mounted beside the GET for a legacy relay that posted to the same path. That
+  relay is gone, and a WebSocket handshake is a GET by definition, so the alias
+  only ever produced the 426 "not an upgrade" refusal. *Decision:* GET only, at
+  every layer: the HTTP router mounts GET (a POST answers chi's 405), the gRPC
+  bridge's `routeRealtime` admits GET, and elitea-main's edge route table
+  answers a POST with the same 405 body.
+
 ## Observability
 - **[human decision] 2026-08-17 (issue #465) — `GET /metrics` serves a named
   allowlist. `/debug/vars` stays unpublished.** *Finding:* the

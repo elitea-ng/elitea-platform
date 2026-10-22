@@ -51,7 +51,6 @@ var postRoutes = map[string]gatewayRPC{
 	"/llm/v1/check_connection":      rpcCheckConnection,
 	"/llm/v1/list_provider_models":  rpcListProviderModels,
 	"/llm/v1/list_provider_voices":  rpcListProviderVoices,
-	"/llm/v1/realtime":              rpcRealtime,
 }
 
 // routeOf returns the method that serves (method, path), or rpcNone.

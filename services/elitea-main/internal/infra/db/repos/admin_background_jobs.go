@@ -8,8 +8,7 @@ package repos
 // an in-process `arbiter.TaskNode`'s `global_task_state` — one-off maintenance
 // operations that plugins register at import time, started and stopped through
 // the Arbiter. There is no such registry here and AGENTS.md says there will not
-// be one, so `/api/v2/admin/tasks/administration` answers 501 and keeps
-// answering it (internal/api/v2/admin/handler.go, arbiterTaskNodeUnavailable).
+// be one, so no route for it is mounted.
 //
 // What the page MEANT to an operator — "what is running on this platform right
 // now, who started it, and can I stop it" — is a real question this platform

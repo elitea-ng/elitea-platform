@@ -164,6 +164,8 @@ func TestProxy_RouteMissesMatchTheGatewayRouter(t *testing.T) {
 		{http.MethodGet, "/llm/other", http.StatusNotFound, "unknown route"},
 		{http.MethodGet, "/llm/v1/chat/completions", http.StatusMethodNotAllowed, "method not allowed"},
 		{http.MethodPost, "/llm/v1/models", http.StatusMethodNotAllowed, "method not allowed"},
+		// A WebSocket handshake is a GET; the legacy POST alias is gone.
+		{http.MethodPost, "/llm/v1/realtime", http.StatusMethodNotAllowed, "method not allowed"},
 		{http.MethodPost, "/llm/v1/messages/batches", http.StatusNotFound, "unknown messages sub-path"},
 		{http.MethodGet, "/llm/v1/messages/batches", http.StatusMethodNotAllowed, "method not allowed"},
 	}

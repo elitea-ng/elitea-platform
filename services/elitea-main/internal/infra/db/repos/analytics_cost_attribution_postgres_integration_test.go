@@ -9,7 +9,7 @@ package repos
 // not the unexported query functions it calls, and it runs on the migrated
 // template so shared migrations 0100 (execution_id) and 0119
 // (tool_call_records) are exercised as DDL. It reuses this package's own
-// agent-analytics fixtures (seedAgentExecution, seedPylonApplicationsTable,
+// agent-analytics fixtures (seedAgentExecution, seedApplicationsTable,
 // seedUnattributedRequests) rather than duplicating them, and this package's
 // own tool-analytics fixture (recordToolCallForTest) for the tool half.
 

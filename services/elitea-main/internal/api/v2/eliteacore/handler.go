@@ -1637,16 +1637,13 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 			`SELECT COALESCE(author_id, 0) FROM %s.application_versions WHERE id = $1`, schema),
 			embeddedVerID).Scan(&embeddedAuthorID) // failure leaves 0; the link is still written
 		ownerProjectID, ownerErr := strconv.Atoi(projectID)
-		includeOwnerID := false
-		if ownerErr == nil {
-			if hasOwner, probeErr := eliteaToolsHasOwnerID(ctx, h.pool, ownerProjectID); probeErr == nil {
-				includeOwnerID = hasOwner
-			}
-		}
-		if err := insertApplicationToolReference(
+		if ownerErr != nil {
+			slog.ErrorContext(ctx, "embed_sub_agents: sub-agent link skipped, project id is not a number",
+				"project_id", projectID, "err", ownerErr)
+		} else if err := insertApplicationToolReference(
 			ctx, h.pool, schema, int64(targetVersionID), ref.Name,
 			int64(embeddedAppID), int64(embeddedVerID),
-			ownerProjectID, includeOwnerID, embeddedAuthorID,
+			ownerProjectID, embeddedAuthorID,
 		); err != nil {
 			slog.ErrorContext(ctx, "embed_sub_agents: sub-agent link failed",
 				"schema", schema, "parent_version_id", targetVersionID,
