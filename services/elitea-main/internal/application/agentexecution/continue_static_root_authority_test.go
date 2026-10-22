@@ -141,7 +141,7 @@ func TestStaticPipelineInventoryContinuationRetainsOriginalAuthority(t *testing.
 			request := CurrentContinuationRequest{ProjectID: 7, ActorUserID: 11, ConversationUUID: input.GetConversationId(), ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a", ThreadID: input.GetThreadId(), Kind: CurrentContinuationStatic, StaticDecisions: []CurrentStaticLeafDecision{{PauseID: leaf.Proof.PauseID, ChildThreadID: leaf.ChildThreadID, ToolCallID: leaf.ToolCallID, Action: "continue", Value: "next"}}}
 			freezer := &currentApplicationVersionFreezerStub{}
 			admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{ExecutionID: "static-resume", CommandID: "static-command", Created: true}}
-			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
+			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
 			if err != nil {
 				t.Fatal(err)
 			}

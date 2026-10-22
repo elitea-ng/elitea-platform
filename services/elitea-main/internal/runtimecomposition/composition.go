@@ -37,7 +37,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/currentcore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
@@ -751,10 +750,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
 		}
-		// In process (#1359 H7): this used to be an HTTP self-call to the
-		// platform listener that always answered 404. No policy source
-		// exists yet (#334), so every turn carries no policy, as before.
-		nextInputSuggestionResolver := currentcore.NewNextInputSuggestionResolver(nil)
 		agentGuardrails, targetErr := platformconfig.NewGuardrailPolicyAdapter(dependencies.AdmissionPool)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent guardrail policy source: %w", targetErr)
@@ -764,7 +759,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			agentTargets,
 			agentTargets,
 			agentTargets,
-			nextInputSuggestionResolver,
 			agentGuardrails,
 			agentVersions,
 			agentAdmissions,

@@ -93,8 +93,7 @@ func TestCurrentAdhocStartCarriesTheTriggerOrigin(t *testing.T) {
 		ExecutionID: "execution-adhoc", CommandID: "command-adhoc", Created: true,
 		AdmittedAt: time.Unix(1, 0), Deadline: time.Unix(61, 0),
 	}}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

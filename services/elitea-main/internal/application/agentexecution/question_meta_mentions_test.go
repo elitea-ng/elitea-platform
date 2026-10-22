@@ -48,8 +48,7 @@ func TestCurrentApplicationStartStoresMentionsOnTheQuestion(t *testing.T) {
 		ExecutionID: "execution-1", CommandID: "command-1", Created: true,
 		AdmittedAt: admittedAt, Deadline: admittedAt.Add(time.Minute),
 	}}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +84,7 @@ func TestCurrentAdhocStartStoresMentionsOnTheQuestion(t *testing.T) {
 		ExecutionID: "execution-adhoc", CommandID: "command-adhoc", Created: true,
 		AdmittedAt: admittedAt, Deadline: admittedAt.Add(time.Minute),
 	}}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}
