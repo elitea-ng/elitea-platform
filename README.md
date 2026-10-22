@@ -60,7 +60,7 @@ Services will be available at:
 | Browser origin | http://localhost:8080 | elitea-main: API, plus the SPA relayed |
 | API | http://localhost:8080/api/ | elitea-main API endpoints |
 | UI | http://localhost:8080/app/ | elitea-ui React SPA |
-| postgres | localhost:5432 | PostgreSQL 18 with pgvector |
+| postgres | localhost:5432 | PostgreSQL 18 (no extensions needed) |
 
 ### DeepWiki on the dev stack (`deepwiki` profile)
 
@@ -68,7 +68,7 @@ DeepWiki is off by default. Turn it on with one command:
 
 ```bash
 bash deploy/scripts/gen-deepwiki-certs.sh           # provider CA, host and client certs
-bash deploy/scripts/gen-platform-listener-certs.sh  # elitea-main's :9446 listener and the callback identity
+bash deploy/scripts/gen-platform-listener-certs.sh  # :9446 listener, callback identity, elitea-vector certs
 ELITEA_DEEPWIKI_ENABLED=true \
 ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki:9443 \
 ELITEA_RUNTIME_PLATFORM_ADDRESS=:9446 \
@@ -77,7 +77,9 @@ podman compose -f deploy/docker-compose.yml --profile deepwiki up -d
 
 `ELITEA_RUNTIME_PLATFORM_ADDRESS` opens elitea-main's platform gRPC listener
 (mTLS, compose network only). The DeepWiki host stores its artifacts there,
-and the engine makes its model calls there. This stack has **no LLM gateway**,
+and the engine makes its model calls there. The profile also brings up
+`qdrant` and `elitea-vector`, where the engine keeps its dense vectors;
+elitea-vector verifies the engine's tokens on that listener. This stack has **no LLM gateway**,
 so a model call still fails at elitea-main. Artifacts work, and
 `DEEPWIKI_NATIVE_RUNNER=fixture` gives a canned wiki. To generate a wiki with
 a real model, use `deploy/docker-compose.standalone-full.yml`, below.

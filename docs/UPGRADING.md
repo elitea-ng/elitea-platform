@@ -4,7 +4,151 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
-## Dev compose: object storage, pgvector, and the platform listener for the `deepwiki` profile
+## pgvector is removed: every vector is in Qdrant behind elitea-vector — BREAKING
+
+**Affects:** every install. PostgreSQL no longer needs (or gets) the `vector`
+extension. DeepWiki and Inventory keep their vectors in elitea-vector (#1359;
+ADR-0031 as amended, elitea-docs#58), so a deployment that runs either
+engine's `native` runner, Rust indexing or the memory toolkit needs
+`vector.enabled` (or an external elitea-vector).
+
+**What changed.**
+
+* **PostgreSQL is plain `postgres:18`** in every compose stack, kind and CI.
+  The chart's `dbInit` job, the standalone `db-init` and kind's initdb no
+  longer run `CREATE EXTENSION vector`. An existing data volume or server is
+  reused as it is.
+* **DeepWiki**: dense vectors live in elitea-vector (source `deepwiki`, the
+  shared `emb_<slug>_<dim>` collections), one namespace per wiki; a build
+  writes them under its own generation and the publish flips
+  `wikis.active_generation` with the nodes and edges. The engine's new
+  migration `0008_vectors_in_qdrant` drops `wiki_node_embeddings` (and its
+  build twin) and adds `active_generation` and `stale_generations`.
+  **Every wiki published before the upgrade has no dense vectors**: it
+  answers from the lexical branch only until it is regenerated.
+* **Inventory**: entity vectors live in elitea-vector (source `inventory`,
+  their own float32 collections `inv_<slug>_<dim>`, exact search), one
+  namespace per graph. The float8[] `entities.embedding` column stays. The
+  engine's `0008_entity_vectors_in_qdrant` drops the generated
+  `embedding_vector` column and adds the graph row's vector columns and
+  `vector_staged_generations`. **No rebuild is needed**: the first ranking of
+  a graph (which carries the invocation's bearer) publishes its stored
+  vectors to elitea-vector (the backfill). `orphans --delete` now keeps a
+  live project's graph that still holds vectors in elitea-vector; elitea-main's
+  toolkit cleanup deletes both.
+* **Rewritten released migrations.** Plain PostgreSQL could not run the
+  engines' released chains, which created the extension, so these released
+  files were rewritten without it:
+
+  | Engine | Migration | Released checksum still accepted |
+  |---|---|---|
+  | DeepWiki | `0001_wiki_index_storage` | `ea5af872e89869cdf824e92f71586ed58143efa30572c74c73a3e7bfa1bb40c3` |
+  | DeepWiki | `0003_build_space` | `e36c440fb1c6d43c2900931f94f4f1c1ea023359c9e9ffbddd93e191efaf2b7e` |
+  | DeepWiki | `0005_project_scope` | `fe71faa1fc925a050ad73b5d3b7313e1cc8ca926d1218fe476ae950bd3a7cac7` |
+  | Inventory | `0004_entity_vectors` | `a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f` |
+
+  The runner (`libs/rust/pg-migrate`, `apply_with_rewrites`) accepts exactly
+  the released checksum listed for each rewritten version, besides the new
+  one; any other checksum is still refused, as for every other migration.
+  A database that applied the released text keeps that checksum in its
+  ledger and is not re-run; a fresh install records the new text. Each
+  rewritten file names its released checksum in its header.
+* **The extension is dropped only when nothing needs it.** Each engine's
+  `0008` drops the `vector` extension with `RESTRICT` when it exists. When
+  another object still depends on it, or the migrating role does not own
+  it, the migration keeps it with a NOTICE and succeeds; drop it yourself
+  once nothing uses it (`DROP EXTENSION vector;` as its owner).
+* **The `pgvector` configuration type is removed** (and
+  `pgvector_configuration` with it). Creating a configuration of type
+  `pgvector`, or switching one to it, is refused with 400. **Existing rows
+  are kept but inert**: they are hidden from configuration lists and
+  selectors, nothing reads them, and `GET` and `DELETE` by id still work, so
+  remove them (and their vault secrets) when convenient. Toolkit settings
+  lose `pgvector_configuration`: the API strips it on read and write, and the
+  tenant migration `0154_strip_toolkit_pgvector_configuration` deletes the
+  key from stored `elitea_tools.settings`.
+* **elitea-main's per-project PgVector store is gone**: no `project_<id>`
+  database or role is created for a new project, and nothing drops the old
+  ones any more (`cmd/pgvector-orphans` is deleted too).
+  * With `ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED=false`, project create
+    used to provision a `project_<id>` PgVector database. It no longer does,
+    and **such a deployment indexes nothing** (it indexed nothing that was
+    read since the Python worker went). Index through the Rust worker and
+    elitea-vector.
+  * The project delete response no longer carries `database`. The cleanup
+    journal runs `artifact_buckets` and `project_schema` (plus the
+    application data steps and elitea-vector's `DropProject`). A journal row
+    written before the upgrade, with `had_vector_store`, `vector_database`,
+    `quiet_drop_failures` or `project_pgvector_drop`, is decoded without
+    them and completes on its next run.
+* **Token introspection** (`TokenIntrospectionService`) is also served on
+  elitea-main's platform listener (`:9446`) behind the same
+  `ELITEA_VECTOR_INTROSPECTION_CLIENTS`, so a stack without the runtime plane
+  can run elitea-vector for DeepWiki and Inventory. Callback tokens of both
+  engines now carry a grant to their own source, and their default lifetime
+  is 8 h (`ELITEA_{DEEPWIKI,INVENTORY}_CALLBACK_TOKEN_TTL_MINUTES`).
+* **The introspection pool is 2 connections** per elitea-main replica (was 8;
+  `ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS`). `values-standalone.yaml`
+  declares `postgresql.maxConnections: 210` (was 200): four replicas at 44
+  connections plus 25 reserved. Turning vector on no longer costs a replica.
+* **New engine settings**: `ELITEA_DEEPWIKI_VECTOR_URL` and
+  `ELITEA_INVENTORY_VECTOR_URL` (the elitea-vector origin,
+  `https://elitea-vector:9470`), with optional `*_VECTOR_SERVER_NAME`. The
+  `native` runners refuse to start without them; TLS reuses each engine's
+  callback CA, certificate and key. The chart derives them from
+  `vector.enabled` (a value set in the app's `env` wins) and **refuses to
+  render a `native` runner with neither**.
+
+**What to do.**
+
+1. Turn on elitea-vector before (or with) the upgrade wherever DeepWiki's or
+   Inventory's `native` runner runs. With this chart:
+
+   ```yaml
+   vector:
+     enabled: true            # needs main.runtime.enabled
+     qdrant:
+       mode: internal         # a 3-node StatefulSet; or external + external.url
+       apiKeySecret:
+         name: elitea-qdrant-api-key   # create it first; key: api-key
+     # recommended in production: every model either engine or the worker
+     # embeds with, as "<model-slug>:<dimension>"
+     allowedSpaces: []
+   ```
+
+   ```bash
+   kubectl -n <ns> create secret generic elitea-qdrant-api-key \
+     --from-literal=api-key="$(openssl rand -hex 32)"
+   ```
+
+   The certificates come from the `elitea-runtime-ca` ClusterIssuer the
+   runtime plane already uses (`vector.mtls.issuerRef`). Keep
+   `vector.collection.replicationFactor` (2) at most
+   `vector.qdrant.internal.replicas` (3).
+   **argocd-lab (technicaldomain)** needs exactly this block in its values,
+   plus the Secret above in its namespace, before it syncs this release,
+   whenever its DeepWiki or Inventory engine runs `native` (the chart's
+   default runner), which the chart now refuses without vector. If it also sets `postgresql.maxConnections` from
+   `values-standalone.yaml`'s old 200, raise it (and the server) to at least
+   201, or keep elitea-main at three replicas.
+2. **Regenerate every DeepWiki wiki** after the upgrade (each one answers
+   lexically until then). Inventory needs nothing: graphs backfill on their
+   first ranking.
+3. Roll the engines over completely: a replica still on the previous release
+   fails dense searches and publishes once the new `0008` has dropped the
+   embedding tables.
+4. **Retire the per-project PgVector server yourself**: drop the
+   `project_<id>` databases and `project_<id>_user` roles it holds (nothing in
+   the platform reads them any more; they held toolkit indexes the Python
+   worker wrote). Remove the `pgvector` configuration rows when convenient.
+5. If an engine's `0008` logged that it kept the extension, drop it once
+   nothing else uses it.
+6. Compose: nothing beyond the image change for the default stacks;
+   `docker-compose.standalone-full.yml` already runs elitea-vector and now
+   points both engines at it. For the dev stack's `deepwiki` profile see the
+   next entry.
+
+## Dev compose: object storage, the platform listener and elitea-vector for the `deepwiki` profile
 
 **Affects:** the local dev stack `deploy/docker-compose.yml` only. The chart
 and the other compose files are unchanged.
@@ -15,13 +159,11 @@ and the other compose files are unchanged.
   (bucket `elitea-artifacts`), as the e2e and standalone stacks do, and waits
   for `rustfs-bucket-init`. Without it, elitea-main refused to start on this
   stack: `STORAGE_BACKEND must be one of "s3", "azure", "gcs"`.
-* `postgres` runs `pgvector/pgvector:0.8.1-pg18-trixie`, the image
-  `docker-compose.standalone-full.yml` uses, instead of `postgres:18`.
-  `elitea-deepwiki-migrate` creates the `vector` extension in its first
-  migration, so on `postgres:18` the `deepwiki` profile stopped at
-  `extension "vector" is not available`. It has the same PostgreSQL major and
-  the same Debian 13 base, so the existing `postgres_data` volume is reused as
-  it is.
+* The `deepwiki` profile gains `qdrant` and `elitea-vector` (the engine keeps
+  its dense vectors there; see "pgvector is removed" above). elitea-vector's
+  server and client certificates come off the provider CA, issued by
+  `gen-platform-listener-certs.sh`, and it verifies the engine's tokens on
+  elitea-main's platform listener. `postgres` stays plain `postgres:18`.
 * The `deepwiki` profile can now reach elitea-main's platform gRPC listener
   (`:9446`, #1359). The KNOWN LIMIT about a missing listener is gone. The
   host uploads its artifacts over `ArtifactObjectService`, and the engine
@@ -237,8 +379,8 @@ material comes from the new `deploy/scripts/gen-platform-listener-certs.sh`
 `docker-compose.yml` opens no platform listener, so its providers have no
 artifact transport: an invocation that carries a callback bearer fails its
 upload, and the error names `ELITEA_<APP>_ARTIFACT_SERVICE_URL`.
-(Since fixed: see "Dev compose: object storage, pgvector, and the platform
-listener for the `deepwiki` profile" above.)
+(Since fixed: see "Dev compose: object storage, the platform listener and
+elitea-vector for the `deepwiki` profile" above.)
 
 **What to do (kind).** `deploy/kind/kind-stack.sh up` now installs the
 in-repo NATS chart and its bootstrap, creates `elitea-runtime-material`,
@@ -432,8 +574,8 @@ export the same `RUNTIME_WORKER_SPIFFE_ID` you minted with), and
 ModelService with grpcurl and expects the pipeline's 401 for its invalid
 bearer. The dev `docker-compose.yml` opens no platform listener, so its
 `deepwiki` profile can run only the fixture engine runner. (Since fixed: see
-"Dev compose: object storage, pgvector, and the platform listener for the
-`deepwiki` profile" above.)
+"Dev compose: object storage, the platform listener and elitea-vector for
+the `deepwiki` profile" above.)
 
 ## DeepWiki and Inventory: provider SPI and engine sidecar over gRPC; cancel fan-out over NATS
 
