@@ -22,6 +22,8 @@ use crate::pb::vector_service_client::VectorServiceClient;
 pub const MAX_BATCH_POINTS: usize = 512;
 /// The most results one search may ask for.
 pub const MAX_LIMIT: u32 = 1000;
+/// The deepest a search page may reach: `offset + limit` is at most this.
+pub const MAX_SEARCH_DEPTH: u32 = 10_000;
 
 /// The handle toolkit code holds for the claim it runs under. The worker's
 /// `VectorClaimToken` implements it; nothing else may read the bearer, and
@@ -337,7 +339,7 @@ impl VectorClient {
             .collections)
     }
 
-    /// Dense cosine search.
+    /// Dense cosine search: the first page of the ranking.
     ///
     /// # Errors
     ///
@@ -346,6 +348,28 @@ impl VectorClient {
         &self,
         token: &dyn ClaimToken,
         params: SearchParams,
+    ) -> Result<Vec<pb::ScoredPoint>> {
+        self.search_page(token, params, 0).await
+    }
+
+    /// Dense cosine search: the page of `params.limit` results that starts
+    /// `offset` results down the ranking. `offset + limit` is at most
+    /// [`MAX_SEARCH_DEPTH`].
+    ///
+    /// The ranking is by score, highest first, then by point id, so
+    /// consecutive pages over unchanged points are disjoint and in order. For
+    /// [`pb::Source::Inventory`] the facade scans exactly, so the ranking is
+    /// the exact cosine ranking; for the other sources it is an HNSW walk's.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidToken`] or the facade's refusal (`INVALID_ARGUMENT`
+    /// past the depth bound).
+    pub async fn search_page(
+        &self,
+        token: &dyn ClaimToken,
+        params: SearchParams,
+        offset: u32,
     ) -> Result<Vec<pb::ScoredPoint>> {
         let request = authorize(
             token,
@@ -356,6 +380,7 @@ impl VectorClient {
                 filter: params.filter,
                 limit: params.limit,
                 score_threshold: params.score_threshold,
+                offset,
             },
         )?;
         Ok(self
@@ -684,6 +709,29 @@ pub fn toolkit_scope_with_generations(namespaces: &[(String, Option<String>)]) -
             .collect(),
         memory_scope: 0,
         toolkit_id: 0,
+    }
+}
+
+/// A search scope over Inventory namespaces (no generation).
+#[must_use]
+pub fn inventory_scope(namespace_ids: Vec<String>) -> pb::Scope {
+    pb::Scope {
+        project_id: 0,
+        source: pb::Source::Inventory as i32,
+        namespace_ids,
+        generation: String::new(),
+        active_generations: Vec::new(),
+        memory_scope: 0,
+        toolkit_id: 0,
+    }
+}
+
+/// The Inventory namespace `namespace_id`, without a generation.
+#[must_use]
+pub fn inventory_namespace(namespace_id: &str) -> pb::Namespace {
+    pb::Namespace {
+        source: pb::Source::Inventory as i32,
+        ..toolkit_namespace(namespace_id)
     }
 }
 

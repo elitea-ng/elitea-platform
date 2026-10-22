@@ -2098,7 +2098,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			Clients:  grpcauth.AnyVerifiedPeer(),
 			Register: contentServer.Register,
 		}},
-		VectorIntrospection: vectorIntrospection,
+		VectorIntrospection: vectorIntrospectionOrNil(vectorIntrospection),
 		Workspace:           workspaceServer,
 		EgressAudit:         egressAuditServerOrNil(egressAuditServer),
 	})
@@ -2180,6 +2180,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		publicRoutes:           publicRoutes,
 		configurationValidator: currentSDKConfigurationValidator,
 		egressAudit:            egressAuditMerger,
+		vectorIntrospection:    vectorIntrospection,
 	}, nil
 }
 

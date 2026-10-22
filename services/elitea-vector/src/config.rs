@@ -11,9 +11,9 @@
 //! | `ELITEA_VECTOR_QDRANT_URL` | Qdrant gRPC URL | required |
 //! | `ELITEA_VECTOR_QDRANT_API_KEY_FILE` | file holding the Qdrant API key | none |
 //! | `ELITEA_VECTOR_COLLECTION_REPLICATION_FACTOR`, `ELITEA_VECTOR_COLLECTION_SHARD_NUMBER` | settings of a new collection | `1`, `1` |
-//! | `ELITEA_VECTOR_MAX_COLLECTIONS` | a **soft** cap on `emb_*` collections: creating one beyond it is `RESOURCE_EXHAUSTED`, but concurrent creators can overshoot it by their number. Use `ELITEA_VECTOR_ALLOWED_SPACES` for a hard bound | `64` |
+//! | `ELITEA_VECTOR_MAX_COLLECTIONS` | a **soft** cap on the owned collections (`emb_*` and `inv_*` together): creating one beyond it is `RESOURCE_EXHAUSTED`, but concurrent creators can overshoot it by their number. Use `ELITEA_VECTOR_ALLOWED_SPACES` for a hard bound | `64` |
 //! | `ELITEA_VECTOR_MAX_DIMENSION` | the largest space dimension a caller may create | `4096` |
-//! | `ELITEA_VECTOR_ALLOWED_SPACES` | comma-separated `slug:dimension`; when set, only these spaces may be created: the **hard** bound on collections (recommended in production) | any |
+//! | `ELITEA_VECTOR_ALLOWED_SPACES` | comma-separated `slug:dimension`; when set, only these spaces may be created (a listed space may be created in either family, `emb_*` and `inv_*`): the **hard** bound on collections (recommended in production) | any |
 //! | `ELITEA_VECTOR_INTROSPECTION_URL` | elitea-main's private control listener, `https://…` | required |
 //! | `ELITEA_VECTOR_INTROSPECTION_CA_FILE` | CA of elitea-main's server certificate | required |
 //! | `ELITEA_VECTOR_INTROSPECTION_SERVER_NAME` | TLS server name of elitea-main | the URL host |

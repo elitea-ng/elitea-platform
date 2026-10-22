@@ -6,6 +6,24 @@ package repos
 // A callback token is an ordinary auth_core__token row, and a user can create
 // a PAT with the same name, project binding and expiry. This record is the
 // only thing that tells the two apart, and only the minting facade writes it.
+//
+// TWO KINDS OF RECORD share the one row a token may have (token_id is the
+// key), told apart by owner_toolkit_id:
+//
+//   - an INVOCATION grant (RecordInvocation): written for every bearer a
+//     DeepWiki or Inventory facade mints, before the hop. owner_toolkit_id is
+//     0 (no toolkit row has that id) and source_toolkit_ids is empty, so it
+//     admits no source tool; what it carries is the provider, which decides
+//     the vector source the token may use in elitea-vector (ADR-0031,
+//     vectorintrospection.ProviderSource);
+//   - a SOURCE-TOOL grant (Record): Inventory `investigate` with a named
+//     invoking toolkit. It upgrades the invocation grant the mint already
+//     wrote for the same token, provider and project, adding the invoking
+//     toolkit and its source toolkits (test_tool's SourceToolGate).
+//
+// Reusing shared/0159's columns needs no new migration: 0 never names a
+// toolkit, and AdmitsSourceTool requires the toolkit among the sources, which
+// an invocation grant has none of.
 
 import (
 	"context"
@@ -52,6 +70,12 @@ func NewCallbackTokenGrants(pool *pgxpool.Pool) *CallbackTokenGrants {
 // Record writes grant for the token it names. The token must exist, belong
 // to OwnerID and be bound to ProjectID; anything else records nothing and
 // returns ErrCallbackGrantNotRecorded.
+//
+// A token that already carries a grant — the invocation grant its mint wrote
+// (RecordInvocation) — is UPGRADED in place when that grant is for the same
+// provider and project: the tool, the invoking toolkit and the sources are
+// replaced. A grant for another provider or project is never rewritten, and
+// the call then records nothing.
 func (g *CallbackTokenGrants) Record(ctx context.Context, grant CallbackTokenGrant) error {
 	if g == nil || g.pool == nil {
 		return fmt.Errorf("%w: no database", ErrCallbackGrantNotRecorded)
@@ -74,11 +98,65 @@ FROM public.auth_core__token AS t
 JOIN elitea_identity.token_project_binding AS b ON b.token_id = t.id
 WHERE t.uuid = $1
   AND t.user_id = $2
-  AND b.project_id = $3`,
+  AND b.project_id = $3
+ON CONFLICT (token_id) DO UPDATE
+SET tool               = EXCLUDED.tool,
+    owner_toolkit_id   = EXCLUDED.owner_toolkit_id,
+    source_toolkit_ids = EXCLUDED.source_toolkit_ids
+WHERE callback_token_grant.provider = EXCLUDED.provider
+  AND callback_token_grant.project_id = EXCLUDED.project_id`,
 		grant.TokenUUID, owner, project, grant.Provider, grant.Tool,
 		grant.OwnerToolkitID, sources)
 	if err != nil {
 		return fmt.Errorf("record callback token grant: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w: token %s", ErrCallbackGrantNotRecorded, grant.TokenUUID)
+	}
+	return nil
+}
+
+// CallbackInvocationGrant is the record every minted DeepWiki or Inventory
+// callback bearer gets: the provider and tool of the invocation it was minted
+// for, and the project it is bound to. It names no toolkit.
+type CallbackInvocationGrant struct {
+	// TokenUUID is the minted token's uuid (material.Grant.UUID).
+	TokenUUID string
+	// OwnerID owns the token; ProjectID is the project it is bound to.
+	OwnerID   int64
+	ProjectID int64
+	// Provider is the facade ("deepwiki", "inventory"); Tool the invoked tool.
+	Provider string
+	Tool     string
+}
+
+// RecordInvocation writes the invocation grant of a freshly minted token
+// (owner_toolkit_id 0, no sources). The token must exist, belong to OwnerID
+// and be bound to ProjectID, and carry no grant yet; anything else records
+// nothing and returns ErrCallbackGrantNotRecorded.
+func (g *CallbackTokenGrants) RecordInvocation(ctx context.Context, grant CallbackInvocationGrant) error {
+	if g == nil || g.pool == nil {
+		return fmt.Errorf("%w: no database", ErrCallbackGrantNotRecorded)
+	}
+	owner, ownerOK := narrowPositive(grant.OwnerID)
+	project, projectOK := narrowPositive(grant.ProjectID)
+	if !ownerOK || !projectOK || grant.TokenUUID == "" || len(grant.TokenUUID) > 36 ||
+		grant.Provider == "" || grant.Tool == "" {
+		return fmt.Errorf("%w: incomplete grant", ErrCallbackGrantNotRecorded)
+	}
+	tag, err := g.pool.Exec(ctx, `
+INSERT INTO elitea_identity.callback_token_grant
+    (token_id, provider, tool, project_id, owner_toolkit_id, source_toolkit_ids)
+SELECT t.id, $4, $5, $3, 0, '{}'::integer[]
+FROM public.auth_core__token AS t
+JOIN elitea_identity.token_project_binding AS b ON b.token_id = t.id
+WHERE t.uuid = $1
+  AND t.user_id = $2
+  AND b.project_id = $3
+ON CONFLICT (token_id) DO NOTHING`,
+		grant.TokenUUID, owner, project, grant.Provider, grant.Tool)
+	if err != nil {
+		return fmt.Errorf("record callback invocation grant: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("%w: token %s", ErrCallbackGrantNotRecorded, grant.TokenUUID)

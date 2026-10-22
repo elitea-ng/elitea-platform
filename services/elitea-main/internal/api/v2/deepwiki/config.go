@@ -44,10 +44,25 @@ const (
 
 	// CallbackTokenTTLEnv is how long a minted callback bearer lives. It must
 	// outlast the longest generation the deployment expects; a token that dies
-	// mid-run makes the engine fail its artifact upload after doing all the
-	// work.
+	// mid-run makes the engine fail its artifact upload and its vector writes
+	// (elitea-vector, near the END of the build) after doing all the work.
 	CallbackTokenTTLEnv = "ELITEA_DEEPWIKI_CALLBACK_TOKEN_TTL_MINUTES"
 )
+
+// DefaultCallbackTokenTTL is the bearer's lifetime when CallbackTokenTTLEnv
+// is unset: eight hours.
+//
+// WHY EIGHT. Nothing bounds a generation by the wall clock: neither this
+// facade, nor the sub-application host (its engine calls carry no deadline
+// the caller did not set), nor the engine. The only cap is the generation
+// worker's CPU time, ELITEA_DEEPWIKI_WORKER_CPU_SECONDS (RLIMIT_CPU, default
+// 4 h of CPU). CPU time is not wall time: the worker also waits on model
+// calls and on embeddings, which spend none of it, so the build's wall clock
+// runs past its CPU budget. Twice the default CPU cap covers the longest
+// build the default limits allow with that waiting included; the bearer then
+// still verifies when the engine writes its vectors at the end. A deployment
+// that raises the CPU cap raises this with it (CallbackTokenTTLEnv).
+const DefaultCallbackTokenTTL = 8 * time.Hour
 
 // ErrIncompleteConfig reports a deployment that enabled DeepWiki without
 // giving the facade what it needs to reach the provider.
@@ -75,10 +90,10 @@ type Config struct {
 
 	Timeout time.Duration
 
-	// CallbackTokenTTL is the minted bearer's lifetime. Defaults to two hours
-	// — long enough for a large repository's generation, short enough that a
-	// leaked token is not a standing grant. The legacy flow's equivalent had
-	// no expiry at all.
+	// CallbackTokenTTL is the minted bearer's lifetime. Defaults to
+	// DefaultCallbackTokenTTL — long enough for the longest generation the
+	// worker's CPU cap allows, short enough that a leaked token is not a
+	// standing grant. The legacy flow's equivalent had no expiry at all.
 	CallbackTokenTTL time.Duration
 
 	// GitEgress is the allowlist of hosts a repository may be cloned from,
@@ -125,7 +140,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		timeout = time.Duration(seconds) * time.Second
 	}
 
-	callbackTTL := 2 * time.Hour
+	callbackTTL := DefaultCallbackTokenTTL
 	if raw := get(CallbackTokenTTLEnv); raw != "" {
 		minutes, convErr := strconv.Atoi(raw)
 		if convErr != nil || minutes < 1 {

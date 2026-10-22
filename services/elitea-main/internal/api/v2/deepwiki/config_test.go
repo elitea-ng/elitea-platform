@@ -145,3 +145,27 @@ func TestTheRetiredBaseURLIsRefused(t *testing.T) {
 		t.Fatalf("the retired ELITEA_DEEPWIKI_BASE_URL was not refused by name: %v", err)
 	}
 }
+
+// The callback bearer outlives the longest build the worker's default CPU cap
+// allows (4 h of CPU, plus the wall-clock waiting on models it does not
+// count): the engine writes its vectors with it at the END of the build.
+func TestTheCallbackTokenTTLCoversTheLongestBuildAndIsOverridable(t *testing.T) {
+	cfg, err := deepwiki.ConfigFromEnv(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const defaultWorkerCPU = 4 * time.Hour // ELITEA_DEEPWIKI_WORKER_CPU_SECONDS default
+	if cfg.CallbackTokenTTL != deepwiki.DefaultCallbackTokenTTL || cfg.CallbackTokenTTL <= defaultWorkerCPU {
+		t.Fatalf("default callback TTL %v, want %v and above the %v CPU cap",
+			cfg.CallbackTokenTTL, deepwiki.DefaultCallbackTokenTTL, defaultWorkerCPU)
+	}
+	cfg, err = deepwiki.ConfigFromEnv(env(map[string]string{deepwiki.CallbackTokenTTLEnv: "90"}))
+	if err != nil || cfg.CallbackTokenTTL != 90*time.Minute {
+		t.Fatalf("override %v (err %v)", cfg.CallbackTokenTTL, err)
+	}
+	for _, raw := range []string{"0", "-1", "8h"} {
+		if _, err := deepwiki.ConfigFromEnv(env(map[string]string{deepwiki.CallbackTokenTTLEnv: raw})); err == nil {
+			t.Fatalf("TTL %q was accepted", raw)
+		}
+	}
+}

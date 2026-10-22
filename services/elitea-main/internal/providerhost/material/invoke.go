@@ -165,7 +165,9 @@ func (in Invocation) Serve(w http.ResponseWriter, r *http.Request) {
 		original, body = peek(r.Body, in.limit())
 	}
 
-	rewritten, grant, err := rewrite(r.Context(), body, projectID, userID)
+	// The tool names the invocation grant a GrantingMinter records.
+	rewriteCtx := WithInvocationTool(r.Context(), chi.URLParam(r, "tool_name"))
+	rewritten, grant, err := rewrite(rewriteCtx, body, projectID, userID)
 	if err != nil {
 		Revoke(r.Context(), in.Minter, logger, userID, grant.UUID)
 		status, message := in.Status(err)

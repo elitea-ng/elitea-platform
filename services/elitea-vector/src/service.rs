@@ -20,15 +20,15 @@ use qdrant_client::qdrant::value::Kind;
 use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, Filter,
     NamedVectors, PayloadIncludeSelector, PointId, PointStruct, PrefetchQueryBuilder, Query,
-    QueryPointsBuilder, Rrf, ScrollPointsBuilder, SetPayloadPointsBuilder, UpsertPointsBuilder,
-    Value, Vector, VectorsSelector, vector_output, with_vectors_selector,
+    QueryPointsBuilder, Rrf, ScrollPointsBuilder, SearchParamsBuilder, SetPayloadPointsBuilder,
+    UpsertPointsBuilder, Value, Vector, VectorsSelector, vector_output, with_vectors_selector,
 };
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::auth::{Authenticator, Caller, MemoryBinding, MemoryIntent, SHARED_INDEX_WRITE_REFUSED};
 use crate::fanout::fan_out;
-use crate::layout::{self, BM25_MODEL, BM25_VECTOR, DENSE_VECTOR, Space, key};
+use crate::layout::{self, BM25_MODEL, BM25_VECTOR, DENSE_VECTOR, Family, Space, key};
 use crate::pb;
 use crate::scope::{self, Scope};
 use crate::store::{Store, unavailable};
@@ -37,6 +37,14 @@ use crate::store::{Store, unavailable};
 pub const MAX_BATCH_POINTS: usize = 512;
 /// The most results one search returns.
 pub const MAX_LIMIT: u32 = 1000;
+/// The deepest a `Search` pages: `offset + limit` is at most this. A page
+/// costs the store the whole ranking down to its last point, so the depth is
+/// bounded like a limit is.
+pub const MAX_SEARCH_DEPTH: u32 = 10_000;
+/// How many candidates past its depth a `Search` reads, at most, to take in
+/// every point that ties with the last one inside the depth (see
+/// [`VectorService::ranked`]).
+const MAX_TIE_CANDIDATES: u64 = 1000;
 /// The longest `text` of a point, and of a hybrid query.
 const MAX_TEXT_BYTES: usize = 1 << 20;
 const MAX_QUERY_TEXT_BYTES: usize = 8 << 10;
@@ -292,9 +300,11 @@ impl pb::vector_service_server::VectorService for VectorService {
             namespace.toolkit_id,
             true,
         )?;
+        let family = Family::of_raw(namespace.source)?;
         let target = UpsertTarget {
             project_id,
             binding: binding.clone(),
+            bm25: family.layout().bm25,
             source: layout::source_keyword(namespace.source)?,
             namespace_id: namespace.namespace_id.clone(),
             namespace: layout::namespace_uuid(&namespace.namespace_id)?,
@@ -304,10 +314,10 @@ impl pb::vector_service_server::VectorService for VectorService {
         // Everything the caller chose is checked before Qdrant is asked to
         // make anything.
         self.limits.check_dimension(&space)?;
-        if self.store.existing(&space).await?.is_none() {
+        if self.store.existing(family, &space).await?.is_none() {
             self.limits.check_creatable(&space)?;
         }
-        let collection = self.store.ensure(&space).await?;
+        let collection = self.store.ensure(family, &space).await?;
         let mut upserted: u64 = 0;
         // The header was decided afresh just above. Before every batch the
         // token is re-verified through the claim cache (a revocation ends the
@@ -389,6 +399,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             )
             .await?;
         let source = layout::source_keyword(namespace.source)?;
+        let family = Family::of_raw(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
         let binding = caller.memory_binding(
             namespace.source,
@@ -432,7 +443,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             }
             None => return Err(Status::invalid_argument("a selector is required")),
         };
-        let collections = self.store.targets(space.as_ref()).await?;
+        let collections = self.store.targets(family, space.as_ref()).await?;
         self.delete_where(&collections, &scope).await?;
         tracing::info!(
             project_id,
@@ -452,7 +463,9 @@ impl pb::vector_service_server::VectorService for VectorService {
         let caller = self.auth.authenticate(&request).await?;
         let identity = caller.require_admin()?.to_owned();
         let project_id = caller.project(request.into_inner().project_id)?;
-        let collections = self.store.targets(None).await?;
+        // Every collection of every family: a project's Inventory points are
+        // in `inv_*`, everything else in `emb_*`.
+        let collections = self.store.every_target().await?;
         self.delete_where(&collections, &Scope::project(project_id))
             .await?;
         tracing::info!(project_id, identity, "project vectors dropped");
@@ -480,7 +493,7 @@ impl pb::vector_service_server::VectorService for VectorService {
                 false,
             )
             .await?;
-        let (filter, space) = read_parts(
+        let (filter, family, space) = read_parts(
             &caller,
             request.scope.as_ref(),
             request.space.as_ref(),
@@ -488,31 +501,39 @@ impl pb::vector_service_server::VectorService for VectorService {
         )?;
         check_query_vector(&request.vector, &space)?;
         let limit = check_limit(request.limit)?;
+        let depth = check_depth(request.offset, limit)?;
         check_score_threshold(request.score_threshold)?;
-        let Some(collection) = self.store.existing(&space).await? else {
+        let Some(collection) = self.store.existing(family, &space).await? else {
             return Ok(Response::new(pb::SearchResponse::default()));
         };
-        let mut query = QueryPointsBuilder::new(collection)
-            .query(Query::new_nearest(request.vector))
-            .using(DENSE_VECTOR)
-            .filter(filter)
-            .limit(u64::from(limit))
-            .with_payload(true);
-        if let Some(threshold) = request.score_threshold {
-            query = query.score_threshold(threshold);
-        }
-        let response = self
-            .store
-            .client()
-            .query(query)
-            .await
-            .map_err(|error| unavailable("query", &error))?;
+        // The first page (the common case) reads the payloads with the
+        // ranking: one round trip. A deeper page ranks ids and scores only
+        // and then reads the payloads of its own points.
+        let first_page = request.offset == 0;
+        let ranked = self
+            .ranked(
+                &collection,
+                &filter,
+                Ranking {
+                    vector: &request.vector,
+                    depth,
+                    score_threshold: request.score_threshold,
+                    exact: family.layout().exact_search,
+                    with_payload: first_page,
+                },
+            )
+            .await?;
+        let page: Vec<qdrant_client::qdrant::ScoredPoint> =
+            ranked.into_iter().skip(request.offset as usize).collect();
+        let points = if first_page {
+            page.into_iter().map(scored_point).collect()
+        } else {
+            self.with_payloads(&collection, &filter, page).await?
+        };
         Ok(Response::new(pb::SearchResponse {
-            points: response
-                .result
+            points: points
                 .into_iter()
-                .map(|point| {
-                    let mut scored = scored_point(point);
+                .map(|mut scored| {
                     scored.dense_score = Some(scored.score);
                     scored
                 })
@@ -539,12 +560,17 @@ impl pb::vector_service_server::VectorService for VectorService {
                 false,
             )
             .await?;
-        let (filter, space) = read_parts(
+        let (filter, family, space) = read_parts(
             &caller,
             request.scope.as_ref(),
             request.space.as_ref(),
             request.filter.as_ref(),
         )?;
+        if !family.layout().bm25 {
+            return Err(Status::invalid_argument(
+                "hybrid search is not served for this source: its collections hold no BM25 vector; use Search",
+            ));
+        }
         check_query_vector(&request.vector, &space)?;
         let limit = check_limit(request.limit)?;
         if request.text.trim().is_empty() || request.text.len() > MAX_QUERY_TEXT_BYTES {
@@ -557,7 +583,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             value if value <= MAX_LIMIT => value,
             _ => return Err(Status::invalid_argument("prefetch_limit is at most 1000")),
         };
-        let Some(collection) = self.store.existing(&space).await? else {
+        let Some(collection) = self.store.existing(family, &space).await? else {
             return Ok(Response::new(pb::HybridSearchResponse::default()));
         };
         let mut dense = PrefetchQueryBuilder::default()
@@ -645,6 +671,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             )
             .await?;
         let scope = owned_read_scope(&caller, project_id, read, false)?;
+        let family = Family::of_raw(read.source)?;
         let narrowing = scope::translate(request.filter.as_ref())?;
         let space = request
             .space
@@ -652,22 +679,25 @@ impl pb::vector_service_server::VectorService for VectorService {
             .map(|space| Space::from_proto(Some(space)))
             .transpose()?;
         let filter = scope.filter(narrowing);
-        let counts = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
-            let filter = filter.clone();
-            async move {
-                let counted = self
-                    .store
-                    .client()
-                    .count(
-                        CountPointsBuilder::new(collection)
-                            .filter(filter)
-                            .exact(true),
-                    )
-                    .await
-                    .map_err(|error| unavailable("count", &error))?;
-                Ok(counted.result.map_or(0, |result| result.count))
-            }
-        })
+        let counts = fan_out(
+            self.store.targets(family, space.as_ref()).await?,
+            |collection| {
+                let filter = filter.clone();
+                async move {
+                    let counted = self
+                        .store
+                        .client()
+                        .count(
+                            CountPointsBuilder::new(collection)
+                                .filter(filter)
+                                .exact(true),
+                        )
+                        .await
+                        .map_err(|error| unavailable("count", &error))?;
+                    Ok(counted.result.map_or(0, |result| result.count))
+                }
+            },
+        )
         .await?;
         let total: u64 = counts.into_iter().sum();
         Ok(Response::new(pb::CountResponse { count: total }))
@@ -680,10 +710,14 @@ impl pb::vector_service_server::VectorService for VectorService {
         let caller = self.auth.authenticate(&request).await?;
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
-        // An unset source lists every served source the caller may use.
+        // An unset source lists every indexed source the caller may use.
         let sources: Vec<&'static str> = if request.source == pb::Source::Unspecified as i32 {
             caller
-                .permitted_sources(&[pb::Source::ToolkitIndex, pb::Source::Deepwiki])
+                .permitted_sources(&[
+                    pb::Source::ToolkitIndex,
+                    pb::Source::Deepwiki,
+                    pb::Source::Inventory,
+                ])
                 .into_iter()
                 .map(|source| layout::source_keyword(source as i32))
                 .collect::<Result<_, _>>()?
@@ -698,14 +732,18 @@ impl pb::vector_service_server::VectorService for VectorService {
             caller.require_source(request.source)?;
             vec![layout::source_keyword(request.source)?]
         };
+        // Each source is read only in the collections of its own family.
         let queries: Vec<(String, Space, String)> = self
             .store
             .collections()
             .await?
             .into_iter()
-            .flat_map(|(collection, space)| {
+            .flat_map(|(collection, family, space)| {
                 sources
                     .iter()
+                    .filter(move |source| {
+                        Family::of(layout::source_from_keyword(source)) == Some(family)
+                    })
                     .map(move |source| (collection.clone(), space.clone(), (*source).to_owned()))
             })
             .collect();
@@ -782,6 +820,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             )
             .await?;
         let source = layout::source_keyword(namespace.source)?;
+        let family = Family::of_raw(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
         let binding = caller.memory_binding(
             namespace.source,
@@ -825,10 +864,13 @@ impl pb::vector_service_server::VectorService for VectorService {
             folded: &folded,
             max_documents: (request.max_documents != 0).then_some(request.max_documents),
         };
-        let counted = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
-            let filter = filter.clone();
-            async move { self.scroll_documents(&collection, filter, bounds).await }
-        })
+        let counted = fan_out(
+            self.store.targets(family, space.as_ref()).await?,
+            |collection| {
+                let filter = filter.clone();
+                async move { self.scroll_documents(&collection, filter, bounds).await }
+            },
+        )
         .await?;
         let mut documents: BTreeMap<(String, String), u64> = BTreeMap::new();
         for partial in counted {
@@ -896,42 +938,45 @@ impl pb::vector_service_server::VectorService for VectorService {
             .transpose()?;
         let filter = scope.filter(narrowing);
         let matched = AtomicU64::new(0);
-        let read_points = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
-            let filter = filter.clone();
-            let matched = &matched;
-            async move {
-                let mut points = Vec::new();
-                let mut offset: Option<PointId> = None;
-                loop {
-                    let mut scroll = ScrollPointsBuilder::new(&collection)
-                        .filter(filter.clone())
-                        .limit(MEMORY_SCROLL_PAGE)
-                        .with_payload(true)
-                        .with_vectors(false);
-                    if let Some(offset) = offset.take() {
-                        scroll = scroll.offset(offset);
+        let read_points = fan_out(
+            self.store.targets(MEMORY_FAMILY, space.as_ref()).await?,
+            |collection| {
+                let filter = filter.clone();
+                let matched = &matched;
+                async move {
+                    let mut points = Vec::new();
+                    let mut offset: Option<PointId> = None;
+                    loop {
+                        let mut scroll = ScrollPointsBuilder::new(&collection)
+                            .filter(filter.clone())
+                            .limit(MEMORY_SCROLL_PAGE)
+                            .with_payload(true)
+                            .with_vectors(false);
+                        if let Some(offset) = offset.take() {
+                            scroll = scroll.offset(offset);
+                        }
+                        let response = self
+                            .store
+                            .client()
+                            .scroll(scroll)
+                            .await
+                            .map_err(|error| unavailable("scroll", &error))?;
+                        let read = response.result.len() as u64;
+                        if matched.fetch_add(read, Ordering::Relaxed) + read > MAX_MEMORY_MATCHED {
+                            return Err(Status::resource_exhausted(
+                                "the read matches too many memory versions; narrow it",
+                            ));
+                        }
+                        points.extend(response.result);
+                        match response.next_page_offset {
+                            Some(next) => offset = Some(next),
+                            None => break,
+                        }
                     }
-                    let response = self
-                        .store
-                        .client()
-                        .scroll(scroll)
-                        .await
-                        .map_err(|error| unavailable("scroll", &error))?;
-                    let read = response.result.len() as u64;
-                    if matched.fetch_add(read, Ordering::Relaxed) + read > MAX_MEMORY_MATCHED {
-                        return Err(Status::resource_exhausted(
-                            "the read matches too many memory versions; narrow it",
-                        ));
-                    }
-                    points.extend(response.result);
-                    match response.next_page_offset {
-                        Some(next) => offset = Some(next),
-                        None => break,
-                    }
+                    Ok(points)
                 }
-                Ok(points)
-            }
-        })
+            },
+        )
         .await?;
         let mut points: Vec<pb::ScoredPoint> = read_points
             .into_iter()
@@ -1016,7 +1061,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         let filter = scope.filter(None);
         let mut payload = Payload::new();
         payload.insert(key::METADATA, Value::from(metadata));
-        for collection in self.store.targets(space.as_ref()).await? {
+        for collection in self.store.targets(MEMORY_FAMILY, space.as_ref()).await? {
             self.store
                 .client()
                 .set_payload(
@@ -1051,7 +1096,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         } else {
             Scope::project(caller.project(request.project_id)?)
         };
-        let collections = self.store.targets(None).await?;
+        let collections = self.store.targets(MEMORY_FAMILY, None).await?;
         self.delete_where(&collections, &scope.source("memory").owned_by(&owner))
             .await?;
         tracing::info!(
@@ -1076,7 +1121,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         if request.toolkit_id <= 0 {
             return Err(Status::invalid_argument("toolkit_id must be positive"));
         }
-        let collections = self.store.targets(None).await?;
+        let collections = self.store.targets(MEMORY_FAMILY, None).await?;
         self.delete_where(
             &collections,
             &Scope::project(project_id)
@@ -1096,6 +1141,9 @@ impl pb::vector_service_server::VectorService for VectorService {
 /// mid-stream is seen within this interval. (A revoked token is seen at the
 /// next batch through the claim cache.)
 pub const UPSERT_REVERIFY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The family of the memory source's collections.
+const MEMORY_FAMILY: Family = Family::Shared;
 
 /// Points read per Qdrant scroll call by `ReadMemory`.
 const MEMORY_SCROLL_PAGE: u32 = 512;
@@ -1299,6 +1347,9 @@ struct UpsertTarget {
     /// The memory owner and toolkit stamped on every point (`None` for other
     /// sources).
     binding: Option<crate::auth::MemoryBinding>,
+    /// Whether the collection holds the BM25 sparse vector (the family's
+    /// layout); without it the point carries the dense vector only.
+    bm25: bool,
     source: &'static str,
     namespace_id: String,
     namespace: uuid::Uuid,
@@ -1378,7 +1429,7 @@ impl UpsertTarget {
 
         let mut vectors = NamedVectors::default()
             .add_vector(DENSE_VECTOR, Vector::new_dense(point.vector.clone()));
-        if !point.text.trim().is_empty() {
+        if self.bm25 && !point.text.trim().is_empty() {
             vectors =
                 vectors.add_vector(BM25_VECTOR, Document::new(point.text.clone(), BM25_MODEL));
         }
@@ -1430,19 +1481,21 @@ fn check_score_threshold(threshold: Option<f32>) -> Result<(), Status> {
     }
 }
 
+/// The scoped filter, the collection family and the space of a search.
 fn read_parts(
     caller: &Caller,
     read: Option<&pb::Scope>,
     space: Option<&pb::EmbeddingSpace>,
     filter: Option<&pb::Filter>,
-) -> Result<(qdrant_client::qdrant::Filter, Space), Status> {
+) -> Result<(qdrant_client::qdrant::Filter, Family, Space), Status> {
     let read = read.ok_or_else(|| Status::invalid_argument("scope is required"))?;
     let project_id = caller.project(read.project_id)?;
     caller.require_source(read.source)?;
     let scope = owned_read_scope(caller, project_id, read, true)?;
+    let family = Family::of_raw(read.source)?;
     let narrowing = scope::translate(filter)?;
     let space = Space::from_proto(space)?;
-    Ok((scope.filter(narrowing), space))
+    Ok((scope.filter(narrowing), family, space))
 }
 
 /// [`scope::read_scope`], narrowed to the memory owner the token decides when
@@ -1484,6 +1537,169 @@ fn check_limit(limit: u32) -> Result<u32, Status> {
         return Err(Status::invalid_argument("limit is 1 to 1000"));
     }
     Ok(limit)
+}
+
+/// The depth of a search page, `offset + limit`, bounded by
+/// [`MAX_SEARCH_DEPTH`].
+fn check_depth(offset: u32, limit: u32) -> Result<u32, Status> {
+    match offset.checked_add(limit) {
+        Some(depth) if depth <= MAX_SEARCH_DEPTH => Ok(depth),
+        _ => Err(Status::invalid_argument("offset + limit is at most 10000")),
+    }
+}
+
+/// Orders search results by score, highest first, and equal scores by point
+/// id (its text form, ascending), so the order does not depend on how the
+/// store happened to visit the points.
+fn sort_ranked(points: &mut Vec<qdrant_client::qdrant::ScoredPoint>) {
+    let mut keyed: Vec<(String, qdrant_client::qdrant::ScoredPoint)> = points
+        .drain(..)
+        .map(|point| (point_id_text(point.id.clone()), point))
+        .collect();
+    keyed.sort_by(|left, right| {
+        right
+            .1
+            .score
+            .total_cmp(&left.1.score)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    points.extend(keyed.into_iter().map(|(_, point)| point));
+}
+
+/// Whether the ranking `points` (sorted, `fetched` asked for) may have left
+/// out a point that ties with the last one inside `depth`: it came back full
+/// and its last point scores the same as the one at the cut.
+fn ties_may_continue(
+    points: &[qdrant_client::qdrant::ScoredPoint],
+    depth: usize,
+    fetched: u64,
+) -> bool {
+    let full = points.len() as u64 >= fetched;
+    match (points.get(depth.saturating_sub(1)), points.last()) {
+        (Some(cut), Some(last)) if full && points.len() > depth => {
+            cut.score.total_cmp(&last.score).is_eq()
+        }
+        _ => false,
+    }
+}
+
+/// One dense ranking for [`VectorService::ranked`].
+struct Ranking<'a> {
+    vector: &'a [f32],
+    /// `offset + limit`: how far down the ranking the page reaches.
+    depth: u32,
+    score_threshold: Option<f32>,
+    /// An exact scan instead of an HNSW walk (the family's choice).
+    exact: bool,
+    with_payload: bool,
+}
+
+impl VectorService {
+    /// The first `depth` points of the dense ranking of `filter`'s points in
+    /// `collection`, ordered by [`sort_ranked`].
+    ///
+    /// Qdrant does not order equal scores, and its own `offset` re-ranks per
+    /// call, so two pages could split a group of tied points differently:
+    /// one point on both pages, another on neither. Here the ranking is read
+    /// from the top every time, one point past the depth, and when that
+    /// point ties with the last one inside the depth the read is widened
+    /// (doubling, at most [`MAX_TIE_CANDIDATES`] past the depth) until the
+    /// whole tie group is in. Ordering the complete group by point id makes
+    /// the cut the same for every page. A tie group wider than that bound is
+    /// cut where Qdrant's order puts it, and logged.
+    ///
+    /// Exactness: with `exact` the scope's points are scanned, so the ranking
+    /// is the cosine ranking. Without it the HNSW walk can miss a point the
+    /// exact ranking has, and paging is deterministic over what the walk
+    /// returned.
+    async fn ranked(
+        &self,
+        collection: &str,
+        filter: &Filter,
+        ranking: Ranking<'_>,
+    ) -> Result<Vec<qdrant_client::qdrant::ScoredPoint>, Status> {
+        let depth = u64::from(ranking.depth);
+        let widest = depth + MAX_TIE_CANDIDATES;
+        let mut fetch = depth + 1;
+        loop {
+            let mut query = QueryPointsBuilder::new(collection)
+                .query(Query::new_nearest(ranking.vector.to_vec()))
+                .using(DENSE_VECTOR)
+                .filter(filter.clone())
+                .limit(fetch)
+                .with_payload(ranking.with_payload);
+            if ranking.exact {
+                query = query.params(SearchParamsBuilder::default().exact(true));
+            }
+            if let Some(threshold) = ranking.score_threshold {
+                query = query.score_threshold(threshold);
+            }
+            let mut points = self
+                .store
+                .client()
+                .query(query)
+                .await
+                .map_err(|error| unavailable("query", &error))?
+                .result;
+            sort_ranked(&mut points);
+            let depth_index = ranking.depth as usize;
+            if ties_may_continue(&points, depth_index, fetch) {
+                if fetch < widest {
+                    fetch = fetch.saturating_mul(2).min(widest);
+                    continue;
+                }
+                tracing::warn!(
+                    collection,
+                    depth,
+                    "a tie group at the page cut is wider than the tie bound; its order past the bound is the store's"
+                );
+            }
+            points.truncate(depth_index);
+            return Ok(points);
+        }
+    }
+
+    /// The search results of `page` (ranked without payloads) with their
+    /// payloads, read under the same scoped `filter` narrowed to the page's
+    /// ids, in the page's order. A point deleted between the two reads is
+    /// left out.
+    async fn with_payloads(
+        &self,
+        collection: &str,
+        filter: &Filter,
+        page: Vec<qdrant_client::qdrant::ScoredPoint>,
+    ) -> Result<Vec<pb::ScoredPoint>, Status> {
+        if page.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<PointId> = page.iter().filter_map(|point| point.id.clone()).collect();
+        let mut scoped = filter.clone();
+        scoped.must.push(Condition::has_id(ids));
+        let read = self
+            .store
+            .client()
+            .scroll(
+                ScrollPointsBuilder::new(collection)
+                    .filter(scoped)
+                    .limit(u32::try_from(page.len()).unwrap_or(u32::MAX))
+                    .with_payload(true)
+                    .with_vectors(false),
+            )
+            .await
+            .map_err(|error| unavailable("scroll", &error))?;
+        let mut payloads: HashMap<String, HashMap<String, Value>> = read
+            .result
+            .into_iter()
+            .map(|point| (point_id_text(point.id), point.payload))
+            .collect();
+        Ok(page
+            .into_iter()
+            .filter_map(|point| {
+                let payload = payloads.remove(&point_id_text(point.id.clone()))?;
+                Some(scored_from_payload(point.id, point.score, &payload))
+            })
+            .collect())
+    }
 }
 
 fn weights(dense: f32, text: f32) -> Result<(f32, f32), Status> {
@@ -1586,6 +1802,53 @@ fn scored_from_payload(
 mod tests {
     use super::*;
 
+    fn ranked_point(id: &str, score: f32) -> qdrant_client::qdrant::ScoredPoint {
+        qdrant_client::qdrant::ScoredPoint {
+            id: Some(PointId::from(id.to_owned())),
+            score,
+            ..qdrant_client::qdrant::ScoredPoint::default()
+        }
+    }
+
+    #[test]
+    fn rankings_order_ties_by_id_and_detect_a_tie_at_the_cut() {
+        let mut points = vec![
+            ranked_point("c", 0.5),
+            ranked_point("b", 0.9),
+            ranked_point("a", 0.5),
+            ranked_point("d", 0.1),
+        ];
+        sort_ranked(&mut points);
+        let ids: Vec<String> = points.iter().map(|p| point_id_text(p.id.clone())).collect();
+        assert_eq!(ids, ["b", "a", "c", "d"]);
+        // Depth 2, 3 asked and 3 came back, the third ties the second: more
+        // tied points may be past the read.
+        assert!(ties_may_continue(&points[..3], 2, 3));
+        // Fewer than asked came back: everything was read.
+        assert!(!ties_may_continue(&points[..3], 2, 4));
+        // The point past the depth scores lower: the cut is clean.
+        assert!(!ties_may_continue(&points, 3, 4));
+        // Nothing past the depth.
+        assert!(!ties_may_continue(&points[..2], 2, 3));
+    }
+
+    #[test]
+    fn a_page_reaches_at_most_the_depth_bound() {
+        assert_eq!(check_depth(0, 10).expect("first page"), 10);
+        assert_eq!(check_depth(9000, 1000).expect("deepest"), 10_000);
+        for (offset, limit) in [(9001, 1000), (u32::MAX, 1)] {
+            assert_eq!(
+                check_depth(offset, limit).expect_err("too deep").code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+    }
+
+    #[test]
+    fn memory_lives_in_the_shared_family() {
+        assert_eq!(Family::of(pb::Source::Memory), Some(MEMORY_FAMILY));
+    }
+
     #[test]
     fn vectors_are_checked_against_the_dimension() {
         assert!(check_vector(&[1.0, 0.0, 0.0], 3).is_ok());
@@ -1629,6 +1892,7 @@ mod tests {
         let target = UpsertTarget {
             project_id: 7,
             binding: None,
+            bm25: true,
             source: "toolkit_index",
             namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
             namespace: uuid::Uuid::from_u128(1),
@@ -1663,6 +1927,7 @@ mod tests {
         let target = UpsertTarget {
             project_id: 7,
             binding: None,
+            bm25: true,
             source: "toolkit_index",
             namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
             namespace: uuid::Uuid::from_u128(1),

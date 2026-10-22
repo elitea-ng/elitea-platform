@@ -405,6 +405,17 @@ fn cosine(left: &[f32], right: &[f32]) -> f32 {
     }
 }
 
+/// The collection the service names for a source's space: Inventory's own
+/// float32 family is `inv_*`, every other source's `emb_*`.
+fn collection_of(source: i32, slug: &str, dimension: u32) -> String {
+    let prefix = if source == pb::Source::Inventory as i32 {
+        "inv_"
+    } else {
+        "emb_"
+    };
+    format!("{prefix}{slug}_{dimension}")
+}
+
 fn scored(stored: &Stored, score: f32) -> pb::ScoredPoint {
     pb::ScoredPoint {
         id: String::new(),
@@ -528,7 +539,7 @@ impl VectorService for FakeVector {
         }
         Ok(Response::new(pb::UpsertResponse {
             upserted,
-            collection: format!("emb_{}_{}", space.0, space.1),
+            collection: collection_of(namespace.source, &space.0, space.1),
         }))
     }
 
@@ -617,8 +628,22 @@ impl VectorService for FakeVector {
                     .is_none_or(|threshold| *score >= threshold)
             })
             .collect();
-        found.sort_by(|a, b| b.1.total_cmp(&a.1));
-        found.truncate(request.limit as usize);
+        // Like the service: score first, then a stable key (the fake keeps
+        // no point ids), so pages are disjoint.
+        found.sort_by(|a, b| {
+            b.1.total_cmp(&a.1).then_with(|| {
+                (&a.0.point.document_key, &a.0.point.chunk_id)
+                    .cmp(&(&b.0.point.document_key, &b.0.point.chunk_id))
+            })
+        });
+        if request.offset.saturating_add(request.limit) > crate::client::MAX_SEARCH_DEPTH {
+            return Err(Status::invalid_argument("offset + limit is at most 10000"));
+        }
+        let found: Vec<(&Stored, f32)> = found
+            .into_iter()
+            .skip(request.offset as usize)
+            .take(request.limit as usize)
+            .collect();
         Ok(Response::new(pb::SearchResponse {
             points: found
                 .into_iter()
@@ -634,6 +659,16 @@ impl VectorService for FakeVector {
         let project = self.authenticate("hybrid_search", &request)?;
         let token = Self::token_of(&request);
         let request = request.into_inner();
+        if request
+            .scope
+            .as_ref()
+            .is_some_and(|scope| scope.source == pb::Source::Inventory as i32)
+        {
+            // Like the service: Inventory's collections hold no BM25 vector.
+            return Err(Status::invalid_argument(
+                "hybrid search is not served for this source: its collections hold no BM25 vector; use Search",
+            ));
+        }
         let owner = self.scope_owner(&token, request.scope.as_ref())?;
         let (dense_weight, text_weight) =
             if request.dense_weight == 0.0 && request.text_weight == 0.0 {
@@ -771,7 +806,7 @@ impl VectorService for FakeVector {
                 .into_iter()
                 .map(
                     |((slug, dimension), source, namespace_id, point_count)| pb::IndexInfo {
-                        collection: format!("emb_{slug}_{dimension}"),
+                        collection: collection_of(source, &slug, dimension),
                         space: Some(pb::EmbeddingSpace {
                             model_slug: slug,
                             dimension,

@@ -1537,7 +1537,9 @@ main:
     # render refuses the old key.)
     # How long a minted callback bearer lives. It must outlast the longest
     # generation this deployment expects: a token that dies mid-run makes the
-    # engine fail its artifact upload after doing all the work. Default 120.
+    # engine fail its artifact upload, and now its vector writes to
+    # elitea-vector, after doing all the work. Default 480: twice the
+    # engine's 4 h CPU cap, because model waits burn wall time, not CPU.
     ELITEA_DEEPWIKI_CALLBACK_TOKEN_TTL_MINUTES: ""
     # The git hosts a repository may be cloned from. FAIL-CLOSED: unset refuses
     # every clone, and `*` disables the control explicitly.
@@ -1709,8 +1711,9 @@ main:
     # over ArtifactObjectService on the platform listener, and source
     # expansion no longer depends on a callback origin. The render refuses the
     # old key.)
-    # How long that bearer lives. Default 120 minutes; it must outlast the
-    # longest ingestion this deployment expects.
+    # How long that bearer lives. Default 480 minutes; it must outlast the
+    # longest ingestion this deployment expects, since the engine also
+    # writes and ranks its entity vectors through elitea-vector with it.
     ELITEA_INVENTORY_CALLBACK_TOKEN_TTL_MINUTES: ""
     # Which source toolkit types may be expanded. Empty means the default,
     # "github,ado_repos". It can only SUBTRACT: a type with no field

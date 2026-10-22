@@ -24,8 +24,14 @@ syntax = "proto3";
 // the token's project is refused with PERMISSION_DENIED. An administrator
 // caller must set it.
 //
-// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space,
-// named `emb_<model_slug>_<dimension>`. Points carry the payload keys
+// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space
+// and collection family. The shared family (toolkit indexes, DeepWiki,
+// memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
+// int8 quantized copy, plus a BM25 sparse vector. The Inventory family is
+// `inv_<model_slug>_<dimension>`: float32 dense vectors, no quantization, no
+// BM25 (HybridSearch is refused for it), searched by an exact scan, so its
+// scores are the exact cosine similarities. A source's points are only ever
+// in its own family's collections. Points carry the payload keys
 // `project_id`, `source`, `namespace_id`, `generation` (optional),
 // `document_key`, `document_version`, `parent_id`, `chunk_id`, `chunk_type`,
 // `acl`, `text` and `metadata`. A point id is UUIDv5, under namespace_id, of
@@ -90,7 +96,9 @@ enum Source {
   SOURCE_TOOLKIT_INDEX = 1;
   // A DeepWiki wiki; namespace_id is UUIDv5 of (project, wiki id).
   SOURCE_DEEPWIKI = 2;
-  // Reserved for Inventory (ADR-0031 decision 7). Refused in V0.
+  // Inventory (ADR-0031 decision 7): entity embeddings, kept in their own
+  // float32 collections `inv_<model_slug>_<dimension>` (see LAYOUT).
+  // HybridSearch is refused for it (INVALID_ARGUMENT).
   SOURCE_INVENTORY = 3;
   // The memory toolkit (elitea.vector.v1 MemoryScope). Not an index: it is
   // never listed by ListIndexes. namespace_id is a hash of the toolkit's
@@ -117,7 +125,8 @@ enum MemoryScope {
   MEMORY_SCOPE_PROJECT = 2;
 }
 
-// EmbeddingSpace selects the collection `emb_<model_slug>_<dimension>`.
+// EmbeddingSpace selects the collection `<family prefix><model_slug>_<dimension>`
+// (see LAYOUT): the source names the family.
 message EmbeddingSpace {
   // model_slug matches ^[a-z0-9][a-z0-9-]{0,62}$. The caller makes the slug
   // from the model name; elitea-vector does not change it.
@@ -356,6 +365,15 @@ message SearchRequest {
   uint32 limit = 5;
   // score_threshold, when set, drops results with a lower cosine similarity.
   optional float score_threshold = 6;
+  // offset skips that many results of the ranking before the first one
+  // returned: a page. offset + limit is at most 10000.
+  //
+  // The ranking is by score, highest first, and equal scores by point id
+  // (ascending text form), so consecutive pages over unchanged points are
+  // disjoint and together are the ranking's prefix. For an exactly searched
+  // family (Inventory) the ranking is the exact cosine ranking; for the
+  // others it is the HNSW walk's, which can miss a point.
+  uint32 offset = 7;
 }
 
 message SearchResponse {

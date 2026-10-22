@@ -181,8 +181,9 @@ type Config struct {
 
 	// VectorIntrospectionClients are the client certificate identities
 	// admitted to elitea.vector.v1.TokenIntrospectionService on the control
-	// listener (ELITEA_VECTOR_INTROSPECTION_CLIENTS, ADR-0031). Empty leaves
-	// the service unregistered.
+	// listener and on the platform listener (ELITEA_VECTOR_INTROSPECTION_CLIENTS,
+	// ADR-0031). Read with the runtime on or off; with it off the platform
+	// listener must be open. Empty leaves the service unregistered on both.
 	VectorIntrospectionClients []string
 	// EgressAuditClients are the egress proxy's client certificate
 	// identities admitted to elitea.runtime.v1.EgressAuditService on the
@@ -244,9 +245,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		if value, _ := lookup("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"); value != "" && value != "false" {
 			return Config{}, errors.New("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED requires ELITEA_RUNTIME_ENABLED=true")
 		}
-		if value, _ := lookup(VectorIntrospectionClientsEnv); strings.TrimSpace(value) != "" {
-			return Config{}, errors.New(VectorIntrospectionClientsEnv + " requires ELITEA_RUNTIME_ENABLED=true: the service is served on the runtime control listener")
-		}
 		if value, _ := lookup(EgressAuditClientsEnv); strings.TrimSpace(value) != "" {
 			return Config{}, errors.New(EgressAuditClientsEnv + " requires ELITEA_RUNTIME_ENABLED=true: the service is served on the runtime control listener")
 		}
@@ -258,7 +256,18 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-		return Config{PlatformAddress: address, PlatformTLS: platformTLS}, nil
+		// elitea-vector's token introspection needs no runtime plane either:
+		// with the runtime off it is served on the platform listener alone,
+		// so that listener must be open.
+		vectorClients, err := vectorIntrospectionClients(lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		if len(vectorClients) > 0 && address == "" {
+			return Config{}, errors.New(VectorIntrospectionClientsEnv +
+				" requires ELITEA_RUNTIME_ENABLED=true or ELITEA_RUNTIME_PLATFORM_ADDRESS: the service is served on the runtime control listener or the platform listener")
+		}
+		return Config{PlatformAddress: address, PlatformTLS: platformTLS, VectorIntrospectionClients: vectorClients}, nil
 	case "true":
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_ENABLED must be true or false")
