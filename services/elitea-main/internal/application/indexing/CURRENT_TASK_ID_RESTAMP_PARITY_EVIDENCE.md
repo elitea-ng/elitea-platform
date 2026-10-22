@@ -18,10 +18,10 @@ The current behavior spans two repositories:
 - `elitea-sdk/elitea_sdk/tools/base_indexer_toolkit.py:index_meta_init`
   resets `task_id` to `None` on reindex and emits `created_at`/`updated_on`
   through the `index_data_status` callback.
-- `centry/pylon_main/plugins/elitea_core/methods/stream.py:
+- `legacy/plugins/elitea_core/methods/stream.py:
   process_index_data_status_event` invokes the restamp only for
   `agent_index_data_status` with state `in_progress`.
-- `centry/pylon_main/plugins/elitea_core/utils/application_tools.py:
+- `legacy/plugins/elitea_core/utils/application_tools.py:
   ensure_index_data_has_task_id` loads the index metadata and sets `task_id`
   only when it is missing and the metadata `created_on` equals the callback
   `created_at`.

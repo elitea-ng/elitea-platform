@@ -26,9 +26,9 @@ project-scoped forms:
 - canonical UI form: `POST /api/v2/social/feedbacks/default/{project_id}`
 - implicit-default alias: `POST /api/v2/social/feedbacks/{project_id}`
 
-The two no-project variants exposed by generic Pylon URL generation are not in
-this slice. Without a project identifier they cannot preserve the required
-project-membership authorization boundary.
+The two no-project variants exposed by the legacy runtime's generic URL
+generation are not in this slice. Without a project identifier they cannot
+preserve the required project-membership authorization boundary.
 
 ## Behavior matrix
 

@@ -106,7 +106,7 @@ dependency profile drifts from the current Confluence loader requirements.
 ## Baseline transition evidence
 
 The complete HTTP and (since removed) PgVector golden matrix was rerun when the worker lock
-moved from the provisional SDK 0.8.26 target to the current Pylon Indexer
+moved from the provisional SDK 0.8.26 target to the then-current legacy indexer
 0.8.30 baseline. No covered observable contract drifted. In particular, 0.8.30
 made two vision requests for the one image because parent augmentation and
 dependent attachment extraction use different prompts.
@@ -126,7 +126,7 @@ Two tests are intentionally skipped rather than presenting mocked success:
   SDK client, and bind the fixture Confluence/LiteLLM endpoints;
 - Stop parity needs the real orchestration boundary because current
   `index_data` is synchronous and exposes no cancellation input. Today Stop is
-  Pylon task cancellation plus index-meta reconciliation, not an SDK operation.
+  legacy-runtime task cancellation plus index-meta reconciliation, not an SDK operation.
 
 The production 62 MiB cross-process path is also an explicit residual. The
 current test cannot honestly replace durable admission, real JetStream delivery,
