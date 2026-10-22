@@ -808,7 +808,7 @@
   },
   "wiringStatusReview": {
     "reviewed": "2026-08-10",
-    "issue": "https://github.com/EliteaAI/elitea-platform/issues/61",
+    "issue": "https://github.com/elitea-ng/elitea-platform/issues/61",
     "what": "wiringStatus was authored in 46a90914 using route-wiring-map.json’s PHASE-0 vocabulary. At that moment 38 route files under src/routes/** rendered RouteShell scaffolding instead of the page components already built for them, and “ready” meant exactly that: the page exists, the ROUTE does not render it. It never meant the UI was a stub.",
     "why": "The wiring plan has since run. route-wiring-map.json now reports 50 routes wired and its generator’s own --check passes against the tree, so the map is current and the screenshot index was simply never updated alongside it. Wave 2 then mounted more UI still (#128 chat conversation sidebar, #149 toolkit/MCP Indexes tab, #134/#148 agent version bar).",
     "evidence": "Every route flipped below was ALSO opened against the running e2e stack and confirmed to render its real page rather than a heading-only shell, and — except /help-center — put through the stall experiment recorded per-entry in e2e/visual/routes.visual.spec.ts before being given a baseline. No route was flipped merely to make it snapshottable.",
@@ -824,7 +824,7 @@
   },
   "adminSurface": {
     "added": "2026-08-11",
-    "issue": "https://github.com/EliteaAI/elitea-platform/issues/229",
+    "issue": "https://github.com/elitea-ng/elitea-platform/issues/229",
     "what": "The ten /admin/app/* routes, derived from src/pages/admin/router.tsx's own route table (src/pages/admin/adminVisualIndex.test.ts asserts the two cannot drift, the way AdminNav.test.tsx does for the nav).",
     "whyTheyWereMissing": "This index was captured from next.elitea.ai on 2026-08-06, when /admin/app/ was served by the separate admin_ui SPA and elitea-web's admin entry was a ~160-line placeholder. A parity index of elitea-web reasonably had no admin rows. #200 then ported ten real admin pages into this app and #223 retired the submodule and pinned the published image at target: final (which is FROM e2e), so the admin SPA this bundle builds is the one that ships.",
     "file": "null on every admin row, and that is a fact rather than an omission: there is NO production JPEG for these screens. The other 63 rows point at a captured screenshot of the OLD app; the admin rows point at nothing, because the app that served those URLs in production was admin_ui, which no longer exists in this repo. `baseline` names the Playwright PNG instead — that is what these rows are compared against.",

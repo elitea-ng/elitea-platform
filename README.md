@@ -223,7 +223,7 @@ commit → next     → semantic-release → v1.3.0-rc.1 → build RC images
 - **Images:** Multi-arch (amd64 + arm64), native builds on platform-specific runners (Docker in CI, Podman locally)
 - **Signing:** Keyless cosign via Sigstore OIDC
 - **Rollback:** On any build/sign failure, the release, tag, and images are automatically deleted
-- **Registry:** `ghcr.io/eliteaai`
+- **Registry:** `ghcr.io/elitea-ng`
 
 ### Commit Convention
 

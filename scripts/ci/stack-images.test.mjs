@@ -41,13 +41,13 @@ test("one build serves every tag of the same variant", () => {
   // The e2e compose tags the same build under another org and tag, and
   // three standalone services share it: one pull, every local tag.
   const lane = config({
-    "elitea-main": svc("ghcr.io/eliteaai/elitea-main:e2e", "services/elitea-main/Containerfile", "e2e"),
+    "elitea-main": svc("ghcr.io/elitea-ng/elitea-main:e2e", "services/elitea-main/Containerfile", "e2e"),
     "elitea-migrate": MAIN_E2E,
     "elitea-agentstate-migrate": MAIN_E2E,
   });
   assert.deepEqual(si.resolve(lane, WS, digests), [
+    ["ghcr.io/elitea-ng/elitea-main:e2e", `ghcr.io/elitea-ng/ci-elitea-main@${DIGEST}`],
     ["ghcr.io/elitea-ng/elitea-main:standalone", `ghcr.io/elitea-ng/ci-elitea-main@${DIGEST}`],
-    ["ghcr.io/eliteaai/elitea-main:e2e", `ghcr.io/elitea-ng/ci-elitea-main@${DIGEST}`],
   ]);
 });
 

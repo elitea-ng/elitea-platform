@@ -15,7 +15,7 @@
  *
  * `AgentTagEditor` has no `data-testid` of its own. Rather than add one to
  * `src/` (this stack runs a pre-built container image — `docker-compose.
- * e2e-standalone.yml`'s `elitea-web` service pulls `ghcr.io/eliteaai/
+ * e2e-standalone.yml`'s `elitea-web` service pulls `ghcr.io/elitea-ng/
  * elitea-web:e2e` — so a testid added now would not exist in the already-
  * running build this file has to pass against today), this file reaches the
  * control the way it is already reachable: `getByRole('combobox', { name:

@@ -2086,7 +2086,7 @@ sys.stdout.write(reply)
     else
       identity_probe() {
         $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
-          --entrypoint python3 ghcr.io/eliteaai/elitea-mock-llm:standalone -c "
+          --entrypoint python3 ghcr.io/elitea-ng/elitea-mock-llm:standalone -c "
 import ssl, sys, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 headers = dict(item.split(': ', 1) for item in sys.argv[2:])
@@ -2177,7 +2177,7 @@ PY
       # one probe runs that image as root.
       llm_probe() {
         $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
-          --entrypoint python3 ghcr.io/eliteaai/elitea-mock-llm:standalone -c "$1" 2>&1 || true
+          --entrypoint python3 ghcr.io/elitea-ng/elitea-mock-llm:standalone -c "$1" 2>&1 || true
       }
       # ── A credential the PRODUCT created, not the seed (#457) ─────────────
       #
@@ -2697,7 +2697,7 @@ except Exception as error:
           -v "${RUNTIME_CERTS}:/m:ro" \
           -v "${REPO_ROOT}/deploy/scripts/chat-smoke.py:/opt/chat-smoke.py:ro" \
           --user 0:0 --entrypoint python3 \
-          ghcr.io/eliteaai/elitea-mock-llm:standalone /opt/chat-smoke.py \
+          ghcr.io/elitea-ng/elitea-mock-llm:standalone /opt/chat-smoke.py \
           --base-url "http://elitea-main:8080" \
           --pat-uuid "$CHAT_PAT" \
           --signing-key /m/auth-pat-signing-key \

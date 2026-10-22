@@ -9,7 +9,7 @@
   "waivers": {
     "src/features/chat-messages/**": {
       "owner": "elitea-web",
-      "issue": "https://github.com/EliteaAI/elitea-platform/issues/309",
+      "issue": "https://github.com/elitea-ng/elitea-platform/issues/309",
       "reviewBy": "2026-11-30",
       "reason": "69 modules, 8 test files. Now imported by the live chat layer (processes/chat, widgets/chat-box, features/toolkits), so the original 'no consumer yet' reason is void. Measuring it today drops the merged run under the 80% gate; the unit needs tests before the exclusion can go, and this waiver is the deadline for that rather than a permanent pass."
     }

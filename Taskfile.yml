@@ -167,38 +167,38 @@ tasks:
   images:go:
     desc: Build Go service image
     cmds:
-      - podman build -t ghcr.io/eliteaai/elitea-main:dev -f services/elitea-main/Containerfile .
+      - podman build -t ghcr.io/elitea-ng/elitea-main:dev -f services/elitea-main/Containerfile .
 
   images:scheduler:
     desc: Build elitea-scheduler image
     cmds:
       # Repo root, not services/elitea-scheduler: the Containerfile COPYs
       # libs/go/observability (issue #250's local replace target) from there.
-      - podman build -t ghcr.io/eliteaai/elitea-scheduler:dev -f services/elitea-scheduler/Containerfile .
+      - podman build -t ghcr.io/elitea-ng/elitea-scheduler:dev -f services/elitea-scheduler/Containerfile .
 
   images:gateway:
     desc: Build elitea-llm-gateway image
     cmds:
       # Repo root, not services/elitea-llm-gateway: the Containerfile COPYs
       # libs/go/egresslib, the module's local `replace` target.
-      - podman build -t ghcr.io/eliteaai/elitea-llm-gateway:dev -f services/elitea-llm-gateway/Containerfile .
+      - podman build -t ghcr.io/elitea-ng/elitea-llm-gateway:dev -f services/elitea-llm-gateway/Containerfile .
 
   images:ui:
     desc: Build UI image
     cmds:
-      - podman build -t ghcr.io/eliteaai/elitea-ui:dev -f deploy/docker/Containerfile.elitea-ui .
+      - podman build -t ghcr.io/elitea-ng/elitea-ui:dev -f deploy/docker/Containerfile.elitea-ui .
 
   images:web:
     desc: Build elitea-web image
     cmds:
-      - podman build -t ghcr.io/eliteaai/elitea-web:dev -f apps/elitea-web/Containerfile .
+      - podman build -t ghcr.io/elitea-ng/elitea-web:dev -f apps/elitea-web/Containerfile .
 
   images:worker:
     desc: Build elitea-worker-rust image
     cmds:
       # Repo root, not the service directory: the Containerfile COPYs libs/proto
       # and libs/rust. Expect the slowest image here: it compiles the crate graph.
-      - podman build -t ghcr.io/eliteaai/elitea-worker-rust:dev -f services/elitea-worker-rust/Containerfile .
+      - podman build -t ghcr.io/elitea-ng/elitea-worker-rust:dev -f services/elitea-worker-rust/Containerfile .
 
   # ── Deploy ────────────────────────────────────────────────────────────────────
   deploy:check-edge:

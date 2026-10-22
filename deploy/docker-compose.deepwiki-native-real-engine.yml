@@ -3,7 +3,7 @@
 # already runs the native engine sidecar and its migration:
 #
 #   STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native-real-engine.yml \
-#     DEEPWIKI_ENGINE_IMAGE=ghcr.io/eliteaai/elitea-deepwiki-engine-native:local \
+#     DEEPWIKI_ENGINE_IMAGE=ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local \
 #     deploy/scripts/standalone-stack.sh up
 #
 # apps/elitea-web/scripts/deepwiki-real-engine.sh assembles that and runs
@@ -29,11 +29,11 @@
 # internet access.
 services:
   elitea-deepwiki-migrate:
-    image: ${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki-engine-native:local}
+    image: ${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local}
     build: !reset null
 
   elitea-deepwiki-engine:
-    image: ${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki-engine-native:local}
+    image: ${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local}
     build: !reset null
     environment:
       ELITEA_DEEPWIKI_RUNNER: "native"

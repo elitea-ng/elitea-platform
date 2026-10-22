@@ -112,7 +112,7 @@ jobs:
       # overlay's own default tag (which no step builds) reads as an image to
       # PULL, fails five attempts and fails the job. The bake below writes
       # exactly these tags (TAG=local, the bake file's default REGISTRY).
-      DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || 'ghcr.io/eliteaai/elitea-deepwiki-engine-native:local' }}
+      DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || 'ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local' }}
       # On `schedule` the inputs are null and the fallbacks apply; keep the
       # commit in step with the input default above.
       DEEPWIKI_NATIVE_REF: ${{ inputs.native_ref || 'main' }}
@@ -179,7 +179,7 @@ jobs:
         # line here would be free to drift from what a release would produce.
         #
         # TAG=local makes bake write
-        # `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local` — byte for
+        # `ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local` — byte for
         # byte DEEPWIKI_ENGINE_IMAGE above, which the overlay and the runner
         # script read, so nothing has to be retagged.
         # `--set '*.platform=linux/amd64'` also narrows the target's

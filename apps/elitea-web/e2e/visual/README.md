@@ -77,7 +77,7 @@ are separate jobs, each standing up its own stack — but a local `--update` aft
 a journey run is not.
 
 **And rebuild the images.** `e2e-stack.sh up` runs `compose up -d --wait`, and
-compose builds `ghcr.io/eliteaai/elitea-web:e2e` only when that tag is ABSENT
+compose builds `ghcr.io/elitea-ng/elitea-web:e2e` only when that tag is ABSENT
 locally — so `down -v && up` after pulling or rebasing re-creates the containers
 from the STALE image and the suite verifies code that is not in your tree. CI
 does not have this problem (it runs two explicit `docker build`s before bringing
@@ -87,9 +87,9 @@ while leaving the previous image in place:
 
 ```bash
 podman build --file services/elitea-main/Containerfile --target e2e \
-  --tag ghcr.io/eliteaai/elitea-main:e2e --platform linux/amd64 .
+  --tag ghcr.io/elitea-ng/elitea-main:e2e --platform linux/amd64 .
 podman build --file apps/elitea-web/Containerfile \
-  --tag ghcr.io/eliteaai/elitea-web:e2e --platform linux/amd64 .
+  --tag ghcr.io/elitea-ng/elitea-web:e2e --platform linux/amd64 .
 ```
 
 Check the image IDs actually changed afterwards. A cached rebuild can return a

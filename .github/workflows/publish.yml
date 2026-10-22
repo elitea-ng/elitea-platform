@@ -764,7 +764,7 @@ jobs:
 
   # ── Job 4: Package and push the Helm charts to the GHCR OCI registry ────────
   # The images are only half of a release. Until this job existed, a consumer
-  # could `docker pull ghcr.io/eliteaai/elitea-main:1.2.3` but had no way to
+  # could `docker pull ghcr.io/elitea-ng/elitea-main:1.2.3` but had no way to
   # obtain the chart that deploys it other than cloning this repository at the
   # matching tag — which is not a distribution channel, it is a workaround.
   #
