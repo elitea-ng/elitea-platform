@@ -50,8 +50,11 @@ fi
 # million or more as "1e+06", which KEDA cannot parse. --set would hand the
 # chart an int64 and hide it, hence the file.
 printf 'worker:\n  autoscaling:\n    activationLagThreshold: 1000000\n' > "$work/big.yaml"
-if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true -f "$work/big.yaml" \
-    | grep -qF 'activationLagThreshold: "1000000"'; then
+# To a file, not `| grep -q`: under pipefail grep -q exiting at the first
+# match can SIGPIPE helm and fail a render that printed the line.
+helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true -f "$work/big.yaml" \
+  > "$work/big-render.yaml"
+if grep -qF 'activationLagThreshold: "1000000"' "$work/big-render.yaml"; then
   pass "a values-file activationLagThreshold of 1000000 renders as an integer"
 else
   fail "activationLagThreshold 1000000 from a values file did not render as \"1000000\""

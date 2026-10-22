@@ -304,7 +304,7 @@ refuses 'disagrees with worker.indexingRuntime' "${RUST[@]}" --set-string main.e
   || bad "a disagreeing ELITEA_INDEXING_RUNTIME override is not refused"
 # The worker-off note names the Rust worker.
 "$HELM" install t "$CHART" --dry-run=client "${RENDER[@]}" "${NOINDEX[@]}" --set worker.enabled=false 2>/dev/null \
-  | grep -q 'assumes the Rust worker' \
+  | grep 'assumes the Rust worker' >/dev/null \
   && ok "the worker-off note names the Rust worker" \
   || bad "the worker-off note does not name the Rust worker"
 

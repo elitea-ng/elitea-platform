@@ -202,7 +202,7 @@ PY
 # main_owner_on [helm args...] — Main's ConfigMap turns owner recovery on.
 main_owner_on() {
   "$HELM" template t "$CHART" "${RENDER[@]}" "$@" --show-only templates/main/configmap.yaml 2>/dev/null \
-    | grep -qF 'ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"'
+    | grep -F 'ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"' >/dev/null
 }
 
 refuses "$CODE_REFUSAL" --set worker.runtime.agentNodeRecovery=true \
