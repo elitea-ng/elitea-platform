@@ -530,6 +530,19 @@ pub struct RuntimeLimits {
     pub dependency_retry_millis: u64,
     pub delivery_max_concurrency: usize,
     pub delivery_queue_capacity: usize,
+    /// The maximum `agentstate` pool connections, 1..=`delivery_max_concurrency`.
+    /// Optional. When it is not set, the worker uses
+    /// [`DEFAULT_AGENTSTATE_MAX_CONNECTIONS`] or `delivery_max_concurrency`,
+    /// whichever is smaller. Read it with [`Self::agentstate_max_connections()`].
+    /// The pool can be smaller than the delivery cap because each statement
+    /// or short transaction returns its connection before a model call, a
+    /// tool call or a sandbox job continues.
+    #[serde(default)]
+    pub agentstate_max_connections: Option<usize>,
+    /// How long one `agentstate` statement waits for a pooled connection,
+    /// 1000..=300000. Optional, default 30000.
+    #[serde(default = "default_agentstate_acquire_timeout_millis")]
+    pub agentstate_acquire_timeout_millis: u64,
     pub sync_max_workers: usize,
     pub sync_max_in_flight: usize,
     pub admission_timeout_millis: u64,
@@ -554,6 +567,13 @@ fn default_model_timeout_millis() -> u64 {
     120_000
 }
 
+/// The `agentstate` pool size when the configuration does not set one.
+pub const DEFAULT_AGENTSTATE_MAX_CONNECTIONS: usize = 8;
+
+const fn default_agentstate_acquire_timeout_millis() -> u64 {
+    30_000
+}
+
 impl RuntimeLimits {
     fn validate(self) -> Result<(), RuntimeConfigError> {
         let valid = (1..=64).contains(&self.nats_fetch_batch)
@@ -564,6 +584,10 @@ impl RuntimeLimits {
             && (1..=128).contains(&self.delivery_max_concurrency)
             && (1..=512).contains(&self.delivery_queue_capacity)
             && self.delivery_queue_capacity >= self.delivery_max_concurrency
+            && self
+                .agentstate_max_connections
+                .is_none_or(|value| (1..=self.delivery_max_concurrency).contains(&value))
+            && (1_000..=300_000).contains(&self.agentstate_acquire_timeout_millis)
             && (1..=128).contains(&self.sync_max_workers)
             && (1..=512).contains(&self.sync_max_in_flight)
             && self.sync_max_in_flight >= self.sync_max_workers
@@ -587,6 +611,15 @@ impl RuntimeLimits {
             return Err(invalid_limits());
         }
         Ok(())
+    }
+
+    /// The `agentstate` pool size: the configured value, or else
+    /// [`DEFAULT_AGENTSTATE_MAX_CONNECTIONS`] capped at the delivery cap.
+    #[must_use]
+    pub fn agentstate_max_connections(self) -> usize {
+        self.agentstate_max_connections.unwrap_or_else(|| {
+            DEFAULT_AGENTSTATE_MAX_CONNECTIONS.min(self.delivery_max_concurrency)
+        })
     }
 
     #[must_use]
@@ -848,6 +881,65 @@ mod tests {
             let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
             assert!(limits.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn agentstate_pool_defaults_when_old_configurations_omit_it() {
+        let mut value = config(Path::new("/runtime"))["limits"].clone();
+        assert!(value.get("agentstate_max_connections").is_none());
+        assert!(value.get("agentstate_acquire_timeout_millis").is_none());
+        // The fixture delivery cap is 4, so the default 8 is capped at 4.
+        let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+        assert!(limits.validate().is_ok());
+        assert_eq!(limits.agentstate_max_connections, None);
+        assert_eq!(limits.agentstate_max_connections(), 4);
+        assert_eq!(limits.agentstate_acquire_timeout_millis, 30_000);
+
+        value["delivery_max_concurrency"] = json!(32);
+        value["delivery_queue_capacity"] = json!(64);
+        let limits: super::RuntimeLimits = serde_json::from_value(value).unwrap();
+        assert!(limits.validate().is_ok());
+        assert_eq!(
+            limits.agentstate_max_connections(),
+            super::DEFAULT_AGENTSTATE_MAX_CONNECTIONS
+        );
+    }
+
+    #[test]
+    fn agentstate_pool_accepts_explicit_values_and_rejects_unbounded_values() {
+        let mut value = config(Path::new("/runtime"))["limits"].clone();
+        value["delivery_max_concurrency"] = json!(32);
+        value["delivery_queue_capacity"] = json!(64);
+        value["agentstate_max_connections"] = json!(12);
+        value["agentstate_acquire_timeout_millis"] = json!(45_000);
+        let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+        assert!(limits.validate().is_ok());
+        assert_eq!(limits.agentstate_max_connections(), 12);
+        assert_eq!(limits.agentstate_acquire_timeout_millis, 45_000);
+
+        for (field, valid, invalid) in [
+            ("agentstate_max_connections", [1, 32], [0, 33]),
+            (
+                "agentstate_acquire_timeout_millis",
+                [1_000, 300_000],
+                [999, 300_001],
+            ),
+        ] {
+            let mut probe = value.clone();
+            for good in valid {
+                probe[field] = json!(good);
+                let limits: super::RuntimeLimits = serde_json::from_value(probe.clone()).unwrap();
+                assert!(limits.validate().is_ok(), "{field}={good}");
+            }
+            for bad in invalid {
+                probe[field] = json!(bad);
+                let limits: super::RuntimeLimits = serde_json::from_value(probe.clone()).unwrap();
+                assert!(limits.validate().is_err(), "{field}={bad}");
+            }
+        }
+        value["agentstate_max_connections"] = json!(null);
+        let limits: super::RuntimeLimits = serde_json::from_value(value).unwrap();
+        assert_eq!(limits.agentstate_max_connections, None);
     }
 
     fn config(root: &Path) -> Value {
