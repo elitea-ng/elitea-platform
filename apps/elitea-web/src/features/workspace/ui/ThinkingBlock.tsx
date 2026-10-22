@@ -20,7 +20,7 @@ import type { TranscriptItem } from '../model/turnReducer';
 type ThinkingItem = Extract<TranscriptItem, { type: 'thinking' }>;
 
 /** "Thinking…" while it streams, then "Thinking · 1,234 characters". */
-export function thinkingLabel(item: ThinkingItem): string {
+function thinkingLabel(item: ThinkingItem): string {
   if (item.chars === undefined) return t('workspace.thinking.streaming', 'Thinking…');
   const chars = new Intl.NumberFormat().format(item.chars);
   return t('workspace.thinking.done', 'Thinking · {{chars}} characters', { chars });

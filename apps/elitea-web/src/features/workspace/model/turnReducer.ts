@@ -21,21 +21,10 @@ import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { TurnModel } from '@/shared/desktop/turnModel';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
+import type { TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
 
-export type TranscriptItem =
-  | { type: 'text'; key: string; text: string }
-  /** A model step's reasoning (`thinking_delta`); `chars` once its `thinking_end` came. */
-  | { type: 'thinking'; key: string; text: string; chars?: number }
-  | {
-      type: 'tool';
-      key: string;
-      callId: string;
-      tool: string;
-      argsSummary: string;
-      remote: boolean;
-      result?: { ok: boolean; summary: string; truncated: boolean };
-    };
+export type { TranscriptItem } from './transcriptItem';
 
 interface TurnDone {
   committed: boolean;

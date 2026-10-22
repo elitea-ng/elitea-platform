@@ -1,11 +1,17 @@
 /**
  * The turn events that are not the transcript's main line, folded into the
- * `TurnView`: the context meter (`usage`, `context`) and a model step's
+ * turn's view (`TurnView`): the context meter (`usage`, `context`) and a model step's
  * reasoning (`thinking_delta`, `thinking_end`, issue 1228).
  */
-import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
+import type { AgentEvent, ContextMeter } from '@/shared/desktop/workspaceIpc';
 
-import type { TurnView } from './turnReducer';
+import type { TranscriptItem } from './transcriptItem';
+
+/** The part of a turn's view these events change: its transcript and its meter. */
+interface SideView {
+  items: TranscriptItem[];
+  context?: ContextMeter | undefined;
+}
 
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
@@ -23,13 +29,13 @@ function isMeterEvent(event: AgentEvent): event is MeterEvent {
  * composer's meter the latest context occupancy, which a `context` event
  * carries while a summary call runs.
  */
-function onMeter(view: TurnView, event: MeterEvent): TurnView {
+function onMeter<V extends SideView>(view: V, event: MeterEvent): V {
   const context = event.kind === 'context' ? event.payload : event.payload.context;
   return context === undefined ? view : { ...view, context };
 }
 
 /** Reasoning streams into the step's open "Thinking" block; `thinking_end` closes it. */
-function onThinking(view: TurnView, event: ThinkingEvent): TurnView {
+function onThinking<V extends SideView>(view: V, event: ThinkingEvent): V {
   const last = view.items[view.items.length - 1];
   const open = last?.type === 'thinking' && last.chars === undefined ? last : undefined;
   if (event.kind === 'thinking_end') {
@@ -47,6 +53,6 @@ export function isSideEvent(event: AgentEvent): event is SideEvent {
   return isMeterEvent(event) || isThinkingEvent(event);
 }
 
-export function applySideEvent(view: TurnView, event: SideEvent): TurnView {
+export function applySideEvent<V extends SideView>(view: V, event: SideEvent): V {
   return isMeterEvent(event) ? onMeter(view, event) : onThinking(view, event);
 }

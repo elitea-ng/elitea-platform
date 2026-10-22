@@ -20,7 +20,7 @@ import { lazy, Suspense } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import { ModelChip, type WorkspaceTurn } from '@/features/workspace';
+import { composer, type WorkspaceTurn } from '@/features/workspace';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -66,7 +66,7 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
 function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: SessionCommands['modelRef']): Pick<WorkspaceComposerProps, 'modelPicker' | 'onModelCommand'> {
   if (cloudMode || !model.offered) return {};
   return {
-    modelPicker: <ModelChip current={model.current} effort={model.effort} models={model.models} onChoose={model.choose} chipRef={chipRef} />,
+    modelPicker: <composer.ModelChip current={model.current} effort={model.effort} models={model.models} onChoose={model.choose} chipRef={chipRef} />,
     onModelCommand: model.command,
   };
 }

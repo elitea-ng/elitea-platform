@@ -23,15 +23,18 @@
  * not list the model) drops the choice, so the next send does not carry it
  * again.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ComponentProps } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import type { ModelOption, WorkspaceTurn } from '@/features/workspace';
+import { composer, type WorkspaceTurn } from '@/features/workspace';
 import { useGetApplicationVersionDetail } from '@/shared/api/generated/applications/applications';
 import { useListConfigurationModels } from '@/shared/api/generated/configurations/configurations';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { isReasoningEffort, modelOverrideAllowed, type ReasoningEffort, type TurnModel, type TurnModelChoice } from '@/shared/desktop/turnModel';
+
+/** One chat model the chip offers. */
+type ModelOption = ComponentProps<typeof composer.ModelChip>['models'][number];
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
