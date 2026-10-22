@@ -14,8 +14,12 @@ newest entry is first.
 
 * Each sub-app host process holds a PostgreSQL advisory lock for as long as
   it lives, on a dedicated connection, keyed by a 64-bit hash of its owner
-  id. A sibling that finds the lock free terminates the owner's in-flight
-  invocations as orphans, at startup and every minute after.
+  id. A sibling checks the locks of the owners with invocations in flight at
+  startup and every minute after, and terminates an owner's invocations as
+  orphans only when its lock is still free 30 seconds (three claim checks)
+  after the sibling first saw it free, with no held sighting between: an
+  owner whose session dropped re-takes its lock well within that, and keeps
+  its runs.
 * The host checks its own lock every 10 seconds. When its session dropped
   (a PostgreSQL restart, a failover, an idle-session kill) it refuses new
   invocations (gRPC `UNAVAILABLE`) and fails readiness until it has re-taken

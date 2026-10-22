@@ -143,7 +143,7 @@ func TestPostgresStoreReconcilesAnotherOwnersOrphans(t *testing.T) {
 	}
 	mine := &spi.Invocation{ID: "invocation_mine", Toolkit: "Wikis", Tool: "ask", Status: "running", CreatedAt: time.Now()}
 	// The new owner shares the schema: build it on the same DSN.
-	fresh, err := spi.NewPostgresStore(ctx, dsnOf(t, old), "pod-new/1", nil)
+	fresh, err := spi.NewPostgresStore(ctx, dsnOf(t, old), "pod-new/1", nil, spi.WithOwnerGrace(300*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,8 +163,14 @@ func TestPostgresStoreReconcilesAnotherOwnersOrphans(t *testing.T) {
 	if _, err := spi.NewPostgresStore(ctx, dsnOf(t, old), "pod-old/1", nil); err == nil {
 		t.Fatal("a live owner id was claimed twice")
 	}
-	// The old owner dies: now its running row IS an orphan.
+	// The old owner dies: its lock is free. One sighting is not death — an
+	// owner whose session dropped is re-taking it — but a lock still free
+	// the owner grace later is: now its running row IS an orphan.
 	old.Close()
+	if n, err := fresh.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a free lock seen once was taken for death: %d %v", n, err)
+	}
+	time.Sleep(350 * time.Millisecond)
 	n, err := fresh.Reconcile(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("reconciled %d %v", n, err)
@@ -234,6 +240,64 @@ func TestPostgresStoreRefusesWorkWhileItsClaimIsLostAndResumesOnceRetaken(t *tes
 	defer sibling.Close()
 	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
 		t.Fatalf("a sibling reconciled a live owner's row: %d %v", n, err)
+	}
+}
+
+// An owner whose claim session drops re-takes the lock within a check or
+// two. A sibling that sees the lock free in that gap waits the owner grace
+// before it believes it, and a held sighting resets the wait, so the owner
+// keeps its runs; only a lock free for the whole grace is death.
+func TestPostgresStoreLeavesABrieflyDisconnectedOwnersRunsAlone(t *testing.T) {
+	owner, assertions := testStore(t, "pod-blip/1", spi.WithClaimCheckInterval(100*time.Millisecond))
+	ctx := context.Background()
+	running := &spi.Invocation{ID: "invocation_blip", Toolkit: "Wikis", Tool: "generate_wiki", Status: "running", CreatedAt: time.Now()}
+	if err := owner.Create(ctx, running); err != nil {
+		t.Fatal(err)
+	}
+	const grace = 600 * time.Millisecond
+	sibling, err := spi.NewPostgresStore(ctx, dsnOf(t, owner), "pod-sibling/1", nil, spi.WithOwnerGrace(grace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sibling.Close()
+	var key int64
+	if err := assertions.QueryRow(ctx, `SELECT hashtextextended($1, $2)`, owner.Owner(), 0x53_41_48_31).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	// The owner's claim session drops; the sibling sees the lock free before
+	// the owner's next check re-takes it.
+	if _, err := assertions.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		  AND classid = (($1::bigint >> 32) & 4294967295)::oid AND objid = ($1::bigint & 4294967295)::oid`, key); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the lock to be free", func() bool {
+		var held bool
+		_ = assertions.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1
+			AND classid = (($1::bigint >> 32) & 4294967295)::oid AND objid = ($1::bigint & 4294967295)::oid)`, key).Scan(&held)
+		return !held
+	})
+	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a sibling reaped on one free sighting: %d %v", n, err)
+	}
+	waitFor(t, "the owner to re-take its claim", owner.ClaimHeld)
+	time.Sleep(grace + 100*time.Millisecond)
+	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a sibling reaped an owner that re-took its claim: %d %v", n, err)
+	}
+	if got, _ := owner.Get(ctx, "Wikis", "generate_wiki", running.ID); got.Status != "running" {
+		t.Fatalf("the re-taken owner's run was touched: %+v", got)
+	}
+	// The held sighting reset the wait: the owner now dies for good, and the
+	// first free sighting after it starts a new grace rather than reaping at
+	// once on the stale one.
+	owner.Close()
+	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a sibling reaped on a free sighting that predates a held one: %d %v", n, err)
+	}
+	time.Sleep(grace + 100*time.Millisecond)
+	if n, err := sibling.Reconcile(ctx); err != nil || n != 1 {
+		t.Fatalf("an owner gone for the whole grace: reconciled %d %v, want 1", n, err)
 	}
 }
 

@@ -36,8 +36,13 @@ import (
 // failover, an idle kill) frees the lock, and siblings would then take this
 // process for dead. So a lost claim stops this store taking new invocations
 // (Create answers ErrClaimLost, and ClaimHeld feeds readiness) until it is
-// re-taken on a new connection. A row a sibling terminated in the gap stays
-// terminated: Update writes only a row this owner still has in flight.
+// re-taken on a new connection. A sibling does not take one free sighting
+// for death: it terminates an owner's rows only when the lock is still free
+// ownerGrace after it first saw it free, and ownerGrace is longer than the
+// owner needs to notice and re-take (one check interval plus that check's
+// timeout), so a briefly disconnected owner keeps its runs. A row a sibling
+// did terminate (an owner cut off for longer) stays terminated: Update writes
+// only a row this owner still has in flight.
 //
 // Durable is true, and that is not decoration: /health reports it, and an
 // operator uses it to tell a compliant deployment from a dev one.
@@ -50,6 +55,7 @@ type PostgresStore struct {
 
 	claimCheck     time.Duration
 	reconcileEvery time.Duration
+	ownerGrace     time.Duration
 	legacyGrace    time.Duration
 
 	// claimMu guards claim, the dedicated connection that holds this
@@ -58,9 +64,12 @@ type PostgresStore struct {
 	claim   *pgx.Conn
 	held    atomic.Bool
 
-	// reconcileMu serialises Reconcile; legacySeen is when this process
-	// first saw each legacy owner with rows in flight.
+	// reconcileMu serialises Reconcile; freeSince is when this process first
+	// saw each claimed owner's lock free, in a run of free sightings with no
+	// held one between; legacySeen is when it first saw each legacy owner
+	// with rows in flight.
 	reconcileMu sync.Mutex
+	freeSince   map[string]time.Time
 	legacySeen  map[string]time.Time
 
 	stop      chan struct{}
@@ -90,6 +99,11 @@ const claimedOwnerPrefix = "claim1:"
 const (
 	claimCheckInterval = 10 * time.Second
 	reconcileInterval  = time.Minute
+	// ownerGraceChecks is ownerGrace in claim-check intervals. An owner
+	// whose session dropped notices at its next check (up to one interval)
+	// and re-takes the lock within that check's timeout (up to one more), so
+	// a sibling waits longer than both before it reads a free lock as death.
+	ownerGraceChecks = 3
 	// legacyOwnerGrace is how long this process must have seen a legacy
 	// owner's rows in flight before it terminates them. It covers a rolling
 	// deploy: the old replicas are gone well within it, and their rows are
@@ -109,6 +123,13 @@ func WithClaimCheckInterval(d time.Duration) StoreOption {
 // the startup pass.
 func WithReconcileInterval(d time.Duration) StoreOption {
 	return func(s *PostgresStore) { s.reconcileEvery = d }
+}
+
+// WithOwnerGrace sets how long a claimed owner's lock must stay free, from
+// this process's first sighting of it free, before its rows are orphans.
+// The default is ownerGraceChecks claim-check intervals.
+func WithOwnerGrace(d time.Duration) StoreOption {
+	return func(s *PostgresStore) { s.ownerGrace = d }
 }
 
 // WithLegacyOwnerGrace sets how long a legacy (pre-#1359) owner's in-flight
@@ -149,11 +170,14 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	store := &PostgresStore{
 		pool: pool, dsn: dsn, owner: claimedOwnerPrefix + owner, logger: logger,
 		claimCheck: claimCheckInterval, reconcileEvery: reconcileInterval, legacyGrace: legacyOwnerGrace,
-		legacySeen: map[string]time.Time{},
-		stop:       make(chan struct{}), done: make(chan struct{}),
+		freeSince: map[string]time.Time{}, legacySeen: map[string]time.Time{},
+		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	for _, option := range options {
 		option(store)
+	}
+	if store.ownerGrace <= 0 {
+		store.ownerGrace = ownerGraceChecks * store.claimCheck
 	}
 	if err := pool.QueryRow(ctx, `SELECT hashtextextended($1, $2)`, store.owner, ownerLockSeed).Scan(&store.lockKey); err != nil {
 		pool.Close()
@@ -408,10 +432,13 @@ func (s *PostgresStore) Prune(ctx context.Context, olderThan time.Duration) (int
 // caller can act on.
 //
 // Whether an owner is gone depends on what wrote the row:
-//   - claimedOwnerPrefix: gone when its liveness lock is free. A row whose
-//     owner still holds it is a sibling replica's running invocation and is
-//     left alone — before #1359 every other owner counted as gone, and a
-//     second replica starting killed the first one's work.
+//   - claimedOwnerPrefix: gone when its liveness lock is free on two
+//     sightings at least ownerGrace apart, with no held sighting between. A
+//     row whose owner holds it is a sibling replica's running invocation and
+//     is left alone — before #1359 every other owner counted as gone, and a
+//     second replica starting killed the first one's work — and so is the
+//     row of an owner whose session dropped a moment ago and is re-taking
+//     the lock (checkClaim).
 //   - no prefix (an image from before #1359, which takes no lock): gone once
 //     this process has seen its rows in flight for legacyGrace, so a rolling
 //     deploy does not kill what the old replicas are still running.
@@ -445,10 +472,26 @@ func (s *PostgresStore) Reconcile(ctx context.Context) (int, error) {
 	inFlight := make(map[string]bool, len(owners))
 	reconciled := 0
 	for _, owner := range owners {
+		if owner != nil {
+			inFlight[*owner] = true
+		}
+	}
+	defer func() {
+		for owner := range s.freeSince {
+			if !inFlight[owner] {
+				delete(s.freeSince, owner)
+			}
+		}
+		for owner := range s.legacySeen {
+			if !inFlight[owner] {
+				delete(s.legacySeen, owner)
+			}
+		}
+	}()
+	for _, owner := range owners {
 		switch {
 		case owner == nil:
 		case !strings.HasPrefix(*owner, claimedOwnerPrefix):
-			inFlight[*owner] = true
 			seen, ok := s.legacySeen[*owner]
 			if !ok {
 				s.legacySeen[*owner] = now
@@ -466,21 +509,26 @@ func (s *PostgresStore) Reconcile(ctx context.Context) (int, error) {
 				return reconciled, err
 			}
 			if !free {
+				delete(s.freeSince, *owner)
 				continue
 			}
 			if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, $2))`, *owner, ownerLockSeed); err != nil {
 				return reconciled, err
 			}
+			since, seen := s.freeSince[*owner]
+			if !seen {
+				s.freeSince[*owner] = now
+				continue
+			}
+			if now.Sub(since) < s.ownerGrace {
+				continue
+			}
+			delete(s.freeSince, *owner)
 		}
 		n, err := s.terminateOrphans(ctx, owner)
 		reconciled += n
 		if err != nil {
 			return reconciled, err
-		}
-	}
-	for owner := range s.legacySeen {
-		if !inFlight[owner] {
-			delete(s.legacySeen, owner)
 		}
 	}
 	if reconciled > 0 {
