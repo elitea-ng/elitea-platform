@@ -20,8 +20,8 @@ name: Release & Publish
 # that tag's patch + 1. Pre-release tags never feed the bump: semantic-release
 # ignores pre-release versions when it looks for the last release of `main`.
 #
-# A pre-release builds, scans, signs and publishes the same images and charts a
-# release does, under its own version only — the manifest step never gives a
+# A pre-release builds, scans, signs and publishes the same images, charts and
+# signed macOS app (the `desktop` job) a release does, under its own version only — the manifest step never gives a
 # version with a `-` the moving tags. The `prune` job keeps the newest
 # PRERELEASE_KEEP of each pre-release channel and deletes the rest.
 on:
@@ -1045,7 +1045,169 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           helm show chart "oci://${REGISTRY}/charts/${{ matrix.chart }}" --version "$VERSION"
 
-  # ── Job 5: Docs — deploy the docs site for a stable release ─────────────────
+  # ── Job 5: Desktop — the signed, notarised macOS app (Apple silicon) ────────
+  #
+  # Every channel ships it, attached to the GitHub release the `release` job
+  # created: `Elitea_<version>_aarch64.dmg` and the `.app` as a zip. A job here
+  # and not a tag-triggered workflow: a tag created with GITHUB_TOKEN starts no
+  # workflow, and no workflow here may start on a push at all.
+  #
+  # THE VERSION IS STAMPED, NOT COMMITTED, as the chart's is. Cargo.toml takes
+  # the full version, so `X-Client-Version` (CARGO_PKG_VERSION; the
+  # deployment's 426 gate, SemVer with pre-release) says exactly which build
+  # this is. tauri.conf.json takes the numeric `X.Y.Z`, because it becomes
+  # CFBundleShortVersionString, which macOS reads as three integers;
+  # CFBundleVersion is the run number, which only ever grows.
+  #
+  # NOT IN ROLLBACK'S `needs`. The images and charts are the release; a failed
+  # notarisation (Apple's service, an expired certificate) must not delete
+  # them. Re-run this job alone: the upload uses --clobber.
+  #
+  # Signing never degrades in silence: with any signing secret missing the job
+  # fails, and an unsigned app is never attached to a release.
+  desktop:
+    name: Desktop (macOS arm64)
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.new_release_git_tag }}
+          persist-credentials: false
+
+      - name: Signing secrets are all present
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_API_PRIVATE_KEY; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::repository secrets not set: ${missing[*]} (apps/elitea-desktop/README.md, Release signing)"
+            exit 1
+          fi
+          [ "$(uname -m)" = "arm64" ] || { echo "::error::runner is $(uname -m), the release is Apple silicon only"; exit 1; }
+
+      - name: Stamp the release version into the app
+        env:
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+          BUILD: ${{ github.run_number }}
+        working-directory: apps/elitea-desktop
+        run: |
+          set -euo pipefail
+          base="${VERSION%%-*}"
+          node -e '
+            const fs = require("fs");
+            const f = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(f, "utf8"));
+            c.version = process.argv[1];
+            c.bundle.macOS.bundleVersion = process.argv[2];
+            fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n");
+          ' "$base" "$BUILD"
+          # The [package] version is the first `version =` line of Cargo.toml.
+          sed -i '' -E "1,/^version = /s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+
+          got_conf="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          got_cargo="$(sed -nE 's/^version = "(.*)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          if [ "$got_conf" != "$base" ] || [ "$got_cargo" != "$VERSION" ]; then
+            echo "::error::stamped tauri.conf.json ${got_conf} (want ${base}) and Cargo.toml ${got_cargo} (want ${VERSION})"
+            exit 1
+          fi
+          echo "stamped: Cargo.toml ${VERSION}, tauri.conf.json ${base} (build ${BUILD})"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      # `tauri build` runs the web desktop build first (beforeBuildCommand).
+      - name: Install web and desktop (locked)
+        run: |
+          npm ci --prefix apps/elitea-web
+          npm ci --prefix apps/elitea-desktop
+
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      # Restore only: a release run's target directory is not one a pull
+      # request reads (ci-desktop.yml's nightly run is that writer).
+      - name: Restore the cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          workspaces: apps/elitea-desktop/src-tauri
+
+      - name: Prepare the notarisation key
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" | base64 --decode > "$key"
+          chmod 600 "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      # The Tauri CLI imports the certificate into a temporary keychain, signs
+      # with the hardened runtime, notarises and staples the app.
+      - name: Build, sign and notarise
+        working-directory: apps/elitea-desktop
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+
+      # Proven, not assumed: Gatekeeper accepts the app and the ticket is stapled.
+      - name: The app is signed, notarised and stapled
+        working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 macos/Elitea.app
+          spctl --assess --type execute --verbose=4 macos/Elitea.app
+          xcrun stapler validate macos/Elitea.app
+
+      - name: Attach the app to the release
+        working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.new_release_git_tag }}
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          zip_name="Elitea_${VERSION}_aarch64.app.zip"
+          dmg_name="Elitea_${VERSION}_aarch64.dmg"
+          # ditto keeps the code signature and the stapled ticket; zip(1) does not.
+          ditto -c -k --keepParent macos/Elitea.app "$RUNNER_TEMP/$zip_name"
+          dmg="$(ls dmg/*.dmg)"
+          cp "$dmg" "$RUNNER_TEMP/$dmg_name"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$RUNNER_TEMP/$dmg_name" "$RUNNER_TEMP/$zip_name"
+          echo "Attached ${dmg_name} and ${zip_name} to ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the notarisation key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  # ── Job 6: Docs — deploy the docs site for a stable release ─────────────────
   #
   # A merge no longer deploys the docs (docs-pages.yml has no push arm), so the
   # site moves with the stable release, built from its tag. Not in rollback's
@@ -1063,11 +1225,12 @@ jobs:
     with:
       ref: ${{ needs.release.outputs.new_release_git_tag }}
 
-  # ── Job 6: Prune — keep the newest PRERELEASE_KEEP pre-releases per channel ──
+  # ── Job 7: Prune — keep the newest PRERELEASE_KEEP pre-releases per channel ──
   #
   # Runs after a pre-release published, so the one just cut is counted among
   # the kept. Deletes each older pre-release with its tag, its images (the
-  # manifest and both platform tags) and its charts:
+  # manifest and both platform tags) and its charts; the desktop app goes with
+  # the GitHub release it is attached to:
   # scripts/ci/prune-prereleases.mjs, unit-tested in no-binaries.yml.
   prune:
     name: Prune old pre-releases
@@ -1102,7 +1265,7 @@ jobs:
             });
             if (code !== 0) core.setFailed(`scripts/ci/prune-prereleases.mjs exited ${code}`);
 
-  # ── Job 7: Rollback — delete release, tag, and images on failure ────────────
+  # ── Job 8: Rollback — delete release, tag, and images on failure ────────────
   rollback:
     name: Rollback
     # `publish-image` is on this list so a refused image is rolled back, not left

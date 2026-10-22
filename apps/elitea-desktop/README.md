@@ -295,17 +295,31 @@ Icons are the brand mark rasterised with
 `npx tauri icon ../elitea-web/public/brand/logo-mark.svg -o src-tauri/icons --fit contain`
 (keep the six files `tauri.conf.json` lists).
 
-## Release signing (stubs, no secrets in the repository)
+## Release signing and publishing
 
-macOS first. A release build is signed with the hardened runtime and notarised
-when these are set in the build environment (see the Tauri macOS signing guide):
+Every run of `.github/workflows/publish.yml` (a release, a nightly, a dev
+pre-release) builds the app for **Apple silicon only** in its `desktop` job,
+signs it with the Developer ID certificate and the hardened runtime, notarises
+and staples it, checks the result with `codesign`, `spctl` and `stapler`, and
+attaches `Elitea_<version>_aarch64.dmg` and `Elitea_<version>_aarch64.app.zip`
+to that GitHub release. The version is stamped at build time (Cargo.toml: the
+full release version, which `X-Client-Version` sends; tauri.conf.json: the
+numeric `X.Y.Z`, CFBundleVersion = the run number), so neither file is bumped by
+hand. The job fails when any secret below is missing; it never publishes an
+unsigned app.
 
-| Variable | Purpose |
-| --- | --- |
-| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: ...` identity in the build keychain |
-| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` | base64 `.p12` to import in CI |
-| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | notarisation with an app-specific password |
-| `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` | notarisation with an App Store Connect API key instead |
-| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | signs updater artifacts (the updater is not enabled yet) |
+Repository secrets (Settings › Secrets and variables › Actions):
+
+| Secret | What it holds | How to get it |
+| --- | --- | --- |
+| `APPLE_CERTIFICATE` | base64 of the **Developer ID Application** certificate + private key, exported as `.p12` | Keychain Access › export the identity as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
+| `APPLE_CERTIFICATE_PASSWORD` | the password chosen for that `.p12` export | |
+| `APPLE_SIGNING_IDENTITY` | the identity's full name, `Developer ID Application: <Name> (<TEAMID>)` | `security find-identity -v -p codesigning` |
+| `APPLE_API_KEY` | the App Store Connect API **Key ID** (10 characters) | App Store Connect › Users and Access › Integrations › Team Keys (role Developer or higher) |
+| `APPLE_API_ISSUER` | the **Issuer ID** (UUID) shown above that key list | same page |
+| `APPLE_API_PRIVATE_KEY` | base64 of the downloaded `AuthKey_<KEYID>.p8` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` (it can be downloaded once) |
+
+`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` sign updater
+artifacts; the updater is not enabled, so the job does not read them.
 
 Unsigned local builds work without any of them. Telemetry is off; there is none.
