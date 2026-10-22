@@ -25,9 +25,9 @@
 //!   (Filtering first made 3–10× more semantic edges on the parity
 //!   corpora.) Ties go by node id in byte order (`COLLATE "C"`).
 //!
-//!   The vectors are the build's own, in memory ([`Build::vectors`]): the
-//!   build keeps what it staged, so Phase 2 never reads them back from
-//!   elitea-vector, and its distance stays L2 although the published
+//!   The vectors are the build's own ([`Build::vectors`]: in memory, or a
+//!   spill file read block by block for a large build): the build keeps
+//!   what it staged, so Phase 2 never reads them back from elitea-vector, and its distance stays L2 although the published
 //!   index's readers rank by cosine (Phase 2's edges and goldens were
 //!   recorded with L2). A query vector of another dimension, or with a
 //!   non-finite value, is refused as pgvector refused it.
@@ -223,11 +223,18 @@ impl PgTopologyStore {
         // As pgvector parsed the literal: `float4` values.
         #[allow(clippy::cast_possible_truncation)]
         let query: Vec<f32> = embedding.iter().map(|v| *v as f32).collect();
-        let distances: Vec<f64> = vectors
-            .values()
-            .par_chunks(dimension)
-            .map(|vector| l2_distance(vector, &query))
-            .collect();
+        let mut distances: Vec<f64> = Vec::with_capacity(vectors.len());
+        vectors
+            .scan(|_, block| {
+                distances.par_extend(
+                    block
+                        .par_chunks(dimension)
+                        .map(|vector| l2_distance(vector, &query)),
+                );
+            })
+            .map_err(|error| {
+                StoreError::new(format!("reading the build's vectors failed: {error}"))
+            })?;
         let ids = vectors.ids();
         let mut order: Vec<usize> = (0..ids.len()).collect();
         let by = |a: &usize, b: &usize| {
@@ -509,14 +516,16 @@ impl TopologyStore for PgTopologyStore {
     fn get_embeddings(&mut self, ids: &[&str]) -> Result<Vec<Option<Vec<f64>>>, StoreError> {
         self.check_stop()?;
         let vectors = self.build.vectors();
-        Ok(ids
-            .iter()
+        ids.iter()
             .map(|id| {
                 vectors
                     .get(id)
-                    .map(|vector| vector.iter().copied().map(f64::from).collect())
+                    .map(|vector| vector.map(|v| v.into_iter().map(f64::from).collect()))
+                    .map_err(|error| {
+                        StoreError::new(format!("reading the build's vectors failed: {error}"))
+                    })
             })
-            .collect())
+            .collect()
     }
 
     fn search_dense(

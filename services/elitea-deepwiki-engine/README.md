@@ -189,9 +189,11 @@ Before Phase 2 the staging tables are `ANALYZE`d (best effort), so the
 planner plans for the rows just staged. PostgreSQL holds no vector (#1359:
 a wiki's dense vectors are in Qdrant behind elitea-vector, `storage::dense`).
 Dense search never reads them back from there: the build keeps the vectors
-it staged in memory (`Build::vectors`; `nodes × dimensions × 4` bytes, about
-600 MB for 100k nodes of 1536 dimensions) and each search ranks them in
-process, in parallel, with pgvector's `float4` L2 rule, then reads the hits'
+it staged (`Build::vectors`; `nodes × dimensions × 4` bytes, about 600 MB
+for 100k nodes of 1536 dimensions), in memory up to 64 MiB and past that in
+an unlinked file in the job's scratch directory, read back in 4 MiB blocks
+(the page cache, not the worker's heap, holds them), and each search ranks
+them in process, in parallel, with pgvector's `float4` L2 rule, then reads the hits'
 paths in one query. The hits are those of the full-scan SQL query Phase 2
 ran before the vectors left PostgreSQL, row for row and bit for bit
 (`tests/storage_topology.rs` compares them with a brute-force copy of that

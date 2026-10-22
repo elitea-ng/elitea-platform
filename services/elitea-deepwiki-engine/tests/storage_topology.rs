@@ -12,7 +12,7 @@ use elitea_deepwiki_engine::graph::EdgeRow;
 use elitea_deepwiki_engine::graph::topology::replay::standin_embedding;
 use elitea_deepwiki_engine::graph::topology::{SearchHit, TopologyStore};
 use elitea_deepwiki_engine::runner::StopSignal;
-use elitea_deepwiki_engine::storage::build::BuildSpace;
+use elitea_deepwiki_engine::storage::build::{BuildSpace, VectorSpill};
 use elitea_deepwiki_engine::storage::text::score_norm;
 use elitea_deepwiki_engine::storage::topology::{PgTopologyStore, STOPPED};
 use serde_json::json;
@@ -363,15 +363,39 @@ fn reference_search(
 /// Every probe, `k` and prefix gives the same hits, row for row and bit for
 /// bit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines)]
 async fn the_in_process_dense_search_is_the_full_scan() {
-    let Some(pool) = storage_common::fresh_database("topology_dense").await else {
+    dense_full_scan("topology_dense", None).await;
+}
+
+/// The same search over a build whose vectors passed the spill limit (256
+/// KiB here, about 1,000 of the 2,000 vectors): they are read back from
+/// the spill file block by block, with the same hits, row for row and bit
+/// for bit, and none of them is held in memory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_dense_search_over_spilled_vectors_is_the_full_scan() {
+    let directory = std::env::temp_dir().join(format!("dw-topology-spill-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    dense_full_scan(
+        "topology_dense_spilled",
+        Some(VectorSpill {
+            directory: directory.clone(),
+            after_bytes: 256 << 10,
+        }),
+    )
+    .await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[allow(clippy::too_many_lines)]
+async fn dense_full_scan(database: &str, spill: Option<VectorSpill>) {
+    let Some(pool) = storage_common::fresh_database(database).await else {
         return;
     };
     let nodes = setting("DEEPWIKI_DENSE_NODES", 2000);
     let dimensions = setting("DEEPWIKI_DENSE_DIMENSIONS", 64);
     let probes = setting("DEEPWIKI_DENSE_PROBES", 60);
-    let space = BuildSpace::new(pool.clone(), "topology-dense");
+    let spills = spill.is_some();
+    let space = BuildSpace::new(pool.clone(), "topology-dense").with_vector_spill(spill);
     let mut build = space
         .begin(&storage_common::key("acme--dense--main"))
         .await
@@ -406,13 +430,20 @@ async fn the_in_process_dense_search_is_the_full_scan() {
         vectors.push((id, vector));
     }
     build.stage_nodes(rows).await.unwrap();
-    build
-        .stage_embeddings(
-            storage_common::TEST_MODEL,
-            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
-        )
-        .await
-        .unwrap();
+    // In batches, as the embedding rounds stage them.
+    for batch in vectors.chunks(256) {
+        build
+            .stage_embeddings(
+                storage_common::TEST_MODEL,
+                batch.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(build.vectors().spilled(), spills);
+    if spills {
+        assert_eq!(build.vectors().held_in_memory(), 0);
+    }
     assert!(build.refresh_statistics().await);
     let mut queries: Vec<Vec<f64>> = Vec::new();
     for p in 0..probes {

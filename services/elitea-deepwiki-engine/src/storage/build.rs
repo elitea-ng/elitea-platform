@@ -4,7 +4,9 @@
 //! `(project_id, wiki_id)`, migration 0005), stages the code graph into the
 //! `deepwiki_build` tables with `COPY`, writes its dense vectors to
 //! elitea-vector under the build's own generation (the build id,
-//! [`crate::storage::dense`]) and keeps them in memory for Phase 2, and
+//! [`crate::storage::dense`]) batch by batch, keeps them for Phase 2 (in
+//! memory up to a limit, then in a file in the job's scratch directory,
+//! [`BuildVectors`]), and
 //! publishes. [`Build::publish`] is ONE transaction:
 //!
 //! 1. lock the build row (a build the sweep removed cannot publish; the
@@ -236,6 +238,8 @@ pub struct BuildSpace {
     publish: PublishSettings,
     /// Where the builds write their vectors.
     dense: Option<DenseIndex>,
+    /// Where the builds keep their vectors for Phase 2 past a limit.
+    spill: Option<VectorSpill>,
 }
 
 /// Row counts a stage call wrote.
@@ -350,7 +354,17 @@ impl BuildSpace {
             stale_after: DEFAULT_STALE_AFTER,
             publish: PublishSettings::default(),
             dense: None,
+            spill: None,
         }
+    }
+
+    /// Keep the builds' vectors for Phase 2 in a file once they pass
+    /// `spill.after_bytes` ([`BuildVectors`]). Without it they stay in
+    /// memory (the tests, the parity tool).
+    #[must_use]
+    pub fn with_vector_spill(mut self, spill: Option<VectorSpill>) -> Self {
+        self.spill = spill;
+        self
     }
 
     /// The dense store the builds this space opens write their vectors to.
@@ -429,7 +443,7 @@ impl BuildSpace {
             beat: Some(beat),
             published: false,
             dense: self.dense.clone(),
-            vectors: BuildVectors::default(),
+            vectors: BuildVectors::new(self.spill.clone()),
         })
     }
 
@@ -705,21 +719,123 @@ pub struct Build {
     vectors: BuildVectors,
 }
 
-/// The vectors a build staged, in memory: Phase 2 reads them from here
-/// (no read-back from the store), node ids and one flat `f32` array,
-/// `dimension` values per node.
-#[derive(Debug, Default)]
+/// The vector bytes a build holds in memory before it spills them (64 MiB:
+/// about 6,500 vectors of 2,560 dimensions).
+pub const DEFAULT_SPILL_AFTER: usize = 64 << 20;
+
+/// The vector values a [`BuildVectors::scan`] reads per block from a spill
+/// file (4 MiB of `f32`), rounded down to whole vectors.
+const SCAN_VALUES: usize = 1 << 20;
+
+/// Where a build's vectors go once they pass `after_bytes`: an unlinked
+/// file in `directory` (the job's scratch directory), so a large repository
+/// does not hold all its vectors in memory for Phase 2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSpill {
+    pub directory: std::path::PathBuf,
+    pub after_bytes: usize,
+}
+
+impl VectorSpill {
+    /// Spill into `directory` past [`DEFAULT_SPILL_AFTER`].
+    pub fn new(directory: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+            after_bytes: DEFAULT_SPILL_AFTER,
+        }
+    }
+}
+
+/// Where the vector values are.
+#[derive(Debug)]
+enum VectorValues {
+    Memory(Vec<f32>),
+    /// Little-endian `f32`s, `values` of them, in an unlinked file.
+    File {
+        file: std::fs::File,
+        values: usize,
+    },
+}
+
+/// The vectors a build staged, for Phase 2 (no read-back from the store,
+/// whose float16 collections would not give the staged `f32`s back): node
+/// ids and one flat `f32` array, `dimension` values per node. In memory up
+/// to the build space's [`VectorSpill::after_bytes`], then all of them in a
+/// file in the spill directory (memory keeps the ids, never the values), so
+/// the values held in memory never pass that limit. The vectors were
+/// written to elitea-vector batch by batch already, as they were staged.
+#[derive(Debug)]
 pub struct BuildVectors {
     model: Option<String>,
     space: Option<Space>,
     ids: Vec<String>,
     positions: HashMap<String, usize>,
-    values: Vec<f32>,
+    values: VectorValues,
+    spill: Option<VectorSpill>,
     /// Points written to the dense store.
     written: u64,
 }
 
+impl Default for BuildVectors {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+fn spill_failed(spill: &VectorSpill, error: &std::io::Error) -> StorageError {
+    StorageError::Publish(format!(
+        "keeping the build's vectors in {} failed: {error}",
+        spill.directory.display()
+    ))
+}
+
+/// An unlinked read-write file in `directory`: removed from the directory at
+/// once, so it goes away with the process however it ends.
+fn unlinked_file(directory: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let path = directory.join(format!(".build-vectors-{}", new_boot_id()));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    if let Err(error) = std::fs::remove_file(&path) {
+        tracing::warn!(path = %path.display(), %error, "could not unlink the build's vector file; the job directory's removal takes it");
+    }
+    Ok(file)
+}
+
+fn le_bytes(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn from_le_bytes(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+}
+
 impl BuildVectors {
+    /// No vector yet; past `spill`'s limit the values go to its directory.
+    #[must_use]
+    pub fn new(spill: Option<VectorSpill>) -> Self {
+        Self {
+            model: None,
+            space: None,
+            ids: Vec::new(),
+            positions: HashMap::new(),
+            values: VectorValues::Memory(Vec::new()),
+            spill,
+            written: 0,
+        }
+    }
+
     /// The vectors held.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -752,19 +868,116 @@ impl BuildVectors {
         &self.ids
     }
 
-    /// The vector of `node_id`.
+    /// Whether the values are in the spill file.
     #[must_use]
-    pub fn get(&self, node_id: &str) -> Option<&[f32]> {
-        let dimension = self.dimension();
-        self.positions
-            .get(node_id)
-            .map(|position| &self.values[position * dimension..(position + 1) * dimension])
+    pub fn spilled(&self) -> bool {
+        matches!(self.values, VectorValues::File { .. })
     }
 
-    /// Every vector, flat, `dimension` values per id of [`Self::ids`].
+    /// The bytes of vector values held in memory.
     #[must_use]
-    pub fn values(&self) -> &[f32] {
-        &self.values
+    pub fn held_in_memory(&self) -> usize {
+        match &self.values {
+            VectorValues::Memory(values) => values.len() * size_of::<f32>(),
+            VectorValues::File { .. } => 0,
+        }
+    }
+
+    /// Append `values` (whole vectors), spilling when they pass the limit.
+    fn append(&mut self, values: &[f32]) -> Result<()> {
+        if let VectorValues::Memory(held) = &mut self.values {
+            let bytes = (held.len() + values.len()) * size_of::<f32>();
+            match &self.spill {
+                Some(spill) if bytes > spill.after_bytes => {
+                    let file = unlinked_file(&spill.directory)
+                        .map_err(|error| spill_failed(spill, &error))?;
+                    let held = std::mem::take(held);
+                    self.values = VectorValues::File { file, values: 0 };
+                    for block in held.chunks(SCAN_VALUES) {
+                        self.append(block)?;
+                    }
+                }
+                _ => {
+                    held.extend_from_slice(values);
+                    return Ok(());
+                }
+            }
+        }
+        if let VectorValues::File { file, values: held } = &mut self.values {
+            use std::os::unix::fs::FileExt as _;
+            let offset = (*held * size_of::<f32>()) as u64;
+            if let Err(error) = file.write_all_at(&le_bytes(values), offset) {
+                return Err(match &self.spill {
+                    Some(spill) => spill_failed(spill, &error),
+                    None => StorageError::Publish(format!(
+                        "keeping the build's vectors failed: {error}"
+                    )),
+                });
+            }
+            *held += values.len();
+        }
+        Ok(())
+    }
+
+    /// The vector of `node_id`.
+    ///
+    /// # Errors
+    ///
+    /// The spill file's read failure.
+    pub fn get(&self, node_id: &str) -> std::io::Result<Option<Vec<f32>>> {
+        let dimension = self.dimension();
+        let Some(position) = self.positions.get(node_id) else {
+            return Ok(None);
+        };
+        match &self.values {
+            VectorValues::Memory(values) => Ok(Some(
+                values[position * dimension..(position + 1) * dimension].to_vec(),
+            )),
+            VectorValues::File { file, .. } => {
+                use std::os::unix::fs::FileExt as _;
+                let mut bytes = vec![0_u8; dimension * size_of::<f32>()];
+                file.read_exact_at(&mut bytes, (position * dimension * size_of::<f32>()) as u64)?;
+                Ok(Some(from_le_bytes(&bytes).collect()))
+            }
+        }
+    }
+
+    /// Every vector, in staging order (the order of [`Self::ids`]), in
+    /// blocks of whole vectors: `visit(index of the block's first vector,
+    /// its values)`. From the spill file a block holds at most 4 MiB.
+    ///
+    /// # Errors
+    ///
+    /// The spill file's read failure.
+    pub fn scan(&self, mut visit: impl FnMut(usize, &[f32])) -> std::io::Result<()> {
+        let dimension = self.dimension();
+        if dimension == 0 {
+            return Ok(());
+        }
+        let per_block = (SCAN_VALUES / dimension).max(1);
+        match &self.values {
+            VectorValues::Memory(values) => {
+                for (block, chunk) in values.chunks(per_block * dimension).enumerate() {
+                    visit(block * per_block, chunk);
+                }
+            }
+            VectorValues::File { file, values } => {
+                use std::os::unix::fs::FileExt as _;
+                let mut bytes = Vec::new();
+                let mut decoded = Vec::new();
+                let mut first = 0;
+                while first * dimension < *values {
+                    let count = per_block.min(*values / dimension - first);
+                    bytes.resize(count * dimension * size_of::<f32>(), 0);
+                    file.read_exact_at(&mut bytes, (first * dimension * size_of::<f32>()) as u64)?;
+                    decoded.clear();
+                    decoded.extend(from_le_bytes(&bytes));
+                    visit(first, &decoded);
+                    first += count;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -944,7 +1157,7 @@ impl Build {
     }
 
     /// Stage dense vectors made with `model`, keyed by node id: keep them
-    /// in memory (Phase 2 reads them, [`Build::vectors`]) and write them to
+    /// for Phase 2 ([`Build::vectors`], in memory or spilled) and write them to
     /// the dense store under this build's generation, in rounds of at most
     /// 512, BEFORE the publish. Each vector is `f64` as the model client
     /// answers it, stored as `f32` (what pgvector stored too).
@@ -1036,12 +1249,16 @@ impl Build {
                     ))
                 })?;
         }
-        for (node_id, vector) in converted {
+        let flat: Vec<f32> = converted
+            .iter()
+            .flat_map(|(_, vector)| vector.iter().copied())
+            .collect();
+        self.vectors.append(&flat)?;
+        for (node_id, _) in converted {
             self.vectors
                 .positions
                 .insert(node_id.to_owned(), self.vectors.ids.len());
             self.vectors.ids.push(node_id.to_owned());
-            self.vectors.values.extend_from_slice(&vector);
         }
         Ok(rows.len() as u64)
     }
@@ -1840,6 +2057,66 @@ async fn write_fts_branch(tx: &mut PgConnection, key: &WikiKey) -> Result<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The values held in memory never pass the spill limit: past it every
+    /// value is in the (unlinked) spill file, and reads give back exactly
+    /// what was staged.
+    #[test]
+    #[allow(clippy::float_cmp)] // exact: the staged f32s come back
+    fn vectors_past_the_limit_go_to_the_spill_file() {
+        let directory = std::env::temp_dir().join(format!("dw-spill-{}", new_boot_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let dimension = 4;
+        let limit = 3 * dimension * size_of::<f32>();
+        let mut vectors = BuildVectors::new(Some(VectorSpill {
+            directory: directory.clone(),
+            after_bytes: limit,
+        }));
+        vectors.space = Some(Space::new("m", dimension).unwrap());
+        let vector = |i: usize| -> Vec<f32> {
+            (0..dimension)
+                .map(|d| f32::from(u16::try_from(i * 10 + d).unwrap()))
+                .collect()
+        };
+        let mut staged = Vec::new();
+        for batch in 0..5 {
+            let flat: Vec<f32> = (0..2).flat_map(|i| vector(batch * 2 + i)).collect();
+            vectors.append(&flat).unwrap();
+            for i in 0..2 {
+                let id = format!("n{}", batch * 2 + i);
+                vectors.positions.insert(id.clone(), vectors.ids.len());
+                vectors.ids.push(id);
+            }
+            staged.extend(flat);
+            assert!(vectors.held_in_memory() <= limit, "batch {batch}");
+            assert_eq!(vectors.spilled(), (batch + 1) * 2 > 3, "batch {batch}");
+        }
+        // Unlinked: nothing is left in the directory.
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        assert_eq!(vectors.get("n7").unwrap(), Some(vector(7)));
+        assert_eq!(vectors.get("missing").unwrap(), None);
+        let mut scanned = Vec::new();
+        vectors
+            .scan(|first, block| {
+                assert_eq!(first * dimension, scanned.len());
+                scanned.extend_from_slice(block);
+            })
+            .unwrap();
+        assert_eq!(scanned, staged);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// Without a spill directory the vectors stay in memory.
+    #[test]
+    fn vectors_without_a_spill_stay_in_memory() {
+        let mut vectors = BuildVectors {
+            space: Some(Space::new("m", 2).unwrap()),
+            ..BuildVectors::default()
+        };
+        vectors.append(&[1.0; 4096]).unwrap();
+        assert!(!vectors.spilled());
+        assert_eq!(vectors.held_in_memory(), 4096 * 4);
+    }
 
     #[test]
     fn the_wiki_record_ports_registry_from_result() {

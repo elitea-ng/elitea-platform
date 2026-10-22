@@ -53,7 +53,7 @@ use crate::ingest::{self, Admitted, ClonedRepository};
 use crate::llm::{ChatClient, EmbeddingClient, EmbeddingOptions, Transport, TransportSettings};
 use crate::runner::Context;
 use crate::storage::WikiKey;
-use crate::storage::build::{Build, BuildSpace, WikiRecord};
+use crate::storage::build::{Build, BuildSpace, VectorSpill, WikiRecord};
 use crate::storage::topology::PgTopologyStore;
 use crate::storage::{self, StorageError};
 use crate::structure::index::PlannerIndex;
@@ -362,7 +362,9 @@ impl Pipeline<'_> {
         let mut space = BuildSpace::new(pool.clone(), settings.build_owner.clone())
             .with_stale_after(settings.build_stale_after)
             .with_publish_settings(settings.publish)
-            .with_dense(self.dense.clone());
+            .with_dense(self.dense.clone())
+            // Phase 2's vectors past 64 MiB go to the job's scratch directory.
+            .with_vector_spill(Some(VectorSpill::new(self.job.scratch)));
         if let Some(boot_id) = self.job.boot_id {
             space = space.with_boot_id(boot_id);
         }
