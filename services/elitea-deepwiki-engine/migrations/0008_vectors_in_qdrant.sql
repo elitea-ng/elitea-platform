@@ -10,6 +10,15 @@
 -- in the table dropped below, so it starts with NULL and answers lexically
 -- until it is generated again.
 --
+-- `wikis.stale_generations`: generations of the wiki that no reader names
+-- any more and whose points are still to be deleted. A publish appends the
+-- generation it replaces (in its transaction, under the per-wiki publish
+-- lock); a build removed without a bearer is appended too. After its commit
+-- the publish deletes exactly the listed generations and removes the ones
+-- it deleted; a failure leaves them listed for the next publish. Never
+-- "every generation but the active one": builds of one wiki run
+-- concurrently, and an in-flight build's generation is not stale.
+--
 -- WHAT GOES. `wiki_node_embeddings` and `deepwiki_build.wiki_node_embeddings`
 -- (the rewritten 0001, 0003 and 0005 no longer create them; a database that
 -- applied the released texts has them), and then the `vector` extension:
@@ -28,6 +37,7 @@
 
 ALTER TABLE wikis ADD COLUMN IF NOT EXISTS active_generation TEXT
     CHECK (active_generation IS NULL OR active_generation ~ '^[A-Za-z0-9._:-]{1,128}$');
+ALTER TABLE wikis ADD COLUMN IF NOT EXISTS stale_generations TEXT[] NOT NULL DEFAULT '{}';
 
 DROP TABLE IF EXISTS wiki_node_embeddings;
 DROP TABLE IF EXISTS deepwiki_build.wiki_node_embeddings;

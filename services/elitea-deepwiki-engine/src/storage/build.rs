@@ -18,7 +18,8 @@
 //! 3. set `statement_timeout`, `lock_timeout` and `work_mem` for the rest
 //!    of the transaction ([`PublishSettings`]);
 //! 4. upsert the `wikis` row, with `active_generation` = this build's id
-//!    when it wrote vectors (NULL when it wrote none) and the model and
+//!    when it wrote vectors (NULL when it wrote none), the replaced active
+//!    generation appended to `stale_generations`, and the model and
 //!    dimension of those vectors (migrations 0006, 0008);
 //! 5. refuse an empty build, before anything is deleted;
 //! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`, edges,
@@ -31,9 +32,14 @@
 //! reader names; the commit flips `active_generation` together with the
 //! nodes and edges, so a reader (which reads the generation in its own
 //! snapshot) searches the old generation with the old nodes or the new one
-//! with the new nodes, never a mix. After the commit the namespace's other
-//! generations are deleted (`generations_except`), best effort: a failure
-//! is logged and the next publish of the wiki deletes them.
+//! with the new nodes, never a mix. The generation it replaces is appended
+//! to `wikis.stale_generations` in the same transaction. After the commit
+//! exactly the listed generations are deleted, in rounds of at most
+//! [`STALE_ROUND`], and removed from the list ([`sweep_stale_generations`]),
+//! best effort: a failure is logged and the list keeps them for the next
+//! publish. Builds of one wiki run concurrently (only their publishes are
+//! serialised), so "every generation but the active one" would delete the
+//! vectors of a build still in flight; the list never names one.
 //!
 //! After the commit, the live tables are `ANALYZE`d, best effort: one
 //! short transaction per table with a short `lock_timeout`, skipped (and
@@ -70,9 +76,10 @@
 //! generation from elitea-vector, and so does the worker parent's
 //! clean-up of a killed child ([`delete_build`] returns the wiki it
 //! belonged to). The reconciliation and the sweep have no caller bearer, so
-//! they cannot; they log the builds they removed, and the generation's
-//! points (never searched) go with the wiki's next publish, its deletion or
-//! its project's (see [`crate::storage::dense`]).
+//! they cannot; they record the removed builds' generations in
+//! `wikis.stale_generations` ([`record_stale_generation`]), as does a
+//! failed delete, and the wiki's next publish deletes them (see
+//! [`crate::storage::dense`]).
 
 use crate::graph::{CodeGraph, edge_row, node_row};
 use crate::storage::copy::CopyWriter;
@@ -442,7 +449,7 @@ impl BuildSpace {
         .bind(&self.boot_id)
         .fetch_all(&self.pool)
         .await?;
-        log_orphaned_generations("reconciliation", &removed);
+        record_orphaned_generations(&self.pool, "reconciliation", &removed).await;
         Ok(removed.len() as u64)
     }
 
@@ -466,26 +473,102 @@ impl BuildSpace {
         .bind(stale_after.as_secs_f64())
         .fetch_all(&self.pool)
         .await?;
-        log_orphaned_generations("sweep", &removed);
+        record_orphaned_generations(&self.pool, "sweep", &removed).await;
         Ok(removed.len() as u64)
     }
 }
 
 /// The reconciliation and the sweep remove builds without a caller bearer,
 /// so the vectors a removed build wrote (its generation) stay in
-/// elitea-vector. They are never searched (no `wikis` row names them) and
-/// are deleted by the wiki's next publish (`generations_except`), its
-/// deletion or its project's; this records which they are.
-fn log_orphaned_generations(by: &str, removed: &[(String, i32, String)]) {
+/// elitea-vector. They are never searched (no reader names them); this
+/// records them in the wiki's `stale_generations`, which its next publish
+/// deletes. Best effort: a failure is logged.
+async fn record_orphaned_generations(pool: &PgPool, by: &str, removed: &[(String, i32, String)]) {
     for (build, project, wiki) in removed {
         tracing::info!(
             by,
             build = %build,
             project,
             wiki = %wiki,
-            "removed an abandoned build; its vector generation stays in elitea-vector until the wiki is next published or deleted"
+            "removed an abandoned build; its vector generation is deleted by the wiki's next publish"
         );
+        let Some(scope) = crate::storage::ProjectScope::new(*project) else {
+            continue;
+        };
+        if let Err(error) =
+            record_stale_generation(pool, &WikiKey::new(scope, wiki.clone()), build).await
+        {
+            tracing::warn!(build = %build, %error, "could not record the abandoned build's vector generation");
+        }
     }
+}
+
+/// The most generations one sweep deletes per call to elitea-vector.
+pub const STALE_ROUND: usize = 256;
+
+/// Record `generation` in the wiki's `stale_generations`, for its next
+/// publish to delete. Nothing when the wiki has no row (it was never
+/// published: the points stay until the wiki or its project is deleted),
+/// when the generation is already listed, or when it is the active one.
+///
+/// # Errors
+///
+/// [`StorageError::Database`].
+pub async fn record_stale_generation(pool: &PgPool, key: &WikiKey, generation: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE wikis SET stale_generations = array_append(stale_generations, $3) \
+         WHERE project_id = $1 AND wiki_id = $2 \
+           AND active_generation IS DISTINCT FROM $3 \
+           AND NOT ($3 = ANY(stale_generations))",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .bind(generation)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Delete exactly the generations the wiki's `stale_generations` lists from
+/// `store`, in rounds of at most [`STALE_ROUND`], and remove each round
+/// from the list once it is deleted. Returns the generations deleted. A
+/// failed round stops the sweep and stays listed for the next one.
+///
+/// # Errors
+///
+/// [`StorageError::Database`]; [`StorageError::Vector`] for the store's
+/// refusal (the rounds before it stay deleted and unlisted).
+pub async fn sweep_stale_generations(
+    pool: &PgPool,
+    store: &DenseIndex,
+    key: &WikiKey,
+) -> Result<usize> {
+    let listed: Option<Vec<String>> = sqlx::query_scalar(
+        "SELECT stale_generations FROM wikis WHERE project_id = $1 AND wiki_id = $2",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .fetch_optional(pool)
+    .await?;
+    let mut deleted = 0;
+    for round in listed.unwrap_or_default().chunks(STALE_ROUND) {
+        store
+            .delete_generations(key, round.to_vec())
+            .await
+            .map_err(|e| StorageError::Vector(e.to_string()))?;
+        sqlx::query(
+            "UPDATE wikis SET stale_generations = \
+                 ARRAY(SELECT g FROM unnest(stale_generations) AS g WHERE NOT g = ANY($3)) \
+             WHERE project_id = $1 AND wiki_id = $2",
+        )
+        .bind(key.project_id())
+        .bind(key.wiki_id())
+        .bind(round)
+        .execute(pool)
+        .await?;
+        deleted += round.len();
+    }
+    Ok(deleted)
 }
 
 /// The background heartbeat of one open build. Dropping it stops it.
@@ -1074,6 +1157,9 @@ impl Build {
                 .await
         {
             tracing::warn!(build = %self.id, %error, "could not delete the abandoned build's vectors; the wiki's next publish removes them");
+            if let Err(error) = record_stale_generation(&self.pool, &self.key, &self.id).await {
+                tracing::warn!(build = %self.id, %error, "could not record the abandoned build's vector generation");
+            }
         }
         Ok(())
     }
@@ -1201,13 +1287,15 @@ impl Build {
             .await?;
         tx.commit().await?;
 
-        // The namespace's other generations: the previous publish's, and
-        // any abandoned build's. After the commit, so no reader of the
-        // previous snapshot loses its vectors before the flip; best effort.
+        // The generations listed stale: the previous publish's (appended by
+        // this transaction) and any recorded before. After the commit, so no
+        // reader of the previous snapshot loses its vectors before the flip;
+        // best effort. Never "all but this one": a concurrent build of the
+        // wiki has its own generation in flight.
         if let Some(store) = &self.dense
-            && let Err(error) = store.delete_generations_except(key, build).await
+            && let Err(error) = sweep_stale_generations(&self.pool, store, key).await
         {
-            tracing::warn!(build, wiki, project, %error, "could not delete the wiki's older vector generations; the next publish removes them");
+            tracing::warn!(build, wiki, project, %error, "could not delete the wiki's stale vector generations; the next publish retries");
         }
 
         // Statistics that describe the new rows: the first searches after
@@ -1570,6 +1658,12 @@ async fn upsert_wiki(
              wiki_version_id = COALESCE($12, wikis.wiki_version_id), \
              embedding_model = $14, \
              embedding_dim = $15, \
+             stale_generations = CASE \
+                 WHEN wikis.active_generation IS NOT NULL \
+                  AND wikis.active_generation IS DISTINCT FROM $16 \
+                  AND NOT (wikis.active_generation = ANY(wikis.stale_generations)) \
+                 THEN array_append(wikis.stale_generations, wikis.active_generation) \
+                 ELSE wikis.stale_generations END, \
              active_generation = $16, \
              updated_at = now()",
     )

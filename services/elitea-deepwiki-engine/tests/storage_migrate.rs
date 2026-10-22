@@ -91,7 +91,7 @@ fn the_checksums_are_the_ledger_values() {
         ),
         (
             "0008_vectors_in_qdrant",
-            "b7b4f5444f85dd317bd5236b2dbe69fade25eb1ad723f37ca5fd655823559ac0",
+            "7770de2ef5418593fffa2e4242f94e66f08207ca4b28e95fb7ed2522d9e1f500",
         ),
     ]
     .into_iter()

@@ -377,8 +377,7 @@ async fn the_publish_flips_the_active_generation_and_cleans_the_old_ones() {
         active(pool.clone()).await.0.as_deref(),
         Some(first.as_str())
     );
-    // Not abandoned (a crashed worker): its generation is left behind.
-    drop(failing);
+    // Still held (it could retry): its generation is in flight.
     assert_eq!(store.generations(&key).len(), 2);
     let db = UnifiedDb::new(pool.clone(), key.clone()).with_dense(common::dense(&store));
     let hits = db
@@ -391,14 +390,118 @@ async fn the_publish_flips_the_active_generation_and_cleans_the_old_ones() {
         "a reader searched a generation that is not active: {hits:?}"
     );
 
-    // The next publish activates its own generation and deletes both the
-    // previous one and the left one.
+    // The next publish activates its own generation and deletes the one it
+    // replaced; the build still in flight keeps its vectors.
     publish_version(&space, wiki, "beta", 6).await;
     let second = active(pool.clone()).await.0.expect("active");
     assert_ne!(second, first);
     assert_ne!(second, failing_id);
-    assert_eq!(store.generations(&key), vec![(second, 6)]);
+    let mut expected = vec![(second.clone(), 6), (failing_id.clone(), 4)];
+    expected.sort();
+    assert_eq!(store.generations(&key), expected);
     assert!(store.calls().contains(&"delete"));
+    // Abandoned, it deletes its own.
+    failing.abandon().await.expect("abandon");
+    assert_eq!(store.generations(&key), vec![(second, 6)]);
+}
+
+async fn stale_generations(pool: &PgPool, wiki: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT stale_generations FROM wikis WHERE wiki_id = $1")
+        .bind(wiki)
+        .fetch_one(pool)
+        .await
+        .expect("wikis row")
+}
+
+/// Two builds of one wiki in flight at once (only their publishes are
+/// serialised): B publishes and sweeps, then A publishes and sweeps. B's
+/// sweep must not delete A's vectors (A's generation is not stale), A's
+/// dense search answers, and the stale list ends empty. A build the sweep
+/// removes without a bearer is recorded stale, and a failed sweep keeps the
+/// list for the next publish.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_concurrent_build_keeps_its_vectors_through_another_publish() {
+    let Some(pool) = common::fresh_database("publish_concurrent").await else {
+        return;
+    };
+    let wiki = "acme--concurrent--main";
+    let key = common::key(wiki);
+    let (space, store) = common::dense_space(&pool, "publisher");
+    publish_version(&space, wiki, "alpha", 5).await;
+
+    let stage = |tag: &'static str, count: usize| {
+        let space = space.clone();
+        let key = key.clone();
+        async move {
+            let (nodes, vectors) = version(tag, count);
+            let mut build = space.begin(&key).await.expect("begin");
+            build.stage_nodes(nodes).await.expect("nodes");
+            build
+                .stage_embeddings(
+                    common::TEST_MODEL,
+                    vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+                )
+                .await
+                .expect("embeddings");
+            build
+        }
+    };
+    let mut a = stage("alpha", 7).await;
+    let mut b = stage("beta", 3).await;
+    let a_id = a.build_id().to_owned();
+    b.publish(&WikiRecord::default())
+        .await
+        .expect("B publishes");
+    assert_eq!(
+        store
+            .vector(&key, &a_id, "alpha/00000.py::f")
+            .map(|v| v.len()),
+        Some(DIM),
+        "B's sweep deleted the vectors of A, which is still in flight"
+    );
+    assert!(stale_generations(&pool, wiki).await.is_empty());
+    a.publish(&WikiRecord::default())
+        .await
+        .expect("A publishes");
+    assert_eq!(store.generations(&key), vec![(a_id.clone(), 7)]);
+    assert!(stale_generations(&pool, wiki).await.is_empty());
+    let db = UnifiedDb::new(pool.clone(), key.clone()).with_dense(common::dense(&store));
+    let hits = db
+        .reader()
+        .search_dense(&[1.0; DIM], 5)
+        .await
+        .expect("dense");
+    assert_eq!(hits.len(), 5, "{hits:?}");
+
+    // A build removed by the sweep (no bearer) is recorded stale.
+    let c = stage("beta", 2).await;
+    let c_id = c.build_id().to_owned();
+    drop(c);
+    space.sweep(std::time::Duration::ZERO).await.expect("sweep");
+    assert_eq!(stale_generations(&pool, wiki).await, vec![c_id.clone()]);
+    assert!(store.generations(&key).iter().any(|(g, _)| *g == c_id));
+    // A failed sweep keeps the list for the next publish.
+    let mut d = stage("alpha", 4).await;
+    let d_id = d.build_id().to_owned();
+    store.fail_deletes(true);
+    d.publish(&WikiRecord::default())
+        .await
+        .expect("D publishes");
+    let mut listed = stale_generations(&pool, wiki).await;
+    listed.sort();
+    let mut expected = vec![c_id.clone(), a_id.clone()];
+    expected.sort();
+    assert_eq!(listed, expected);
+    store.fail_deletes(false);
+    publish_version(&space, wiki, "beta", 3).await;
+    assert!(stale_generations(&pool, wiki).await.is_empty());
+    let left: Vec<String> = store
+        .generations(&key)
+        .into_iter()
+        .map(|(g, _)| g)
+        .collect();
+    assert_eq!(left.len(), 1);
+    assert!(!left.contains(&d_id) && !left.contains(&c_id) && !left.contains(&a_id));
 }
 
 /// When elitea-vector cannot be reached the hybrid search answers with the

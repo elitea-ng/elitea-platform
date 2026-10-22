@@ -18,8 +18,12 @@
 //!   its vectors under its own generation BEFORE its publish transaction; the
 //!   publish records it in `wikis.active_generation` (migration 0008) together
 //!   with the nodes and edges, so a reader sees the old generation or the new
-//!   one, never a mix. After the commit the older generations of the
-//!   namespace are deleted (`generations_except`), best effort.
+//!   one, never a mix. The generation it replaces is appended to
+//!   `wikis.stale_generations` in the same transaction, and after the commit
+//!   exactly the generations listed there are deleted ([`DeleteSelector`]
+//!   `Generations`), best effort. Never "every generation but the active
+//!   one": builds of one wiki run concurrently (only their publishes are
+//!   serialised), and an in-flight build's generation is not stale.
 //! * **points** — one per embedded node. `document_key` and `chunk_id` are the
 //!   node id when it is 1 to 1024 bytes without a control character, else
 //!   `sha256:<hex of the node id>` ([`point_key`]); the node id itself is
@@ -38,7 +42,8 @@
 //!
 //! # Who deletes what
 //!
-//! * a publish: the namespace's other generations, after the commit;
+//! * a publish: the generations `wikis.stale_generations` lists (the
+//!   previous active one, and any recorded below), after the commit;
 //! * an abandoned build ([`crate::storage::build::Build::abandon`], the
 //!   worker parent's clean-up of a killed child): its own generation;
 //! * a wiki deletion (`delete_wiki_index`): the whole namespace, with the
@@ -47,13 +52,14 @@
 //!   calls elitea-vector `DropProject` (its `vector_data` step), which removes
 //!   every point of the project in every collection and for every source.
 //!
-//! A build abandoned WITHOUT a bearer (the startup reconciliation, the
-//! heartbeat sweep) leaves its generation's points behind. They are never
-//! searched (a reader names the active generation only) and are deleted by
-//! the next publish of that wiki (`generations_except`), its deletion, or the
-//! project's. What remains is a wiki that is never published or deleted
-//! again while its project lives: its abandoned generations stay in Qdrant
-//! until the project is deleted.
+//! A build removed WITHOUT a bearer (the startup reconciliation, the
+//! heartbeat sweep), or whose own delete failed, has its generation appended
+//! to `wikis.stale_generations` when the wiki has a row; its points are
+//! never searched (a reader names the active generation only) and the
+//! wiki's next publish deletes them. What remains: a build of a wiki that
+//! was never published (no row to record it in), or a wiki that is never
+//! published or deleted again while its project lives. Those points stay in
+//! Qdrant until the wiki or the project is deleted.
 //!
 //! # Two backends
 //!
@@ -604,20 +610,6 @@ impl DenseIndex {
             .await
     }
 
-    /// Delete the wiki's points of every generation but `keep`.
-    ///
-    /// # Errors
-    ///
-    /// The store's failure.
-    pub async fn delete_generations_except(
-        &self,
-        key: &WikiKey,
-        keep: &str,
-    ) -> Result<(), DenseError> {
-        self.delete(key, DeleteSelector::GenerationsExcept(keep.to_owned()))
-            .await
-    }
-
     /// Delete every point of the wiki.
     ///
     /// # Errors
@@ -664,6 +656,7 @@ struct MemoryPoint {
 struct MemoryState {
     points: Vec<MemoryPoint>,
     unavailable: bool,
+    fail_deletes: bool,
     calls: Vec<&'static str>,
 }
 
@@ -692,6 +685,12 @@ impl MemoryDense {
     /// (`true`), or works again (`false`).
     pub fn set_unavailable(&self, unavailable: bool) {
         self.lock().unavailable = unavailable;
+    }
+
+    /// Every delete from now fails as elitea-vector's refusal does
+    /// (`true`), or works again (`false`); the other calls are served.
+    pub fn fail_deletes(&self, fail: bool) {
+        self.lock().fail_deletes = fail;
     }
 
     /// The calls made, by name, in order.
@@ -830,6 +829,11 @@ impl MemoryDense {
 
     fn delete(&self, key: &WikiKey, selector: &DeleteSelector) -> Result<(), DenseError> {
         let mut state = self.enter("delete")?;
+        if state.fail_deletes {
+            return Err(DenseError::unavailable(
+                "elitea-vector refused the delete: the in-memory store fails deletes",
+            ));
+        }
         let namespace = namespace_id(key);
         state.points.retain(|p| {
             let ours = p.project == key.project_id() && p.namespace == namespace;
@@ -991,7 +995,10 @@ mod tests {
         );
         assert!(hits[0].distance() < hits[1].distance());
         assert!(index.search(&a, "g1", &space, &[1.0], 10).await.is_err());
-        index.delete_generations_except(&a, "g2").await.unwrap();
+        index
+            .delete_generations(&a, vec!["g1".to_owned()])
+            .await
+            .unwrap();
         assert_eq!(store.generations(&a), [("g2".to_owned(), 1)]);
         assert_eq!(store.generations(&b), [("g1".to_owned(), 2)]);
         index.delete_namespace(&a).await.unwrap();
