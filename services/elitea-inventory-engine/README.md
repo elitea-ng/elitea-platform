@@ -284,7 +284,7 @@ orphaned, so:
   `0.2`) of the stored graphs would be orphans, unless `--force-fraction`:
   that many usually means a wrong or partial list (another database's
   projects, a toolkit list missing a project), not a platform that deleted
-  most of its projects (the same guard as elitea-main's `pgvector-orphans`);
+  most of its projects;
 * the graphs written after the list are found with one query for all
   candidates, and the check is made again immediately before each graph's
   deletion, inside its transaction and under its lock;
@@ -303,7 +303,7 @@ orphaned, so:
 | `ELITEA_INVENTORY_GIT_ALLOWLIST` | unset (no host) | the git hosts a clone may reach |
 | `ELITEA_INVENTORY_MAX_CLONE_BYTES` / `_MAX_FILE_COUNT` / `_MAX_FILE_BYTES` / `_MAX_PARSED_BYTES` / `_CLONE_TIMEOUT_SECONDS` | `elitea-repo-ingest` defaults | clone limits |
 | `ELITEA_INVENTORY_SCRATCH_PATH` | `/var/scratch/inventory` | where a run clones (removed after) |
-| `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, `import-graph`, `export-graph`, and required by `native`; `postgresql://` URL form). PostgreSQL with the pgvector extension available: migration 0004 creates it, and semantic search ranks there |
+| `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, `import-graph`, `export-graph`, and required by `native`; `postgresql://` URL form). Plain PostgreSQL: no extension is needed, `embedding` is a `double precision[]` and semantic search ranks the entity vectors in Qdrant through elitea-vector (migration 0008, `store::vectors`) |
 | `ELITEA_INVENTORY_CALLBACK_CA_FILE` | unset | a PEM bundle the model transport trusts besides the platform roots |
 | `ELITEA_INVENTORY_CALLBACK_CERT_FILE` / `ELITEA_INVENTORY_CALLBACK_KEY_FILE` | unset | the client certificate chain and key the model transport presents; both or neither. elitea-main's internal platform listener (`https://elitea-main:9446`) requires a runtime-CA client certificate |
 | `ELITEA_INVENTORY_MODEL_SERVICE_URL` | unset; **required** by `RUNNER=native` | the origin of elitea-main's platform listener (`https://elitea-main:9446`): every model call (`elitea.llm.v1.ModelService`) and every `investigate` source-tool call (`elitea.runtime.v1.InternalToolService/InvokeToolkit`, which runs the `test_tool` route in process, #1359 U5) goes there; `llm_settings.api_base` only names the model route. The native runner refuses to start without it. https only (`http://` to a loopback host for tests) |

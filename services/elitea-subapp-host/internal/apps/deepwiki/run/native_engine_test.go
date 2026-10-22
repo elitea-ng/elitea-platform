@@ -272,7 +272,7 @@ func TestAStopEndsTheNativeEnginesRun(t *testing.T) {
 // A whole native generation is not run here: it needs a model gateway, a
 // git host and PostgreSQL, which this job does not stand up for the Go
 // tests. The crate's own tests/native_generate.rs runs it end to end (a
-// git http-backend, a mock gateway, the CI pgvector service). The database
+// git http-backend, a mock gateway, the CI PostgreSQL service). The database
 // URL below is never connected to: the run fails before it opens a build.
 func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
 	scratch, err := os.MkdirTemp("/tmp", "dwns")

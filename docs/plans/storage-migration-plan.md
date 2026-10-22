@@ -2613,7 +2613,9 @@ covering the `DISTINCT project_id ... WHERE deleted_at IS NULL` query itself:
 one project with two buckets returns once, a project whose only bucket is
 soft-deleted is excluded, a project with no buckets never appears — run
 against a throwaway `pgvector/pgvector:0.8.5-pg18-trixie` container (matching
-`ci-go.yml`'s `integration` job image) via
+`ci-go.yml`'s `integration` job image at the time; superseded by #1359, which
+removed pgvector: that job and every Postgres integration run now use plain
+`postgres:18`) via
 `ELITEA_TEST_DATABASE_URL`, migrations applied through the existing
 `applyPostgresIntegrationMigrations` helper, database torn down in
 `t.Cleanup`.

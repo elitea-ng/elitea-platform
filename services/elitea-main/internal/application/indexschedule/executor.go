@@ -172,9 +172,9 @@ func (executor *CurrentExecutor) ExecuteScheduled(
 	}
 	clear(preflight)
 
-	// Use the same saved toolkit snapshot for the exact PgVector lookup and
-	// frozen durable inputs. Re-reading the toolkit here could mix a new
-	// PgVector target with the earlier credential/settings snapshot.
+	// Use the same saved toolkit snapshot for the exact index lookup (the
+	// registry) and frozen durable inputs. Re-reading the toolkit here could mix
+	// a newer toolkit with the earlier credential/settings snapshot.
 	toolkit.Settings = settings
 	index, found, err := executor.indexMeta.InspectScheduledIndex(
 		ctx,

@@ -272,7 +272,7 @@ def test_rankings_are_ordered(path: Path):
 def test_fused_scores_are_reproducible_from_the_component_rankings(path: Path):
     """The RRF formula, recomputed — this is the gate for the PostgreSQL port.
 
-    A pgvector/tsvector implementation is free to differ in how it produces the
+    A tsvector/dense-store implementation is free to differ in how it produces the
     FTS and dense lists, but once it has them the fusion must be exactly this.
     """
     payload = json.loads(path.read_text(encoding="utf-8"))

@@ -398,8 +398,7 @@ struct OrphanArguments {
 /// The share of the stored graphs `orphans --delete` may call orphans
 /// without `--force-fraction`: a higher share means a wrong or partial list
 /// (the wrong database's projects, a toolkit export that missed a project's
-/// toolkits), not a platform that lost most of its data. The same default as
-/// elitea-main's `pgvector-orphans --max-orphan-fraction`.
+/// toolkits), not a platform that lost most of its data.
 const DEFAULT_MAX_ORPHAN_FRACTION: f64 = 0.2;
 
 /// Why `--delete` over `orphans` of `stored` graphs is refused by the

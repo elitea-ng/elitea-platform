@@ -278,11 +278,11 @@ export const shots: readonly Shot[] = [
       "but the same project-pinning bug `--project-id`/`--project-name` fixes: captured against " +
       "\"Default Project\", whose toolkit id 1 is a different/nonexistent toolkit, so no \"Indexes\" " +
       "tab ever rendered. Fixed by capturing against project docs-shots/9. Tried live to actually " +
-      "start an index (`POST test_toolkit_tool …tool_name=index_data`, unit W4c): the DEPLOYMENT has " +
-      "no public `elitea-pgvector` configuration at all (`runtimecomposition/project_vector_store.go`'s " +
-      "own log line: \"this deployment has no public elitea-pgvector configuration, so no project can " +
-      "index\") — a stack-wide bootstrap gap, not a per-project one, so indexing stays off regardless " +
-      "of which project is targeted. Stays limited to this real empty state.",
+      "start an index (`POST test_toolkit_tool …tool_name=index_data`, unit W4c): the DEPLOYMENT then " +
+      "had no public `elitea-pgvector` configuration (the per-project store, since removed by issue 1359; " +
+      "indexes now live in Qdrant behind elitea-vector) — a stack-wide gap, not a per-project one, so " +
+      "indexing stayed off regardless of which project was targeted. A capture stack needs elitea-vector " +
+      "enabled and an embedding model to show a real index. Stays limited to this real empty state.",
   },
   {
     id: "index-create-form",
@@ -291,11 +291,11 @@ export const shots: readonly Shot[] = [
     actions: [{ type: "click", selector: "role=tab[name='Indexes']" }],
     persona: "member",
     notes:
-      "Indexes tab create-index dialog; needs pgvector + embedding configurations seeded — " +
+      "Indexes tab create-index dialog; needs elitea-vector enabled and an embedding model seeded — " +
       "this docs seed does not open the dialog itself (no confirmed 'Add index' selector), so " +
       "this currently shows the Indexes tab's own empty/list state, not the dialog. Unit W4c: now " +
       "captured for real (see indexes-tab-empty's note on the project-pinning fix and the " +
-      "deployment-wide missing-pgvector-config root cause) instead of failing outright.",
+      "deployment-wide missing-vector-store root cause) instead of failing outright.",
   },
   {
     id: "index-details-panel",
@@ -305,8 +305,8 @@ export const shots: readonly Shot[] = [
     persona: "member",
     notes:
       "Index detail view with configuration and reindex/delete actions — needs an actual " +
-      "index run, which this stack cannot produce (see indexes-tab-empty's note: no public " +
-      "elitea-pgvector configuration on this deployment). Unit W4c: now captured for real (project " +
+      "index run, which this stack cannot produce (see indexes-tab-empty's note: no vector store " +
+      "on this deployment). Unit W4c: now captured for real (project " +
       "docs-shots/9) instead of failing outright; still shows the same empty Indexes tab.",
   },
   {

@@ -1432,14 +1432,15 @@ func (h *Handler) RemoveProjectVaultTx(ctx context.Context, tx pgx.Tx, projectID
 // handler wrote. The creator and the writer must share one key source, or the
 // vault is unusable whichever creator ran first.
 //
-// WHY ONE REWRITE, AND NOT REPEATED StoreSecret CALLS. Provisioning stores a
-// project's PgVector password and its connection string together. Two calls are
-// two read-modify-write cycles, so a failure between them leaves half the
-// material behind. A later index run then reads a password with no connection
-// string.
+// WHY ONE REWRITE, AND NOT REPEATED StoreSecret CALLS. Values that belong
+// together must land together. Two calls are two read-modify-write cycles, so a
+// failure between them leaves half the material behind. (The production caller
+// this was written for, the per-project PgVector provisioning step that stored
+// a password and its connection string, was removed by #1359. No production
+// path calls this now; the Postgres integration tests seed vaults with it.)
 //
-// The caller must create the vault first. The project_secrets provisioning step
-// does that, and it runs before every caller of this.
+// The caller must create the vault first (EnsureProjectVault, which the
+// project_secrets provisioning step runs).
 func (h *Handler) StoreProjectSecrets(ctx context.Context, projectID string, values map[string]string) error {
 	vaultID := dbKey(projectID)
 	if len(values) == 0 {

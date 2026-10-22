@@ -156,8 +156,8 @@ const (
 )
 
 // NonTerminalJobStates is the one Go definition of "this job is still in
-// flight": admitted work that holds the project's resources (its PgVector
-// database among them) until it settles. QUARANTINED is terminal for this
+// flight": admitted work that holds the project's resources (its index
+// registry rows and elitea-vector namespaces among them) until it settles. QUARANTINED is terminal for this
 // purpose: a quarantined job is not executing.
 //
 // The admission-capacity index of shared/0033

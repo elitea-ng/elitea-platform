@@ -232,8 +232,8 @@ func TestCurrentIndexConfigurationRouteRefusesAMalformedBody(t *testing.T) {
 	}
 }
 
-// Every application refusal has to arrive as its own status. A save that lost
-// the PgVector target and a save against an index that does not exist are
+// Every application refusal has to arrive as its own status. A save whose
+// index storage is unavailable and a save against an index that does not exist are
 // different problems for the person looking at the screen, and the delete
 // route already answers them apart.
 func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {

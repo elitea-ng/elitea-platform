@@ -328,7 +328,7 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 
 	// No embedding index plane is wired for personal memory (#870's own
 	// scope note: an embedding-backed match would need every memory
-	// indexed into pgvector on write, which is a materially larger change
+	// indexed into the vector store on write, which is a materially larger change
 	// than this issue's recall path). Keyword overlap against the user's
 	// current turn, THEN recency, is the fallback the issue asked for.
 	keywords := memoryKeywordSet(userInput)

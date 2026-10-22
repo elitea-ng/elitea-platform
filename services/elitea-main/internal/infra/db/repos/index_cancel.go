@@ -19,8 +19,9 @@ type currentIndexCancellationQueries interface {
 }
 
 // CurrentIndexCancellationRepository changes only the durable desired state of
-// the exact active index execution. Worker settlement owns terminal state and
-// external PgVector cleanup.
+// the exact active index execution. Worker settlement owns terminal state; a
+// stopped run's vectors stay in elitea-vector (indexing.RegistryManualStopCleaner
+// deletes none).
 type CurrentIndexCancellationRepository struct {
 	queries currentIndexCancellationQueries
 }

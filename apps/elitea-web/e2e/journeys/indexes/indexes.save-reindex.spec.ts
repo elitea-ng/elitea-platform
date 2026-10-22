@@ -40,13 +40,13 @@
  * the code this change adds.
  *
  * The SERVER half is proved where it can be proved for real:
- * `internal/application/indexmeta/configuration_test.go` (resolution, refusals,
- * redaction), `internal/api/v2/indexing/index_meta_configuration_test.go`
- * (path, method, RBAC, every refusal's status) and
- * `internal/infra/pgvector/index_meta_configuration_integration_test.go`,
- * which runs the real UPDATE against a real PostgreSQL and asserts that the
- * run-owned fields — `state`, `task_id`, `history`, the counters — are left
- * exactly as they were.
+ * `internal/api/v2/indexing/index_meta_configuration_test.go` (path, method,
+ * RBAC, every refusal's status), `index_registry_contract_test.go` beside it
+ * (the save through the index registry) and
+ * `internal/infra/db/repos/index_registry_postgres_integration_test.go`'s
+ * `TestIndexRegistrySaveConfigurationTouchesNothingElse`, which runs the real
+ * UPDATE against a real PostgreSQL and asserts that the run-owned fields —
+ * `state`, `history`, `updated_at` — are left exactly as they were.
  */
 import { expect, test } from '@playwright/test';
 import type { Page, Route } from '@playwright/test';

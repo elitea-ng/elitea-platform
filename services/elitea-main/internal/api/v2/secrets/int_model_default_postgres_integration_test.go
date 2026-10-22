@@ -14,8 +14,9 @@ package secrets
 //
 // The vault is seeded through the PRODUCT writers, in the order a real project
 // meets them: provisioning creates the vault, the Configurations page sets a
-// default model, pgvector provisioning stores its material through this
-// handler's own rewrite. The last step is the write-back case: it rewrites a
+// default model, and a multi-secret write goes through this handler's own
+// rewrite (StoreProjectSecrets; the per-project pgvector provisioning that
+// wrote this way went with #1359, so the step stands in for any such write). The last step is the write-back case: it rewrites a
 // vault that holds an integer, and the integer must still be one afterwards.
 //
 // Requires a PostgreSQL to create an isolated database in; skipped otherwise.
@@ -71,7 +72,8 @@ func TestAVaultHoldingAnIntegerDefaultModelIDIsReadable(t *testing.T) {
 	}
 	assertStoredIntegerID(t, handler, "after the model-default write")
 
-	// 3. pgvector provisioning rewrites the same vault through this handler.
+	// 3. A multi-secret write (once pgvector provisioning's) rewrites the same
+	// vault through this handler.
 	// It used to fail here too: StoreProjectSecrets opens the vault first.
 	if err := handler.StoreProjectSecrets(ctx, intModelProjectID, map[string]string{
 		pgvectorSecretName: "pgvector-password",

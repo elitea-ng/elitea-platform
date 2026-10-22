@@ -156,11 +156,15 @@ error shapes (HTTP 200 + `status: "Error"` for tool failures, the
 **3. Retrieval → the gate on the PostgreSQL storage port.**
 `nodes.json` is loaded into the new schema, `embedding_model.json` supplies the
 vectors (no model call), and the same seven queries are run against
-pgvector + `tsvector`. Each branch is compared as a *ranked list with scores*,
-not top-1:
+the dense store + `tsvector`. Each branch is compared as a *ranked list with
+scores*, not top-1:
 
-* **dense** — pgvector HNSW ordering must match the recorded `vec_distance`
-  ordering; the L2 distances themselves should match to fixture precision.
+* **dense** — the dense ordering must match the recorded `vec_distance`
+  ordering. The fixtures were recorded with pgvector's L2 distance; since
+  #1359 the dense vectors are in Qdrant behind elitea-vector, which ranks by
+  cosine, so `services/elitea-deepwiki-engine/tests/storage_parity.rs`
+  converts each recorded L2 distance to the cosine distance (monotone for
+  these unit vectors) and compares to fixture precision.
 * **fts** — `tsvector` + GIN must reproduce the recorded set. Note the recorded
   conjunctive semantics: FTS5 `MATCH` ANDs bare terms, so
   `plainto_tsquery` is the match, not `websearch_to_tsquery`.
