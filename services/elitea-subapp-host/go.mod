@@ -14,7 +14,7 @@ require (
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op // indirect
 	github.com/google/go-tpm v0.9.6 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/nats-io/jwt/v2 v2.8.0 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
