@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
@@ -45,19 +44,23 @@ func HoldsInventory(clients []ApplicationDataClient) bool {
 // unchanged.
 //
 // vectors must be a nil INTERFACE (never a typed nil) when the replica has no
-// elitea-vector client. Then the toolkit deletion stays PENDING (the journal
-// retries it, logged at Error naming the variable to set), because closing it
-// would leave the vectors in Qdrant behind a "deleted" — unless abandoned, the
-// operator's ELITEA_VECTOR_CLEANUP_ABANDON switch, under which the rows alone
-// are deleted, as the project journal closes its vector step.
-func WithInventoryGraphVectors(clients []ApplicationDataClient, vectors InventoryGraphVectors, abandoned bool, logger *slog.Logger) []ApplicationDataClient {
-	if logger == nil {
-		logger = slog.Default()
+// elitea-vector client, and then nothing is wrapped: the toolkit deletion
+// deletes the engine's rows and closes. A replica without a client composes
+// an Inventory whose graphs have no vectors this process could reach (the
+// chart refuses a native engine without a vector store; the fixture runner
+// writes none), so a vector leg that waited for a client would keep every
+// Inventory toolkit deletion pending for ever with nothing to delete. It is
+// the same rule DeepWiki follows: no step is owed to a store the replica was
+// not given. The project journal's vector step is recorded on the same
+// condition (projectVectorStepRecorded in cmd/elitea-main).
+func WithInventoryGraphVectors(clients []ApplicationDataClient, vectors InventoryGraphVectors) []ApplicationDataClient {
+	if vectors == nil {
+		return clients
 	}
 	wrapped := make([]ApplicationDataClient, 0, len(clients))
 	for _, client := range clients {
-		if client != nil && client.App() == platformops.AppInventory && (vectors != nil || !abandoned) {
-			client = inventoryWithVectors{ApplicationDataClient: client, vectors: vectors, logger: logger}
+		if client != nil && client.App() == platformops.AppInventory {
+			client = inventoryWithVectors{ApplicationDataClient: client, vectors: vectors}
 		}
 		wrapped = append(wrapped, client)
 	}
@@ -67,7 +70,6 @@ func WithInventoryGraphVectors(clients []ApplicationDataClient, vectors Inventor
 type inventoryWithVectors struct {
 	ApplicationDataClient
 	vectors InventoryGraphVectors
-	logger  *slog.Logger
 }
 
 // DeleteToolkitData deletes the graph's rows in the engine, then its vectors.
@@ -77,11 +79,6 @@ func (c inventoryWithVectors) DeleteToolkitData(ctx context.Context, projectID, 
 	deletion, err := c.ApplicationDataClient.DeleteToolkitData(ctx, projectID, toolkitID)
 	if err != nil {
 		return deletion, err
-	}
-	if c.vectors == nil {
-		c.logger.Error("the deleted Inventory toolkit's graph vectors cannot be deleted: this replica has no elitea-vector client; the deletion stays pending until a replica with one runs it",
-			"project_id", projectID, "toolkit_id", toolkitID, "set", "ELITEA_VECTOR_GRPC_TARGET")
-		return platformops.ToolkitDeletion{}, fmt.Errorf("%w: no elitea-vector client to delete inventory toolkit %d's vectors", platformops.ErrRetryLater, toolkitID)
 	}
 	if err := c.vectors.DeleteInventoryGraph(ctx, projectID, toolkitID); err != nil {
 		if errors.Is(err, platformops.ErrNotAllowed) {

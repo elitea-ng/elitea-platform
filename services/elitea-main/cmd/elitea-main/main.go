@@ -1701,9 +1701,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// replica without index ingest dispatch only drains. No replica closes a
 	// recorded step on its own configuration: only the operator's abandon
 	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
-	// refused beside a client. A replica that runs Inventory records it too:
-	// Inventory's entity vectors are in the store (#1359).
-	vectorStepRecorded := runtimeConfig.RustIndexing() || api.HoldsInventory(applicationData)
+	// refused beside a client. A replica that runs Inventory records it only
+	// beside a client (projectVectorStepRecorded).
+	vectorStepRecorded := projectVectorStepRecorded(
+		runtimeConfig.RustIndexing(), api.HoldsInventory(applicationData), vectorClient != nil)
 	vectorCleanupAbandoned, err := vectorCleanupAbandonSwitch(logger, os.LookupEnv, vectorClient != nil)
 	if err != nil {
 		return err
@@ -1711,12 +1712,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// A deleted Inventory toolkit's graph vectors (#1359): the toolkit cleanup
 	// journal deletes the graph's namespace in elitea-vector after the engine
 	// deleted its rows (api.WithInventoryGraphVectors). A nil INTERFACE without
-	// a client, never a typed nil.
+	// a client, never a typed nil, and then the Inventory client is left as it
+	// is: there is no vector leg to wait for.
 	var inventoryGraphVectors api.InventoryGraphVectors
 	if vectorClient != nil {
 		inventoryGraphVectors = vectorClient
 	}
-	applicationData = api.WithInventoryGraphVectors(applicationData, inventoryGraphVectors, vectorCleanupAbandoned, logger)
+	applicationData = api.WithInventoryGraphVectors(applicationData, inventoryGraphVectors)
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument

@@ -40,7 +40,7 @@ func TestAnInventoryToolkitDeletionAlsoDeletesItsGraphVectors(t *testing.T) {
 	inventory := &fakeEngine{app: platformops.AppInventory, deleted: true}
 	deepwiki := &fakeEngine{app: platformops.AppDeepWiki}
 	vectors := &fakeGraphVectors{}
-	clients := WithInventoryGraphVectors([]ApplicationDataClient{deepwiki, inventory, nil}, vectors, false, nil)
+	clients := WithInventoryGraphVectors([]ApplicationDataClient{deepwiki, inventory, nil}, vectors)
 	if len(clients) != 3 || clients[0] != deepwiki || clients[2] != nil {
 		t.Fatalf("only the Inventory client is wrapped: %v", clients)
 	}
@@ -63,25 +63,30 @@ func TestTheGraphVectorsWaitForTheEngineAndKeepTheRowOpen(t *testing.T) {
 	// The engine refused (an ingestion runs): the vectors are not touched.
 	busy := &fakeEngine{app: platformops.AppInventory, err: platformops.ErrRetryLater}
 	vectors := &fakeGraphVectors{}
-	clients := WithInventoryGraphVectors([]ApplicationDataClient{busy}, vectors, false, nil)
+	clients := WithInventoryGraphVectors([]ApplicationDataClient{busy}, vectors)
 	if _, err := clients[0].DeleteToolkitData(context.Background(), 7, 42); !errors.Is(err, platformops.ErrRetryLater) || len(vectors.calls) != 0 {
 		t.Fatalf("err = %v, vector calls = %v", err, vectors.calls)
 	}
 	// A refused certificate keeps the row open rather than closing it.
 	refused := &fakeGraphVectors{err: platformops.ErrNotAllowed}
-	clients = WithInventoryGraphVectors([]ApplicationDataClient{&fakeEngine{app: platformops.AppInventory}}, refused, false, nil)
+	clients = WithInventoryGraphVectors([]ApplicationDataClient{&fakeEngine{app: platformops.AppInventory}}, refused)
 	_, err := clients[0].DeleteToolkitData(context.Background(), 7, 42)
 	if !errors.Is(err, platformops.ErrRetryLater) || errors.Is(err, platformops.ErrNotAllowed) {
 		t.Fatalf("refused: %v", err)
 	}
-	// No client: pending, unless the operator abandoned the vector store.
-	clients = WithInventoryGraphVectors([]ApplicationDataClient{&fakeEngine{app: platformops.AppInventory}}, nil, false, nil)
-	if _, err := clients[0].DeleteToolkitData(context.Background(), 7, 42); !errors.Is(err, platformops.ErrRetryLater) {
-		t.Fatalf("no client: %v", err)
-	}
+}
+
+// A replica with no elitea-vector client has no Inventory vectors it could
+// reach, so the Inventory client is not wrapped: the toolkit deletion deletes
+// the engine's rows and closes, instead of waiting for ever (ErrRetryLater)
+// for a vector leg that has nothing to delete.
+func TestWithoutAVectorClientTheInventoryToolkitDeletionCloses(t *testing.T) {
 	engine := &fakeEngine{app: platformops.AppInventory}
-	clients = WithInventoryGraphVectors([]ApplicationDataClient{engine}, nil, true, nil)
+	clients := WithInventoryGraphVectors([]ApplicationDataClient{engine}, nil)
 	if clients[0] != engine {
-		t.Fatal("abandoned: the engine's client is used as it is")
+		t.Fatalf("the engine's client was wrapped: %T", clients[0])
+	}
+	if _, err := clients[0].DeleteToolkitData(context.Background(), 7, 42); err != nil {
+		t.Fatalf("no client: %v, want the engine's deletion to close the row", err)
 	}
 }
