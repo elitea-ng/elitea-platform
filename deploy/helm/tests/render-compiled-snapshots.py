@@ -30,10 +30,10 @@ def setting(path):
 
 def values():
     return {
-        # 300: elitea-main's 184 at four replicas plus the gateway (8), the
-        # scheduler (4) and the worker's AgentState pool (32) — the budget
-        # counts every component since S11.
-        'postgresql': {'maxConnections': 300},
+        # 340: elitea-main's 184 at four replicas plus, at their replica
+        # ceilings, the gateway (8 x 4), the scheduler (4 x 2) and the
+        # worker's AgentState pool (8 x 10): 304, plus 25 reserved.
+        'postgresql': {'maxConnections': 340},
         # Indexing off: the standalone values turn index dispatch on, and the
         # Rust indexing runtime (the only one) then needs a vector store these
         # compiled-snapshot contracts do not exercise.
@@ -285,7 +285,9 @@ class Helm(unittest.TestCase):
         self.assertIn('84 PostgreSQL server connections', result.stderr)
         self.assertIn('52 PgBouncer plus 32 independent Code receipt connections across 8 Main replicas', result.stderr)
         self.assertIn('only 75 are available', result.stderr)
-        for maximum, pool_size, accepted in [(153, 48, True), (144, 39, True), (144, 40, False)]:
+        # The rest of the release at its replica ceilings: gateway 8 x 4,
+        # scheduler 4 x 2, worker AgentState 8 x 10 = 120.
+        for maximum, pool_size, accepted in [(229, 48, True), (220, 39, True), (220, 40, False)]:
             with self.subTest(maximum=maximum, pool_size=pool_size):
                 v['postgresql']['maxConnections'] = maximum
                 v['pgbouncer']['poolSize'] = pool_size
@@ -297,9 +299,10 @@ class Helm(unittest.TestCase):
         v['pgbouncer'] = dict(enabled=True, poolSize=48, reservePoolSize=4, maxClientConn=1024,
                               postgresHost='postgres.synthetic', database='compiled_fixture',
                               credentialsSecretName='synthetic-pgbouncer')
-        # 144 − 25 = 119 = PgBouncer 52 + gateway 8 + scheduler 4 + worker 32
-        # + 4 receipt connections × 5 replicas (+3 spare): a sixth replica overflows.
-        v['postgresql'] = dict(maxConnections=144, reservedConnections=25)
+        # 220 − 25 = 195 = PgBouncer 52 + gateway 8 × 4 + scheduler 4 × 2
+        # + worker 8 × 10 + 4 receipt connections × 5 replicas (+3 spare):
+        # a sixth replica overflows.
+        v['postgresql'] = dict(maxConnections=220, reservedConnections=25)
         v['main']['autoscaling'] = dict(enabled=False)
         for count, accepted in [(5, True), (6, False)]:
             with self.subTest(count=count):
@@ -312,8 +315,9 @@ class Helm(unittest.TestCase):
         v['pgbouncer'] = dict(enabled=True, poolSize=48, reservePoolSize=4, maxClientConn=1024,
                               postgresHost='postgres.synthetic', database='compiled_fixture',
                               credentialsSecretName='synthetic-pgbouncer')
-        # 121 − 25 = 96 = PgBouncer 52 + gateway 8 + scheduler 4 + worker 32, exactly.
-        v['postgresql'] = dict(maxConnections=121, reservedConnections=25)
+        # 197 − 25 = 172 = PgBouncer 52 + gateway 8 × 4 + scheduler 4 × 2
+        # + worker 8 × 10, exactly.
+        v['postgresql'] = dict(maxConnections=197, reservedConnections=25)
         v['main']['autoscaling'] = dict(enabled=True, maxReplicas=8)
         del v['main']['runtime']['rustCompiledSnapshots']
         del v['worker']['runtime']['sandboxRuntimes'][1]['compiled_snapshot']
