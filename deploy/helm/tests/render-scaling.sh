@@ -340,7 +340,13 @@ DW_PG_QUERY="SELECT count(*) FROM invocations WHERE finished_at IS NULL OR (fini
 DW_PROM_QUERY='(sum(elitea_subapp_invocations_in_flight{app="elitea-deepwiki",namespace="elitea"}) or vector(0)) + (sum(increase(elitea_subapp_slot_refusals_total{app="elitea-deepwiki",namespace="elitea"}[5m])) or vector(0))'
 check default "auto without KEDA: a CPU HPA, no ScaledObject, no replicas:" \
   "one('HorizontalPodAutoscaler','elitea-deepwiki')['spec']['metrics'][0]['resource']['name'] == 'cpu' and not has('ScaledObject','elitea-deepwiki') and 'replicas' not in one('Deployment','elitea-deepwiki')['spec']"
+# The slots are per replica and the fleet admits their sum, so the default
+# fleet capacity is 1 slot x 1..3 replicas (the Scaling page states it).
+check default "DeepWiki defaults: 1 slot per replica, 1 to 3 replicas" \
+  "env('elitea-deepwiki','elitea-deepwiki','ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS') == '1' and one('HorizontalPodAutoscaler','elitea-deepwiki')['spec']['minReplicas'] == 1 and one('HorizontalPodAutoscaler','elitea-deepwiki')['spec']['maxReplicas'] == 3"
 expect_render "auto with KEDA, no Prometheus: the invocation store" dw-pg --set scaling.keda.clusterInstalled=true
+check dw-pg "the postgresql threshold is the slots of one replica" \
+  "trigger('elitea-deepwiki', 0)['metadata']['targetQueryValue'] == env('elitea-deepwiki','elitea-deepwiki','ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS') == '1'"
 check dw-pg "a postgresql trigger over running and refused-busy invocations, then CPU; its TriggerAuthentication on the host's DB Secret" \
   "triggers('elitea-deepwiki') == ['postgresql', 'cpu'] and trigger('elitea-deepwiki', 0)['metadata']['query'] == \"$DW_PG_QUERY\" and one('TriggerAuthentication','elitea-deepwiki-keda-postgresql')['spec']['secretTargetRef'][0]['parameter'] == 'connection' and not has('HorizontalPodAutoscaler','elitea-deepwiki')"
 expect_render "auto with KEDA, Prometheus and the Operator: in-flight invocations" dw-prom \
