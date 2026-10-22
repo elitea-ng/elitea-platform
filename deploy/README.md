@@ -1333,7 +1333,7 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   by it, so they must live in its namespace (#1076); the platform chart
   refuses `nats.namespace` other than its own while `nats.tls.issuerRef` is a
   namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
-  mint a NATS identity — restrict both (`deploy/helm/nats/README.md`, "Who
+  mint a NATS identity — restrict both (`deploy/helm/elitea/NATS.md`, "Who
   can mint a NATS identity"). To run NATS in another namespace, back a
   `ClusterIssuer` with a CA used for NATS only, point
   `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and

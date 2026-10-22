@@ -1,6 +1,6 @@
 {{- if .Values.llmGateway.enabled }}
 {{- /*
-  Shared connection addresses, computed once from the top-level `nats` block and
+  Shared connection addresses, computed once from the `natsClient` block and
   namespace-relative by default. An explicit env entry still wins. The gateway
   and the scheduler MUST name the same NATS — budget counters are shared state,
   and two components on two clusters of one counter enforce nothing.
@@ -8,7 +8,7 @@
 {{- $env := .Values.llmGateway.env | default dict }}
 {{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (include "elitea.natsUrl" $)) }}{{- end }}
 {{- /* The chart owns GATEWAY_NATS_TLS_* when it mounts the certificate (env list below). */ -}}
-{{- if .Values.nats.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
+{{- if .Values.natsClient.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
 {{- /*
   The chart owns GATEWAY_WORKLOAD_IDENTITY_ENABLED (env list below), because the
   NetworkPolicy's metadata rule follows the same value. A second source in the
@@ -154,7 +154,7 @@ spec:
             - name: GATEWAY_TLS_CA_FILE
               value: {{ .Values.llmGateway.mtls.mountPath }}/ca.crt
             {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # The gateway's NATS identity (#1076): the client certificate
             # templates/natsClient.yaml issues, mounted below. Re-read on every
             # TLS handshake, so a renewal needs no restart.
@@ -218,7 +218,7 @@ spec:
               mountPath: {{ .Values.llmGateway.mtls.mountPath }}
               readOnly: true
             {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # The gateway's NATS client certificate (templates/natsClient.yaml).
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
@@ -230,7 +230,7 @@ spec:
           secret:
             secretName: {{ .Values.llmGateway.mtls.serverSecretName }}
         {{- end }}
-        {{- if .Values.nats.tls.enabled }}
+        {{- if .Values.natsClient.tls.enabled }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-llm-gateway.fullname" .))) | nindent 8 }}
         {{- end }}
       {{- with .Values.llmGateway.nodeSelector }}

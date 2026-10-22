@@ -105,7 +105,7 @@ scaler_account=$(awk '/type: nats-jetstream/{f=1} f && /^ *account:/{gsub(/.*acc
 if [ "$scaler_account" = "RUNTIME" ]; then
   pass "the scaler reads the RUNTIME account's /jsz"
 else
-  fail "the scaler reads account '$scaler_account', not RUNTIME (deploy/helm/nats accounts); it would see zero lag"
+  fail "the scaler reads account '$scaler_account', not RUNTIME (nats.config.merge.accounts); it would see zero lag"
 fi
 
 # Consumer LAG (num_pending), not a pending-entries count.

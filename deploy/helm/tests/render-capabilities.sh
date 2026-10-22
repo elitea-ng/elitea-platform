@@ -965,11 +965,11 @@ refuses "a material Secret set while the runtime is off" \
   "runtime.enabled" \
   --set main.runtime.material.secretName=elitea-runtime-material
 
-# #1081 review G1: with no runtime.nats.url and no nats.service the runtime
+# #1081 review G1: with no runtime.nats.url and no natsClient.service the runtime
 # URL rendered as tls://.<namespace>.svc.cluster.local:4222 without a word.
 refuses "the runtime with no NATS to publish commands to" \
   "main.runtime.enabled=true needs a NATS" \
-  -f "$CHART/values-standalone.yaml" --set-string nats.service=
+  -f "$CHART/values-standalone.yaml" --set nats.enabled=false --set natsBootstrap.enabled=false --set-string natsClient.service=
 
 refuses "the runtime without production authentication" \
   "fileConfig.authConfig.enabled" \

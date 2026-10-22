@@ -2,9 +2,8 @@
 The pod name label. Its DEFAULT value stays "elitea-worker-python" although
 only the Rust worker exists: app.kubernetes.io/name is in the Deployment's
 selector and immutable after install (renaming it turns every upgrade into an
-unrecoverable "field is immutable" error), and the NATS chart's NetworkPolicy
-admits the worker pods by this exact name (deploy/helm/nats values
-networkPolicy.clients). The value is historical, the image is not.
+unrecoverable "field is immutable" error), and the NATS NetworkPolicy
+admits the worker pods by this exact name (nats.networkPolicy.clients). The value is historical, the image is not.
 */}}
 {{- define "elitea-worker.name" -}}
 {{- default "elitea-worker-python" .Values.worker.nameOverride | trunc 63 | trimSuffix "-" }}

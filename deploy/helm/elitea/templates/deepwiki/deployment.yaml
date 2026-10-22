@@ -104,7 +104,7 @@ spec:
             - name: ELITEA_DEEPWIKI_NATS_URL
               value: {{ include "elitea.natsUrl" . | quote }}
             {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # Its NATS identity, elitea-deepwiki (templates/natsClient.yaml).
             - name: ELITEA_DEEPWIKI_NATS_TLS_CA_FILE
               value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
@@ -155,7 +155,7 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
             - name: runtime-ca
@@ -297,7 +297,7 @@ spec:
                 path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 8 }}{{- end }}
-        {{- if .Values.nats.tls.enabled }}
+        {{- if .Values.natsClient.tls.enabled }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-deepwiki.fullname" .))) | nindent 8 }}
         {{- end }}
       {{- with .Values.deepwiki.nodeSelector }}

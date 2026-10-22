@@ -101,7 +101,7 @@ these checks on every values file.
   on the governance page is then ignored, with no probe and no log line at the
   moment the ceiling is saved.
 
-  deployment.yaml fills GATEWAY_NATS_URL from the top-level `nats` block when
+  deployment.yaml fills GATEWAY_NATS_URL from the `natsClient` block when
   env does not set it, so the empty case reaches a pod only when that block
   names no service. This refuses that combination at render time.
 
@@ -119,8 +119,8 @@ these checks on every values file.
 {{- if and (eq $require "off") (not .Values.llmGateway.acknowledgeUnenforcedBudgets) -}}
 {{- fail "env.LLM_BUDGET_REQUIRE_ENFORCEMENT=\"off\" turns off the startup refusal, so this gateway starts and serves /llm even when it can enforce no budget at all. Set llmGateway.acknowledgeUnenforcedBudgets=true to state that this deployment accepts unmetered spend, or remove the setting to keep the default \"auto\" posture (issue #304)." -}}
 {{- end -}}
-{{- if and (not (get $env "GATEWAY_NATS_URL")) (not .Values.nats.service) -}}
-{{- fail "the gateway would render with an empty GATEWAY_NATS_URL: env.GATEWAY_NATS_URL is unset and the top-level nats.service names no NATS. The budget counters live in NATS, so that pod enforces no ceiling, bills nothing, and still reports ready — and it refuses to start once a budget row exists (issue #304). Set nats.service, or set env.GATEWAY_NATS_URL to the address of a NATS this deployment shares with the scheduler." -}}
+{{- if and (not (get $env "GATEWAY_NATS_URL")) (not .Values.natsClient.service) -}}
+{{- fail "the gateway would render with an empty GATEWAY_NATS_URL: env.GATEWAY_NATS_URL is unset and natsClient.service names no NATS. The budget counters live in NATS, so that pod enforces no ceiling, bills nothing, and still reports ready — and it refuses to start once a budget row exists (issue #304). Set natsClient.service, or set env.GATEWAY_NATS_URL to the address of a NATS this deployment shares with the scheduler." -}}
 {{- end -}}
 {{- end }}
 

@@ -35,7 +35,7 @@
 {{- fail (printf "worker.autoscaling.maxReplicas (%d) is below minReplicas (%d)." (int $a.maxReplicas) (int $a.minReplicas)) }}
 {{- end }}
 {{- /*
-  The monitoring endpoint defaults to the NATS chart's HEADLESS service. On a
+  The monitoring endpoint defaults to the NATS server's HEADLESS service. On a
   single server either name works. On the HA cluster the scaler must reach the
   CONSUMER LEADER's /jsz (a follower reports its own, stale view): it reads
   /varz connect_urls and queries each advertised node, and when a server
@@ -43,7 +43,7 @@
   name that resolves only under the headless service (KEDA
   pkg/scalers/nats_jetstream_scaler.go getNATSJetStreamMonitoringNodeURLByNode).
 */}}
-{{- $headless := dict "service" (printf "%s-headless" .Values.nats.service) "namespace" .Values.nats.namespace -}}
+{{- $headless := dict "service" (printf "%s-headless" .Values.natsClient.service) "namespace" .Values.natsClient.namespace -}}
 {{- $endpoint := $a.natsMonitoringEndpoint | default (printf "%s:8222" (include "elitea.serviceHost" (dict "svc" $headless "ctx" .))) }}
 {{- /*
   The target per replica. KEDA's metric is num_pending + num_ack_pending of
@@ -108,8 +108,8 @@ spec:
     # The worker's own durable consumer on the command bus
     # (docs/runtime-command-bus.md). The scaler reads /jsz (and, on a
     # cluster, /varz) on the NATS monitoring port — plain HTTP, no credential, so no
-    # TriggerAuthentication; deploy/helm/nats admits the KEDA operator there
-    # (networkPolicy.monitoringFrom).
+    # TriggerAuthentication; the bundled NATS admits the KEDA operator there
+    # (nats.networkPolicy.monitoringFrom).
     - type: nats-jetstream
       metadata:
         natsServerMonitoringEndpoint: {{ $endpoint | quote }}

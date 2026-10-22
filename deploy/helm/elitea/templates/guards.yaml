@@ -23,6 +23,23 @@
 {{- fail "runtimeRedis is removed: the platform runs without Redis (the runtime command bus is NATS JetStream, Form sign-in state is in PostgreSQL). Delete the runtimeRedis block from your values, then delete the leftover elitea-runtime-redis Deployment, Service, ConfigMap, PVC and the elitea-runtime-redis-material Secret. See docs/UPGRADING.md, \"runtime-redis removed\"." }}
 {{- end }}
 
+{{- /*
+  The NATS client block was `nats` until the server was bundled into this
+  chart; `nats` is now the bundled server's (the upstream nats chart's values)
+  and the client contract is `natsClient`. A values file that still states the
+  old client keys under `nats` would otherwise have them handed to the
+  upstream chart, where `service` is a map and the rest mean nothing — the
+  components would silently dial the default instead of the NATS it names.
+*/ -}}
+{{- $legacyNats := list -}}
+{{- if kindIs "string" (get .Values.nats "service") }}{{ $legacyNats = append $legacyNats "service" }}{{ end -}}
+{{- range $k := list "port" "namespace" "tls" "networkPolicyClientNamesManaged" -}}
+{{- if hasKey $.Values.nats $k }}{{ $legacyNats = append $legacyNats $k }}{{ end -}}
+{{- end -}}
+{{- if $legacyNats }}
+{{- fail (printf "nats.%s: the NATS client settings moved to natsClient (natsClient.service, .port, .namespace, .tls, .networkPolicyClientNamesManaged). `nats` now configures the NATS server this chart bundles (nats.enabled, default true). Move those keys under natsClient; for a NATS you run yourself also set nats.enabled=false. See docs/UPGRADING.md, \"One chart: NATS bundled\"." (join ", nats." $legacyNats)) }}
+{{- end }}
+
 {{- if and (not .Values.networkPolicies.enabled) (not .Values.networkPolicies.externallyManaged) }}
 {{- fail "networkPolicies.enabled is false. The chart's NetworkPolicies are what keep pods without a role off elitea-main, the worker and the sandbox supervisors. If your own NetworkPolicy already does this, say so with networkPolicies.externallyManaged=true." }}
 {{- end }}
@@ -134,8 +151,8 @@
 {{- fail (printf "worker.runtime.limits.%s is gone with the Redis command bus; the worker refuses unknown limits. Use nats_fetch_batch, nats_fetch_expires_millis, nats_in_progress_interval_millis and nats_retry_delay_millis." $legacy) }}
 {{- end }}
 {{- end }}
-{{- if not (or .Values.worker.runtime.natsUrl .Values.nats.service) }}
-{{- fail "worker.enabled=true needs a NATS: worker.runtime.natsUrl, or the top-level nats.service. The worker reads its commands from the JetStream command bus and nothing else; with no bus it starts, reports Ready, and consumes nothing forever." }}
+{{- if not (or .Values.worker.runtime.natsUrl .Values.natsClient.service) }}
+{{- fail "worker.enabled=true needs a NATS: worker.runtime.natsUrl, or natsClient.service. The worker reads its commands from the JetStream command bus and nothing else; with no bus it starts, reports Ready, and consumes nothing forever." }}
 {{- end }}
 {{- end }}
 

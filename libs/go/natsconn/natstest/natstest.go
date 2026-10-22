@@ -2,7 +2,7 @@
 // configuration, with test certificates, so a service's real NATS code can be
 // run against the permission table it will meet in a cluster (#1076).
 //
-// The permission table lives in deploy/helm/nats/values.yaml. Copying it into
+// The permission table lives in deploy/helm/elitea/values.yaml. Copying it into
 // a test would prove the copy; this package instead reads the nats.conf that
 // `helm template` renders (scripts/nats/render-secure-conf.sh writes it), swaps
 // the file paths and ports for local ones, and runs the real server binary on
@@ -10,7 +10,7 @@
 // service's own test, before it is a broken budget path in a cluster.
 //
 // The JetStream assets are created the way a cluster creates them: by running
-// deploy/helm/nats-bootstrap/files/bootstrap.sh with the nats CLI, once per
+// deploy/helm/elitea/files/nats-bootstrap.sh with the nats CLI, once per
 // account, as that account's bootstrap identity. So the bootstrap's own
 // grants are exercised by every test that uses this package.
 //
@@ -215,7 +215,7 @@ var BootstrapIdentities = map[string]string{
 	"worker":  natsconn.IdentityBootstrapWorker,
 }
 
-// Bootstrap runs deploy/helm/nats-bootstrap/files/bootstrap.sh exactly as
+// Bootstrap runs deploy/helm/elitea/files/nats-bootstrap.sh exactly as
 // the Job does — one run, connecting to each account as that account's
 // bootstrap identity (NATS_TLS_DIR) — and fails the test if it fails. env
 // overrides the script's tuning variables.
@@ -281,7 +281,7 @@ func (s *Server) RunBootstrap(identity string, env map[string]string) (string, e
 }
 
 func (s *Server) runBootstrap(vars map[string]string) (string, error) {
-	script := filepath.Join(s.repoRoot, "deploy", "helm", "nats-bootstrap", "files", "bootstrap.sh")
+	script := filepath.Join(s.repoRoot, "deploy", "helm", "elitea", "files", "nats-bootstrap.sh")
 	binDir := filepath.Join(s.dir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return "", err
@@ -632,12 +632,12 @@ func findRepoRoot() (string, error) {
 		return "", err
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "deploy", "helm", "nats-bootstrap", "files", "bootstrap.sh")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "deploy", "helm", "elitea", "files", "nats-bootstrap.sh")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", errors.New("natstest: no deploy/helm/nats-bootstrap/files/bootstrap.sh above the working directory")
+			return "", errors.New("natstest: no deploy/helm/elitea/files/nats-bootstrap.sh above the working directory")
 		}
 		dir = parent
 	}

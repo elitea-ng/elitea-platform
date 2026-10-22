@@ -34,8 +34,12 @@ on:
       # real NATS client against the nats.conf the NATS chart renders, after
       # the real bootstrap.sh. A change to any of them must run it.
       - "libs/go/natsconn/**"
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/charts/nats/**"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # The guarded write-back UPSERT both writers must equal
       # (budget-writeback-guarded-upsert-v1.sql); the gateway half of the
@@ -58,8 +62,12 @@ on:
       - ".github/workflows/ci-gateway.yml"
       - "scripts/ci/check-gateway-toolchain.sh"
       - "libs/go/natsconn/**"
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/charts/nats/**"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       - "libs/proto/contracts/**"
       - "libs/proto/elitea/gateway/**"

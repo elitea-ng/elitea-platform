@@ -98,7 +98,7 @@ key names are the file names that `gen-runtime-certs.sh` writes.
 The worker may not create a consumer (its NATS permissions deny it). A
 consumer that can create its own durable can, after losing one, recreate it in
 a way that skips every command in flight. The `nats-bootstrap` service runs
-[`deploy/helm/nats-bootstrap/files/bootstrap.sh`](../helm/nats-bootstrap/files/bootstrap.sh),
+[`deploy/helm/elitea/files/nats-bootstrap.sh`](../helm/elitea/files/nats-bootstrap.sh),
 the same script the cluster's hook Job runs, as the only identity that may.
 
 ## Workload sessions are provisioned, never self-registered

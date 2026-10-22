@@ -138,7 +138,7 @@ false
 elitea-main.validateEventsNats — refuse a render where elitea-main cannot know
 the NATS the gateway uses. When the gateway reads GATEWAY_NATS_URL from a Secret
 (llmGateway.secrets), the chart cannot see the value, so deriving main's URL
-from the `nats` block could point it at a different broker: soft alerts would
+from the `natsClient` block could point it at a different broker: soft alerts would
 never reach the project stream, or main would crash on a host that does not
 exist. The operator names main's URL as well — main.secrets (preferred when it
 carries credentials) or main.env.
@@ -148,7 +148,7 @@ carries credentials) or main.env.
 {{- $mainSecrets := .Values.main.secrets | default dict -}}
 {{- $gwSecrets := .Values.llmGateway.secrets | default dict -}}
 {{- if and .Values.llmGateway.enabled (hasKey $gwSecrets "GATEWAY_NATS_URL") (not (get $mainEnv "ELITEA_EVENTS_NATS_URL")) (not (hasKey $mainSecrets "ELITEA_EVENTS_NATS_URL")) -}}
-{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `nats` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
+{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `natsClient` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
 {{- end -}}
 {{- end }}
 
@@ -1264,11 +1264,11 @@ too, whatever the value:
 {{- end -}}
 
 {{/* The runtime plane's NATS connection (ELITEA_RUNTIME_NATS_URL), as the
-     elitea-main-runtime identity. Empty means the top-level `nats` block;
+     elitea-main-runtime identity. Empty means the `natsClient` block;
      templates/natsClient.yaml issues the certificate and refuses a URL that
-     disagrees with nats.tls. */}}
-{{- if not (or (get $runtimeNats "url") .Values.nats.service) -}}
-{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or the top-level nats.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
+     disagrees with natsClient.tls. */}}
+{{- if not (or (get $runtimeNats "url") .Values.natsClient.service) -}}
+{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or natsClient.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
 {{- end -}}
 {{- if and (get $runtimeNats "url") (contains "@" (get $runtimeNats "url" | toString)) -}}
 {{- fail "runtime.nats.url carries user information. With mTLS the client certificate is the identity, and this URL is rendered into a ConfigMap." -}}
@@ -1494,7 +1494,7 @@ ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID: {{ $scheduling.instanceId | quote }}
 {{/* The runtime command bus (docs/runtime-command-bus.md), as the
      elitea-main-runtime NATS identity (templates/natsClient.yaml). */}}
 ELITEA_RUNTIME_NATS_URL: {{ include "elitea-main.runtimeNatsUrl" . | quote }}
-{{- if .Values.nats.tls.enabled }}
+{{- if .Values.natsClient.tls.enabled }}
 ELITEA_RUNTIME_NATS_TLS_CA_FILE: {{ printf "%s/ca.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_CERT_FILE: {{ printf "%s/tls.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_KEY_FILE: {{ printf "%s/tls.key" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
@@ -1575,7 +1575,7 @@ reads the Secret; the service reads the copies.
 
 {{/*
 elitea-main.runtimeNatsUrl — the runtime plane's NATS URL: runtime.nats.url,
-else the top-level `nats` block (the same broker as every other client; the
+else the `natsClient` block (the same broker as every other client; the
 runtime is a separate identity, not a separate server).
 */}}
 {{- define "elitea-main.runtimeNatsUrl" -}}
@@ -1586,7 +1586,7 @@ runtime is a separate identity, not a separate server).
 {{/*
 elitea-main.runtimeNatsMountPath — where elitea-main-runtime's client
 certificate Secret is mounted. A directory of its own: the live-update plane's
-identity sits at nats.tls.mountPath in the same pod.
+identity sits at natsClient.tls.mountPath in the same pod.
 */}}
 {{- define "elitea-main.runtimeNatsMountPath" -}}
 {{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}

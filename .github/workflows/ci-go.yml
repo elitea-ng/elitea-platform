@@ -24,11 +24,15 @@ on:
       - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
       # The secured NATS permission tests (#1076) run elitea-main's and the
-      # scheduler's real NATS paths against the nats.conf the NATS chart
-      # renders, after the real bootstrap.sh. A change to the permission
+      # scheduler's real NATS paths against the nats.conf the elitea chart's
+      # bundled NATS renders, after the real bootstrap.sh. A change to the permission
       # table, the bootstrap or the render script must run them.
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/charts/nats/**"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # internal/transport/commandbus pins its constants to the command bus
       # contract document.
@@ -63,11 +67,15 @@ on:
       - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
       # The secured NATS permission tests (#1076) run elitea-main's and the
-      # scheduler's real NATS paths against the nats.conf the NATS chart
-      # renders, after the real bootstrap.sh. A change to the permission
+      # scheduler's real NATS paths against the nats.conf the elitea chart's
+      # bundled NATS renders, after the real bootstrap.sh. A change to the permission
       # table, the bootstrap or the render script must run them.
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/charts/nats/**"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # internal/transport/commandbus pins its constants to the command bus
       # contract document.
@@ -399,7 +407,7 @@ jobs:
           exit 1
 
       # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
-      # starts nats-server on the nats.conf `helm template deploy/helm/nats`
+      # starts nats-server on the nats.conf `helm template deploy/helm/elitea`
       # renders and runs elitea-main's and the scheduler's real NATS paths as
       # their certificate identities, after the real bootstrap.sh. The script
       # renders that config (helm + the upstream subchart), fetches the pinned

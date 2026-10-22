@@ -14,7 +14,7 @@
 #     with no LLM and no git host;
 #   * the provider uploads its pages over gRPC on elitea-main's platform
 #     listener (#1359 U5), so elitea-main runs its runtime plane, on the
-#     in-repo NATS chart (deploy/helm/nats + deploy/helm/nats-bootstrap).
+#     NATS JetStream the chart bundles (nats + natsBootstrap).
 #
 #   deploy/kind/kind-stack.sh up       # build, load, install, seed  (~6-9 min cold)
 #   deploy/kind/kind-stack.sh verify   # prove the four claims below
@@ -292,44 +292,26 @@ install_infra() {
   kc -n "$NS" wait --for=condition=complete --timeout=180s job/rustfs-bucket-init
 }
 
-# The runtime plane publishes onto the NATS JetStream command bus, so the
-# in-repo NATS chart and its bootstrap Job (which creates the RUNTIME streams
-# and every other account's assets) go in first, in the SAME namespace: the
-# NATS CA is a namespaced Issuer, and the platform chart's client Certificates
-# are issued from it. Release names are the ones the charts' defaults assume
-# (Service elitea-nats).
-install_nats() {
-  say "Installing NATS JetStream and its bootstrap"
-  # The chart wraps the upstream nats subchart (Chart.lock pins it), and
-  # `helm dependency build` refuses an http(s) repository it has no
-  # definition for on a fresh helm (a CI runner): register each one the
-  # chart names first, as publish.yml does.
-  local repo
-  for repo in $(awk '$1 == "repository:" { gsub(/"/, "", $2); print $2 }' "${REPO_ROOT}/deploy/helm/nats/Chart.yaml" | grep -E '^https?://' | sort -u); do
-    helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update >/dev/null
-  done
-  helm dependency build "${REPO_ROOT}/deploy/helm/nats" >/dev/null
-  helm --kube-context "kind-${CLUSTER}" upgrade --install elitea-nats "${REPO_ROOT}/deploy/helm/nats" \
-    --namespace "$NS" \
-    -f "${REPO_ROOT}/deploy/helm/nats/values-scale1.yaml" \
-    -f "${SCRIPT_DIR}/values-nats-kind.yaml" \
-    --wait --timeout 10m
-  helm --kube-context "kind-${CLUSTER}" upgrade --install elitea-nats-bootstrap "${REPO_ROOT}/deploy/helm/nats-bootstrap" \
-    --namespace "$NS" \
-    --set natsUrl=tls://elitea-nats:4222 \
-    --set replicas=1 \
-    --wait --timeout 10m
-}
-
+# ONE chart: NATS JetStream and its bootstrap Job are part of the release
+# (nats.enabled, the default), exactly as the published chart installs.
+#
+# No --wait. The bootstrap is a post-install hook (it needs the NATS server,
+# a resource of this same release), and --wait would hold it until every pod
+# is Ready — while elitea-main is not Ready until the bootstrap has created
+# the command-bus streams it binds. Helm still blocks on the pre-install
+# migration hooks and on the post-install bootstrap Job; the rollout wait
+# below then covers the workloads, which restart until the streams exist.
 install_chart() {
-  say "Installing the chart (elitea-main + the DeepWiki provider)"
-  # The migration Jobs are pre-install hooks: elitea-main's own -all-tenants
-  # run, and the provider's `elitea-deepwiki-engine migrate`. --wait covers
-  # both, and the hooks' own timeout is the one that matters for a cold start.
+  say "Installing the chart (NATS + elitea-main + the DeepWiki provider)"
   helm --kube-context "kind-${CLUSTER}" upgrade --install "$RELEASE" "${REPO_ROOT}/deploy/helm/elitea" \
     --namespace "$NS" \
     -f "${SCRIPT_DIR}/values-kind.yaml" \
-    --wait --timeout 15m
+    --timeout 15m
+  kc -n "$NS" rollout status statefulset/elitea-nats --timeout=5m
+  local d
+  for d in $(kc -n "$NS" get deploy -l "app.kubernetes.io/instance=${RELEASE}" -o name); do
+    kc -n "$NS" rollout status "$d" --timeout=10m
+  done
 }
 
 psql_exec() {
@@ -351,7 +333,6 @@ cmd_up() {
   load_images
   install_cert_manager
   install_infra
-  install_nats
   install_chart
   seed
   say "Up. Next: ${BASH_SOURCE[0]} verify"

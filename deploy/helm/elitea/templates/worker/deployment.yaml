@@ -238,7 +238,7 @@ spec:
               {{- if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }}
               readOnly: true
               {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # The elitea-worker NATS identity (templates/natsClient.yaml),
             # read on every reconnect so a cert-manager renewal is picked up.
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
@@ -360,7 +360,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.worker.materialInit.sizeLimit }}
-        {{- if .Values.nats.tls.enabled }}
+        {{- if .Values.natsClient.tls.enabled }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-worker.fullname" .))) | nindent 8 }}
         {{- end }}
         - name: spool

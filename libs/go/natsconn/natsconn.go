@@ -19,7 +19,7 @@
 // A client is identified by the URI SAN of its certificate,
 // spiffe://<trust domain>/nats/<identity>. The NATS server runs with
 // `verify_and_map`, so the SAN is the user name and the permission table in
-// deploy/helm/nats/values.yaml decides which account the user is in and what
+// deploy/helm/elitea/values.yaml decides which account the user is in and what
 // it may publish and subscribe to there. Nothing in a URL is a credential: URLs are tls://host:port
 // and can sit in a ConfigMap.
 //
@@ -43,7 +43,7 @@ import (
 
 // The client identities. Each is the last path segment of the certificate's
 // URI SAN and the suffix of the client's inbox prefix. The NATS chart's
-// permission table (deploy/helm/nats/values.yaml) declares each in exactly
+// permission table (deploy/helm/elitea/values.yaml) declares each in exactly
 // one account; a new identity needs a row there first.
 const (
 	// MAIN account.

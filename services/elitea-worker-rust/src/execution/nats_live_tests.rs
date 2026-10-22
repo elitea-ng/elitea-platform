@@ -168,7 +168,7 @@ impl Environment {
     fn violations(&self, account: &str, user: &str) -> Vec<String> {
         let log = std::fs::read_to_string(&self.log).expect("nats-server log");
         // The server prefixes the mapped user with its account: the producer
-        // is in RUNTIME, the worker in WORKER (deploy/helm/nats/values.yaml).
+        // is in RUNTIME, the worker in WORKER (deploy/helm/elitea/values.yaml).
         let marker = format!("{account}/user:{user}\"");
         log.lines()
             .filter(|line| {

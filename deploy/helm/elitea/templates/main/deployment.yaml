@@ -318,12 +318,12 @@ spec:
               mountPath: {{ .Values.main.fileConfig.vectorClientMaterial.mountPath }}
               readOnly: true
             {{- end }}
-            {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+            {{- if and .Values.natsClient.tls.enabled (include "elitea-main.usesNats" .) }}
             # The live-update plane's NATS client certificate
             # (templates/natsClient.yaml).
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
-            {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+            {{- if and .Values.natsClient.tls.enabled (.Values.main.runtime | default dict).enabled }}
             # The runtime plane's NATS identity, elitea-main-runtime: the
             # command bus producer (templates/natsClient.yaml).
             - name: runtime-nats-client-tls
@@ -483,10 +483,10 @@ spec:
             defaultMode: {{ .Values.main.fileConfig.vectorClientMaterial.defaultMode }}
           {{- end }}
         {{- end }}
-        {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+        {{- if and .Values.natsClient.tls.enabled (include "elitea-main.usesNats" .) }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-main.fullname" .))) | nindent 8 }}
         {{- end }}
-        {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+        {{- if and .Values.natsClient.tls.enabled (.Values.main.runtime | default dict).enabled }}
         - name: runtime-nats-client-tls
           secret:
             secretName: {{ printf "%s-runtime-nats-client-tls" (include "elitea-main.fullname" .) }}

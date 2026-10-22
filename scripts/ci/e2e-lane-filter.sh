@@ -18,7 +18,7 @@
 #   deploy/helm/**     the chart. No stack lane renders it; helm-lint.yml and
 #                      helm-install-smoke.yml do. EXCEPT every path under it
 #                      that a deploy/*.yml compose file references (today
-#                      ./helm/nats-bootstrap/files/bootstrap.sh, bind-mounted
+#                      ./helm/elitea/files/nats-bootstrap.sh, bind-mounted
 #                      by the standalone stacks). That list is READ from the
 #                      compose files on every run, never written here, so a
 #                      new bind mount reaches the stack without editing this.

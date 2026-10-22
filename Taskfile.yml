@@ -240,6 +240,13 @@ tasks:
       - task: helm:gateway-master-key
       - task: helm:gateway-workload-identity
       - task: helm:indexing-runtime
+      - task: helm:nats-bundled
+
+  helm:nats-bundled:
+    desc: Check that the vendored NATS subchart matches Chart.yaml, renders on and off, refuses a mismatched natsClient, and survives helm package
+    cmds:
+      # Needs helm, python3 and PyYAML. No network: charts/nats is vendored.
+      - bash deploy/helm/tests/render-nats-bundled.sh
 
   helm:indexing-runtime:
     desc: Check that worker.indexingRuntime reaches elitea-main as ELITEA_INDEXING_RUNTIME (default python) and that an unknown value, or rust without the Rust worker, is refused

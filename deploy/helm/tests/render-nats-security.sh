@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # render-nats-security.sh — the NATS security posture (#1076), asserted on the
-# RENDERED output of all three charts that have to agree about it:
+# RENDERED output of the three parts of the elitea chart that have to agree
+# about it:
 #
-#   deploy/helm/nats            the server: NATS CA, server certificate,
+#   nats (templates/nats/ + the vendored upstream chart)
+#                               the server: NATS CA, server certificate,
 #                               TLS + verify_and_map, the permission table,
 #                               the ingress NetworkPolicy, its refusals
-#   deploy/helm/nats-bootstrap  the bootstrap identity and its connection
-#   deploy/helm/elitea          one client certificate per component, the
+#   natsBootstrap               the bootstrap identity and its connection
+#   natsClient                  one client certificate per component, the
 #                               mounts and env that point at it, tls:// URLs,
 #                               and the URL refusals
 #
-# The agreement is the point. Each chart can be internally fine while the
+# The agreement is the point. Each part can be internally fine while the
 # certificate a component presents names no user, is signed by an issuer the
 # server does not trust, or comes from a pod the NetworkPolicy does not admit.
 # Every one of those installs cleanly and then fails every connection.
@@ -19,8 +21,8 @@
 # one. libs/go/natsconn/natstest runs every service's real code against the
 # rendered config for that (ci-go.yml, ci-gateway.yml).
 #
-# Needs helm, python3 + PyYAML, and network access the first time (the
-# upstream nats subchart is vendored with `helm dependency build`).
+# Needs helm and python3 + PyYAML. No network: the upstream nats subchart is
+# vendored in deploy/helm/elitea/charts/nats.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # deploy/
@@ -28,28 +30,22 @@ HELM="${HELM:-helm}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-if ! ls "$DIR"/helm/nats/charts/nats-*.tgz >/dev/null 2>&1; then
-  # `helm dependency build` refuses an http(s) repository it has no definition
-  # for ("no repository definition for ..."), so register the subchart's
-  # repository first. Idempotent, and a no-op on a machine that already has it.
-  "$HELM" repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
-  "$HELM" dependency build "$DIR/helm/nats" >/dev/null
-fi
-
 NS=elitea
-"$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-scale1.yaml" > "$TMP/nats-scale1.yaml"
-"$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml"     > "$TMP/nats-ha.yaml"
+EL=(elitea "$DIR/helm/elitea" -n "$NS"
+    --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
+    --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
+# The server, the bootstrap and the platform are one render now; the files
+# below keep their names so each section reads the render it always did.
+"$HELM" template "${EL[@]}" > "$TMP/elitea.yaml"
+cp "$TMP/elitea.yaml" "$TMP/nats-scale1.yaml"
+cp "$TMP/elitea.yaml" "$TMP/bootstrap.yaml"
+"$HELM" template "${EL[@]}" -f "$DIR/helm/elitea/values-nats-ha.yaml" > "$TMP/nats-ha.yaml"
 # The same HA render on a cluster that serves approver-policy (#1076 F3).
-"$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" \
+"$HELM" template "${EL[@]}" -f "$DIR/helm/elitea/values-nats-ha.yaml" \
   --api-versions policy.cert-manager.io/v1alpha1/CertificateRequestPolicy > "$TMP/nats-ha-ap.yaml"
-"$HELM" template elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" -n "$NS"                    > "$TMP/bootstrap.yaml"
 # The command-bus alerts (#1081 review G3): with the Prometheus Operator
 # served, the rule renders together with the exporter whose series it reads.
-"$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-scale1.yaml" \
-  --api-versions monitoring.coreos.com/v1 > "$TMP/nats-base-prom.yaml"
-"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
-  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
-  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
+"$HELM" template "${EL[@]}" --api-versions monitoring.coreos.com/v1 > "$TMP/nats-base-prom.yaml"
 # The sub-application hosts on (#1359): their cancellation fan-out identities.
 # On the standalone profile's runtime plane: their engines make model calls
 # over ModelService on elitea-main's platform listener (#1359 U2), so the
@@ -68,9 +64,8 @@ NS=elitea
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-runtime.yaml"
 
-# Schema validation of the NATS renders (R9). The template job in helm-lint.yml
-# runs kubeconform on the charts it can template without network; these two
-# vendor an upstream subchart, so this suite is where their renders exist.
+# Schema validation of the NATS renders (R9), the server's and the
+# bootstrap's resources in the full render.
 # KUBECONFORM names the binary; CI sets NATS_REQUIRE_KUBECONFORM=1 so a missing
 # binary fails instead of reading as a pass. The approver-policy schema is not
 # in the pinned CRD catalog release, so it comes from the catalog commit that
@@ -85,8 +80,8 @@ POLICY_SCHEMAS='https://raw.githubusercontent.com/datreeio/CRDs-catalog/b2fd9c93
 if [ -n "$KUBECONFORM" ]; then
   if "$KUBECONFORM" -strict -summary -kubernetes-version 1.30.0 \
       -schema-location default -schema-location "$CRD_SCHEMAS" -schema-location "$POLICY_SCHEMAS" \
-      "$TMP/nats-scale1.yaml" "$TMP/nats-ha.yaml" "$TMP/nats-ha-ap.yaml" "$TMP/bootstrap.yaml" > "$TMP/kubeconform.out" 2>&1; then
-    echo "ok	kubeconform: the nats (scale-1, HA, HA + approver-policy) and nats-bootstrap renders are schema-valid" >> "$TMP/refusals"
+      "$TMP/nats-scale1.yaml" "$TMP/nats-ha.yaml" "$TMP/nats-ha-ap.yaml" > "$TMP/kubeconform.out" 2>&1; then
+    echo "ok	kubeconform: the scale-1, HA and HA + approver-policy renders (server and bootstrap) are schema-valid" >> "$TMP/refusals"
   else
     echo "KUBECONFORM-FAILED	kubeconform on the NATS renders	$(tr '\n' ' ' < "$TMP/kubeconform.out")" >> "$TMP/refusals"
   fi
@@ -107,10 +102,7 @@ refuse() {
     echo "WRONG-REASON	$name	$(tail -1 "$TMP/refusal.err")" >> "$TMP/refusals"
   fi
 }
-EL=(elitea "$DIR/helm/elitea" -n "$NS"
-    --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
-    --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
-NA=(elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-scale1.yaml")
+NA=("${EL[@]}")
 refuse "nats: verify_and_map off"             "verify_and_map must be true"  "${NA[@]}" --set nats.config.nats.tls.merge.verify_and_map=false
 refuse "nats: TLS off"                        "tls.enabled is false"         "${NA[@]}" --set nats.config.nats.tls.enabled=false
 refuse "nats: no_auth_user"                   "no_auth_user"                 "${NA[@]}" --set nats.config.merge.no_auth_user=anyone
@@ -135,7 +127,7 @@ refuse "nats: RUNTIME imports"                "account RUNTIME imports"      "${
 # the rest of the table stays as shipped.
 mutate() {
   local out="$1" expr="$2"
-  python3 - "$DIR/helm/nats/values.yaml" "$out" "$expr" <<'PYM'
+  python3 - "$DIR/helm/elitea/values.yaml" "$out" "$expr" <<'PYM'
 import sys, yaml
 v = yaml.safe_load(open(sys.argv[1]))
 accts = v["nats"]["config"]["merge"]["accounts"]
@@ -205,28 +197,28 @@ mutate "$TMP/m-wrong-bootstrap.yaml" 'accts["MAIN"]["users"].append({"user": "sp
 refuse "nats: another plane's bootstrap"      "is a bootstrap identity in account MAIN" "${NA[@]}" -f "$TMP/m-wrong-bootstrap.yaml"
 mutate "$TMP/m-password.yaml" 'user("MAIN","elitea-main")["password"] = "x"'
 refuse "nats: a password user"                "carries a password"           "${NA[@]}" -f "$TMP/m-password.yaml"
-refuse "nats: NetworkPolicy off, unstated"    "networkPolicy.enabled is false" "${NA[@]}" --set networkPolicy.enabled=false
+refuse "nats: NetworkPolicy off, unstated"    "nats.networkPolicy.enabled is false" "${NA[@]}" --set nats.networkPolicy.enabled=false
 refuse "nats: alerts with the exporter off"   "nats.promExporter.enabled is false" "${NA[@]}" --set nats.promExporter.enabled=false
-HA=(elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml")
+HA=("${EL[@]}" -f "$DIR/helm/elitea/values-nats-ha.yaml")
 refuse "nats: HA routes trust the client CA"   "must be /etc/nats-certs/cluster/ca.crt" "${HA[@]}" --set nats.config.cluster.tls.merge.ca_file=/etc/nats-ca-cert/ca.crt
 refuse "nats: HA routes reuse the client cert" "ROUTE certificate's own Secret" "${HA[@]}" --set nats.config.cluster.tls.secretName=elitea-nats-server-tls
 refuse "nats: HA routes do not verify"         "verify must be true"          "${HA[@]}" --set nats.config.cluster.tls.merge.verify=false
-refuse "nats: HA route issuer = client issuer" "same issuer as security.issuerRef" "${HA[@]}" --set security.ca.create=false --set security.issuerRef.name=nats-ca --set security.routeIssuerRef.name=nats-ca
-refuse "nats: approver-policy required, not served" "does not serve policy.cert-manager.io" "${NA[@]}" --set security.approverPolicy.enabled=true
-refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" --set nats.config.cluster.tls.enabled=false
-refuse "bootstrap: nats:// URL"               "is not tls://"                elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=nats://elitea-nats:4222
-refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
-refuse "bootstrap: connectWait eats the deadline" "leaves the Job under a minute" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set connectWait=590
-refuse "bootstrap: an account left out"       "must be [main, gateway, runtime, worker]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway,runtime}'
+refuse "nats: HA route issuer = client issuer" "same issuer as nats.security.issuerRef" "${HA[@]}" --set nats.security.ca.create=false --set nats.security.issuerRef.name=nats-ca --set nats.security.routeIssuerRef.name=nats-ca --set natsClient.tls.issuerRef.name=nats-ca --set natsClient.tls.issuerRef.kind=ClusterIssuer
+refuse "nats: approver-policy required, not served" "does not serve policy.cert-manager.io" "${NA[@]}" --set nats.security.approverPolicy.enabled=true
+refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    "${HA[@]}" --set nats.config.cluster.tls.enabled=false
+refuse "bootstrap: nats:// URL"               "is not tls://"                "${EL[@]}" --set natsBootstrap.natsUrl=nats://elitea-nats:4222
+refuse "bootstrap: credential URL"            "user information"             "${EL[@]}" --set natsBootstrap.natsUrl=tls://u:p@elitea-nats:4222
+refuse "bootstrap: connectWait eats the deadline" "leaves the Job under a minute" "${EL[@]}" --set natsBootstrap.connectWait=590
+refuse "bootstrap: an account left out"       "must be [main, gateway, runtime, worker]" "${EL[@]}" --set 'natsBootstrap.accounts={main,gateway,runtime}'
 # A numeric value that is not an integer must fail the render: `int64` would
 # turn it into 0, which natscli reads as the server default (MaxAckPending
 # 1000, MaxBytes unbounded). Review of #1296.
-refuse "bootstrap: maxAckPending with a unit"  "deltas.writeback.maxAckPending must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.writeback.maxAckPending=40k
-refuse "bootstrap: maxBytes with a unit"       "deltas.maxBytes must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxBytes=1GiB
-printf 'deltas:\n  maxMsgs: 1.5\n' > "$TMP/fractional.yaml"   # a YAML float, not a --set string
-refuse "bootstrap: a fractional maxMsgs (YAML float)" "deltas.maxMsgs must be a whole number" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" -f "$TMP/fractional.yaml"
-refuse "bootstrap: a fractional maxMsgs (--set)" "deltas.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxMsgs=1.5
-refuse "bootstrap: a runtime maxMsgs typo"     "runtime.agent.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set runtime.agent.maxMsgs=1o24
+refuse "bootstrap: maxAckPending with a unit"  "deltas.writeback.maxAckPending must be an integer" "${EL[@]}" --set natsBootstrap.deltas.writeback.maxAckPending=40k
+refuse "bootstrap: maxBytes with a unit"       "deltas.maxBytes must be an integer" "${EL[@]}" --set natsBootstrap.deltas.maxBytes=1GiB
+printf 'natsBootstrap:\n  deltas:\n    maxMsgs: 1.5\n' > "$TMP/fractional.yaml"   # a YAML float, not a --set string
+refuse "bootstrap: a fractional maxMsgs (YAML float)" "deltas.maxMsgs must be a whole number" "${EL[@]}" -f "$TMP/fractional.yaml"
+refuse "bootstrap: a fractional maxMsgs (--set)" "deltas.maxMsgs must be an integer" "${EL[@]}" --set natsBootstrap.deltas.maxMsgs=1.5
+refuse "bootstrap: a runtime maxMsgs typo"     "runtime.agent.maxMsgs must be an integer" "${EL[@]}" --set natsBootstrap.runtime.agent.maxMsgs=1o24
 # The scheduler's write-back rule: never without a scrape path.
 refuse "elitea: a non-integer maxAckPending in the rule" "scheduler.metrics.prometheusRule.maxAckPending must be a whole number" "${EL[@]}" --api-versions monitoring.coreos.com/v1 --set scheduler.metrics.prometheusRule.maxAckPending=40k
 # With the Prometheus Operator served, a rendered budget-writeback rule ALWAYS
@@ -253,28 +245,31 @@ monitoring_case() {
 monitoring_case "elitea: Operator defaults scrape and alert together" yes yes
 monitoring_case "elitea: no scrape path, no rule" no no --set scheduler.metrics.podMonitor.enabled=false
 monitoring_case "elitea: annotations alone carry the rule" yes yes --set scheduler.metrics.podMonitor.enabled=false --set scheduler.metrics.scrapeAnnotations=true
-refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.tls.enabled=false
+refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.enabled=false --set natsClient.tls.enabled=false
+refuse "elitea: plaintext with the bundled server" "plaintext is only for a NATS you run yourself" "${EL[@]}" --set natsClient.tls.enabled=false --set natsClient.tls.allowPlaintext=true
+refuse "elitea: clients dial another server than the bundled one" "Point natsClient at the bundled server" "${EL[@]}" --set natsClient.service=other-nats
+refuse "bootstrap: plaintext NATS of your own"  "has no plaintext mode"      "${EL[@]}" --set nats.enabled=false --set natsClient.tls.enabled=false --set natsClient.tls.allowPlaintext=true
+refuse "elitea: the old client keys under nats" "moved to natsClient"        "${EL[@]}" --set nats.tls.enabled=true
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: credential in a scheduler URL" "user information"            "${EL[@]}" --set-string scheduler.env.GATEWAY_NATS_URL=tls://u:p@elitea-nats:4222
-refuse "elitea: NATS in another namespace, namespaced Issuer" "is a namespaced Issuer" "${EL[@]}" --set nats.namespace=nats-elsewhere
+refuse "elitea: NATS in another namespace, namespaced Issuer" "is a namespaced Issuer" "${EL[@]}" --set nats.enabled=false --set natsClient.namespace=nats-elsewhere
 refuse "elitea: renamed NATS client, policy not updated" "would be dropped at the NATS port" "${EL[@]}" --set scheduler.nameOverride=sched
-refuse "bootstrap: renamed Job pod, policy not updated" "would time out at the NATS port" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set nameOverride=nb
-refuse "elitea: tls:// with TLS off"          "tls:// but nats.tls.enabled is false" "${EL[@]}" --set nats.tls.enabled=false --set nats.tls.allowPlaintext=true --set-string llmGateway.env.GATEWAY_NATS_URL=tls://elitea-nats:4222
+refuse "elitea: tls:// with TLS off"          "tls:// but natsClient.tls.enabled is false" "${EL[@]}" --set nats.enabled=false --set natsBootstrap.enabled=false --set natsClient.tls.enabled=false --set natsClient.tls.allowPlaintext=true --set-string llmGateway.env.GATEWAY_NATS_URL=tls://elitea-nats:4222
 # A renamed client renders once the operator states the policy matches.
-if "$HELM" template "${EL[@]}" --set scheduler.nameOverride=sched --set nats.networkPolicyClientNamesManaged=true > /dev/null 2> "$TMP/rn.err"; then
+if "$HELM" template "${EL[@]}" --set scheduler.nameOverride=sched --set natsClient.networkPolicyClientNamesManaged=true > /dev/null 2> "$TMP/rn.err"; then
   echo "ok	elitea: a renamed client with the policy managed renders" >> "$TMP/refusals"
 else
   echo "REFUSED-A-VALID-TOPOLOGY	elitea: renamed client, managed	$(tail -1 "$TMP/rn.err")" >> "$TMP/refusals"
 fi
 # NATS in another namespace renders with a ClusterIssuer.
-if "$HELM" template "${EL[@]}" --set nats.namespace=nats-elsewhere --set nats.tls.issuerRef.kind=ClusterIssuer --set nats.tls.issuerRef.name=nats-ca > /dev/null 2> "$TMP/ci.err"; then
+if "$HELM" template "${EL[@]}" --set nats.enabled=false --set natsClient.namespace=nats-elsewhere --set natsClient.tls.issuerRef.kind=ClusterIssuer --set natsClient.tls.issuerRef.name=nats-ca > /dev/null 2> "$TMP/ci.err"; then
   echo "ok	elitea: NATS elsewhere with a ClusterIssuer renders" >> "$TMP/refusals"
 else
   echo "REFUSED-A-VALID-TOPOLOGY	elitea: NATS elsewhere with a ClusterIssuer	$(tail -1 "$TMP/ci.err")" >> "$TMP/refusals"
 fi
 # And the one acknowledged way out renders.
-if "$HELM" template "${EL[@]}" --set nats.tls.enabled=false --set nats.tls.allowPlaintext=true > "$TMP/plain.yaml" 2> "$TMP/plain.err"; then
+if "$HELM" template "${EL[@]}" --set nats.enabled=false --set natsBootstrap.enabled=false --set natsClient.tls.enabled=false --set natsClient.tls.allowPlaintext=true > "$TMP/plain.yaml" 2> "$TMP/plain.err"; then
   echo "ok	elitea: acknowledged plaintext renders" >> "$TMP/refusals"
 else
   echo "REFUSED-THE-ESCAPE-HATCH	elitea: acknowledged plaintext	$(tail -1 "$TMP/plain.err")" >> "$TMP/refusals"
@@ -312,8 +307,13 @@ URI = lambda i: f"spiffe://elitea.internal/nats/{i}"
 ALERTS = "gateway.events.project.*.events"
 
 # ── the server ────────────────────────────────────────────────────────────
-scale1, ha = docs("nats-scale1.yaml"), docs("nats-ha.yaml")
-base = docs("nats-base-prom.yaml")
+# The server's and the bootstrap's objects out of the full render: what the
+# separate nats and nats-bootstrap charts rendered before they were bundled.
+def natsdocs(f):
+    return [d for d in docs(f) if d["metadata"]["name"].startswith(("elitea-nats", "nats-bootstrap"))
+            or (d["metadata"].get("labels") or {}).get("app.kubernetes.io/name") in ("nats", "nats-bootstrap")]
+scale1, ha = natsdocs("nats-scale1.yaml"), natsdocs("nats-ha.yaml")
+base = natsdocs("nats-base-prom.yaml")
 rules = [x for x in base if x["kind"] == "PrometheusRule"]
 exporter = [c for x in base if x["kind"] == "StatefulSet" for c in x["spec"]["template"]["spec"]["containers"] if c["name"] == "prom-exporter"]
 check("the alert rule renders with the exporter it reads (jsz series, nats_ prefix)", bool(rules) and bool(exporter) and "-jsz=all" in exporter[0].get("args", []) and "-prefix=nats" in exporter[0].get("args", []), exporter[0].get("args") if exporter else None)
@@ -481,7 +481,7 @@ check("the server mounts the certificate Secret it is issued into", srv[0]["spec
 
 pod_labels = sts["spec"]["template"]["metadata"]["labels"]
 for label, d in (("scale-1", scale1), ("HA", ha)):
-    nps = kinds(d, "NetworkPolicy")
+    nps = [x for x in kinds(d, "NetworkPolicy") if x["metadata"]["name"].startswith("elitea-nats")]
     check(f"{label}: an ingress NetworkPolicy renders", len(nps) == 1)
     if not nps:
         continue
@@ -498,7 +498,7 @@ for label, d in (("scale-1", scale1), ("HA", ha)):
 
 # ── approver-policy (#1076 F3) ─────────────────────────────────────────────
 check("no CertificateRequestPolicy where the API is not served (enabled: auto)", not kinds(ha, "CertificateRequestPolicy"))
-ap = docs("nats-ha-ap.yaml")
+ap = natsdocs("nats-ha-ap.yaml")
 pols = {x["metadata"]["name"]: x["spec"] for x in kinds(ap, "CertificateRequestPolicy")}
 check("approver-policy renders where the API is served", len(pols) == 5, sorted(pols))
 cli = pols.get("elitea-nats-elitea-client-identities", {})
@@ -519,7 +519,7 @@ binding = kinds(ap, "ClusterRoleBinding")
 check("the binding names cert-manager's service account", binding and binding[0]["subjects"] == [{"kind": "ServiceAccount", "name": "cert-manager", "namespace": "cert-manager"}])
 
 # ── the bootstrap ─────────────────────────────────────────────────────────
-bs = docs("bootstrap.yaml")
+bs = [d for d in docs("bootstrap.yaml") if (d["metadata"].get("labels") or {}).get("app.kubernetes.io/name") == "nats-bootstrap"]
 bcerts = {c["spec"]["commonName"]: c for c in kinds(bs, "Certificate")}
 check("the bootstrap issues one certificate per account", set(bcerts) == {f"elitea-nats-bootstrap-{a}" for a in ("main", "gateway", "runtime", "worker")}, sorted(bcerts))
 for name, c in bcerts.items():
@@ -534,6 +534,10 @@ for name, c in bcerts.items():
     check(f"{name}: a hook in the Job's own phase (exists only while an install runs)", ann.get("helm.sh/hook") == jobmeta.get("helm.sh/hook"), ann.get("helm.sh/hook"))
     check(f"{name}: ordered before the Job", int(ann.get("helm.sh/hook-weight", "0")) < int(jobmeta.get("helm.sh/hook-weight", "0")))
     check(f"{name}: deleted with the Job, so nothing renews it", "hook-succeeded" in ann.get("helm.sh/hook-delete-policy", "") and "before-hook-creation" in ann.get("helm.sh/hook-delete-policy", ""))
+    # Argo CD: the same phase as the Job (a Sync hook, not the PostSync Argo
+    # CD maps post-install to), in the Job's wave, and deleted with it.
+    check(f"{name}: an Argo CD Sync hook in the Job's wave", ann.get("argocd.argoproj.io/hook") == jobmeta.get("argocd.argoproj.io/hook") == "Sync" and ann.get("argocd.argoproj.io/sync-wave") == jobmeta.get("argocd.argoproj.io/sync-wave"), ann)
+    check(f"{name}: Argo CD deletes it once the sync succeeds", "HookSucceeded" in ann.get("argocd.argoproj.io/hook-delete-policy", ""), ann.get("argocd.argoproj.io/hook-delete-policy"))
     check(f"{name}: lives at most an hour", dur_hours(c["spec"].get("duration")) <= 1, c["spec"].get("duration"))
 job = kinds(bs, "Job")[0]["spec"]["template"]["spec"]
 env = {e["name"]: e.get("value") for e in job["containers"][0]["env"]}
@@ -559,7 +563,7 @@ for a in ("main", "gateway", "runtime"):
 
 # ── the platform ──────────────────────────────────────────────────────────
 el = docs("elitea.yaml")
-certs = {c["spec"]["commonName"]: c for c in kinds(el, "Certificate") if c["spec"].get("uris")}
+certs = {c["spec"]["commonName"]: c for c in kinds(el, "Certificate") if c["spec"].get("uris") and not c["spec"]["commonName"].startswith("elitea-nats-bootstrap-")}
 want = {"elitea-main", "elitea-llm-gateway", "elitea-scheduler"}
 check("the platform issues a NATS certificate for each client", set(certs) == want, sorted(certs))
 for ident, c in certs.items():
@@ -726,7 +730,7 @@ check("the Rust worker's prefix is the chart's", rs and rs.group(1) == wprefix, 
 # The chart pins the server; CI's plaintext suites, the secured tests' server
 # binary and compose must run the same one, or a test passes on a server the
 # cluster does not run.
-pins = {yaml.safe_load(open(root / "deploy/helm/nats" / f))["nats"]["container"]["image"]["tag"] for f in ("values-scale1.yaml", "values-ha.yaml")}
+pins = {(yaml.safe_load(open(root / "deploy/helm/elitea" / f)).get("nats", {}).get("container", {}).get("image", {}).get("tag")) for f in ("values.yaml", "values-nats-ha.yaml")} - {None}
 check("both NATS profiles pin one server image", len(pins) == 1, pins)
 pin = next(iter(pins))
 image_re = re.compile(r"\bnats:(2\.[0-9][0-9A-Za-z.\-]*)")
@@ -752,10 +756,19 @@ for rel in ("deploy/docker-compose.yml", "deploy/docker-compose.e2e-standalone.y
 # ── the Argo CD sample ────────────────────────────────────────────────────
 def app(f):
     return yaml.safe_load(open(apps / f))
-nsset = {app(f)["spec"]["destination"]["namespace"] for f in ("nats.yaml", "nats-bootstrap.yaml", "elitea.yaml")}
-check("argocd: NATS, its bootstrap and the platform share one namespace (the NATS CA Issuer is namespaced)", len(nsset) == 1, nsset)
-bparams = {p["name"]: p["value"] for p in app("nats-bootstrap.yaml")["spec"]["source"]["helm"]["parameters"]}
-check("argocd: the bootstrap dials tls://", bparams.get("natsUrl", "").startswith("tls://"))
+check("argocd: one platform Application; NATS and its bootstrap are the chart's, not Applications of their own",
+      sorted(f.name for f in apps.glob("*.yaml")) == ["elitea.yaml"], sorted(f.name for f in apps.glob("*.yaml")))
+eparams = {p["name"]: p["value"] for p in app("elitea.yaml")["spec"]["source"].get("helm", {}).get("parameters", [])}
+check("argocd: the sample keeps the bundled NATS", eparams.get("nats.enabled", "true") == "true", eparams.get("nats.enabled"))
+# The NATS server, its certificates and the bootstrap converge in one Argo CD
+# wave ahead of the workloads (wave 0), which bind the assets the bootstrap
+# creates; and the bootstrap is a Sync hook, because a PostSync one waits for
+# workloads that wait for it.
+wave = lambda x: int((x["metadata"].get("annotations") or {}).get("argocd.argoproj.io/sync-wave", "0"))
+natsobjs = [x for x in el if x["metadata"]["name"].startswith("elitea-nats") and not x["metadata"]["name"].endswith("-nats-client")]
+check("argocd: every NATS server and bootstrap object is in wave -10", natsobjs and all(wave(x) == -10 for x in natsobjs if x["kind"] != "ConfigMap" or x["metadata"]["name"] != "elitea-nats-bootstrap"),
+      sorted((x["kind"], x["metadata"]["name"], wave(x)) for x in natsobjs if wave(x) != -10))
+check("argocd: the bootstrap Job is a Sync hook", jobmeta.get("argocd.argoproj.io/hook") == "Sync", jobmeta)
 
 # Docker retains the store when its container is replaced, as the PVC does.
 for filename in ("docker-compose.yml", "docker-compose.standalone-full.yml"):

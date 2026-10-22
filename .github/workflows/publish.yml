@@ -686,7 +686,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ONE chart for the platform. It ships every first-party image, so no
+          # ONE chart for the platform, NATS JetStream included (the upstream
+          # nats chart is vendored unpacked in its charts/, so packaging needs
+          # no network). It ships every first-party image, so no
           # single `image:` names it — `platformImageTag` below stamps the one
           # top-level `image.tag` every component resolves from instead. Without
           # that a chart published at a release number would install `latest`
@@ -694,13 +696,6 @@ jobs:
           - chart: elitea
             image: ""
             platformImageTag: true
-          # NATS stays separate: commodity infrastructure the platform chart
-          # points at rather than owns, and it vendors an upstream subchart, so
-          # packaging needs `helm dependency build` and network access.
-          - chart: nats
-            image: ""
-          - chart: nats-bootstrap
-            image: ""
           # The optional sandbox runtime installer (ADR-0034): a node-level
           # chart kept apart from `elitea`, which never touches nodes. Its
           # image is a pinned third-party Debian 13 digest, so nothing is
@@ -855,19 +850,17 @@ jobs:
 
           yq '{"version": .version, "appVersion": .appVersion}' "$CHART"
 
-      - name: Build chart dependencies
+      # Dependencies are vendored in the chart's charts/ (elitea: the upstream
+      # nats chart, unpacked), so nothing is built or downloaded here: a
+      # `helm dependency build` would add a second copy of the subchart beside
+      # it. Fail instead if charts/ does not satisfy Chart.yaml.
+      - name: Vendored chart dependencies satisfy Chart.yaml
         run: |
           CHART_DIR="deploy/helm/${{ matrix.chart }}"
-          if [ "$(yq -r '.dependencies // [] | length' "${CHART_DIR}/Chart.yaml")" -gt 0 ]; then
-            # dependency build refuses an http(s) repository it has no
-            # definition for, so register each one the chart names first.
-            yq -r '.dependencies[].repository // ""' "${CHART_DIR}/Chart.yaml" \
-              | grep -E '^https?://' | sort -u | while read -r repo; do
-                  helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update
-                done
-            helm dependency build "$CHART_DIR"
-          else
-            echo "no dependencies declared"
+          helm dependency list "$CHART_DIR" | tee /tmp/deps.txt
+          if grep -E '\s(missing|wrong version|misplaced)\s*$' /tmp/deps.txt; then
+            echo "::error::${CHART_DIR}: a dependency in Chart.yaml is not satisfied by charts/"
+            exit 1
           fi
 
       - name: Package chart
@@ -1008,7 +1001,7 @@ jobs:
           # `elitea` chart, so a rollback warned about six charts that no longer
           # exist and left the one chart this release actually published in
           # place — pointing at images the step above had just deleted.
-          CHARTS=("elitea" "nats" "nats-bootstrap" "elitea-sandbox-runtime")
+          CHARTS=("elitea" "elitea-sandbox-runtime")
           ORG="${{ github.repository_owner }}"
 
           # Report what could not be deleted. Every call here used to end in

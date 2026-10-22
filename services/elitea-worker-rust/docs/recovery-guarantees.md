@@ -427,7 +427,7 @@ Three indexing planes exist. The Python index worker (`services/elitea-worker-py
 | Toolkit invocation fence | `services/elitea-worker-rust/src/protocol/toolkit_invocation.rs` | `AUTHORIZED_NOW` is required before a provider call. |
 | Node attempt journal | `services/elitea-worker-rust/src/agents/graph/node_recovery.rs:80-100,303-398` | Started before dispatch. No blind retry of an unknown effect. Code nodes only. |
 | Sandbox receipt ledger and dispatch journal | `services/elitea-worker-rust/src/sandbox/ledger.rs:184,397-420,478,501,511`, `services/elitea-worker-rust/src/sandbox/dispatch.rs:202,233` | Intent before effect, fenced by owner, epoch and lease. The sandbox never re-runs after dispatch. |
-| NATS stream and consumer | `docs/runtime-command-bus.md:58-90`, `deploy/helm/nats-bootstrap/files/bootstrap.sh:397-470` | WorkQueue, file storage, `MaxMsgSize 65536`, `MaxAge` deadline plus 2 h, Duplicates 2 m. Consumer: explicit ack, AckWait 60 s, MaxDeliver -1, MaxAckPending 1024. |
+| NATS stream and consumer | `docs/runtime-command-bus.md:58-90`, `deploy/helm/elitea/files/nats-bootstrap.sh:397-470` | WorkQueue, file storage, `MaxMsgSize 65536`, `MaxAge` deadline plus 2 h, Duplicates 2 m. Consumer: explicit ack, AckWait 60 s, MaxDeliver -1, MaxAckPending 1024. |
 | Dead-letter KV | `services/elitea-worker-rust/src/execution/command_delivery.rs:895-940` | Poison records with a 7 day TTL. |
 | Replay log | `services/elitea-main/internal/infra/db/repos/replay_events.go:166` | Cursor resume and a reset event for a pruned cursor. |
 | Scheduler occurrence ledger | `services/elitea-main/internal/infra/db/repos/schedule_occurrences.go:96,227` | Lease epoch and `ErrStaleFence`. |

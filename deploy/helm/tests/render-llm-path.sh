@@ -335,7 +335,7 @@ refuses "a gateway with no NATS to count budgets in" \
   "empty GATEWAY_NATS_URL" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
-  --set-string nats.service=
+  --set nats.enabled=false --set natsBootstrap.enabled=false --set-string natsClient.service=
 
 refuses "a require-enforcement value the binary does not read" \
   "must be one of auto, on or off" "$GATEWAY" \
@@ -524,7 +524,7 @@ if [ -z "$nats_url" ]; then
   fail "a default scheduler install renders GATEWAY_NATS_URL empty, so the write-back consumer never starts whatever BUDGET_WRITEBACK_ENABLED says"
 else
   pass "a default scheduler install renders GATEWAY_NATS_URL=\"$nats_url\""
-  # The chart renders the FQDN (nats.namespace may name another namespace
+  # The chart renders the FQDN (natsClient.namespace may name another namespace
   # when the NATS issuer is a ClusterIssuer, and a short name does not
   # resolve across namespaces), over tls:// with the scheduler's client
   # certificate (#1076).

@@ -69,29 +69,32 @@ ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 
 echo "== NATS profile values (design §8.1.1) =="
-# scale-1: single node, replicas=1, HA waived, file storage, NATS 2.12.0+
-python3 - "$DIR/helm/nats/values-scale1.yaml" <<'PY' && ok "scale-1: cluster disabled, replicas=1, file store, image 2.12.0" || bad "scale-1 profile shape"
+# scale-1 (the chart's own nats block): single node, HA waived, file storage, NATS 2.12.0+
+python3 - "$DIR/helm/elitea/values.yaml" <<'PY' && ok "scale-1: bundled by default, cluster disabled, file store, image 2.12.0" || bad "scale-1 profile shape"
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))["nats"]
+v = yaml.safe_load(open(sys.argv[1]))
+d = v["nats"]
+assert d["enabled"] is True, "NATS is bundled by default"
 assert d["config"]["cluster"]["enabled"] is False, "cluster must be disabled at scale-1"
-assert d["statefulSet"]["replicas"] == 1, "scale-1 must be a single node"
 assert d["config"]["jetstream"]["fileStore"]["enabled"] is True, "file storage required"
 assert d["config"]["jetstream"]["memoryStore"]["enabled"] is False, "memory store must be off"
 assert d["container"]["image"]["tag"].startswith("2.12"), "NATS Server must be 2.12.0+ (Nats-Incr)"
+assert v["natsBootstrap"]["replicas"] == 1, "scale-1 assets are created at replicas=1"
 PY
-# HA: 3 nodes, replicas>=3 (RAFT quorum)
-python3 - "$DIR/helm/nats/values-ha.yaml" <<'PY' && ok "HA: cluster enabled, replicas>=3, spread constraints" || bad "HA profile shape"
+# HA: 3 nodes, replicas>=3 (RAFT quorum), and the bootstrap at the same count
+python3 - "$DIR/helm/elitea/values-nats-ha.yaml" <<'PY' && ok "HA: cluster enabled, replicas>=3, spread constraints, bootstrap replicas match" || bad "HA profile shape"
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))["nats"]
+v = yaml.safe_load(open(sys.argv[1]))
+d = v["nats"]
 assert d["config"]["cluster"]["enabled"] is True, "HA must enable clustering"
 assert d["config"]["cluster"]["replicas"] >= 3, "HA needs replicas>=3 for quorum"
-assert d["statefulSet"]["replicas"] >= 3, "HA needs >=3 nodes"
 assert d["container"]["image"]["tag"].startswith("2.12"), "NATS Server must be 2.12.0+"
 assert "topologySpreadConstraints" in d["podTemplate"], "HA must spread the quorum across nodes"
+assert v["natsBootstrap"]["replicas"] == d["config"]["cluster"]["replicas"], "assets must be created at the cluster's replica count"
 PY
 
 echo "== KV/stream bootstrap owns every asset (design §8.6, §9.5; #1076) =="
-BS="$DIR/helm/nats-bootstrap/files/bootstrap.sh"
+BS="$DIR/helm/elitea/files/nats-bootstrap.sh"
 grep -q  'ensure_stream GATEWAY_BUDGET file'        "$BS" && ok "creates the GATEWAY_BUDGET counter stream"     || bad "GATEWAY_BUDGET stream"
 grep -q  'ensure_stream GATEWAY_RATELIMIT file'     "$BS" && ok "creates the GATEWAY_RATELIMIT counter stream"  || bad "GATEWAY_RATELIMIT stream"
 grep -q  'ensure_stream GATEWAY_BUDGET_DELTAS file' "$BS" && ok "creates the GATEWAY_BUDGET_DELTAS stream"       || bad "GATEWAY_BUDGET_DELTAS stream"
@@ -137,7 +140,7 @@ assert cports == {"http": 8083, "grpc": 8443}, cports
 env = {e["name"]: e.get("value") for e in c.get("env", [])}
 assert env.get("GATEWAY_GRPC_ADDR", ":8443") == ":8443", env.get("GATEWAY_GRPC_ADDR")
 assert c["readinessProbe"]["httpGet"]["port"] == "http", "probes use the plaintext infra listener"
-certs = [d for d in docs if d["kind"] == "Certificate"]
+certs = [d for d in docs if d["kind"] == "Certificate" and d["spec"].get("usages")]
 usages = {u for c in certs for u in c["spec"]["usages"]}
 assert "server auth" in usages and "client auth" in usages, "need both server + client mTLS certs"
 server = [c for c in certs if "server auth" in c["spec"]["usages"]]
@@ -163,14 +166,18 @@ assert m["type"] == "Pods", "SSE metric must be a Pods metric, not Resource/CPU"
 assert m["pods"]["metric"]["name"] == "gateway_llm_sse_active_connections", "wrong SSE metric name"
 PY
 
-echo "== nats-bootstrap Job is idempotent Helm hook =="
-"$HELM" template nb "$DIR/helm/nats-bootstrap" > "$TMP/nb.yaml"
-python3 - "$TMP/nb.yaml" <<'PY' && ok "post-install/upgrade hook Job mounts bootstrap.sh" || bad "bootstrap Job hook"
+echo "== nats-bootstrap Job: a Helm post hook, an Argo CD Sync hook in the NATS wave =="
+"$HELM" template nb "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" > "$TMP/nb.yaml"
+python3 - "$TMP/nb.yaml" <<'PY' && ok "post-install/upgrade hook Job mounts bootstrap.sh; Argo CD Sync hook in wave -10" || bad "bootstrap Job hook"
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
-job = [d for d in docs if d["kind"] == "Job"][0]
+job = [d for d in docs if d["kind"] == "Job" and d["metadata"]["name"] == "elitea-nats-bootstrap"][0]
 ann = job["metadata"]["annotations"]
 assert "post-install" in ann["helm.sh/hook"] and "post-upgrade" in ann["helm.sh/hook"], "Job must be a post-install/upgrade hook"
+# Argo CD would map post-install to PostSync, which waits for healthy
+# workloads that wait for these streams.
+assert ann.get("argocd.argoproj.io/hook") == "Sync", "Argo CD must run it as a Sync hook, not PostSync"
+assert ann.get("argocd.argoproj.io/sync-wave") == "-10", "the bootstrap runs in the NATS wave, ahead of the workloads"
 c = job["spec"]["template"]["spec"]["containers"][0]
 assert "bootstrap.sh" in " ".join(c["command"]), "Job must run bootstrap.sh"
 PY
@@ -179,17 +186,13 @@ PY
 # the applications/ directory with the app-of-apps layout (#265), and this
 # assertion went on reading the old path. It raised FileNotFoundError, and no
 # caller ran it, so nothing printed the failure anywhere (#485).
-echo "== ArgoCD apps ordered by sync-wave =="
-python3 - "$DIR/argocd/applications" <<'PY' && ok "nats(-2) < nats-bootstrap(-1) < elitea(0)" || bad "argocd sync-wave ordering"
-import sys, yaml, pathlib
+echo "== ArgoCD: one Application, NATS inside it =="
+python3 - "$DIR/argocd/applications" <<'PY' && ok "elitea is the only child Application (NATS and its bootstrap are bundled)" || bad "argocd application layout"
+import sys, pathlib
 d = pathlib.Path(sys.argv[1])
-def wave(f):
-    path = d / f
-    assert path.is_file(), f"{path} does not exist; the ArgoCD layout moved and this assertion stopped measuring"
-    a = yaml.safe_load(open(path))
-    return int(a["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"])
-# The platform is one Application now; the gateway is a component of it.
-assert wave("nats.yaml") < wave("nats-bootstrap.yaml") < wave("elitea.yaml"), "waves out of order"
+assert d.is_dir(), f"{d} does not exist; the ArgoCD layout moved and this assertion stopped measuring"
+names = sorted(f.name for f in d.glob("*.yaml"))
+assert names == ["elitea.yaml"], names
 PY
 
 # Issue #475. The Application used to name "the values file this Application

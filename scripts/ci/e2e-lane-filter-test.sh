@@ -37,7 +37,7 @@ expect true false "a service README (services/** is never prose-only)" "services
 expect true false "a .md under libs" "libs/proto/contracts/node-recovery-v1.md"
 expect true false "a .md test fixture" "services/elitea-deepwiki-engine/tests/fixtures/a.md"
 expect true false "a compose file next to the chart" "deploy/docker-compose.e2e-standalone.yml" "deploy/helm/x.yaml"
-expect true false "a helm file a compose stack bind-mounts" "deploy/helm/nats-bootstrap/files/bootstrap.sh"
+expect true false "a helm file a compose stack bind-mounts" "deploy/helm/elitea/files/nats-bootstrap.sh"
 expect true false "docs plus one Go file" "README.md" "services/elitea-main/cmd/x.go"
 expect true true  "the gateway" "services/elitea-llm-gateway/main.go"
 expect true true  "the e2e workflow" ".github/workflows/ci-web-e2e.yml"
@@ -51,7 +51,7 @@ trap 'rm -rf "$fixture"' EXIT
 printf 'services:\n  x:\n    volumes:\n      - ./helm/other/files/run.sh:/run.sh:ro\n      - "./helm/somedir:/d"\n' > "$fixture/docker-compose.yml"
 COMPOSE_DIR="$fixture" expect true false "fixture: a referenced helm file" "deploy/helm/other/files/run.sh"
 COMPOSE_DIR="$fixture" expect true false "fixture: a file under a referenced helm dir" "deploy/helm/somedir/a/b.conf"
-COMPOSE_DIR="$fixture" expect false false "fixture: the file no compose references now" "deploy/helm/nats-bootstrap/files/bootstrap.sh"
+COMPOSE_DIR="$fixture" expect false false "fixture: the file no compose references now" "deploy/helm/elitea/files/nats-bootstrap.sh"
 # And the real compose files do reference something, or the arm above is vacuous.
 grep -qE '\./helm/' deploy/*.yml || { echo "FAIL: no deploy/*.yml references ./helm/ — the compose-reference arm tests nothing"; fails=$((fails + 1)); }
 

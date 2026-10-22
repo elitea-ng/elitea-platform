@@ -5,8 +5,8 @@
 # The runtime plane is ON (#1359 U5): the provider uploads its pages over
 # elitea.runtime.v1.ArtifactObjectService on elitea-main's platform gRPC
 # listener, which only the runtime plane opens. That plane needs the NATS
-# command bus (deploy/helm/nats + nats-bootstrap, installed by kind-stack.sh)
-# and the runtime material from deploy/scripts/gen-runtime-certs.sh.
+# command bus (bundled: `nats` + `natsBootstrap`, below) and the runtime
+# material from deploy/scripts/gen-runtime-certs.sh.
 #
 # Everything the facade does not need is off. Read deploy/kind/README.md for
 # what `up` installs around this file.
@@ -20,11 +20,24 @@ postgresql:
   existingSecret: elitea-db
   key: database-url
 
-# The in-repo NATS chart, release elitea-nats in this namespace
-# (kind-stack.sh install_nats): the runtime command bus, elitea-main's live
-# updates and the DeepWiki host's cancellation fan-out. The chart's defaults
-# (service elitea-nats, client certificates from the elitea-nats-ca Issuer)
-# are exactly that install, so nothing is overridden here.
+# NATS JetStream, bundled (nats.enabled, the default): the runtime command
+# bus, elitea-main's live updates and the DeepWiki host's cancellation
+# fan-out. natsClient's defaults (service elitea-nats, client certificates from
+# the elitea-nats-ca Issuer) name it, so only what a throwaway cluster cannot
+# provide changes here.
+nats:
+  config:
+    jetstream:
+      fileStore:
+        pvc:
+          # The upstream chart derives max_file_store from this size, and
+          # JetStream RESERVES each stream's MaxBytes against it at creation:
+          # the bootstrap's GATEWAY_BUDGET_DELTAS alone reserves 1 GiB
+          # (natsBootstrap.deltas.maxBytes), so a 1Gi store refuses it
+          # ("insufficient storage resources available", 10047) once any other
+          # bounded stream exists. kind's local-path provisioner does not
+          # enforce the size, so the headroom costs no disk.
+          size: 4Gi
 
 # ── Off: nothing here is on the DeepWiki path ────────────────────────────────
 # dbInit creates the agent-state database for the WORKER, which this install

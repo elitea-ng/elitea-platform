@@ -20,7 +20,7 @@ it ships to production (ADR-0023):
   `elitea.runtime.v1.ArtifactObjectService`, presenting the sub-application
   callback certificate. That listener belongs to the runtime plane, so
   elitea-main runs it (`main.runtime.enabled`, the base plane only) on the
-  in-repo NATS chart (`deploy/helm/nats` + `deploy/helm/nats-bootstrap`).
+  NATS JetStream the chart bundles (`nats` + `natsBootstrap`).
 
 ## Prerequisites
 
@@ -32,8 +32,8 @@ it ships to production (ADR-0023):
   runner.
 * `kind` v0.33+, `kubectl`, `helm` v3/v4, `python3`, `curl`.
 * Network access for the first run only: the cert-manager chart and its
-  images, the upstream NATS chart (`helm dependency build deploy/helm/nats`)
-  and the NATS images, which the node pulls. Everything else is built
+  images, and the NATS images, which the node pulls (the upstream NATS chart
+  is vendored in `deploy/helm/elitea/charts/nats`). Everything else is built
   locally or side-loaded from podman.
 * ~8 GB of free disk for the images, and ~4 GB of memory for the podman
   machine.
@@ -82,15 +82,14 @@ installed cert-manager are reused, and the chart install is a
 6. creates the artifact bucket **before** elitea-main starts, because
    `configureObjectStoreRetentionLifecycle` has no tolerance for a missing one
    and it is the Deployment that crash-loops, after the install looked green;
-7. installs NATS (`deploy/helm/nats`, `values-scale1.yaml` +
-   `values-nats-kind.yaml`, release `elitea-nats`) and its bootstrap Job
-   (`deploy/helm/nats-bootstrap`, which creates the runtime command-bus
-   streams) in the same namespace, because the NATS CA is a namespaced
-   `Issuer` the platform chart's client Certificates are issued from;
-8. `helm upgrade --install` with `values-kind.yaml`. The chart's own
-   pre-install hooks run both migrations: elitea-main's `-all-tenants` run and
-   the provider's `elitea-deepwiki-engine migrate` (the native image);
-9. applies `seed.sql` — the wiki toolkit, the repository credential the facade
+7. `helm upgrade --install` of the ONE chart with `values-kind.yaml`, NATS
+   included. The chart's own pre-install hooks run both migrations:
+   elitea-main's `-all-tenants` run and the provider's
+   `elitea-deepwiki-engine migrate` (the native image); its post-install hook
+   runs the NATS bootstrap, which creates the runtime command-bus streams.
+   No `--wait` (it would hold that hook until elitea-main is Ready, and
+   elitea-main waits for the streams); `rollout status` waits instead;
+8. applies `seed.sql` — the wiki toolkit, the repository credential the facade
    resolves through the project vault, the artifact bucket row, and the
    personal access token `verify` authenticates with.
 

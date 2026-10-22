@@ -205,7 +205,7 @@ main:
     # The endpoint the chart cannot guess. Override it at install time.
     DATABASE_URL: ""
     # The live-update plane (project event stream, canvas presence) dials the
-    # top-level `nats` block unless ELITEA_EVENTS_NATS_URL is set here; see
+    # `natsClient` block unless ELITEA_EVENTS_NATS_URL is set here; see
     # values.yaml.
 
     # --- Current-compatibility plane -------------------------------------------
