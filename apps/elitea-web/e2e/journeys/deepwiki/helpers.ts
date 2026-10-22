@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 
@@ -68,14 +68,32 @@ export async function readObject(page: Page, key: string): Promise<{ status: num
  * is the listing's page size: a wiki generated from a real repository can
  * hold more than the default 200 objects.
  */
-export async function listKeys(page: Page, wikiId: string, limit = 200): Promise<string[]> {
-  const response = await page.request.get(
+export async function listKeys(client: Page | APIRequestContext, wikiId: string, limit = 200): Promise<string[]> {
+  const request = 'request' in client ? client.request : client;
+  const response = await request.get(
     `${BASE_URL}/api/v2/artifacts/objects/${SEEDED.projectId}/${SEEDED.bucket}?prefix=${encodeURIComponent(wikiId + '/')}&limit=${limit}`,
   );
   if (response.status() === 404) return [];
   expect(response.ok(), `listing ${wikiId}: ${response.status()}`).toBe(true);
   const body = (await response.json()) as { items?: { key: string }[]; objects?: { key: string }[] };
   return (body.items ?? body.objects ?? []).map((o) => o.key);
+}
+
+/**
+ * Deletes every object under a wiki id, the way DeleteWikiButton does (one
+ * `:batchDelete`), and asserts nothing is left. For journeys that must start
+ * from "no wiki" even when an earlier attempt of the same file generated one.
+ */
+export async function clearWiki(request: APIRequestContext, wikiId: string): Promise<void> {
+  const keys = await listKeys(request, wikiId);
+  if (keys.length > 0) {
+    const response = await request.post(
+      `${BASE_URL}/api/v2/artifacts/objects/${SEEDED.projectId}/${SEEDED.bucket}:batchDelete`,
+      { data: { keys }, failOnStatusCode: false },
+    );
+    expect(response.ok(), `deleting ${wikiId}: ${response.status()} ${await response.text()}`).toBe(true);
+  }
+  expect(await listKeys(request, wikiId)).toEqual([]);
 }
 
 /**

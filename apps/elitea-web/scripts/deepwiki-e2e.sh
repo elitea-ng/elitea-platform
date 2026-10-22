@@ -17,4 +17,11 @@ set -euo pipefail
 export PLAYWRIGHT_PROJECT=deepwiki-stack
 export CHAT_STREAM_PROJECT="${DEEPWIKI_STREAM_PROJECT:-elitea-deepwiki}"
 export CHAT_STREAM_PORT="${DEEPWIKI_STREAM_PORT:-8086}"
+# The fixture engine's pause between progress steps (the compose default is
+# 1s). DWIKI-005/006 stop and reload over a run IN FLIGHT; at 1s a 5-step
+# generation lasts ~5s, which one slow invoke + poll round trip on a CI runner
+# can swallow whole — the first poll then carries every step and the terminal
+# status, the panel never shows `running`, and the run lands its wiki. 3s
+# (~15s a run) leaves room for a reload; Stop ends those runs early anyway.
+export DEEPWIKI_FIXTURE_STEP_SECONDS="${DEEPWIKI_FIXTURE_STEP_SECONDS:-3}"
 exec "$(dirname "$0")/chat-stream-e2e.sh" "$@"
