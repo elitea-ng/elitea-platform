@@ -1912,7 +1912,9 @@ type SearchRequest struct {
 	// vector has exactly the collection's dimension.
 	Vector []float32 `protobuf:"fixed32,3,rep,packed,name=vector,proto3" json:"vector,omitempty"`
 	Filter *Filter   `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
-	// limit is 1 to 1000.
+	// limit is 1 to 1000; 1 to 10000 for an exactly searched family
+	// (Inventory), whose caller reads a whole ranking in one call (one exact
+	// scan) rather than page by page (one scan per page).
 	Limit uint32 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
 	// score_threshold, when set, drops results with a lower cosine similarity.
 	ScoreThreshold *float32 `protobuf:"fixed32,6,opt,name=score_threshold,json=scoreThreshold,proto3,oneof" json:"score_threshold,omitempty"`

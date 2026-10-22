@@ -611,7 +611,7 @@ async fn the_stored_ranking_matches_the_vector_ranking() {
         return;
     };
     let key = key(1, 9);
-    let (_fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
     let vectors = common::entity_vectors(&origin, BEARER);
     let mut graph = replay();
     let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
@@ -626,12 +626,21 @@ async fn the_stored_ranking_matches_the_vector_ranking() {
         .await
         .expect("write");
     let query = [0.5, 1.0, 0.0, 0.0];
+    let searches = |fake: &elitea_vector_index::testing::FakeVector| {
+        fake.calls()
+            .iter()
+            .filter(|call| **call == "search")
+            .count()
+    };
+    let before = searches(&fake);
     let remote = store::PgGraphStore::new(pool.clone())
         .with_vectors(Some(vectors))
         .rank(key, &query, 0.1)
         .await
         .expect("rank")
         .expect("same width");
+    // The whole ranking is one search (one exact scan), not pages.
+    assert_eq!(searches(&fake) - before, 1, "one search per ranking");
     let local = store::vectors::rank_stored(&pool, key, &query, 0.1)
         .await
         .expect("rank stored");

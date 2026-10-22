@@ -4825,6 +4825,56 @@ async fn inventory_writes_use_a_float32_collection_without_quantization() {
     assert_eq!(wiki.len(), 3);
 }
 
+/// An Inventory search reads its whole depth in one call (one exact scan);
+/// a shared-family search keeps its 1000-result bound, and the depth bound
+/// holds for both.
+#[tokio::test]
+async fn an_inventory_search_reads_its_whole_depth_in_one_call() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_inventory().await;
+    let query = [0.5, 0.5, 0.1, 0.0];
+    let found = h
+        .inventory_search(
+            TOKEN_A_INV,
+            inventory_scope(&[NAMESPACE_A]),
+            query,
+            10_000,
+            0,
+        )
+        .await
+        .expect("a whole-depth inventory search");
+    assert_eq!(found.len(), 3);
+    for (limit, offset) in [(10_001, 0), (10_000, 1)] {
+        let refused = h
+            .inventory_search(
+                TOKEN_A_INV,
+                inventory_scope(&[NAMESPACE_A]),
+                query,
+                limit,
+                offset,
+            )
+            .await
+            .expect_err("past the bound");
+        assert_eq!(refused.code(), Code::InvalidArgument, "{limit}+{offset}");
+    }
+    let refused = h
+        .worker
+        .search(with_token(
+            TOKEN_A_WIKI,
+            pb::SearchRequest {
+                scope: Some(wiki_scope(&[NAMESPACE_A])),
+                space: Some(h.space()),
+                vector: query.to_vec(),
+                limit: 1001,
+                ..pb::SearchRequest::default()
+            },
+        ))
+        .await
+        .expect_err("a shared-family search keeps its bound");
+    assert_eq!(refused.code(), Code::InvalidArgument);
+}
+
 #[tokio::test]
 async fn hybrid_search_on_inventory_is_refused() {
     let _ = require_qdrant!();

@@ -24,6 +24,15 @@ pub const MAX_BATCH_POINTS: usize = 512;
 pub const MAX_LIMIT: u32 = 1000;
 /// The deepest a search page may reach: `offset + limit` is at most this.
 pub const MAX_SEARCH_DEPTH: u32 = 10_000;
+/// The most results one search of an exactly searched source
+/// ([`pb::Source::Inventory`]) may ask for: its whole depth, so a caller
+/// that needs the whole ranking reads it with one exact scan instead of one
+/// scan per page.
+pub const MAX_EXACT_LIMIT: u32 = MAX_SEARCH_DEPTH;
+/// The largest response the client decodes: `elitea-vector`'s own message
+/// bound. A search of [`MAX_EXACT_LIMIT`] results is past tonic's 4 MiB
+/// default.
+const MAX_RESPONSE_BYTES: usize = 64 << 20;
 
 /// The handle toolkit code holds for the claim it runs under. The worker's
 /// `VectorClaimToken` implements it; nothing else may read the bearer, and
@@ -170,7 +179,7 @@ impl VectorClient {
     #[must_use]
     pub fn from_channel(channel: Channel) -> Self {
         Self {
-            inner: VectorServiceClient::new(channel),
+            inner: VectorServiceClient::new(channel).max_decoding_message_size(MAX_RESPONSE_BYTES),
         }
     }
 
@@ -353,8 +362,9 @@ impl VectorClient {
     }
 
     /// Dense cosine search: the page of `params.limit` results that starts
-    /// `offset` results down the ranking. `offset + limit` is at most
-    /// [`MAX_SEARCH_DEPTH`].
+    /// `offset` results down the ranking. `limit` is at most [`MAX_LIMIT`]
+    /// ([`MAX_EXACT_LIMIT`] for [`pb::Source::Inventory`]), and
+    /// `offset + limit` at most [`MAX_SEARCH_DEPTH`].
     ///
     /// The ranking is by score, highest first, then by point id, so
     /// consecutive pages over unchanged points are disjoint and in order. For

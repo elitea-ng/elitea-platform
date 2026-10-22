@@ -636,6 +636,20 @@ impl VectorService for FakeVector {
                     .cmp(&(&b.0.point.document_key, &b.0.point.chunk_id))
             })
         });
+        // Like the service: an exactly searched source reads its whole depth
+        // in one call.
+        let exact = request
+            .scope
+            .as_ref()
+            .is_some_and(|scope| scope.source == pb::Source::Inventory as i32);
+        let most = if exact {
+            crate::client::MAX_EXACT_LIMIT
+        } else {
+            crate::client::MAX_LIMIT
+        };
+        if request.limit == 0 || request.limit > most {
+            return Err(Status::invalid_argument(format!("limit is 1 to {most}")));
+        }
         if request.offset.saturating_add(request.limit) > crate::client::MAX_SEARCH_DEPTH {
             return Err(Status::invalid_argument("offset + limit is at most 10000"));
         }

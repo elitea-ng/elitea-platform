@@ -361,7 +361,9 @@ message SearchRequest {
   // vector has exactly the collection's dimension.
   repeated float vector = 3;
   Filter filter = 4;
-  // limit is 1 to 1000.
+  // limit is 1 to 1000; 1 to 10000 for an exactly searched family
+  // (Inventory), whose caller reads a whole ranking in one call (one exact
+  // scan) rather than page by page (one scan per page).
   uint32 limit = 5;
   // score_threshold, when set, drops results with a lower cosine similarity.
   optional float score_threshold = 6;

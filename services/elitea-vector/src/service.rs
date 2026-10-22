@@ -37,6 +37,14 @@ use crate::store::{Store, unavailable};
 pub const MAX_BATCH_POINTS: usize = 512;
 /// The most results one search returns.
 pub const MAX_LIMIT: u32 = 1000;
+/// The most results one `Search` of an exactly searched family (Inventory)
+/// returns: its whole depth. Its caller needs every point at or above a
+/// threshold, and paging re-ranks from the top for every page (see
+/// [`VectorService::ranked`]), so ten pages of 1000 would cost ten exact
+/// scans, the last one 10000 deep; one call of 10000 costs one. The
+/// response stays inside the message bound (an Inventory point carries no
+/// text and a small metadata object).
+pub const MAX_EXACT_LIMIT: u32 = MAX_SEARCH_DEPTH;
 /// The deepest a `Search` pages: `offset + limit` is at most this. A page
 /// costs the store the whole ranking down to its last point, so the depth is
 /// bounded like a limit is.
@@ -500,7 +508,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             request.filter.as_ref(),
         )?;
         check_query_vector(&request.vector, &space)?;
-        let limit = check_limit(request.limit)?;
+        let limit = check_search_limit(request.limit, family.layout().exact_search)?;
         let depth = check_depth(request.offset, limit)?;
         check_score_threshold(request.score_threshold)?;
         let Some(collection) = self.store.existing(family, &space).await? else {
@@ -1539,6 +1547,20 @@ fn check_limit(limit: u32) -> Result<u32, Status> {
     Ok(limit)
 }
 
+/// The limit of a `Search`: [`check_limit`], or up to [`MAX_EXACT_LIMIT`]
+/// over an `exact` family.
+fn check_search_limit(limit: u32, exact: bool) -> Result<u32, Status> {
+    if !exact {
+        return check_limit(limit);
+    }
+    if limit == 0 || limit > MAX_EXACT_LIMIT {
+        return Err(Status::invalid_argument(
+            "limit is 1 to 10000 for an exactly searched source",
+        ));
+    }
+    Ok(limit)
+}
+
 /// The depth of a search page, `offset + limit`, bounded by
 /// [`MAX_SEARCH_DEPTH`].
 fn check_depth(offset: u32, limit: u32) -> Result<u32, Status> {
@@ -1830,6 +1852,20 @@ mod tests {
         assert!(!ties_may_continue(&points, 3, 4));
         // Nothing past the depth.
         assert!(!ties_may_continue(&points[..2], 2, 3));
+    }
+
+    #[test]
+    fn only_an_exact_family_reads_its_whole_depth_in_one_search() {
+        assert_eq!(check_search_limit(1000, false).expect("shared"), 1000);
+        assert_eq!(check_search_limit(10_000, true).expect("exact"), 10_000);
+        for (limit, exact) in [(1001, false), (0, true), (10_001, true), (0, false)] {
+            assert_eq!(
+                check_search_limit(limit, exact)
+                    .expect_err("out of bounds")
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
     }
 
     #[test]

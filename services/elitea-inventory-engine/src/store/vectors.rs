@@ -63,9 +63,10 @@
 //! (or a graph of mixed widths) is numpy's `shapes … not aligned` message,
 //! decided from the graph row before Qdrant is called; the entities scoring at
 //! least `min_score`, best first, ties by entity id. elitea-vector orders
-//! equal scores by point id, so the ties are re-ordered here. The pages are
-//! read until one comes back short. elitea-vector serves at most
-//! [`MAX_RANKED`] results of one ranking (its search depth). A graph with
+//! equal scores by point id, so the ties are re-ordered here. The ranking is
+//! ONE search of [`MAX_RANKED`] results (elitea-vector's search depth, which
+//! it serves to this source in one call): one exact scan, where pages of
+//! 1000 would scan again from the top for each page. A graph with
 //! more entities at or above `min_score` is ranked here instead, exactly,
 //! from `entities.embedding` (the float8[] column every write keeps):
 //! `semantic_search` filters the ranking (ACL view, type, layer, file)
@@ -89,8 +90,7 @@
 
 use super::{GraphKey, Result, StoreError, lock};
 use elitea_vector_index::client::{
-    ClaimToken, DeleteSelector, MAX_LIMIT, MAX_SEARCH_DEPTH, SearchParams, VectorClient,
-    inventory_namespace,
+    ClaimToken, DeleteSelector, MAX_EXACT_LIMIT, SearchParams, VectorClient, inventory_namespace,
 };
 use elitea_vector_index::pb;
 use sha1::Digest as _;
@@ -109,8 +109,9 @@ pub const NAMESPACE_ROOT: [u8; 16] = [
     0x63, 0x4f, 0xdd, 0x4c, 0x7b, 0x6b, 0x56, 0x48, 0x80, 0xb0, 0x46, 0xde, 0x40, 0x56, 0x04, 0x43,
 ];
 
-/// The most entities one ranking returns: elitea-vector's search depth.
-pub const MAX_RANKED: u32 = MAX_SEARCH_DEPTH;
+/// The most entities one ranking returns: elitea-vector's search depth,
+/// which it serves to this exactly searched source in one call.
+pub const MAX_RANKED: u32 = MAX_EXACT_LIMIT;
 
 /// elitea-vector's model-slug limit (`^[a-z0-9][a-z0-9-]{0,62}$`).
 const MAX_SLUG_BYTES: usize = 63;
@@ -495,27 +496,31 @@ impl EntityVectors {
         let query: Vec<f32> = vector.iter().map(|value| *value as f32).collect();
         #[allow(clippy::cast_possible_truncation)]
         let threshold = min_score as f32;
-        let mut ranked: Vec<(String, f64)> = Vec::new();
-        let mut offset = 0u32;
-        loop {
-            let page = self
-                .client
-                .search_page(
-                    &*self.bearer,
-                    SearchParams {
-                        scope: scope.clone(),
-                        space: space.clone(),
-                        vector: query.clone(),
-                        filter: None,
-                        limit: MAX_LIMIT,
-                        score_threshold: Some(threshold),
-                    },
-                    offset,
-                )
-                .await
-                .map_err(|error| vectors_failed("search", &error))?;
-            let full = page.len() >= MAX_LIMIT as usize;
-            ranked.extend(page.into_iter().map(|point| {
+        // One call for the whole ranking: the family is scanned exactly,
+        // and every page would scan again from the top.
+        let points = self
+            .client
+            .search(
+                &*self.bearer,
+                SearchParams {
+                    scope,
+                    space,
+                    vector: query,
+                    filter: None,
+                    limit: MAX_RANKED,
+                    score_threshold: Some(threshold),
+                },
+            )
+            .await
+            .map_err(|error| vectors_failed("search", &error))?;
+        if points.len() >= MAX_RANKED as usize {
+            // More may reach min_score than elitea-vector returns: the
+            // caller ranks the graph itself.
+            return Ok(None);
+        }
+        let mut ranked: Vec<(String, f64)> = points
+            .into_iter()
+            .map(|point| {
                 let id = serde_json::from_str::<serde_json::Value>(&point.metadata_json)
                     .ok()
                     .and_then(|metadata| {
@@ -526,17 +531,8 @@ impl EntityVectors {
                     })
                     .unwrap_or(point.document_key);
                 (id, f64::from(point.score))
-            }));
-            offset += MAX_LIMIT;
-            if !full {
-                break;
-            }
-            if offset >= MAX_RANKED {
-                // More reach min_score than elitea-vector returns: the
-                // caller ranks the graph itself.
-                return Ok(None);
-            }
-        }
+            })
+            .collect();
         // float32 rounding can put a score a hair under min_score past the
         // float32 threshold; the contract is the float64 comparison.
         ranked.retain(|(_, score)| *score >= min_score);
