@@ -742,7 +742,7 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     delete_with(pool, key, None).await
 }
 
-/// [`delete`], with the graph's entity vectors: through `vectors` the
+/// [`delete()`], with the graph's entity vectors: through `vectors` the
 /// namespace is deleted inside the deletion's transaction, before its
 /// commit, so a failed delete leaves the graph and its generation records
 /// as they were (nothing is deleted, the call can be repeated). Without

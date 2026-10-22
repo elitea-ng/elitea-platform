@@ -38,7 +38,7 @@ use crate::store::{Store, unavailable};
 /// in one Upsert batch; the most results one search returns, and one
 /// `Search` of an exactly searched family (Inventory) its whole depth
 /// (paging re-ranks from the top for every page, see
-/// [`VectorService::ranked`], so ten pages of 1000 would cost ten exact
+/// `VectorService::ranked`, so ten pages of 1000 would cost ten exact
 /// scans; an Inventory point carries no text and a small metadata object,
 /// so the response stays inside the message bound); and the deepest a
 /// `Search` pages, `offset + limit` (a page costs the store the whole

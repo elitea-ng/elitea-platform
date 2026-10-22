@@ -33,14 +33,14 @@
 //!
 //! # A write
 //!
-//! [`stage`] runs BEFORE the write's transaction opens, so no transaction is
+//! `stage` runs BEFORE the write's transaction opens, so no transaction is
 //! open and no lock held across the call to elitea-vector: it upserts the
 //! graph's points under a new generation. A failed upsert fails the write
 //! before anything is written. Inside the transaction, under the graph's
-//! write lock, [`record`] makes that generation the graph row's and appends
+//! write lock, `record` makes that generation the graph row's and appends
 //! the one it replaces to `vector_stale_generations`. A committed generation
 //! is therefore always complete in Qdrant, and a generation nobody committed
-//! is never searched. After the transaction [`settle`] deletes the staged
+//! is never searched. After the transaction `settle` deletes the staged
 //! generation when the write did not commit it, then sweeps: it deletes
 //! exactly the stale generations the row lists ([`EntityVectors::sweep`]),
 //! never "every generation but the current one", which would delete a
@@ -496,7 +496,7 @@ const SWEEP_BATCH: usize = 256;
 /// write ever loses its points.
 pub const STAGED_MAX_AGE: std::time::Duration = std::time::Duration::from_hours(6);
 
-/// A graph's vectors upserted ahead of its write ([`stage`]).
+/// A graph's vectors upserted ahead of its write (`stage`).
 #[derive(Debug)]
 pub struct Staged {
     /// The new generation; `None` for a write without vector access.
