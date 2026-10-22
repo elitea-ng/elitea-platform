@@ -312,3 +312,34 @@
 {{- if and (not .Values.egressProxy.enabled) .Values.egressProxy.signingKey.existingSecret }}
 {{- fail "egressProxy.signingKey.existingSecret is set but egressProxy.enabled is false: enable the proxy, or remove the signing key" }}
 {{- end }}
+
+{{- /*
+  GCS, keyless (Workload Identity). elitea-main is the ONLY workload that
+  opens the object store — the worker and the DeepWiki / Inventory hosts reach
+  artifacts through its ArtifactObjectService over gRPC — so its Kubernetes
+  service account is the only one that needs a Google service account.
+
+  Without the iam.gke.io/gcp-service-account annotation the Google client
+  library does not fail: Application Default Credentials fall through to the
+  NODE's service account, and if that account can reach the bucket the pod
+  starts, passes its readiness probe and writes every artifact under an
+  identity nobody chose. That is a silent wrong answer, so it is refused here.
+  GCS_ENDPOINT set (an emulator) needs no identity; main.serviceAccount.create
+  false means you bring the service account, annotation included.
+*/ -}}
+{{- $mainEnv := .Values.main.env | default dict }}
+{{- $storageBackend := get $mainEnv "STORAGE_BACKEND" | toString }}
+{{- if and .Values.main.enabled (eq $storageBackend "gcs") (not (get $mainEnv "GCS_ENDPOINT")) .Values.main.serviceAccount.create (not (get (.Values.main.serviceAccount.annotations | default dict) "iam.gke.io/gcp-service-account")) }}
+{{- fail "main.env.STORAGE_BACKEND is \"gcs\" with no main.serviceAccount.annotations.\"iam.gke.io/gcp-service-account\": elitea-main would reach the bucket as the NODE's service account (Application Default Credentials fall through to it). Annotate the service account with the Google service account that holds roles/storage.admin on the bucket (object access plus storage.buckets.get/update: elitea-main rewrites the bucket lifecycle at boot and exits if it cannot) and is bound to this KSA with roles/iam.workloadIdentityUser, or set main.serviceAccount.create=false and bring an annotated one." }}
+{{- end }}
+
+{{- /*
+  objectInit creates an S3-compatible bucket with static keys. On GCS and Azure
+  the bucket (container) is the operator's precondition, like the database: an
+  application identity able to create buckets is more privilege than this
+  release should hold. The Job refuses those backends when it RUNS; refused
+  here so the mistake is a render error instead of a failed hook.
+*/ -}}
+{{- if and .Values.objectInit.enabled (has $storageBackend (list "gcs" "azure")) }}
+{{- fail (printf "objectInit.enabled is true with main.env.STORAGE_BACKEND=%q: objectInit creates S3-compatible buckets only. Create the bucket/container yourself before the install and set objectInit.enabled=false." $storageBackend) }}
+{{- end }}

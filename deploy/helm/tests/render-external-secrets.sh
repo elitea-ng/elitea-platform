@@ -228,7 +228,8 @@ es_names() { yq eval-all 'select(.kind == "ExternalSecret") | .spec.target.name'
 
 echo "== optional references follow the deployment"
 gcs="$(helm template t "$chart" "${min[@]}" "${es[@]}" --set externalSecrets.remoteKey=elitea-all \
-  --set main.env.STORAGE_BACKEND=gcs)"
+  --set main.env.STORAGE_BACKEND=gcs \
+  --set "main.serviceAccount.annotations.iam\\.gke\\.io/gcp-service-account=elitea-main@p.iam.gserviceaccount.com")"
 if es_names "$gcs" | grep -x elitea-main-storage-secrets >/dev/null; then
   fail "STORAGE_BACKEND=gcs still renders the S3/Azure key ExternalSecret"
 else

@@ -296,6 +296,14 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-external-secrets.sh
 
+      # values-gke.yaml: renders, keyless GCS is guarded, and the steady-state
+      # requests fit the 4 vCPU / 10 GiB the file header promises.
+      - name: The GKE example values render inside their budget
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-gke-budget.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \

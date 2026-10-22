@@ -305,6 +305,17 @@ pgbouncer:
   # verifier: pgbouncer checks the clients against the userlist AND logs in to
   # Postgres with it, and a verifier cannot do the second half.
   credentialsSecretName: ""
+  # TLS from the pooler to PostgreSQL, pgbouncer's server_tls_sslmode:
+  # disable | allow | prefer | require | verify-ca | verify-full. `prefer`
+  # (pgbouncer's own default, stated here so it is visible) uses TLS when the
+  # server offers it. Set `require` for a server that must never be reached in
+  # the clear (Cloud SQL with "Allow only SSL connections"): it encrypts but,
+  # like libpq's require, does not verify the server certificate. verify-ca /
+  # verify-full need serverTlsCaFile, a path inside the pod, and this chart
+  # mounts no CA bundle yet. The client side (elitea-main -> pooler) stays
+  # in-cluster plaintext, inside the NetworkPolicy.
+  serverTlsSslmode: prefer
+  serverTlsCaFile: ""
   # Server-side pool, the whole point of the component: poolSize steady
   # connections shared by every main replica, reservePoolSize more for short
   # bursts. The pooler never opens more than the two summed (the rendered
@@ -1541,6 +1552,27 @@ natsBootstrap:
 # applies it itself when the database does not carry it, so a fresh install
 # migrates from empty with no external step — and the objects end up owned by
 # the migrating role, which is what the histories need in order to ALTER them.
+#
+# MANAGED POSTGRESQL WITH NO SUPERUSER (Cloud SQL, and the like). This Job
+# CAN run there — psql honours the DSN's sslmode, and it connects as whatever
+# role the Secret names — but only after the one grant below, because
+# CREATE DATABASE ... OWNER <role> requires the creating role to be a member
+# of <role>. The simpler, recommended shape is to skip it: set enabled: false
+# and externallyManaged: true, and run once, connected as the instance's
+# admin user (`postgres` on Cloud SQL; the login role itself created with
+# `gcloud sql users create elitea_v2 --instance <instance> --password ...`):
+#
+#   GRANT elitea_v2 TO postgres;   -- the admin must be able to act as the owner
+#   CREATE DATABASE elitea_v2 OWNER elitea_v2;
+#   CREATE DATABASE elitea_v2_agentstate OWNER elitea_v2;
+#
+# That is all the SQL: no extension is needed (vectors are in Qdrant), and the
+# owner of a database owns its `public` schema's CREATE right on PostgreSQL 15+
+# (pg_database_owner), so every schema, table and grant after that is the
+# migration Jobs' work as elitea_v2. The two database names are
+# agentStateDatabase below and the database in postgresql.existingSecret's DSN;
+# the role is appRole. Put `?sslmode=require` on every DSN for a server that
+# accepts only TLS (pgx, libpq and the Rust services' sqlx all honour it).
 dbInit:
   enabled: true
 
