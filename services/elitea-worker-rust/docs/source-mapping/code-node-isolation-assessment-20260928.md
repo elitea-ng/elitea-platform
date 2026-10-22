@@ -494,7 +494,7 @@ Preserve the useful runtime limits while adding whole-job enforcement for packag
 WASM isolation does not exempt Python from the outer execution boundary.
 
 Indexer plugin revision `c048daa` confirms the configuration wiring.
-`pylon_indexer/plugins/indexer_worker/config.yml` declares the four `SANDBOX_*` limits under `env_vars`.
+`legacy/plugins/indexer_worker/config.yml` declares the four `SANDBOX_*` limits under `env_vars`.
 `module.py` copies configured environment values into `os.environ` during startup.
 The SDK reads those values through `_read_sandbox_limits_from_env`.
 This verifies the configuration-to-enforcement source path without claiming live container settings were inspected.

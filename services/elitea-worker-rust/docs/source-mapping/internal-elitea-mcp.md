@@ -56,7 +56,7 @@ delete, publish, execution, or administrative operations by accident.
 | `elitea_core/api/v2/application_relation.py::PromptLibAPI.patch` | `models.applications.application_relation.patch` | `patch_elitea_core_application_relation` |
 
 The current source paths above are relative to
-`pylon_main/plugins/elitea_core`. Each source operation has `mcp_tool=True` and
+`legacy/plugins/elitea_core`. Each source operation has `mcp_tool=True` and
 the `elitea_core/applications` tag. Main publishes exactly those eight
 operations.
 
@@ -210,7 +210,7 @@ Without those services, it publishes only the original five operations.
 | `configurations/api/v2/models.py::API.post` | `configurations.configuration.update` | `post_configurations_models` |
 
 The current source paths above are relative to
-`pylon_main/plugins/configurations`. The available catalogue REST endpoint is
+`legacy/plugins/configurations`. The available catalogue REST endpoint is
 authenticated but carries no project permission. Internal MCP is itself a
 project-scoped execution surface and the catalogue exists to construct project
 configuration writes, so Main deliberately strengthens that one tool to
@@ -273,7 +273,7 @@ operations marked `mcp_tool=True`; bulk mutation and deletion remain REST-only.
 | `notifications/api/v2/notification.py::PromptLibAPI.get` | `models.notifications.notification.details` | `get_notifications_notification` |
 | `notifications/api/v2/notification.py::PromptLibAPI.put` | `models.notifications.notification.update` | `put_notifications_notification` |
 
-The current source paths above are relative to `pylon_main/plugins`. The list
+The current source paths above are relative to `legacy/plugins`. The list
 contract is global user-scoped: the endpoint project authorizes the call but
 does not filter notification rows. Main preserves that behavior, so a
 notification whose payload names a different project can still appear in its
@@ -348,7 +348,7 @@ operations marked `mcp_tool=True`.
 | `secrets/api/v2/secrets.py::ProjectAPI.post` | `configuration.secrets.secret.create` | `post_secrets_secrets` |
 | `secrets/api/v2/secret.py::ProjectAPI.put` | `configuration.secrets.secret.edit` | `put_secrets_secret` |
 
-The current source paths above are relative to `pylon_main/plugins`. The
+The current source paths above are relative to `legacy/plugins`. The
 catalogue intentionally excludes plaintext `Get Secret`, deletion, hiding,
 bulk replacement, and every administration-vault operation. List returns only
 secret names, `{{secret.NAME}}` placeholders, and the existing `is_default`
@@ -364,12 +364,12 @@ project and authenticated actor are server-owned. Secret names are bounded to
 the placeholder resolver and Main vault writer.
 
 Update is value rotation, not rename. Although the current OpenAPI description
-says “name and/or value”, current pylon overwrites the body `name` with the
+says “name and/or value”, the legacy runtime overwrites the body `name` with the
 path `secret` before validation. The fixed MCP schema consequently exposes the
 existing `secret` name and replacement `value`, but no misleading rename
 field. Unknown arguments never cross into the handler.
 
-Main does not currently read pylon's `elitea_core.default_secret_keys` or
+Main does not currently read the legacy runtime's `elitea_core.default_secret_keys` or
 `ignore_default_secret_api` plugin configuration. Its existing REST response
 therefore reports `is_default:false` and does not implement conditional
 default-name suppression. The checked current deployment configuration defines

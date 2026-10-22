@@ -69,7 +69,7 @@ impl PlatformClient {
     /// Unlike `resolve_application_version`, a failure of this call is NOT a
     /// failure of the turn. Its caller (`agents::attachments`) treats every
     /// error as "unreadable", announces the file by name and continues, which
-    /// is pylon's own rule for a file the platform cannot read
+    /// is the legacy runtime's own rule for a file the platform cannot read
     /// (`rpc/chat_all.py:384-386`).
     pub(crate) async fn read_attachment_object(
         &self,

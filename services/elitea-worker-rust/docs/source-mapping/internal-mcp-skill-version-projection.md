@@ -8,7 +8,7 @@
 | Core `models/pd/skill.py` version projections | Main `internal/api/v2/skills/handler.go::SkillVersion` and `internal/infra/db/repos/skills.go` | Preserve distinct version metadata after shared repository lookup. |
 | SDK internal MCP consumption | Rust native MCP tool execution | Return the Main response without replacing version metadata. |
 
-Paths under Core refer to `projects/centry/pylon_main/plugins/elitea_core` in the umbrella workspace.
+Paths under Core refer to `legacy/plugins/elitea_core` in the umbrella workspace.
 
 ## Implementation history
 

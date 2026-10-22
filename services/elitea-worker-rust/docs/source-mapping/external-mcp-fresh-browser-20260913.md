@@ -31,7 +31,7 @@ Do not close gate 3d on the normal-path evidence above.
 
 ## Toolkit admission and observation separation
 
-The current platform reference is `projects/centry/pylon_main/plugins/elitea_core/routes/mcp_sse.py::_handle_mcp_request` in the umbrella workspace.
+The current platform reference is `legacy/plugins/elitea_core/routes/mcp_sse.py::_handle_mcp_request` in the umbrella workspace.
 It checks project access and refuses GET with HTTP 405.
 Its optional SSE POST mode does not provide the required restart recovery contract.
 

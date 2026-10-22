@@ -8,7 +8,7 @@ Message execution and continuation remain outside this slice.
 
 ## Current source mapping
 
-Current paths below start at `projects/centry/pylon_main/plugins/elitea_core`.
+Current paths below start at `legacy/plugins/elitea_core`.
 Main paths start at `services/elitea-main`.
 
 | Current source | Main owner | Preserved behavior |

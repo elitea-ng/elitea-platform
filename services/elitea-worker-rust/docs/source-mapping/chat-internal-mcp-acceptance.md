@@ -13,7 +13,7 @@ Direct endpoint tests and standalone Toolkit Test checks support this gate but d
 
 ## Source mapping
 
-Current Core paths start at `projects/centry/pylon_main/plugins/elitea_core`.
+Current Core paths start at `legacy/plugins/elitea_core`.
 New platform paths start at the repository root.
 
 | Current behavior | New platform owner | Verification boundary |

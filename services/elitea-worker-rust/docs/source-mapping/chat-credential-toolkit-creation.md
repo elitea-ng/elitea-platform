@@ -4,10 +4,10 @@
 
 | Responsibility | Current source |
 | --- | --- |
-| Credential creation fields | `projects/centry/pylon_main/plugins/configurations/models/pd/configuration.py` |
+| Credential creation fields | `legacy/plugins/configurations/models/pd/configuration.py` |
 | Saved credential selection | `projects/EliteaUI/src/[fsd]/features/credentials/ui/credentials-select/CredentialsSelect.jsx` |
 | GitHub settings and selected tools | `projects/elitea-sdk/elitea_sdk/tools/github/__init__.py` |
-| Toolkit persistence model | `projects/centry/pylon_main/plugins/elitea_core/models/elitea_tools.py` |
+| Toolkit persistence model | `legacy/plugins/elitea_core/models/elitea_tools.py` |
 
 The credential picker stores `{elitea_title, private}`.
 It does not store a numeric configuration ID or a JSON Schema `$ref` as the reference.
@@ -170,8 +170,8 @@ The persisted `entity_tool_mapping` row selects only `get_issues`.
 The instructions remain unchanged, and `entity_skill_mapping` retains skill 5.
 
 Current references separate these operations too:
-`projects/centry/pylon_main/plugins/configurations/api/v2/configuration.py` owns configuration updates.
-`projects/centry/pylon_main/plugins/elitea_core/api/v2/tool.py` separates toolkit update from agent relation patch.
+`legacy/plugins/configurations/api/v2/configuration.py` owns configuration updates.
+`legacy/plugins/elitea_core/api/v2/tool.py` separates toolkit update from agent relation patch.
 The new internal configuration and toolkit executors retain these boundaries.
 
 Playwright submits a new request through saved-agent chat 543.

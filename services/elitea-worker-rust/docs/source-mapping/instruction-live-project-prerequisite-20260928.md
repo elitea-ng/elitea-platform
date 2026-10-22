@@ -12,7 +12,7 @@ The API reports successful compensation. A readback shows only the original two 
 
 | Current-platform source | Behavior | Replatform owner |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/projects/models/project.py::Project.keycloak_groups` | SQLAlchemy supplies an empty dictionary as a client-side default. | `services/elitea-main/internal/application/projectprovisioning/steps.go::createProjectModel` |
+| `legacy/plugins/projects/models/project.py::Project.keycloak_groups` | SQLAlchemy supplies an empty dictionary as a client-side default. | `services/elitea-main/internal/application/projectprovisioning/steps.go::createProjectModel` |
 | Replatform bootstrap `internal/infra/db/migrations/001_initial.sql` | A fresh schema supplies an empty JSON object as a server default. | Existing bootstrap remains unchanged. |
 
 The project insert now supplies an empty group mapping explicitly.

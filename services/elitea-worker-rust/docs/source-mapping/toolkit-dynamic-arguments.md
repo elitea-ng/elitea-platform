@@ -9,7 +9,7 @@ The saved credential remains a reference throughout this UI flow.
 | Current source | Replacement source | Behavior |
 | --- | --- | --- |
 | `projects/EliteaUI/src/hooks/toolkit/useGetSelectedToolSchema.js` | `apps/elitea-web/src/features/toolkits/ui/test-tools/useGetSelectedToolSchema.ts` | Resolve `args_schemas` through saved toolkit discovery. |
-| `projects/centry/pylon_main/plugins/elitea_core/api/v2/toolkit_available_tools.py` | Main `internal/api/v2/toolkits/handler.go:AvailableTools` | Authorize discovery for the saved toolkit. |
+| `legacy/plugins/elitea_core/api/v2/toolkit_available_tools.py` | Main `internal/api/v2/toolkits/handler.go:AvailableTools` | Authorize discovery for the saved toolkit. |
 | `projects/elitea-sdk/elitea_sdk/tools/openapi/__init__.py` | Rust `src/toolkits/direct_runtime.rs` and `src/toolkits/families/openapi/` | Derive selected operation schemas and invoke the configured API. |
 
 Paths beginning with `projects/` refer to the source umbrella workspace.

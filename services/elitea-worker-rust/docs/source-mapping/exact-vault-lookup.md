@@ -2,7 +2,7 @@
 
 ## Source mapping
 
-Current `projects/centry/pylon_main/plugins/secrets/api/v2/secret.py` reads a named secret from regular and hidden dictionaries.
+Current `legacy/plugins/secrets/api/v2/secret.py` reads a named secret from regular and hidden dictionaries.
 New `services/elitea-main/internal/api/v2/secrets/handler.go::ResolveSecretValue` serves exact named references for runtime configuration and chat defaults.
 Rust receives admitted settings through the existing claim-authorized input service.
 Rust does not own or migrate the application vault.

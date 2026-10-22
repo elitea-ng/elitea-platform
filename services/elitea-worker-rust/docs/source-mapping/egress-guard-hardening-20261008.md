@@ -145,7 +145,7 @@ The webhook, MCP and Code workspace behaviours that users see are unchanged for 
 - MCP Load Tools, OAuth and DCR proxies;
 - GitHub reads.
 
-The current platform (`centry/pylon_main/plugins/elitea_core/utils/mcp_oauth.py:110,180,258`) sends outbound
+The current platform (`legacy/plugins/elitea_core/utils/mcp_oauth.py:110,180,258`) sends outbound
 requests with plain `requests.post`. That client:
 - follows redirects;
 - honours environment proxies;

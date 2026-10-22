@@ -8,7 +8,7 @@
 | Core `rpc/chat_all.py`, merged agent and conversation internal tools | Main `agentexecution/internal_mcp.go` and `tools.go` | Merge builder selection and create frozen MCP references. |
 | Current internal MCP categories | Main `mcpregistry/internal_builders.go` and `runtimecomposition/agent_prebuilt_mcp.go` | Resolve fixed category URLs with the endpoint project and executing actor. |
 
-Core paths are relative to `projects/centry/pylon_main/plugins/elitea_core`.
+Core paths are relative to `legacy/plugins/elitea_core`.
 Web paths are under `apps/elitea-web/src/widgets/chat-box/ui/hooks`.
 Main package paths are under `services/elitea-main/internal`.
 Rust consumes the resulting MCP settings through its existing toolkit client.

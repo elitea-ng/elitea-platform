@@ -4,7 +4,7 @@ Status: deployed discovery authorization, invocation, and pending-call reload pa
 
 ## Source mapping
 
-Current Core references are `projects/centry/pylon_main/plugins/elitea_core/api/v2/toolkit_available_tools.py` and `api/v2/test_toolkit_tool.py`.
+Current Core references are `legacy/plugins/elitea_core/api/v2/toolkit_available_tools.py` and `api/v2/test_toolkit_tool.py`.
 They establish saved-toolkit discovery, caller-scoped configuration expansion, and direct tool invocation.
 Current SDK `projects/elitea-sdk/elitea_sdk/runtime/utils/mcp_adapter.py::_preflight_auth_check` extracts OAuth metadata from an initialization refusal.
 Current UI `projects/EliteaUI/src/[fsd]/features/mcp/ui/modal/McpAuthModal.jsx` supplies the authorization dialog behavior.

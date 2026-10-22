@@ -5,7 +5,7 @@ This contract follows the user's external-MCP restriction on interrupt decisions
 
 ## Current platform evidence
 
-Paths are relative to `projects/centry/pylon_main/plugins/elitea_core`.
+Paths are relative to `legacy/plugins/elitea_core`.
 
 | Source | Business behavior | Replatform owner |
 | --- | --- | --- |

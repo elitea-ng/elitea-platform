@@ -148,7 +148,7 @@ published fixtures, not the remaining mixed-guard, replacement, or replay gates.
 Direct pipeline HITL history and editor Test entry points remain gate 5 work.
 
 Current-platform reference checked after the public-project clarification:
-`projects/centry/pylon_main/plugins/elitea_core/routes/mcp_sse.py::_check_project_access`
+`legacy/plugins/elitea_core/routes/mcp_sse.py::_check_project_access`
 uses `list_user_projects`; `plugins/projects/rpc/poc.py::list_user_projects`
 resolves project membership through `admin_check_user_in_projects`.
 The same module's project classification helper classifies the configured `ai_project_id`

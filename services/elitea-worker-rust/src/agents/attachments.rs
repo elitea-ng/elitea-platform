@@ -19,9 +19,9 @@
 //! A `document` chunk carries a namespaced `elitea_attachment` marker naming the
 //! bucket, the object key (`name`), the filepath and the row `item_id`, with
 //! `needs_content_extraction: true` (attachments.go, `attachmentContentScaffold`
-//! and `attachmentExtractionMarkerKey`). Pylon reads each such file through the
-//! SDK artifact toolkit's `read_multiple_files` and APPENDS the text as a second
-//! `{"type":"text"}` chunk; the Python worker does the same
+//! and `attachmentExtractionMarkerKey`). The legacy runtime reads each such file
+//! through the SDK artifact toolkit's `read_multiple_files` and APPENDS the text
+//! as a second `{"type":"text"}` chunk; the Python worker does the same
 //! (`sdk_adapter.py:529-624`, `_read_attachment_documents`).
 //!
 //! THIS RUNTIME NOW PERFORMS THAT READ, through the one channel it holds. It
@@ -34,7 +34,8 @@
 //! [`pending_attachment_reads`] names what has to be read,
 //! [`read_attachment_documents`] reads it, and [`resolved_attachment_chunks`]
 //! splices each document in as a SECOND text chunk after its own header —
-//! exactly the shape pylon's extraction step leaves behind, and exactly what the
+//! exactly the shape the legacy runtime's extraction step leaves behind, and
+//! exactly what the
 //! Python worker builds (`sdk_adapter.py:529-624`, `_read_attachment_documents`).
 //!
 //! WHAT MAIN SERVES, AND WHAT HAPPENS WHEN IT CANNOT. Main extracts the file
@@ -46,13 +47,14 @@
 //! `Rejected` — never to the retryable `dependency_unavailable` — and the
 //! model gets a note that says the file could not be read and why. A
 //! transport failure gets the same kind of note. The TURN IS NEVER REFUSED:
-//! that is pylon's own rule for a file the platform cannot read
+//! that is the legacy runtime's own rule for a file the platform cannot read
 //! (`rpc/chat_all.py:384-386`), because the question may not even be about
 //! the file.
 //!
 //! A header chunk IMMEDIATELY FOLLOWED by a plain text chunk (one with no marker
 //! of its own) is already extracted and is NOT read again. That is the storage
-//! shape pylon leaves behind, and it is also the shape this module produces, so
+//! shape the legacy runtime leaves behind, and it is also the shape this module
+//! produces, so
 //! a replayed turn does not pay for the read twice.
 //!
 //! Reporting extracted text back onto the stored row (#607) is a separate,
@@ -71,7 +73,8 @@
 //! because a `type` decides what the MODEL is shown: forwarding one this runtime
 //! does not understand would silently change the prompt, and a chunk that fails
 //! INSIDE the provider call fails after the turn was admitted and billed. The
-//! admitted set is the two chunk shapes pylon's own processors produce, `text`
+//! admitted set is the two chunk shapes the legacy runtime's own processors
+//! produce, `text`
 //! and `image_url` — matching the Python worker's `_ADMITTED_CHUNK_TYPES` so the
 //! two ends stay deploy-compatible. A marker FIELD, by contrast, decides nothing
 //! the model sees, so an unknown field is ignored rather than refused: that
@@ -708,8 +711,8 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
 /// Project the admitted chunks with this turn's reads spliced in.
 ///
 /// Each successfully read document is inserted as a SECOND `{"type":"text"}`
-/// chunk directly after its own header, which is what pylon's extraction step
-/// does (`rpc/chat_all.py:366-374`) and what the Python worker's
+/// chunk directly after its own header, which is what the legacy runtime's
+/// extraction step does (`rpc/chat_all.py:366-374`) and what the Python worker's
 /// `attachment_message_chunks` produces. Two properties follow from that
 /// placement and both are load-bearing:
 ///
@@ -795,8 +798,8 @@ fn needs_unavailable_read(
 }
 
 /// Whether the header at `index` is already followed by its own extracted text —
-/// a plain `text` chunk with no marker of its own, the shape pylon leaves behind
-/// after its extraction step ran.
+/// a plain `text` chunk with no marker of its own, the shape the legacy runtime
+/// leaves behind after its extraction step ran.
 fn carries_extracted_text(input_attachments: &[Value], index: usize) -> bool {
     input_attachments
         .get(index + 1)
@@ -908,9 +911,9 @@ mod tests {
 
     #[test]
     fn an_already_extracted_header_renders_both_chunks() {
-        // A header immediately followed by a plain text chunk is the shape pylon
-        // leaves after extraction ran. Both are plain text here, so both reach
-        // the model verbatim with no read required.
+        // A header immediately followed by a plain text chunk is the shape the
+        // legacy runtime leaves after extraction ran. Both are plain text here,
+        // so both reach the model verbatim with no read required.
         let attachments = vec![
             json!({
                 "type": "text",

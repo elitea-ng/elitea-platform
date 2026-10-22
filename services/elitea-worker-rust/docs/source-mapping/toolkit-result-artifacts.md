@@ -10,8 +10,8 @@ The platform Python worker provides protocol evidence only.
 
 | Current source | Verified responsibility | Native owner |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/elitea_core/api/v2/toolkit_available_tools.py:PromptLibAPI.get` | Authorize project and folder access. Load settings. Dispatch discovery. Return the full JSON result. | Main `application/toolkitdiscovery`, its repository, and toolkit HTTP handler |
-| `projects/centry/pylon_indexer/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py:Method.indexer_toolkit_available_tools` | Invoke SDK discovery once. Preserve the returned result shape. | Rust `src/execution/toolkit_delivery_processor.rs` |
+| `legacy/plugins/elitea_core/api/v2/toolkit_available_tools.py:PromptLibAPI.get` | Authorize project and folder access. Load settings. Dispatch discovery. Return the full JSON result. | Main `application/toolkitdiscovery`, its repository, and toolkit HTTP handler |
+| `legacy/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py:Method.indexer_toolkit_available_tools` | Invoke SDK discovery once. Preserve the returned result shape. | Rust `src/execution/toolkit_delivery_processor.rs` |
 | `projects/elitea-sdk/elitea_sdk/tools/__init__.py:get_toolkit_available_tools` | Select the toolkit enumerator. Return tools and argument schemas. Preserve result errors. | Rust toolkit registry and family implementations |
 
 The inspected Core revision is `b701a00aeff0af1a416916c4a537bfdd4b7d8337`.
