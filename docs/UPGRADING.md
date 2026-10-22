@@ -4,7 +4,7 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
-## Dev compose: object storage, and the platform listener for the `deepwiki` profile
+## Dev compose: object storage, pgvector, and the platform listener for the `deepwiki` profile
 
 **Affects:** the local dev stack `deploy/docker-compose.yml` only. The chart
 and the other compose files are unchanged.
@@ -15,6 +15,13 @@ and the other compose files are unchanged.
   (bucket `elitea-artifacts`), as the e2e and standalone stacks do, and waits
   for `rustfs-bucket-init`. Without it, elitea-main refused to start on this
   stack: `STORAGE_BACKEND must be one of "s3", "azure", "gcs"`.
+* `postgres` runs `pgvector/pgvector:0.8.1-pg18-trixie`, the image
+  `docker-compose.standalone-full.yml` uses, instead of `postgres:18`.
+  `elitea-deepwiki-migrate` creates the `vector` extension in its first
+  migration, so on `postgres:18` the `deepwiki` profile stopped at
+  `extension "vector" is not available`. It has the same PostgreSQL major and
+  the same Debian 13 base, so the existing `postgres_data` volume is reused as
+  it is.
 * The `deepwiki` profile can now reach elitea-main's platform gRPC listener
   (`:9446`, #1359). The KNOWN LIMIT about a missing listener is gone. The
   host uploads its artifacts over `ArtifactObjectService`, and the engine
@@ -29,8 +36,11 @@ and the other compose files are unchanged.
   unset, so the default stack needs no new certificates.
 * This stack still has no LLM gateway. ModelService runs elitea-main's `/llm`
   surface, which exists only with `LLM_GATEWAY_URL`, so a model call fails
-  there (`Unavailable`, HTTP 503). Generating a wiki with a model needs
-  `docker-compose.standalone-full.yml`.
+  there (`Unavailable`, HTTP 503). The refusal names the cause:
+  `llm_gateway_not_configured`, "LLM_GATEWAY_URL is empty". Generating a wiki
+  with a model needs `docker-compose.standalone-full.yml`.
+* This stack still does not migrate the platform database (`SKIP_MIGRATIONS=1`;
+  the schema comes from a loaded dump, `docker-compose.staging.yml`).
 
 **What to do.** To run DeepWiki, run
 `deploy/scripts/gen-platform-listener-certs.sh` after `gen-deepwiki-certs.sh`.
@@ -227,8 +237,8 @@ material comes from the new `deploy/scripts/gen-platform-listener-certs.sh`
 `docker-compose.yml` opens no platform listener, so its providers have no
 artifact transport: an invocation that carries a callback bearer fails its
 upload, and the error names `ELITEA_<APP>_ARTIFACT_SERVICE_URL`.
-(Since fixed: see "Dev compose: object storage, and the platform listener
-for the `deepwiki` profile" above.)
+(Since fixed: see "Dev compose: object storage, pgvector, and the platform
+listener for the `deepwiki` profile" above.)
 
 **What to do (kind).** `deploy/kind/kind-stack.sh up` now installs the
 in-repo NATS chart and its bootstrap, creates `elitea-runtime-material`,
@@ -422,8 +432,8 @@ export the same `RUNTIME_WORKER_SPIFFE_ID` you minted with), and
 ModelService with grpcurl and expects the pipeline's 401 for its invalid
 bearer. The dev `docker-compose.yml` opens no platform listener, so its
 `deepwiki` profile can run only the fixture engine runner. (Since fixed: see
-"Dev compose: object storage, and the platform listener for the `deepwiki`
-profile" above.)
+"Dev compose: object storage, pgvector, and the platform listener for the
+`deepwiki` profile" above.)
 
 ## DeepWiki and Inventory: provider SPI and engine sidecar over gRPC; cancel fan-out over NATS
 

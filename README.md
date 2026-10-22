@@ -60,7 +60,7 @@ Services will be available at:
 | Browser origin | http://localhost:8080 | elitea-main: API, plus the SPA relayed |
 | API | http://localhost:8080/api/ | elitea-main API endpoints |
 | UI | http://localhost:8080/app/ | elitea-ui React SPA |
-| postgres | localhost:5432 | PostgreSQL 18 |
+| postgres | localhost:5432 | PostgreSQL 18 with pgvector |
 
 ### DeepWiki on the dev stack (`deepwiki` profile)
 
@@ -81,6 +81,14 @@ and the engine makes its model calls there. This stack has **no LLM gateway**,
 so a model call still fails at elitea-main. Artifacts work, and
 `DEEPWIKI_NATIVE_RUNNER=fixture` gives a canned wiki. To generate a wiki with
 a real model, use `deploy/docker-compose.standalone-full.yml`, below.
+A model call on this stack fails with `llm_gateway_not_configured` ("LLM_GATEWAY_URL
+is empty"), which the engine reports on the invocation.
+
+This stack also does not migrate the platform database. elitea-main runs with
+`SKIP_MIGRATIONS=1`, and the schema comes from a loaded dump
+(`deploy/docker-compose.staging.yml`). On an empty database elitea-main starts,
+but projects and toolkits, DeepWiki's included, have no tables behind them.
+`elitea-deepwiki-migrate` applies DeepWiki's own schema either way.
 
 ## Standalone full stack
 

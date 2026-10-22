@@ -1,6 +1,12 @@
 services:
   postgres:
-    image: postgres:18
+    # pgvector, not plain postgres:18: elitea-deepwiki-migrate's first
+    # migration creates the `vector` extension (the wiki index lives in this
+    # database), and the platform's index plane needs it too. The same image
+    # docker-compose.standalone-full.yml runs. Same PostgreSQL major, and
+    # Debian 13 like postgres:18, so an existing postgres_data volume is
+    # reused as it is.
+    image: pgvector/pgvector:0.8.1-pg18-trixie
     shm_size: '2g'
     environment:
       POSTGRES_USER: elitea
@@ -477,7 +483,8 @@ services:
   # THIS STACK HAS NO LLM GATEWAY, and never had one: elitea-main mounts its
   # /llm surface, which ModelService runs in process, only with
   # LLM_GATEWAY_URL set. The transport works and artifacts work; a model call
-  # still fails at elitea-main. Generating a wiki with a model needs
+  # still fails at elitea-main, with `llm_gateway_not_configured` ("LLM_GATEWAY_URL
+  # is empty") in the refusal the engine reports. Generating a wiki with a model needs
   # docker-compose.standalone-full.yml, which runs elitea-llm-gateway.
   # DEEPWIKI_NATIVE_RUNNER=fixture gives canned results with no model.
   elitea-deepwiki-engine:
