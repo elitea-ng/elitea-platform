@@ -747,11 +747,30 @@ jobs:
       # This reads the file names out of THIS workflow, so adding a
       # values-*.yaml beside the chart fails here until somebody either renders
       # it or writes down why it cannot be rendered.
+      # The GKE example (GKE Ingress, BackendConfig, FrontendConfig and the
+      # ExternalSecrets) and the NATS HA profile over staging. The pinned CRD
+      # catalog has no external-secrets.io/v1 schema (only v1beta1), so
+      # ExternalSecret is skipped here; render-external-secrets.sh asserts
+      # each one's shape against the Secrets the workloads read.
+      - name: helm template + kubeconform (GKE example, NATS HA)
+        if: matrix.chart == 'elitea'
+        run: |
+          helm template ci-release deploy/helm/elitea \
+            -f deploy/helm/elitea/values-gke.yaml > /tmp/elitea-gke.yaml
+          helm template ci-release deploy/helm/elitea ${{ matrix.values }} \
+            -f deploy/helm/elitea/values-nats-ha.yaml > /tmp/elitea-nats-ha.yaml
+          kubeconform -strict -summary -verbose \
+            -kubernetes-version 1.30.0 \
+            -schema-location default \
+            -schema-location "$CRD_SCHEMAS" \
+            -skip ExternalSecret \
+            /tmp/elitea-gke.yaml /tmp/elitea-nats-ha.yaml
+
       - name: Every values file is rendered by some pass
         if: matrix.chart == 'elitea'
         run: |
           # values files deliberately not rendered here, with the reason.
-          # Empty today: all three are rendered by a pass in this job.
+          # Empty today: every one is rendered by a pass in this job.
           excluded=""
           rendered="$(grep -oE 'deploy/helm/elitea/values-[a-z0-9-]+\.yaml' \
                         .github/workflows/helm-lint.yml | sort -u | tr '\n' ' ')"

@@ -79,6 +79,10 @@ kind: Application
 metadata:
   name: elitea
   namespace: argocd
+  annotations:
+    # The only child today; the root's wave check still wants one on every
+    # child, so a second one cannot quietly co-schedule with this.
+    argocd.argoproj.io/sync-wave: "0"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
