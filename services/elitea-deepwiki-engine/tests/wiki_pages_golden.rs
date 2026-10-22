@@ -1,5 +1,5 @@
 //! The page gate without Python: `tests/fixtures/wiki/golden` is a small
-//! repository (Python, C++, a Pylon API, Markdown, YAML, a file only on
+//! repository (Python, C++, a plugin class API, Markdown, YAML, a file only on
 //! disk) and the Python engine's run of the page phase over it
 //! (`parity/python_pages_dump.py --mermaid-pages`, the structure planner's
 //! output plus three hand-written pages: one over the split cap, one
@@ -13,7 +13,7 @@
 
 use elitea_deepwiki_engine::errors::EngineError;
 use elitea_deepwiki_engine::runner::StopSignal;
-use elitea_deepwiki_engine::wiki::context::PylonPlugin;
+use elitea_deepwiki_engine::wiki::context::PluginMount;
 use elitea_deepwiki_engine::wiki::expansion::ExpansionFlags;
 use elitea_deepwiki_engine::wiki::pages::{PageGenerator, PageSettings, generate_pages};
 use elitea_deepwiki_engine::wiki::parity::{self, StubModel};
@@ -228,7 +228,7 @@ async fn probe_generator(
             repo_root: dump.repo_root.clone(),
             flags: ExpansionFlags::from_env().unwrap(),
             budget: CONTEXT_TOKEN_BUDGET,
-            pylon: PylonPlugin::new(dump.repo_root.clone()),
+            plugin_mount: PluginMount::new(dump.repo_root.clone()),
         },
         chat: parity::stub_chat(&model.base_url).unwrap(),
         settings: PageSettings::new(dump.identity.repository.clone()),

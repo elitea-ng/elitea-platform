@@ -24,7 +24,7 @@ fn every_constant_pattern_compiles() {
         &*CLI_COBRA,
         &*JS_GRPC_HANDLER_MAP,
         &*GQL_FIELD,
-        &*PYLON_PARAM_NAMED,
+        &*CLASS_API_PARAM_NAMED,
         &*API_PREFIX,
     ] {
         assert_ne!(re.as_str(), "");
@@ -83,18 +83,19 @@ fn helpers_match_python() {
             "{text}"
         );
     }
-    let pylon = fixture["cases"]
+    let case = fixture["cases"]
         .as_array()
         .unwrap()
         .iter()
         .find(|c| c["rel_path"] == "plugins/configurations/api/v1/configurations.py")
         .unwrap();
-    let endpoints = derive_pylon_endpoints(
+    let endpoints = derive_plugin_endpoints(
         "plugins/configurations/api/v1/configurations.py",
-        text(pylon, "source_text"),
+        text(case, "source_text"),
         "configurations",
     );
-    let expected: Vec<String> = serde_json::from_value(fixture["pylon_endpoints"].clone()).unwrap();
+    let expected: Vec<String> =
+        serde_json::from_value(fixture["plugin_endpoints"].clone()).unwrap();
     assert_eq!(endpoints, expected);
 }
 
