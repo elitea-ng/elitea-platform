@@ -692,7 +692,15 @@ func configurationRowFilter(request configurationListQuery, placeholder int) (st
 
 // retiredConfigurationTypeFilter keeps every row of a retired configuration
 // type (application/configurations/retired.go) out of a listing.
-const retiredConfigurationTypeFilter = " AND type <> '" + configurationapp.RetiredPgvectorConfigurationType + "'"
+//
+// It normalises the stored value the way IsRetiredConfigurationType normalises
+// a request's: case-folded and trimmed of the whitespace strings.TrimSpace
+// strips in ASCII (space, tab, newline, carriage return, vertical tab, form
+// feed; \x0B because an E-string has no \v escape). A row written as "PgVector" or
+// "pgvector " before the gate folded case is the same retired type and stays
+// hidden. A NULL type is filtered as before (NULL <> x is NULL).
+const retiredConfigurationTypeFilter = " AND lower(btrim(type, E' \\t\\n\\r\\x0B\\f')) <> '" +
+	configurationapp.RetiredPgvectorConfigurationType + "'"
 
 // The two sentinels separate a row this handler could not READ from a row it
 // read and could not DECODE. Both are 500s, and they keep the two messages the

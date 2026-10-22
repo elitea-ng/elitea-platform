@@ -128,7 +128,7 @@ func TestListFilterAlwaysExcludesTheRetiredPgvectorType(t *testing.T) {
 		{"type": {"pgvector"}},
 	} {
 		clause, _ := configurationRowFilter(parseConfigurationListQuery(values), 1)
-		if !strings.Contains(clause, " AND type <> 'pgvector'") {
+		if !strings.Contains(clause, retiredConfigurationTypeFilter) {
 			t.Fatalf("query %v: clause = %q, want the retired type excluded", values, clause)
 		}
 	}

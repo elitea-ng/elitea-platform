@@ -46,6 +46,23 @@ func TestUpdateRefusesAChangeToTheRetiredPgvectorType(t *testing.T) {
 	assertRetiredTypeRefusal(t, recorder)
 }
 
+// The type column is free text and an unknown type is stored as sent, so
+// the gate folds case and trims whitespace: "PgVector" and "pgvector " are the
+// retired type, not two unknown ones that would be written.
+func TestCreateRefusesTheRetiredPgvectorTypeWhateverItsCaseAndPadding(t *testing.T) {
+	for _, typeName := range []string{"PgVector", "pgvector ", " PGVECTOR\t"} {
+		t.Run(typeName, func(t *testing.T) {
+			recorder := createWithPinnedCatalog(t, map[string]any{
+				"elitea_title": "autotest_pgvector",
+				"label":        "autotest pgvector",
+				"type":         typeName,
+				"data":         map[string]any{"connection_string": "postgresql://u:p@db/x"},
+			})
+			assertRetiredTypeRefusal(t, recorder)
+		})
+	}
+}
+
 func assertRetiredTypeRefusal(t *testing.T, recorder *httptest.ResponseRecorder) {
 	t.Helper()
 	var body struct {
