@@ -23,7 +23,8 @@ engine's `native` runner, Rust indexing or the memory toolkit needs
   writes them under its own generation and the publish flips
   `wikis.active_generation` with the nodes and edges. The engine's new
   migration `0008_vectors_in_qdrant` drops `wiki_node_embeddings` (and its
-  build twin) and adds `active_generation` and `stale_generations`.
+  build twin) and adds `wikis.active_generation` and the
+  `wiki_stale_generations` table.
   **Every wiki published before the upgrade has no dense vectors**: it
   answers from the lexical branch only until it is regenerated.
 * **Inventory**: entity vectors live in elitea-vector (source `inventory`,

@@ -18,8 +18,8 @@
 //!   its vectors under its own generation BEFORE its publish transaction; the
 //!   publish records it in `wikis.active_generation` (migration 0008) together
 //!   with the nodes and edges, so a reader sees the old generation or the new
-//!   one, never a mix. The generation it replaces is appended to
-//!   `wikis.stale_generations` in the same transaction, and after the commit
+//!   one, never a mix. The generation it replaces is added to
+//!   `wiki_stale_generations` in the same transaction, and after the commit
 //!   exactly the generations listed there are deleted ([`DeleteSelector`]
 //!   `Generations`), best effort. Never "every generation but the active
 //!   one": builds of one wiki run concurrently (only their publishes are
@@ -42,10 +42,12 @@
 //!
 //! # Who deletes what
 //!
-//! * a publish: the generations `wikis.stale_generations` lists (the
-//!   previous active one, and any recorded below), after the commit;
+//! * a publish: the generations `wiki_stale_generations` lists for its
+//!   project (the previous active one, and any recorded below), after the
+//!   commit;
 //! * an abandoned build ([`crate::storage::build::Build::abandon`], the
-//!   worker parent's clean-up of a killed child): its own generation;
+//!   worker parent's clean-up of a killed child): its own generation, then
+//!   the project's listed ones;
 //! * a wiki deletion (`delete_wiki_index`): the whole namespace, with the
 //!   invocation's callback bearer;
 //! * a project deletion: nothing here. elitea-main's project deprovisioning
@@ -53,13 +55,13 @@
 //!   every point of the project in every collection and for every source.
 //!
 //! A build removed WITHOUT a bearer (the startup reconciliation, the
-//! heartbeat sweep), or whose own delete failed, has its generation appended
-//! to `wikis.stale_generations` when the wiki has a row; its points are
-//! never searched (a reader names the active generation only) and the
-//! wiki's next publish deletes them. What remains: a build of a wiki that
-//! was never published (no row to record it in), or a wiki that is never
-//! published or deleted again while its project lives. Those points stay in
-//! Qdrant until the wiki or the project is deleted.
+//! heartbeat sweep), or whose own delete failed, has its generation added
+//! to `wiki_stale_generations`, also when its wiki was never published (no
+//! `wikis` row); its points are never searched (a reader names the active
+//! generation only) and the project's next publish, abandon or worker
+//! clean-up deletes them. What remains: a project in which nothing runs
+//! with a bearer again; its points stay in Qdrant until the project is
+//! deleted.
 //!
 //! # Two backends
 //!

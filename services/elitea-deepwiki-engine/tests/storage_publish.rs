@@ -406,11 +406,13 @@ async fn the_publish_flips_the_active_generation_and_cleans_the_old_ones() {
 }
 
 async fn stale_generations(pool: &PgPool, wiki: &str) -> Vec<String> {
-    sqlx::query_scalar("SELECT stale_generations FROM wikis WHERE wiki_id = $1")
-        .bind(wiki)
-        .fetch_one(pool)
-        .await
-        .expect("wikis row")
+    sqlx::query_scalar(
+        "SELECT generation FROM wiki_stale_generations WHERE wiki_id = $1 ORDER BY generation",
+    )
+    .bind(wiki)
+    .fetch_all(pool)
+    .await
+    .expect("stale generations")
 }
 
 /// Two builds of one wiki in flight at once (only their publishes are
@@ -511,6 +513,85 @@ async fn a_concurrent_build_keeps_its_vectors_through_another_publish() {
         .collect();
     assert_eq!(left.len(), 1);
     assert!(!left.contains(&d_id) && !left.contains(&c_id) && !left.contains(&a_id));
+}
+
+/// The first build of a wiki that was never published (no `wikis` row),
+/// removed without a bearer by the heartbeat sweep: its generation is
+/// recorded all the same, and the project's next holder of a bearer (here a
+/// publish of ANOTHER wiki of the project) deletes its points. Another
+/// project's listed generation is not touched, and a failed delete keeps
+/// the row for the next one (an abandon).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_abandoned_first_build_has_its_vectors_deleted_eventually() {
+    let Some(pool) = common::fresh_database("publish_first_abandoned").await else {
+        return;
+    };
+    let (space, store) = common::dense_space(&pool, "publisher");
+    let never = "acme--never-published--main";
+    let never_key = common::key(never);
+    let stage = |key: elitea_deepwiki_engine::storage::WikiKey, tag: &'static str| {
+        let space = space.clone();
+        async move {
+            let (nodes, vectors) = version(tag, 3);
+            let mut build = space.begin(&key).await.expect("begin");
+            build.stage_nodes(nodes).await.expect("nodes");
+            build
+                .stage_embeddings(
+                    common::TEST_MODEL,
+                    vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+                )
+                .await
+                .expect("embeddings");
+            build
+        }
+    };
+
+    // The first build of `never` dies; the sweep (no bearer) removes it.
+    let first = stage(never_key.clone(), "alpha").await;
+    let first_id = first.build_id().to_owned();
+    drop(first);
+    // One in another project, removed the same way.
+    let other_key = common::key_in(2, never);
+    let other = stage(other_key.clone(), "alpha").await;
+    let other_id = other.build_id().to_owned();
+    drop(other);
+    space.sweep(std::time::Duration::ZERO).await.expect("sweep");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM wikis WHERE wiki_id = $1")
+        .bind(never)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(rows, 0, "the wiki was never published");
+    assert_eq!(stale_generations(&pool, never).await.len(), 2);
+    assert_eq!(store.generations(&never_key), vec![(first_id.clone(), 3)]);
+
+    // A publish of another wiki of project 1 sweeps the project's list.
+    publish_version(&space, "acme--neighbour--main", "beta", 2).await;
+    assert_eq!(
+        store.generations(&never_key),
+        [] as [(String, usize); 0],
+        "the abandoned first build's points leaked"
+    );
+    assert_eq!(
+        stale_generations(&pool, never).await,
+        vec![other_id.clone()]
+    );
+    assert_eq!(store.generations(&other_key), vec![(other_id.clone(), 3)]);
+
+    // Project 2: an abandon whose own delete fails records its generation;
+    // the next abandon (deletes working) sweeps both.
+    let failing = stage(other_key.clone(), "beta").await;
+    let failing_id = failing.build_id().to_owned();
+    store.fail_deletes(true);
+    failing.abandon().await.expect("abandon");
+    store.fail_deletes(false);
+    let mut expected = vec![other_id.clone(), failing_id.clone()];
+    expected.sort();
+    assert_eq!(stale_generations(&pool, never).await, expected);
+    let last = stage(other_key.clone(), "alpha").await;
+    last.abandon().await.expect("abandon");
+    assert_eq!(stale_generations(&pool, never).await, [] as [String; 0]);
+    assert_eq!(store.generations(&other_key), [] as [(String, usize); 0]);
 }
 
 /// When elitea-vector cannot be reached the hybrid search answers with the

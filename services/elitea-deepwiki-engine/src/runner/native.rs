@@ -35,7 +35,10 @@ use super::{Context, prepare_arguments};
 use crate::cgroup::Cgroup;
 use crate::config::{ConfigError, Settings};
 use crate::errors::{EngineError, ErrorType};
-use crate::storage::build::{delete_build, new_boot_id, process_boot_id, record_stale_generation};
+use crate::storage::build::{
+    delete_build, new_boot_id, process_boot_id, record_stale_generation,
+    sweep_stale_generations_logged,
+};
 use crate::storage::dense::{DenseAccess, DenseIndex};
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
@@ -231,14 +234,20 @@ async fn delete_left_build(
     match delete_build(pool, build_id).await {
         Ok(Some(key)) => {
             tracing::info!(build = %build_id, "deleted the build the wiki worker left");
+            // With the invocation's bearer at hand, the project's other
+            // stale generations go too (a never-published wiki's abandoned
+            // builds included).
             let deleted = match dense {
                 Some(store) => match store
                     .delete_generations(&key, vec![build_id.to_owned()])
                     .await
                 {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        sweep_stale_generations_logged(pool, store, key.project()).await;
+                        true
+                    }
                     Err(error) => {
-                        tracing::warn!(build = %build_id, %error, "could not delete the left build's vectors; the wiki's next publish removes them");
+                        tracing::warn!(build = %build_id, %error, "could not delete the left build's vectors; the project's next publish removes them");
                         false
                     }
                 },

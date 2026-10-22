@@ -10,14 +10,21 @@
 -- in the table dropped below, so it starts with NULL and answers lexically
 -- until it is generated again.
 --
--- `wikis.stale_generations`: generations of the wiki that no reader names
--- any more and whose points are still to be deleted. A publish appends the
--- generation it replaces (in its transaction, under the per-wiki publish
--- lock); a build removed without a bearer is appended too. After its commit
--- the publish deletes exactly the listed generations and removes the ones
--- it deleted; a failure leaves them listed for the next publish. Never
--- "every generation but the active one": builds of one wiki run
--- concurrently, and an in-flight build's generation is not stale.
+-- `wiki_stale_generations`: generations no reader names any more whose
+-- points are still to be deleted, one row per (project, wiki, generation).
+-- A table of its own, not a column of `wikis`: a build of a wiki that was
+-- never published has no `wikis` row, and its generation must still be
+-- recorded. A publish adds the generation it replaces (in its transaction,
+-- under the per-wiki publish lock); a build removed without a bearer (the
+-- startup reconciliation, the heartbeat sweep, the worker parent's
+-- clean-up) or whose own delete failed is added too. Every holder of a
+-- bearer for the project (a publish, an abandoned build, the parent's
+-- clean-up with the invocation's bearer) then deletes the project's listed
+-- generations, never one a wiki names as active, and removes the rows it
+-- deleted; a failure leaves them listed for the next one. Never "every
+-- generation but the active one": builds of one wiki run concurrently, and
+-- an in-flight build's generation is not stale. A project deletion removes
+-- its rows (elitea-main drops the project's points from elitea-vector).
 --
 -- WHAT GOES. `wiki_node_embeddings` and `deepwiki_build.wiki_node_embeddings`
 -- (the rewritten 0001, 0003 and 0005 no longer create them; a database that
@@ -37,7 +44,13 @@
 
 ALTER TABLE wikis ADD COLUMN IF NOT EXISTS active_generation TEXT
     CHECK (active_generation IS NULL OR active_generation ~ '^[A-Za-z0-9._:-]{1,128}$');
-ALTER TABLE wikis ADD COLUMN IF NOT EXISTS stale_generations TEXT[] NOT NULL DEFAULT '{}';
+CREATE TABLE IF NOT EXISTS wiki_stale_generations (
+    project_id  INTEGER     NOT NULL,
+    wiki_id     TEXT        NOT NULL,
+    generation  TEXT        NOT NULL CHECK (generation ~ '^[A-Za-z0-9._:-]{1,128}$'),
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, wiki_id, generation)
+);
 
 DROP TABLE IF EXISTS wiki_node_embeddings;
 DROP TABLE IF EXISTS deepwiki_build.wiki_node_embeddings;

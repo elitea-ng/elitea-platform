@@ -710,7 +710,7 @@ publishes take together); upsert the `wikis` row (`registry_from_result`'s
 fields; an absent field keeps the stored value), refuse an empty build,
 delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes and edges,
 record the build's elitea-vector generation in `wikis.active_generation` (the
-one it replaces goes to `wikis.stale_generations`, deleted after the commit),
+one it replaces goes to `wiki_stale_generations`, deleted after the commit),
 write the `wiki_bm25_*` statistics of the `'fts'` branch, delete the build, commit. A reader sees
 the old index or the new one. After the commit the live tables are
 `ANALYZE`d one by one, best effort, each with a short `lock_timeout`

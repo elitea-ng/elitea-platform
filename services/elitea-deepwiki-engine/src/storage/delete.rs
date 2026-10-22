@@ -355,6 +355,13 @@ async fn delete_in_transaction(
         return Ok(WikiOutcome::Newer(reason));
     }
     let rows = delete_live(tx, key).await?;
+    // The wiki's listed stale generations go with its namespace, which the
+    // caller deletes (a project's points are dropped by elitea-main).
+    sqlx::query("DELETE FROM wiki_stale_generations WHERE project_id = $1 AND wiki_id = $2")
+        .bind(key.project_id())
+        .bind(key.wiki_id())
+        .execute(&mut **tx)
+        .await?;
     let existed = sqlx::query("DELETE FROM wikis WHERE project_id = $1 AND wiki_id = $2")
         .bind(key.project_id())
         .bind(key.wiki_id())
@@ -499,6 +506,13 @@ pub async fn delete_project_guarded(
     .execute(&mut *tx)
     .await?
     .rows_affected();
+    // The listed stale generations of wikis that have no `wikis` row (a
+    // build of a wiki never published); elitea-main drops their points with
+    // the project.
+    sqlx::query("DELETE FROM wiki_stale_generations WHERE project_id = $1")
+        .bind(project.id())
+        .execute(&mut *tx)
+        .await?;
     let live: i64 =
         sqlx::query_scalar("SELECT count(*) FROM deepwiki_build.builds WHERE project_id = $1")
             .bind(project.id())
