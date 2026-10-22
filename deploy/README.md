@@ -323,7 +323,7 @@ until somebody templates and publishes it.
 
 Every published image has a chart component. `ghcr.io/elitea-ng/elitea-ui`,
 the old UI that ran only in compose, went with the `apps/elitea-ui` submodule;
-`elitea-web` (the `web` component) serves the UI everywhere. `pylon-indexer`
+`elitea-web` (the `web` component) serves the UI everywhere. The legacy indexer
 was the other image deployed nowhere; issue #339 deleted the service, so
 it is no longer built or published either. The Go runtime plane serves index
 ingest through the agent worker, on the same command stream.
@@ -592,9 +592,9 @@ images.
 variable makes the composition root build a dependency, and the router
 registers a route group only when that dependency exists.
 
-The chart used to set **none** of them. So the same image served the pylon-free
+The chart used to set **none** of them. So the same image served the standalone
 configuration on compose and served none of it on Kubernetes — the platform
-could run without pylon on compose and could not on Kubernetes, which is the
+could run without the legacy runtime on compose and could not on Kubernetes, which is the
 deployment target. `deploy/helm/elitea/values.yaml` now carries every flag
 under `main.env`, and `deploy/helm/elitea/values-standalone.yaml` is the values
 file whose capability set matches `docker-compose.standalone-full.yml`.
@@ -689,10 +689,10 @@ same rows, so the halves cannot disagree:
 
 - `ELITEA_APPLICATION_SKILLS_ENABLED` (#395). The attached-skills read answers
   the published `SkillsList` keys (`items`, `total`, `page`, `page_size`,
-  `total_pages`) that `apps/elitea-web` reads, beside the Pylon keys (`skills`,
+  `total_pages`) that `apps/elitea-web` reads, beside the legacy keys (`skills`,
   `max_skills`) that `apps/elitea-ui` reads.
 - `ELITEA_INDEX_TYPES_ENABLED` (#394). The index-types read answers the
-  published `DocumentLoadersResponse` keys (`items`, `total`) beside the Pylon
+  published `DocumentLoadersResponse` keys (`items`, `total`) beside the legacy
   keys (`document_types`, `image_types`, `code_types`). Every entry of `items`
   names one category and lists that category's extensions, so the two halves
   are the same pinned SDK snapshot read twice.
@@ -1370,13 +1370,13 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
 `elitea-main` and `elitea-llm-gateway` both read `centry.secrets_key`. Each one wraps a project key with `SECRETS_MASTER_KEY`
 when it holds that value, and stores the project key in the clear when it does
 not. Two services with two answers put two row formats in one table, and
-neither can read what the other wrote. `pylon-indexer` was the third reader
+neither can read what the other wrote. The legacy indexer was the third reader
 until issue #339 deleted it, which is one fewer place for those two answers to
 disagree.
 
 So the rule is: **one stack, one value, given to every service that reads that
 table.** Give it in the environment, never in a file. A committed default is a
-second key source, and the one `pylon-indexer` used to ship is treated as
+second key source, and the one the legacy indexer used to ship is treated as
 exposed (issue #418).
 
 Set it to a base64url-encoded 32-byte Fernet key:

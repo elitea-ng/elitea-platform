@@ -988,7 +988,7 @@ contract**, so the count rises rather than falls:
 The old paths — `/artifacts/buckets/default/{project_id}`,
 `/artifacts/artifacts/default/{project_id}/{bucket}`, `/artifacts/artifact/...`,
 and everything under `/artifacts/s3` — are removed from the spec entirely. The
-`default/` segment was a Pylon mode selector with exactly one value; it carries
+`default/` segment was a legacy-runtime mode selector with exactly one value; it carries
 no information and does not survive.
 
 Schema rules, applied uniformly:
@@ -2363,7 +2363,7 @@ naturally one of the last to run, not "right after S5."
   add the new names introduced by S2, S5, and S12.
 - Remove `ARTIFACTS_DATA_DIR` and the artifact bind mount from
   `deploy/docker-compose.staging.yml`.
-- Add a Helm chart for `pylon-indexer` and `elitea-worker-python`, or record
+- Add a Helm chart for the legacy indexer and `elitea-worker-python`, or record
   explicitly that they are out of scope for R1.
 
 A bare `grep -q 'S3_ACCESS_KEY'` only proves the literal string appears
@@ -2401,10 +2401,10 @@ production path is GKE Workload Identity (needing no credentials file at
 all), and forcing every deployment to provision a credentials-file Secret
 would be wiring the non-default path as if it were required.
 
-**Pylon-indexer / elitea-worker-python Helm charts: recorded out of scope
+**Legacy indexer / elitea-worker-python Helm charts: recorded out of scope
 for R1**, per the bullet's own "or record explicitly" alternative. Both
 have a `Containerfile` (confirmed:
-`services/pylon-indexer/Containerfile`, `services/elitea-worker-python/Containerfile`)
+the legacy indexer's `Containerfile`, `services/elitea-worker-python/Containerfile`)
 but no chart today. Building production-grade charts for two Python
 services with their own env/secret/health-check surfaces is materially
 larger than this stage's remaining bullets and outside this plan's actual

@@ -3,8 +3,8 @@
 # Copy the current platform's artifact objects into the Go object store (#337).
 #
 # WHY A COPY AND NOT A CONFIGURATION CHANGE. The current platform stores objects
-# through Apache libcloud with the LOCAL driver: a directory tree on pylon_main's
-# own disk, where BOTH the container directory name and the object file name are
+# through Apache libcloud with the LOCAL driver: a directory tree on the legacy main
+# service's own disk, where BOTH the container directory name and the object file name are
 # url-safe base64 of the real name (legacy plugins/shared/tools/storage_engines/
 # libcloud.py, and `storage_libcloud_encoder: base64` in the deployed
 # shared.yml). That is not an S3, Azure or GCS endpoint, so no setting of

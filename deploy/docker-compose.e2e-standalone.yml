@@ -2,7 +2,7 @@
 #
 # A COMPLETE, self-contained stack — NOT an overlay.
 # Use this instead of layering on docker-compose.yml when local ports conflict
-# (e.g. centry's pylon_main already holds 8080).
+# (e.g. the legacy centry stack's main service already holds 8080).
 #
 # Ports used (all non-default to avoid clashing with centry/dev stacks):
 #   8082 → elitea-main (E2E entry point, the browser edge) — E2E_PORT

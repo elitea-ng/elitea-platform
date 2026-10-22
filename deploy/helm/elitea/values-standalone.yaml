@@ -48,18 +48,18 @@ main:
   autoscaling:
     maxReplicas: 4
 
-  # Standalone (pylon-free) values for elitea-main — issue #382.
+  # Standalone (legacy-free) values for elitea-main — issue #382.
   #
   # WHAT THIS FILE IS FOR
   # The chart used to set no capability flag at all. cmd/elitea-main gates whole
   # capabilities on environment variables, so a Kubernetes install served none of
   # those route groups while the SAME IMAGE on compose served all of them. That
-  # made Kubernetes unable to run the pylon-free configuration, which is the
+  # made Kubernetes unable to run the standalone configuration, which is the
   # deployment target. This file closes the gap.
   #
   # The capability set here equals deploy/docker-compose.standalone-full.yml,
-  # which is the configuration proven to run without pylon. Read that file beside
-  # this one: every flag below has its reasoning written out there.
+  # which is the configuration proven to run without the legacy runtime. Read
+  # that file beside this one: every flag below has its reasoning written out there.
   #
   # HOW TO USE IT
   #   helm install elitea deploy/helm/elitea \
@@ -253,7 +253,7 @@ main:
     # ON here (#394). The index-types read now answers ONE body that both
     # shipped clients accept: the published DocumentLoadersResponse keys
     # (items, total) that the generated apps/elitea-web client holds, beside
-    # the Pylon keys (document_types, image_types, code_types) that
+    # the legacy keys (document_types, image_types, code_types) that
     # apps/elitea-ui reads. It was the missing items key that kept this flag
     # dark. Both halves project the same pinned SDK snapshot, so they cannot
     # disagree.
@@ -274,7 +274,7 @@ main:
 
     # ON here (#395). The attached-skills read now answers ONE body that both
     # shipped clients accept: the published SkillsList keys (items, total, page,
-    # page_size, total_pages) that apps/elitea-web reads, beside the Pylon keys
+    # page_size, total_pages) that apps/elitea-web reads, beside the legacy keys
     # (skills, max_skills) that apps/elitea-ui reads. It was the missing items
     # key that kept this flag dark.
     #

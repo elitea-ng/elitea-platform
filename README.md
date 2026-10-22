@@ -21,7 +21,7 @@ elitea-platform/
 ├── deploy/
 │   ├── docker/              # Helper scripts and configs for container images
 │   ├── docker-compose.yml   # Local dev environment (legacy shape, Go services)
-│   ├── docker-compose.standalone-full.yml  # Target-architecture stack (Go + Bifrost, no pylon)
+│   ├── docker-compose.standalone-full.yml  # Target-architecture stack (Go + Bifrost, no legacy runtime)
 │   └── helm/                # Kubernetes Helm charts
 └── .github/workflows/       # CI/CD pipelines
 ```
@@ -97,7 +97,7 @@ but projects and toolkits, DeepWiki's included, have no tables behind them.
 legacy database and routing conventions. `deploy/docker-compose.standalone-full.yml`
 is a separate, self-contained recipe for the **target** architecture: Go `elitea-main` +
 `elitea-web` + the Bifrost `elitea-llm-gateway` + postgres/nats/rustfs
-+ a mock OIDC provider — no pylon, no centry, no LiteLLM.
++ a mock OIDC provider — no legacy runtime, no centry, no LiteLLM.
 
 ```bash
 deploy/scripts/standalone-stack.sh certs   # once — local mTLS material (deploy/certs/, gitignored)
@@ -204,8 +204,8 @@ prints only fixed generic failures and never prints the file path or contents.
 
 ### The index plane, and the service that used to serve it
 
-`pylon-indexer` was the transitional Pylon runtime: it cloned its plugins at
-container start and served index ingest, provider descriptors and agent
+The legacy indexer was the transitional legacy-runtime service: it cloned its
+plugins at container start and served index ingest, provider descriptors and agent
 execution. It is **deleted** (issue #339). The Go runtime plane dispatches index
 ingest to `elitea-worker-python` on the same command stream and consumer group
 as agent execution, so one worker serves both capabilities and no plugin is

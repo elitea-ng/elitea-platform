@@ -12,7 +12,7 @@ Machines here use **podman**: `podman compose`, not `docker compose`.
 | | current platform | `elitea-main` |
 | --- | --- | --- |
 | engine | Apache libcloud, `LOCAL` driver | S3 / Azure Blob / GCS |
-| location | a directory on `pylon_main`'s own disk | an object-store endpoint |
+| location | a directory on the legacy main service's own disk | an object-store endpoint |
 | bucket name on disk | url-safe base64 of `p--<projectID>.<bucket>` | — |
 | object name on disk | url-safe base64 of the key | — |
 | object address | — | `[<prefix>/]p/<projectID>/b/<bucket>/o/<key>` in ONE container |
@@ -44,13 +44,13 @@ The mixed `deploy/centry-hybrid` stack that this runbook was first written
 against is retired (see `docs/UPGRADING.md`). On your own edge, route both the
 browser surface (`/api/v2/artifacts/...`) and the root-mounted
 `/artifacts/s3/...` surface the pinned SDK speaks to `elitea-main`, and do not
-leave either half falling through to pylon.
+leave either half falling through to the legacy runtime.
 
 ## 3. The procedure
 
 ### 3.1 Before the flip
 
-1. **Inventory the source.** On the host that runs `pylon_main`, the libcloud
+1. **Inventory the source.** On the host that runs the legacy main service, the libcloud
    root is `<centry>/pylon_main/libcloud/storage` (the container path
    `/data/libcloud/storage` under the `./pylon_main:/data` mount).
 
@@ -121,7 +121,7 @@ a running container attached to the previous inode.
 
 ### 3.5 Prove it
 
-1. **The index run.** Start one index run and confirm pylon serves no artifact
+1. **The index run.** Start one index run and confirm the legacy runtime serves no artifact
    request during it:
 
    ```bash
@@ -132,7 +132,7 @@ a running container attached to the previous inode.
    the whole file: an entry from before the flip is not a failure.
 
 2. **The browser round trip.** Upload an artifact in the UI, then download it.
-   Both calls must appear in `elitea-main`'s log and in neither pylon log.
+   Both calls must appear in `elitea-main`'s log and in neither legacy-runtime log.
 
 ## 4. Rollback
 

@@ -622,9 +622,9 @@ engine's `native` runner, Rust indexing or the memory toolkit needs
    fails dense searches and publishes once the new `0008` has dropped the
    embedding tables.
 4. **Drop the per-project PgVector databases.** If the deployment ever ran
-   the per-project PgVector store (pylon, or elitea-main before this
+   the per-project PgVector store (the legacy runtime, or elitea-main before this
    release), point elitea-main at that server's admin role, the connection
-   pylon kept in the public project's `elitea-pgvector` configuration (a
+   the legacy runtime kept in the public project's `elitea-pgvector` configuration (a
    role that may drop the `project_<id>` databases and `project_<id>_user`
    roles it created; `postgresql+psycopg://` is accepted):
 
@@ -637,7 +637,7 @@ engine's `native` runner, Rust indexing or the memory toolkit needs
    (Secret `elitea-main-legacy-pgvector`, key `admin-url`, optional); with
    compose, add `ELITEA_LEGACY_PGVECTOR_ADMIN_URL` to the `elitea-main`
    service's environment. From then on every project delete drops its own legacy
-   database and role. For projects deleted EARLIER (by pylon, or by a
+   database and role. For projects deleted EARLIER (by the legacy runtime, or by a
    release whose journal skipped the drop), run the one-shot command in the
    same image, with the same environment (`ELITEA_LEGACY_PGVECTOR_ADMIN_URL`
    and `DATABASE_URL`):
