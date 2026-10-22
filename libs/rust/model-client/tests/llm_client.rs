@@ -29,6 +29,7 @@ use elitea_model_client::{
 use elitea_model_rpc::testing::with_model_service;
 use serde_json::{Value, json};
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -148,6 +149,52 @@ async fn gateway(
         let _ = axum::serve(listener, app).await;
     });
     (gateway, format!("http://{address}/llm/v1"))
+}
+
+/// [`gateway`], served over HTTP/2 by a server that sends GOAWAY on every
+/// connection at `max_age` and lets the streams already on it finish however
+/// long they take — elitea-main's platform listener (`MaxConnectionAge` with
+/// `ConnectionAgeGraceUnlimited`). Also returns how many connections it
+/// accepted.
+async fn gateway_with_max_age(
+    script: impl Fn(usize, &Seen) -> Reply + Send + Sync + 'static,
+    max_age: Duration,
+) -> (Gateway, String, Arc<AtomicUsize>) {
+    let gateway = Gateway {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        script: Arc::new(script),
+    };
+    let Ok(listener) = TcpListener::bind("127.0.0.1:0").await else {
+        panic!("cannot bind loopback");
+    };
+    let Ok(address) = listener.local_addr() else {
+        panic!("no local address");
+    };
+    let app = with_model_service(
+        Router::new().fallback(handle).with_state(gateway.clone()),
+        "/llm/v1",
+    );
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let service = hyper_util::service::TowerToHyperService::new(app.clone());
+            tokio::spawn(async move {
+                let builder =
+                    hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new());
+                let connection =
+                    builder.serve_connection(hyper_util::rt::TokioIo::new(socket), service);
+                tokio::pin!(connection);
+                tokio::select! {
+                    _ = connection.as_mut() => return,
+                    () = tokio::time::sleep(max_age) => connection.as_mut().graceful_shutdown(),
+                }
+                let _ = connection.await;
+            });
+        }
+    });
+    (gateway, format!("http://{address}/llm/v1"), accepted)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -817,6 +864,66 @@ async fn a_streamed_answer_arrives_in_fragments_with_usage() {
             .get("accept")
             .and_then(|v| v.to_str().ok()),
         Some("text/event-stream")
+    );
+}
+
+/// The platform listener ends a connection at its maximum age with GOAWAY
+/// and lets the streams already on it finish (elitea-main
+/// `ConnectionAgeGraceUnlimited`). A completion streaming across that moment
+/// completes, and the next call goes over a new connection without an error.
+#[tokio::test]
+async fn a_stream_outlives_its_connections_goaway_and_the_next_call_reconnects() {
+    let mut events = vec![delta(json!({"role": "assistant", "content": ""}))];
+    for word in 0..12 {
+        events.push(delta(json!({"content": format!("w{word} ")})));
+    }
+    events.push(json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}));
+    // One SSE event per chunk.
+    let mut chunks: Vec<Vec<u8>> = events
+        .iter()
+        .map(|event| format!("data: {event}\n\n").into_bytes())
+        .collect();
+    chunks.push(b"data: [DONE]\n\n".to_vec());
+    let (_gw, base, accepted) = gateway_with_max_age(
+        move |_, seen| {
+            if seen.path.ends_with("/embeddings") {
+                return embeddings_reply(seen, 4);
+            }
+            // 16 events 200 ms apart: about 3 s, well past the connection's
+            // one-second age.
+            Reply::Stream(chunks.clone(), Duration::from_millis(200))
+        },
+        Duration::from_secs(1),
+    )
+    .await;
+    let transport = transport(&fast());
+    let chat = ChatClient::new(transport.clone(), settings(&base, json!({})));
+    let request = ChatRequest::new(vec![ChatMessage::User("hello".to_owned())]);
+    let started = std::time::Instant::now();
+    let response = ok(chat
+        .chat(&request, &StopSignal::default(), &mut |_| {})
+        .await);
+    assert!(
+        started.elapsed() > Duration::from_millis(1_500),
+        "the stream ended before the connection's age: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(response.finish_reason.as_deref(), Some("stop"));
+    assert!(response.content.ends_with("w11 "), "{}", response.content);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    // The connection is closed now; the next call opens another.
+    let embedder = EmbeddingClient::new(
+        transport,
+        settings(&base, json!({})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let vector = ok(embedder.embed_query("t3", &StopSignal::default()).await);
+    assert_eq!(vector[0], 3.0);
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        2,
+        "the call after GOAWAY reused the old connection"
     );
 }
 

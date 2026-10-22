@@ -2110,6 +2110,8 @@ dependencies = [
  "elitea-llm-wire",
  "elitea-model-rpc",
  "futures-util",
+ "hyper",
+ "hyper-util",
  "rcgen",
  "reqwest 0.13.5",
  "serde_json",

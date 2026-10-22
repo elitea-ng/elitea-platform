@@ -38,6 +38,12 @@ rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"
 tokio = { version = "1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
+# An HTTP/2 server that sends GOAWAY at a connection's age and lets its
+# streams finish, as elitea-main's platform listener does. tonic's own
+# max_connection_age cannot: without a grace it panics re-polling its timer,
+# with one it never sends GOAWAY before the forced close.
+hyper = { version = "1.12.0", default-features = false, features = ["http2", "server"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["service", "tokio"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 
 [lints]
