@@ -1,0 +1,44 @@
+# EXAMPLE — the app-of-apps root of a GKE install, for YOUR GitOps repository.
+#
+# Copy deploy/argocd/examples/gke/ into a git repository your organisation
+# owns, replace every <...>, and apply this file once:
+#
+#   kubectl apply -f root.yaml
+#
+# It renders every Application in applications/ — one, `elitea`, which pulls
+# the published chart from ghcr.io and holds the values. bootstrap/ is NOT
+# rendered by this root: it holds the cluster objects you apply once by hand
+# (or from your own cluster-bootstrap Application) before the first sync — the
+# OCI repository registration and the ClusterSecretStore.
+#
+# The walkthrough is the embedded docs page "Deploy on GKE with Argo CD"
+# (apps/elitea-web/src/entries/docs/content/deployment/gke-argocd.mdx).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: elitea-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # Your GitOps repository and the directory you copied this example into.
+    repoURL: https://git.example.com/your-org/elitea-gitops.git
+    targetRevision: main
+    path: elitea/applications
+    directory:
+      recurse: false
+      include: "*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    # Applications live in argocd's namespace; each child names its own
+    # workload namespace.
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # Removing a file from applications/ deletes that Application and,
+      # through its finalizer, everything it manages. Review such diffs as
+      # production deletions.
+      prune: true
+      selfHeal: true

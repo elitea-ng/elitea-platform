@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -236,7 +239,11 @@ func writeAudioRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 		writeAudioBodyTooLarge(w)
 		return true
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+	// gRPC sends the edge deadline to the gateway, whose own timer can fire a
+	// moment before this side's: the hop then fails with a DeadlineExceeded
+	// status while r.Context() has not ended yet. That is the same deadline.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) ||
+		status.Code(err) == codes.DeadlineExceeded {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGatewayTimeout)
 		_, _ = w.Write([]byte(`{"error":{"message":"the audio request did not complete in time","type":"api_error","code":"upstream_timeout"}}`))

@@ -11,9 +11,13 @@
 #     control listener (env AND NetworkPolicy), and that identity is the client
 #     certificate's one DNS SAN — a server certificate with several SANs has
 #     no valid client identity;
-#   * the internal Qdrant reads the same API-key Secret elitea-vector mounts,
-#     and only elitea-vector reaches its gRPC port;
-#   * external mode renders no StatefulSet and passes the URL through;
+#   * the bundled Qdrant (the upstream qdrant subchart, qdrant.enabled) reads
+#     the same API-key Secret elitea-vector mounts, serves TLS with the
+#     certificate this chart issues from the runtime CA (and peer TLS in the
+#     values-qdrant-ha.yaml profile), and only elitea-vector reaches its gRPC
+#     port;
+#   * qdrant.enabled=false renders no Qdrant and passes the external URL and
+#     CA through; the pre-S10 vector.qdrant.mode/internal keys are refused;
 #   * elitea-vector's gRPC port admits the DeepWiki and Inventory engine pods
 #     (callback-token callers) exactly when each component is enabled, and
 #     never when it is not;
@@ -31,6 +35,18 @@
 # Usage: deploy/helm/tests/render-vector.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 CHART="deploy/helm/elitea"
 
@@ -39,13 +55,12 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # values-standalone.yaml turns the runtime plane on, which vector needs.
 # vector.enabled adds the 2-connection token-introspection pool to every
 # elitea-main replica (44 instead of 42); the profile's 4 replicas still fit
-# its 185 available connections (4 x 44 = 176).
+# its 255 available connections (4 x 44 + gateway 8 + scheduler 4 = 188).
 COMPLETE="\
 -f $CHART/values-standalone.yaml \
 --set llmGateway.egressPosture=allowlist \
 --set llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=elitea.invalid:8000 \
---set vector.enabled=true \
---set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key"
+--set vector.enabled=true --set qdrant.enabled=true"
 
 failures=0
 note() { printf '  %s\n' "$1"; }
@@ -72,16 +87,16 @@ expect_refusal() {
   fi
 }
 
-echo "== vector off (the default)"
+echo "== vector off (fixtures/features-off.yaml; on by default since S10)"
 off="$(render)"
 # Comment lines excluded: elitea-main's NetworkPolicy header names the peer.
-if printf '%s' "$off" | grep -v '^[[:space:]]*#' | grep -q 'elitea-vector\|elitea-qdrant\|ELITEA_VECTOR_'; then
+if [ "$(grep -v '^[[:space:]]*#' <<<"$off" | grep -c 'elitea-vector\|elitea-qdrant\|ELITEA_VECTOR_' || true)" != 0 ]; then
   fail "vector is off, but something of it rendered"
 else
   note "nothing of elitea-vector or Qdrant renders"
 fi
 
-echo "== vector on, internal Qdrant"
+echo "== vector on, the bundled Qdrant (qdrant subchart)"
 on="$(render $COMPLETE)"
 
 clients="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_INTROSPECTION_CLIENTS')"
@@ -106,7 +121,7 @@ control_from="$(select_one "$on" NetworkPolicy elitea-main-netpol \
 # sync-wave -5, so elitea-vector is healthy before elitea-main (wave 0) starts
 # minting memory sources it introspects for. Every vector manifest shares the
 # wave (a Deployment ahead of its own certificates would never become ready).
-off_wave="$(printf '%s' "$on" | yq eval 'select((.metadata.labels."app.kubernetes.io/component" == "vector" or .metadata.name == "elitea-qdrant" or .metadata.name == "elitea-qdrant-headless" or .metadata.name == "elitea-qdrant-netpol") and .metadata.annotations."argocd.argoproj.io/sync-wave" != "-5") | .kind + "/" + .metadata.name' - | grep -v '^---$' || true)"
+off_wave="$(printf '%s' "$on" | yq eval 'select((.metadata.labels."app.kubernetes.io/component" == "vector" or (.metadata.name | test("^elitea-vectordb"))) and .metadata.annotations."argocd.argoproj.io/sync-wave" != "-5") | .kind + "/" + .metadata.name' - | grep -v '^---$' || true)"
 main_wave="$(select_one "$on" Deployment elitea-main '.metadata.annotations."argocd.argoproj.io/sync-wave" // "0"')"
 vector_wave="$(select_one "$on" Deployment elitea-vector '.metadata.annotations."argocd.argoproj.io/sync-wave"')"
 if [ -z "$off_wave" ] && [ "$vector_wave" = "-5" ] && [ "$main_wave" -gt "$vector_wave" ]; then
@@ -116,17 +131,60 @@ else
 fi
 
 dep_key="$(select_one "$on" Deployment elitea-vector '.spec.template.spec.volumes[] | select(.name == "qdrant-api-key") | .secret.secretName')"
-sts_key="$(select_one "$on" StatefulSet elitea-qdrant '.spec.template.spec.containers[0].env[] | select(.name == "QDRANT__SERVICE__API_KEY") | .valueFrom.secretKeyRef.name')"
-[ "$dep_key" = "elitea-qdrant-api-key" ] && [ "$sts_key" = "elitea-qdrant-api-key" ] \
+sts_key="$(select_one "$on" StatefulSet elitea-vectordb '.spec.template.spec.containers[0].env[] | select(.name == "QDRANT__SERVICE__API_KEY") | .valueFrom.secretKeyRef.name')"
+[ "$dep_key" = "elitea-qdrant-api" ] && [ "$sts_key" = "elitea-qdrant-api" ] \
   && note "elitea-vector and Qdrant read the same API-key Secret" \
   || fail "API-key Secret: vector '$dep_key', qdrant '$sts_key'"
 
 url="$(select_one "$on" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_QDRANT_URL") | .value')"
-[ "$url" = "http://elitea-qdrant.default.svc:6334" ] \
-  && note "elitea-vector dials the internal Qdrant over gRPC" \
-  || fail "ELITEA_VECTOR_QDRANT_URL is '$url'"
+ssl_on="$(select_one "$on" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "SSL_CERT_FILE") | .value')"
+[ "$url" = "https://elitea-vectordb.default.svc:6334" ] && [ "$ssl_on" = "/etc/elitea-vector/tls/ca.crt" ] \
+  && note "elitea-vector dials the bundled Qdrant over TLS, trusting the runtime CA" \
+  || fail "ELITEA_VECTOR_QDRANT_URL is '$url', SSL_CERT_FILE '$ssl_on'"
 
-qdrant_from="$(select_one "$on" NetworkPolicy elitea-qdrant-netpol \
+# TLS on the bundled Qdrant: this chart's Certificate (runtime CA, the Service
+# and every pod name), mounted through the subchart's qdrant-tls volume, and
+# the server config switched to TLS (so the probes are HTTPS).
+q_secret="$(select_one "$on" Certificate elitea-vectordb '.spec.secretName')"
+q_issuer="$(select_one "$on" Certificate elitea-vectordb '.spec.issuerRef.name')"
+q_sans="$(select_one "$on" Certificate elitea-vectordb '.spec.dnsNames | join(",")')"
+q_vol="$(select_one "$on" StatefulSet elitea-vectordb '.spec.template.spec.volumes[] | select(.name == "qdrant-tls") | .secret.secretName')"
+q_mount="$(select_one "$on" StatefulSet elitea-vectordb '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "qdrant-tls") | .mountPath')"
+q_tls="$(select_one "$on" ConfigMap elitea-vectordb '.data."production.yaml"' | yq '.service.enable_tls' -)"
+q_probe="$(select_one "$on" StatefulSet elitea-vectordb '.spec.template.spec.containers[0].readinessProbe.httpGet.scheme')"
+q_image="$(select_one "$on" StatefulSet elitea-vectordb '.spec.template.spec.containers[0].image')"
+case "$q_sans" in
+  elitea-vectordb.default.svc,*'*.elitea-vectordb-headless.default.svc'*) sans_ok=1 ;;
+  *) sans_ok=0 ;;
+esac
+[ "$q_secret" = "elitea-qdrant-tls" ] && [ "$q_issuer" = "elitea-runtime-ca" ] && [ "$sans_ok" = 1 ] \
+  && [ "$q_vol" = "elitea-qdrant-tls" ] && [ "$q_mount" = "/qdrant/tls" ] && [ "$q_tls" = "true" ] && [ "$q_probe" = "HTTPS" ] \
+  && note "Qdrant serves TLS with the runtime-CA certificate the chart issues (secret, mount, config, HTTPS probe)" \
+  || fail "Qdrant TLS: secret='$q_secret' issuer='$q_issuer' sans='$q_sans' volume='$q_vol' mount='$q_mount' enable_tls='$q_tls' probe='$q_probe'"
+[ "$q_image" = "docker.io/qdrant/qdrant:v1.19.2-unprivileged" ] \
+  && note "Qdrant runs the pinned unprivileged image" \
+  || fail "Qdrant image is '$q_image'"
+[ "$(select_one "$on" StatefulSet elitea-vectordb '.spec.volumeClaimTemplates[0].metadata.name')" = "qdrant-storage" ] \
+  && note "Qdrant's PVCs are qdrant-storage-elitea-vectordb-<n>" \
+  || fail "the Qdrant volumeClaimTemplate is not qdrant-storage"
+
+echo "== the HA profile (values-qdrant-ha.yaml)"
+ha="$(render $COMPLETE -f "$CHART/values-qdrant-ha.yaml")" || fail "values-qdrant-ha.yaml does not render: $ha"
+ha_replicas="$(select_one "$ha" StatefulSet elitea-vectordb '.spec.replicas')"
+ha_p2p="$(select_one "$ha" ConfigMap elitea-vectordb '.data."production.yaml"' | yq '.cluster.p2p.enable_tls' -)"
+ha_cluster="$(select_one "$ha" ConfigMap elitea-vectordb '.data."production.yaml"' | yq '.cluster.enabled' -)"
+ha_pdb="$(select_one "$ha" PodDisruptionBudget elitea-vectordb '.spec.maxUnavailable')"
+ha_rf="$(select_one "$ha" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_REPLICATION_FACTOR") | .value')"
+[ "$ha_replicas" = "3" ] && [ "$ha_cluster" = "true" ] && [ "$ha_p2p" = "true" ] && [ "$ha_pdb" = "1" ] \
+  && note "three nodes, clustering and peer TLS on, a PodDisruptionBudget (replication factor '$ha_rf')" \
+  || fail "HA profile: replicas='$ha_replicas' cluster='$ha_cluster' p2p_tls='$ha_p2p' pdb='$ha_pdb'"
+# A here-string, not printf | grep -q: under pipefail grep's early exit
+# would fail the pipeline.
+grep -qF -- 'https://elitea-vectordb-0.elitea-vectordb-headless.${POD_NAMESPACE}.svc:6335' <<<"$ha" \
+  && note "peers bootstrap through pod 0's fully qualified name, which the certificate's wildcard SAN covers" \
+  || fail "the Qdrant start command does not name pod 0 by its fully qualified headless name"
+
+qdrant_from="$(select_one "$on" NetworkPolicy elitea-vectordb-netpol \
   '.spec.ingress[] | select(.ports[0].port == 6334) | .from[0].podSelector.matchLabels."app.kubernetes.io/name"')"
 [ "$qdrant_from" = "elitea-vector" ] \
   && note "only elitea-vector reaches Qdrant's gRPC port" \
@@ -205,15 +263,16 @@ ext_secret="$(select_one "$external" Deployment elitea-main '.spec.template.spec
   && note "an external elitea-vector is named explicitly and its material mounted from the operator's Secret" \
   || fail "external vector client: target='$ext_target' secret='$ext_secret'"
 
-echo "== vector on, external Qdrant"
-ext="$(render $COMPLETE --set vector.qdrant.mode=external \
+echo "== vector on, Qdrant of your own (qdrant.enabled=false)"
+ext="$(render $COMPLETE --set qdrant.enabled=false \
   --set vector.qdrant.external.url=https://qdrant.example.invalid:6334 \
   --set vector.qdrant.external.caSecretName=qdrant-ca)"
-if printf '%s' "$ext" | grep -q 'kind: StatefulSet' && \
-   [ -n "$(select_one "$ext" StatefulSet elitea-qdrant '.metadata.name')" ]; then
-  fail "external mode still renders the Qdrant StatefulSet"
+# grep -c reads to the end: a `grep -q` here could exit early, SIGPIPE the
+# grep before it, and under pipefail read as "no match".
+if [ "$(grep -v '^[[:space:]]*#' <<<"$ext" | grep -c 'elitea-vectordb' || true)" != 0 ]; then
+  fail "qdrant.enabled=false still renders part of the bundled Qdrant"
 else
-  note "external mode renders no Qdrant"
+  note "qdrant.enabled=false renders no Qdrant, certificate or Qdrant NetworkPolicy"
 fi
 ext_url="$(select_one "$ext" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_QDRANT_URL") | .value')"
 ssl="$(select_one "$ext" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "SSL_CERT_FILE") | .value')"
@@ -300,18 +359,35 @@ expect_refusal "runtime plane off" "vector.enabled needs main.runtime.enabled" \
   --set main.runtime.enabled=false --set worker.enabled=false
 expect_refusal "no Qdrant API key" "vector.qdrant.apiKeySecret.name is empty" \
   --set vector.qdrant.apiKeySecret.name=
-expect_refusal "external without a URL" "vector.qdrant.external.url" \
+expect_refusal "a Qdrant of your own without a URL" "vector.qdrant.external.url" \
+  --set qdrant.enabled=false
+expect_refusal "the pre-S10 vector.qdrant.mode" "vector.qdrant.mode (external) is gone" \
   --set vector.qdrant.mode=external
-expect_refusal "unknown Qdrant mode" "vector.qdrant.mode must be internal or external" \
-  --set vector.qdrant.mode=embedded
+expect_refusal "the pre-S10 vector.qdrant.internal" "vector.qdrant.internal is gone" \
+  --set vector.qdrant.internal.replicas=3
 expect_refusal "replication above node count" "cannot place more replicas than nodes" \
-  --set vector.qdrant.internal.replicas=1
+  --set vector.collection.replicationFactor=2
+expect_refusal "several Qdrant nodes without clustering" "unrelated stores" \
+  --set qdrant.replicaCount=3
+expect_refusal "a Qdrant cluster without peer TLS" "p2p.enable_tls must be true" \
+  -f "$CHART/values-qdrant-ha.yaml" --set qdrant.config.cluster.p2p.enable_tls=false
+expect_refusal "a plaintext Qdrant" "qdrant.config.service.enable_tls must be true" \
+  --set qdrant.config.service.enable_tls=false
+expect_refusal "a renamed Qdrant" "qdrant.fullnameOverride must be" \
+  --set qdrant.fullnameOverride=my-qdrant
+expect_refusal "the API-key Secret renamed on one side only" "qdrant.env must set QDRANT__SERVICE__API_KEY" \
+  --set vector.qdrant.apiKeySecret.name=other-qdrant-key
+expect_refusal "the subchart's lookup-based apiKey" "not supported" \
+  --set qdrant.apiKey=plain
+expect_refusal "a Qdrant left on with elitea-vector off" "set qdrant.enabled=false too" \
+  --set vector.enabled=false --set main.runtime.indexIngestDispatch.enabled=false
 expect_refusal "one replica" "minReplicas must be at least 2" \
   --set vector.autoscaling.minReplicas=1
-# 9 primary + 36 runtime + 2 introspection = 47 per replica, 188 for four:
-# over 185, while the same primary without vector (45, 180) fits.
-expect_refusal "the introspection pool is in the connection budget" "47 per elitea-main replica" \
-  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=9
+# 23 primary + 36 runtime + 2 introspection = 61 per replica, 244 for four,
+# plus the gateway's 8 and the scheduler's 4 = 256: over 255, while the same
+# primary without vector (59, 236 + 12 = 248) fits.
+expect_refusal "the introspection pool is in the connection budget" "61 per elitea-main replica" \
+  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=23
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'
 expect_refusal "elitea-main's identity equal to elitea-vector's own" "must differ" \

@@ -1,10 +1,11 @@
-// Package webedge makes elitea-main the browser edge of a compose stack
-// (#1359 P2).
+// Package webedge makes elitea-main the browser edge (#1359 P2 for compose,
+// P3 for the chart).
 //
 // The compose stacks used to run a Traefik in front of elitea-main and the web
-// SPA container (deploy/traefik/dynamic*.yml, now deleted). It did four things
-// for a browser, and this package does the same four, in the same order of
-// precedence:
+// SPA container (deploy/traefik/dynamic*.yml, now deleted), and a cluster ran a
+// Gateway API HTTPRoute with one rule per root-mounted Go route plus a second
+// route for the SPA. Both edges did four things for a browser, and this package
+// does the same four, in the same order of precedence:
 //
 //  1. `/` answers a NON-permanent redirect to `/app/`, keeping the query
 //     string (a link of the form `/?utm_source=x` once skipped the redirect and
@@ -15,20 +16,27 @@
 //     `/app/application_icon/` and `/app/application_tool_icon/`.
 //  3. `/readyz` and `/startupz` are not published at this edge. Their bodies
 //     name each dependency's state; a probe inside the container (loopback)
-//     still reaches them.
+//     still reaches them. The chart runs its startup and readiness probes as
+//     `elitea-main -healthcheck <path>` for that reason: a kubelet httpGet
+//     arrives from the node's address and would be refused.
 //  4. Everything else reaches elitea-main's own router, which strips every
 //     client identity header itself (apimw.StripClientIdentityHeaders) — the
 //     job Traefik's `strip-client-identity` middleware did.
 //
-// It is DEV/COMPOSE ONLY and off unless ELITEA_WEB_UPSTREAM names the web
-// container. A cluster leaves it unset: there the Gateway API HTTPRoute does
-// the path routing (deploy/gateway-api/httproute.yaml) and terminates TLS.
+// It is off unless ELITEA_WEB_UPSTREAM names the web container. The compose
+// stacks set it, and the chart sets it to the elitea-web Service whenever
+// web.enabled is true. The cluster's Ingress or HTTPRoute is then ONE `/` rule
+// to elitea-main: the MCP carve-out needs a path regular expression, which
+// Gateway API leaves implementation-specific and a networking.k8s.io Ingress
+// cannot express at all, so it lives here, in Go, where one test covers every
+// deployment shape.
 //
 // The browser → elitea-main → elitea-web hop is browser traffic relayed, not a
 // service-to-service call, so it stays plain HTTP like the edge it replaces.
 //
 // services/elitea-main/tests/deployedge drives the real router with this edge
-// enabled against a real upstream and holds every rule above.
+// enabled against a real upstream and holds every rule above; webedge_test.go
+// holds the routing decision itself.
 package webedge
 
 import (

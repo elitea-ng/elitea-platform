@@ -52,7 +52,12 @@ func main() {
 	}()
 
 	// Database
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := databasePoolConfig(cfg.DatabaseURL, os.LookupEnv)
+	if err != nil {
+		slog.Error("failed to configure db pool", "err", err)
+		os.Exit(1)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		slog.Error("failed to create db pool", "err", err)
 		os.Exit(1)

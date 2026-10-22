@@ -15,6 +15,18 @@
 #
 # Run: deploy/helm/tests/render-indexing-runtime.sh   (requires helm + python3 + PyYAML)
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO_ROOT="$(cd "$DIR/.." && pwd)"
@@ -45,8 +57,7 @@ RENDER=(
 NOINDEX=(--set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
 # An indexing deployment: the registry, and this chart's elitea-vector.
 RUST=(
-  --set vector.enabled=true
-  --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key
+  --set vector.enabled=true --set qdrant.enabled=true
 )
 
 # Unrolled, like render-worker.sh: the floor counts accepting sites.
@@ -285,14 +296,14 @@ refuses 'toolkitModelCallCap must be an integer between 1' "${RUST[@]}" --set wo
   && ok "toolkitModelCallCap=0 is refused" \
   || bad "toolkitModelCallCap=0 is not refused"
 
-refuses 'worker.indexingRuntime=golang is no longer supported' --set worker.indexingRuntime=golang \
+refuses 'worker.indexingRuntime=golang is no longer supported' "${RUST[@]}" --set worker.indexingRuntime=golang \
   && ok "an unknown worker.indexingRuntime is refused" \
   || bad "an unknown worker.indexingRuntime is not refused"
 
 # The retired python indexing runtime is refused with what to do, and so is the
 # retired Python worker beside it: an old values file must not silently switch
 # index stores.
-refuses 'worker.indexingRuntime=python is no longer supported' --set worker.indexingRuntime=python \
+refuses 'worker.indexingRuntime=python is no longer supported' "${RUST[@]}" --set worker.indexingRuntime=python \
   && ok "the retired worker.indexingRuntime=python is refused" \
   || bad "the retired worker.indexingRuntime=python is not refused"
 refuses 'worker.implementation=python is no longer supported' --set worker.implementation=python "${RUST[@]}" \
@@ -304,7 +315,7 @@ refuses 'disagrees with worker.indexingRuntime' "${RUST[@]}" --set-string main.e
   || bad "a disagreeing ELITEA_INDEXING_RUNTIME override is not refused"
 # The worker-off note names the Rust worker.
 "$HELM" install t "$CHART" --dry-run=client "${RENDER[@]}" "${NOINDEX[@]}" --set worker.enabled=false 2>/dev/null \
-  | grep -q 'assumes the Rust worker' \
+  | grep 'assumes the Rust worker' >/dev/null \
   && ok "the worker-off note names the Rust worker" \
   || bad "the worker-off note does not name the Rust worker"
 

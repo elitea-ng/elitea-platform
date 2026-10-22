@@ -30,6 +30,21 @@
 # Usage: deploy/helm/tests/render-network-policies.sh
 # Needs: helm, python3 with PyYAML. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+# SHIPPED_DEFAULTS=1 skips the prepend, for a profile that states every
+# switch itself on top of the shipped defaults (values-kind.yaml).
+helm() {
+  if [ "${1:-}" = template ] && [ -z "${SHIPPED_DEFAULTS:-}" ]; then
+    shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CHART="$REPO/deploy/helm/elitea"
@@ -122,7 +137,8 @@ for d in docs:
         pods[f'{kind}/{d["metadata"]["name"]}'] = d["spec"]["template"]["metadata"].get("labels", {})
     elif kind == "CronJob":
         pods[f'CronJob/{d["metadata"]["name"]}'] = d["spec"]["jobTemplate"]["spec"]["template"]["metadata"].get("labels", {})
-    elif kind == "Pod":
+    elif kind == "Pod" and (d["metadata"].get("annotations") or {}).get("helm.sh/hook") != "test":
+        # A `helm test` Pod (the qdrant subchart ships one) is not installed.
         pods[f'Pod/{d["metadata"]["name"]}'] = d["metadata"].get("labels", {})
 
 def selects(match_labels):
@@ -144,6 +160,18 @@ if deepwiki:
     expected["elitea-deepwiki-netpol"] = DW
 if inventory:
     expected["elitea-inventory-netpol"] = INV
+# elitea-web is behind elitea-main (#1359 P3): wherever the chart renders it,
+# it gets a policy of its own.
+WEB = "Deployment/elitea-web"
+if WEB in pods:
+    expected["elitea-web-netpol"] = WEB
+# elitea-vector and the bundled Qdrant (S10: on by default) carry policies of
+# their own; render-vector.sh asserts their rules.
+VEC, QDRANT = "Deployment/elitea-vector", "StatefulSet/elitea-vectordb"
+if VEC in pods:
+    expected["elitea-vector-netpol"] = VEC
+if QDRANT in pods:
+    expected["elitea-vectordb-netpol"] = QDRANT
 check(sorted(policies) == sorted(expected), f"policy set {sorted(policies)} != {sorted(expected)}")
 
 for pname, target in expected.items():
@@ -217,6 +245,13 @@ if main:
     want_platform = sorted(([WORKER] if worker else [])
                            + ([DW] if deepwiki and plat else [])
                            + ([INV] if inventory and plat else []))
+    # elitea-vector reaches the CONTROL listener alone, for token
+    # introspection (ADR-0031), in a rule of its own.
+    control = [p["containerPort"] for p in ctr if p["name"] == "runtime-control"]
+    vec_rule = by.get(tuple(control)) if (VEC in pods and control and not worker) else None
+    if vec_rule is not None:
+        check(peer_targets(vec_rule, "main:control") == [VEC], "main: the control-only rule must admit elitea-vector only")
+        rts = [k for k in rts if k != tuple(control)]
     if rt and worker:
         check(rts == [tuple(rt)], f"main: runtime rule ports {rts}, want {[tuple(rt)]}")
         if rts:
@@ -231,8 +266,26 @@ if main:
             check(got == want_platform, f"main:platform admits {got}, want {want_platform}")
     else:
         check(platform_rule is None, f"main: platform listener rule without a peer")
-    check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else []) + (plat if want_platform else [])),
+    check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else [])
+                                                      + (control if vec_rule is not None else []) + (plat if want_platform else [])),
           "main: ports admitted are not exactly 8080 + runtime + platform")
+
+# ── elitea-web ───────────────────────────────────────────────────────────────
+# The browser edge is elitea-main (ELITEA_WEB_UPSTREAM): it is the only peer on
+# the SPA's port. The gateway or ingress controller is never admitted here,
+# because the Ingress / HTTPRoute names elitea-main alone; these renders
+# declare no web.extraIngressFrom.
+web = policies.get("elitea-web-netpol")
+if web:
+    spec = web["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "web: policyTypes must be Ingress only")
+    rules = spec.get("ingress") or []
+    check(len(rules) == 1, f"web: {len(rules)} ingress rules, want one")
+    if rules:
+        check([p["port"] for p in rules[0]["ports"]] == ["http"], f"web: ports {rules[0]['ports']}, want the container's http port only")
+        check(peer_targets(rules[0], "web:http") == [MAIN], "web: the SPA port must admit elitea-main only")
+    env = {e["name"]: e.get("value") for e in deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+    check(env.get("ELITEA_WEB_UPSTREAM") == "http://elitea-web:80", f"main: ELITEA_WEB_UPSTREAM is {env.get('ELITEA_WEB_UPSTREAM')!r}; the policy admits main because main relays to web")
 
 # ── the providers (deepwiki, inventory) ─────────────────────────────────────
 # One port each (#1359): the gRPC listener (provider SPI + platform service),
@@ -314,9 +367,10 @@ run default      0 0 0 0 --
 run standalone   0 0 0 0 -- "${STANDALONE[@]}"
 run auth-minimal 0 0 0 0 -- -f "$CHART/values-auth-minimal.yaml"
 run staging      0 0 0 0 -- -f "$CHART/values-staging.yaml"
-# values-kind.yaml runs DeepWiki beside the runtime plane (#1359 U5), so the
-# provider pod is admitted on the platform listener and nothing on 8080.
-run kind         0 0 1 0 -- -f "$REPO/deploy/kind/values-kind.yaml"
+# values-kind.yaml is the shipped defaults minus the worker (S10): DeepWiki and
+# Inventory beside the runtime plane (#1359 U5), so both provider pods are
+# admitted on the platform listener and nothing on 8080.
+SHIPPED_DEFAULTS=1 run kind 0 0 1 1 -- -f "$REPO/deploy/kind/values-kind.yaml"
 echo "== composed installs =="
 run worker       1 0 0 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
 run full         1 1 1 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${INVENTORY[@]}"
@@ -393,8 +447,7 @@ YAML
 # profile's noExternalIngress=true.
 GWAPI=(--set networkPolicies.main.noExternalIngress=false --set main.ingress.enabled=true --set main.ingress.gatewayApi=true
        --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system)
-PLAIN=(--set networkPolicies.main.noExternalIngress=false --set main.ingress.enabled=true --set main.ingress.gatewayApi=false
-       --set main.ingress.identityHeadersStrippedByController=true)
+PLAIN=(--set networkPolicies.main.noExternalIngress=false --set main.ingress.enabled=true --set main.ingress.gatewayApi=false)
 # extraIngressFrom satisfies the install-time decision, so what is refused here is
 # the ingress-specific rule: the Ingress / HTTPRoute needs ingressFrom itself.
 EXTRA=(--set 'networkPolicies.main.extraIngressFrom[0].ipBlock.cidr=192.0.2.0/24')

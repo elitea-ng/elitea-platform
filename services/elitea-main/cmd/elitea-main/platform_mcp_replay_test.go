@@ -21,7 +21,7 @@ import (
 )
 
 // bootstrapPlatformReplayBucket creates the platform MCP replay bucket with
-// the settings deploy/helm/nats-bootstrap/files/bootstrap.sh gives it, on a
+// the settings deploy/helm/elitea/files/nats-bootstrap.sh gives it, on a
 // plaintext test server that has no bootstrap of its own.
 func bootstrapPlatformReplayBucket(t *testing.T, conn *nats.Conn) {
 	t.Helper()

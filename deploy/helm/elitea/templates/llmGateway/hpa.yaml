@@ -1,31 +1,55 @@
 {{- if .Values.llmGateway.enabled }}
 {{- if .Values.llmGateway.autoscaling.enabled }}
+{{- /*
+  The gateway's autoscaler. ONE of three renders, chosen by
+  elitea.scaling.gatewaySource (templates/_scaling.tpl) from what the cluster
+  and this release provide; this file renders the two HPA shapes, and
+  keda-scaledobject.yaml the KEDA one.
+*/ -}}
+{{- $source := include "elitea.scaling.gatewaySource" . | trim }}
+{{- $a := .Values.llmGateway.autoscaling }}
+{{- if ne $source "keda-prometheus" }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "elitea-llm-gateway.fullname" . }}
   labels:
     {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
+  annotations:
+    # Which source rendered this HPA (llmGateway.autoscaling.source).
+    elitea.ai/autoscaling-source: {{ $source }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "elitea-llm-gateway.fullname" . }}
-  minReplicas: {{ .Values.llmGateway.autoscaling.minReplicas }}
-  maxReplicas: {{ .Values.llmGateway.autoscaling.maxReplicas }}
+  minReplicas: {{ $a.minReplicas }}
+  maxReplicas: {{ $a.maxReplicas }}
   metrics:
-    # Custom /llm SSE-connection metric — CPU/memory is a poor autoscaling signal
-    # for I/O-bound streaming (design §9.5). Scale when the average number of
-    # concurrent /llm SSE connections per replica approaches the tuned provider
-    # Concurrency budget. Requires the Prometheus Adapter (or equivalent) to
-    # surface `{{ .Values.llmGateway.autoscaling.sseConnectionMetric }}` as a Pods metric.
+    {{- if eq $source "adapter" }}
+    # Concurrent /llm SSE streams per pod, through custom.metrics.k8s.io
+    # (prometheusAdapter's one rule, or the cluster's adapter). Scale out when
+    # the average approaches the tuned provider concurrency budget
+    # (GATEWAY_PROVIDER_CONCURRENCY=50). A GAUGE: averaged, never rated.
     - type: Pods
       pods:
         metric:
-          name: {{ .Values.llmGateway.autoscaling.sseConnectionMetric }}
+          name: {{ $a.sseConnectionMetric }}
         target:
           type: AverageValue
-          averageValue: {{ .Values.llmGateway.autoscaling.targetSSEConnectionsPerPod | quote }}
+          averageValue: {{ $a.targetSSEConnectionsPerPod | quote }}
+    {{- else }}
+    # CPU, the fallback: no KEDA prometheus trigger and no custom metrics API
+    # is available. A poor signal for I/O-bound streaming (a replica full of
+    # waiting streams can sit at low CPU), so it scales late; it is still a
+    # signal that exists, unlike a Pods metric nothing serves.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $a.targetCPUUtilizationPercentage | default 70 }}
+    {{- end }}
   behavior:
     scaleUp:
       # React quickly to connection surges but avoid thrash.
@@ -42,5 +66,6 @@ spec:
         - type: Pods
           value: 1
           periodSeconds: 120
+{{- end }}
 {{- end }}
 {{- end }}

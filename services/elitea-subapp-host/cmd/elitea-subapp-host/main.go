@@ -101,7 +101,7 @@ func run(logger *slog.Logger) error {
 		// reconciled before the first call, so no poll answers InProgress for
 		// work nobody is doing. A database that is configured and unreachable
 		// is a boot failure, not a host that silently runs in memory.
-		store, err := spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger)
+		store, err := spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger, spi.WithMaxConns(settings.DatabaseMaxConns))
 		if err != nil {
 			return err
 		}
@@ -168,7 +168,15 @@ func run(logger *slog.Logger) error {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		stopGRPC(grpcServer, shutdownCtx)
-		_ = admin.Shutdown(shutdownCtx)
+		// No new invocation arrives now. The ones running get the drain
+		// before server.Stop (deferred) cancels what is left; a poll or a
+		// cancel for them reaches a sibling, which reads the shared store
+		// and fans the cancel back here. The admin port stays up, so the
+		// in-flight gauge is scraped while it falls.
+		drainInvocations(server.Manager(), time.Duration(settings.DrainTimeoutSeconds)*time.Second, logger)
+		adminCtx, adminCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer adminCancel()
+		_ = admin.Shutdown(adminCtx)
 		return nil
 	case err := <-errs:
 		_ = admin.Close()
@@ -176,6 +184,21 @@ func run(logger *slog.Logger) error {
 			return nil
 		}
 		return err
+	}
+}
+
+// drainInvocations waits up to timeout for manager's in-flight invocations
+// to end. Zero waits for nothing.
+func drainInvocations(manager *spi.Manager, timeout time.Duration, logger *slog.Logger) {
+	running := manager.InFlight()
+	if running == 0 || timeout <= 0 {
+		return
+	}
+	logger.Info("draining in-flight invocations", "count", running, "timeout", timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := manager.WaitIdle(ctx); err != nil {
+		logger.Warn("the drain ended with invocations still running; they are cancelled", "count", manager.InFlight())
 	}
 }
 

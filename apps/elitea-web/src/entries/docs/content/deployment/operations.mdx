@@ -16,6 +16,7 @@ Point your ArgoCD `Application` (or `helm upgrade`) at the new published chart v
 </Step>
 <Step title="helm upgrade">
 ```bash
+deploy/helm/elitea/build-deps.sh   # from a clone: the chart's dependencies
 helm upgrade elitea deploy/helm/elitea \
   -f deploy/helm/elitea/values-standalone.yaml \
   --reuse-values \
@@ -51,12 +52,12 @@ Three components carry a native `HorizontalPodAutoscaler`; the fourth uses a dif
 <CardGroup cols={2}>
   <Card title="elitea-main" icon="server">CPU/memory HPA, `minReplicas: 2` / `maxReplicas: 10` by default. Scaling this past what `postgresql.maxConnections` was sized for is refused at render time — see [Production deployment overview](/deployment/overview#sizing-the-postgresql-connection-budget).</Card>
   <Card title="elitea-web" icon="layout"> CPU/memory HPA. Stateless; a rollout is safe at any time.</Card>
-  <Card title="llm-gateway" icon="waypoints">An HPA on a custom `/llm` SSE-connection metric — CPU/memory is a poor signal for I/O-bound streaming. **Off by default**: it needs the Prometheus Adapter installed and configured to surface that gauge metric, or it reports `FailedGetPodsMetric` and silently pins at `minReplicas`.</Card>
+  <Card title="llm-gateway" icon="waypoints">Scales on concurrent `/llm` streams (`gateway_llm_sse_active_connections`) through KEDA's Prometheus trigger or a custom metrics adapter, and falls back to CPU when neither is there. **Off by default** (`llmGateway.autoscaling.enabled`). The chart picks the source it can see and refuses one you name that is missing; see [Scaling](/deployment/scaling).</Card>
   <Card title="agent worker" icon="cpu">**No native HPA.** An agent execution spends most of its life waiting on a model, so CPU/memory never reflects backlog. Queue-depth autoscaling through **KEDA** is available (`worker.autoscaling`, off by default) — it scales on the worker durable's waiting plus held commands on the NATS command bus (`num_pending + num_ack_pending`, read from the NATS monitoring port). The chart refuses to install a KEDA `ScaledObject` unless KEDA is actually present, rather than creating an object nothing reads.</Card>
 </CardGroup>
 
 <Warning>
-KEDA's scaler reads `/jsz` on the NATS chart's headless service, port 8222 (plain HTTP, no credential); the NATS chart's NetworkPolicy admits the KEDA operator there (`networkPolicy.monitoringFrom`). A scaler that cannot connect reports no lag, which scales the fleet **down** while the backlog grows; the chart cannot detect this for you.
+KEDA's scaler reads `/jsz` on the bundled NATS's headless service, port 8222 (plain HTTP, no credential); the NATS NetworkPolicy admits the KEDA operator there (`nats.networkPolicy.monitoringFrom`). A scaler that cannot connect reports no lag, which scales the fleet **down** while the backlog grows; the chart cannot detect this for you.
 </Warning>
 
 <Note>
@@ -73,7 +74,7 @@ Not provisioned or backed up by any chart here — bring your own PostgreSQL ope
 Also brought by you — the chart only creates the bucket (optionally, via `objectInit`) and sets its retention lifecycle. Use your object store's own versioning/replication for backup.
 </Accordion>
 <Accordion title="NATS JetStream">
-The `nats` and `nats-bootstrap` charts are commodity infrastructure this platform points at; back up the JetStream KV buckets and stream through NATS's own tooling if their loss matters to you. Losing the JetStream store resets budget-enforcement counters to zero, but does not lose spend history: the Usage page's accumulators are written independently by elitea-scheduler's write-back consumer from the gateway's billing deltas, not read out of the counter itself.
+NATS runs inside the `elitea` release (the bundled upstream NATS chart, its JetStream volume `elitea-nats-js-elitea-nats-0`), but its state is rebuildable; back up the JetStream KV buckets and stream through NATS's own tooling if their loss matters to you. Losing the JetStream store resets budget-enforcement counters to zero, but does not lose spend history: the Usage page's accumulators are written independently by elitea-scheduler's write-back consumer from the gateway's billing deltas, not read out of the counter itself.
 </Accordion>
 <Accordion title="Restoring from a backup that predates a worker's session row">
 `runtime-session-init` (or the Helm workload-session Job) is what authorizes the agent worker's certificate identity in `elitea_runtime.workload_sessions`; a database restored from a backup that predates it has no such row. Re-run `standalone-stack.sh seed-runtime` (compose) or re-trigger the workload-session hook Job (Helm) to recover, rather than assuming a restore alone brings chat back.
@@ -82,7 +83,7 @@ The `nats` and `nats-bootstrap` charts are commodity infrastructure this platfor
 
 ## CI/CD: what publishes, and how it's checked
 
-`.github/workflows/publish.yml` runs on pushes to `main`/`next`: `semantic-release` decides the version, then every first-party image is built, **scanned twice** (once against the artefact this release actually pushes, in addition to a same-day CI scan of a rebuild), and **cosign-signed keylessly** before the charts (`elitea`, `nats`, `nats-bootstrap`) are packaged, stamped with that version, pushed to `oci://ghcr.io/elitea-ng/charts/<chart>`, and signed the same way. The chart job runs strictly after the images it references are pushed, so a chart never reaches the registry pointing at a tag that does not exist yet. If any stage fails, a rollback job deletes everything that stage's run had already pushed — charts and images alike.
+`.github/workflows/publish.yml` runs on pushes to `main`/`next`: `semantic-release` decides the version, then every first-party image is built, **scanned twice** (once against the artefact this release actually pushes, in addition to a same-day CI scan of a rebuild), and **cosign-signed keylessly** before the charts (`elitea`, which carries NATS and the sandbox-runtime installer, and `elitea-sandbox-runtime`, still published on its own) are packaged, stamped with that version, pushed to `oci://ghcr.io/elitea-ng/charts/<chart>`, and signed the same way. The chart job runs strictly after the images it references are pushed, so a chart never reaches the registry pointing at a tag that does not exist yet. If any stage fails, a rollback job deletes everything that stage's run had already pushed — charts and images alike.
 
 ```bash
 cosign verify ghcr.io/elitea-ng/elitea-main:<tag> \
@@ -90,14 +91,14 @@ cosign verify ghcr.io/elitea-ng/elitea-main:<tag> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-Separately, `.github/workflows/helm-install-smoke.yml` installs the chart into a real `kind` cluster (not just `helm template`) on every PR touching `deploy/helm/**`, and asserts every pod reaches Ready, the DeepWiki/Inventory provider pod's two containers run the runners the chart set, the facade's provider registration is healthy over its mTLS hop, and a fixture generation completes end to end — the runtime plane, workers and LLM gateway stay off in that smoke run, so it proves the chart installs cleanly, not the full product.
+Separately, `.github/workflows/helm-install-smoke.yml` installs the chart into a real `kind` cluster (not just `helm template`) on every PR touching `deploy/helm/**`, and asserts every pod reaches Ready, the DeepWiki/Inventory provider pod's two containers run the runners the chart set, the facade's provider registration is healthy over its mTLS hop, and a fixture generation completes end to end — it installs the chart's shipped defaults (the runtime plane, the bundled Qdrant and `elitea-vector`, DeepWiki and Inventory), with the worker, the LLM gateway, the web UI and the scheduler off for weight, so it proves the chart installs cleanly, not the full product.
 
 ## Security posture
 
 <CardGroup cols={2}>
   <Card title="Image scanning" icon="shield-check">Every published image is scanned by Trivy against the exact digest this release pushes (not a same-day rebuild), gated by `scripts/ci/image-scan-gate.sh`; an exempted finding must be recorded in `.github/image-scan-exempt.txt` rather than silently passing.</Card>
   <Card title="mTLS runtime material" icon="lock">The agent-execution plane's three listeners (control, output, content) all require and verify a client certificate; there is no cleartext mode. The runtime and auth material both arrive as Kubernetes Secrets, copied by an init container into an owner-only `emptyDir` because a plain Secret volume cannot satisfy the permission profile the code enforces.</Card>
-  <Card title="Edge-auth header stripping" icon="shield-alert">The edge (Ingress/HTTPRoute) must strip caller-supplied `X-Auth-*` and `X-Elitea-*` identity headers before they reach elitea-main — the pod network typically sits inside `trusted_proxy_cidrs`, so anything reaching the Service with these headers set by the caller is an impersonation. `main.ingress.stripIdentityHeaders` lists the exact set for the HTTPRoute path; a plain `networking.k8s.io/v1` Ingress has no portable header-removal field and must strip them on the ingress controller itself.</Card>
+  <Card title="Identity headers stop at elitea-main" icon="shield-alert">elitea-main deletes caller-supplied `X-Auth-*` and `X-Elitea-*` identity headers itself, before any route runs, and reads no `X-Auth-*` header as an identity, so a plain Ingress that forwards them is safe. The chart's HTTPRoute removes the same names again (`main.ingress.stripIdentityHeaders`) as defence in depth.</Card>
   <Card title="GATEWAY_IDENTITY_SECRET" icon="key">Required, not optional, on both elitea-main and the gateway, and the two must agree — see [Install with Helm](/deployment/helm-install#secrets-to-create-beforehand).</Card>
 </CardGroup>
 

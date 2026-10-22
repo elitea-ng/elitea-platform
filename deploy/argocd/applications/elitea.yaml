@@ -8,14 +8,17 @@
 # own copy of the database secret name, the NATS URL and the (since removed) Redis address, and
 # they had already drifted apart. One chart, one Application, one values file.
 #
-# SYNC-WAVE 0 — after NATS (-2) and its JetStream bootstrap (-1), which the LLM
-# gateway's budget counters dial. Ordering WITHIN the platform is no longer a
-# wave concern: it is Helm hook ordering inside this one release. The migration
-# runs pre-install/pre-upgrade at weight 0 and Helm blocks on it, the
-# workload-session provisioning follows at weight 10. The runtime command
-# bus's JetStream streams and durables are the nats-bootstrap Application's
-# (wave -1). A failed migration aborts the release and the
-# previous pods keep serving.
+# NATS JetStream is IN this chart (`nats`, bundled by default), with its
+# JetStream bootstrap (`natsBootstrap`): there are no separate nats and
+# nats-bootstrap Applications any more (docs/UPGRADING.md, "One chart: NATS
+# bundled", has the migration from that layout). Ordering is inside this one
+# release. PreSync hooks run first: the database preparation, the migration
+# (Helm blocks on it) and the workload-session provisioning. Then the Sync
+# phase, in waves: -10 is the NATS server, its certificates and the bootstrap
+# Job (a Sync hook, not PostSync — PostSync would wait for workloads that
+# wait for the streams it creates), -5 the vector store, 0 the platform, 1 the
+# worker. A failed migration aborts the sync and the previous pods keep
+# serving.
 #
 # ── WHERE THE VALUES COME FROM (issue #475) ─────────────────────────────────
 #
@@ -58,27 +61,47 @@
 #     created by pylon rather than by the Go chain. See deploy/runtime/README.md.
 #     An upgrade of an already-bootstrapped database is unaffected.
 #
+#   - cert-manager must be installed: the bundled NATS CA and every NATS
+#     identity are cert-manager Certificates.
+#
 #   - The material Secrets the runtime plane mounts (runtime CA, server and
 #     client certificates, the command-signing keyring, the output-spool key)
 #     must exist. The NATS client certificates (elitea-main-runtime,
 #     elitea-worker) are issued by cert-manager from the NATS CA. deploy/runtime/README.md names the keys.
 #
-# CHAT is off unless you turn on `main.runtime.enabled` and `worker.enabled`
-# together. The chart refuses a values file that still sets `runtimeRedis`
-# (removed; docs/UPGRADING.md). It also refuses the
-# incoherent combinations at render time rather than installing something that
-# reports every pod Ready and then answers no message.
+# CHAT IS OFF IN THIS APPLICATION. The chart turns the runtime plane, the
+# worker, elitea-vector with Qdrant, DeepWiki and Inventory ON by default
+# (S10), and those need values only you have: production authentication
+# with its public origin, the worker's identity, the git allowlists (the
+# render lists every missing one in a single message). This Application
+# states the six switches OFF below, so it syncs with the parameters it
+# carries; flip them back, and supply those values in your own values file
+# (deploy/argocd/examples/gke/ and values-gke.yaml show a complete set), to
+# run chat. The chart refuses a values file that still sets `runtimeRedis`
+# (removed; docs/UPGRADING.md). It also refuses the incoherent combinations
+# at render time rather than installing something that reports every pod
+# Ready and then answers no message.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: elitea
   namespace: argocd
   annotations:
+    # The only child today; the root's wave check still wants one on every
+    # child, so a second one cannot quietly co-schedule with this.
     argocd.argoproj.io/sync-wave: "0"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+  # A git source has no charts/ (it is never committed): the repo-server runs
+  # `helm dependency build` from the committed Chart.lock, so it must reach
+  # https://nats-io.github.io/k8s/helm/charts/,
+  # https://qdrant.github.io/qdrant-helm, https://kedacore.github.io/charts
+  # and https://prometheus-community.github.io/helm-charts (KEDA and
+  # prometheus-adapter are fetched even while switched off), and a project
+  # that restricts sourceRepos must list all four. The published OCI chart
+  # carries its dependencies and needs none (deploy/argocd/examples/gke/).
   source:
     repoURL: https://github.com/elitea-ng/elitea-platform
     targetRevision: main
@@ -99,15 +122,28 @@ spec:
         - name: postgresql.key
           value: "database-url"
 
-        # NATS. applications/nats.yaml installs it as release `elitea-nats`
-        # (Service elitea-nats) in this Application's own `elitea` namespace,
-        # so the empty nats.namespace default resolves it, and the gateway,
-        # the scheduler and elitea-main's live-update plane all dial
-        # tls://elitea-nats.elitea.svc.cluster.local:4222 with the client
-        # certificates the chart issues from the NATS chart's elitea-nats-ca
-        # Issuer (#1076). Nothing to set here unless NATS lives elsewhere.
-        - name: nats.service
-          value: "elitea-nats"
+        # NATS needs nothing here: the chart runs it as Service elitea-nats in
+        # this Application's namespace and every component dials
+        # tls://elitea-nats.elitea.svc.cluster.local:4222 with a client
+        # certificate from the bundled NATS CA (#1076). To use a NATS you
+        # run yourself, set nats.enabled=false and natsClient.* instead.
+
+        # The features that are on by default and need values this file
+        # does not carry (see CHAT IS OFF above). Each is ONE switch; the
+        # render refuses a combination that leaves a dependant without what
+        # it needs, naming the switch to flip.
+        - name: main.runtime.enabled
+          value: "false"
+        - name: worker.enabled
+          value: "false"
+        - name: vector.enabled
+          value: "false"
+        - name: qdrant.enabled
+          value: "false"
+        - name: deepwiki.enabled
+          value: "false"
+        - name: inventory.enabled
+          value: "false"
 
         # ── YOU MUST FILL THESE IN ────────────────────────────────────────
         #

@@ -95,7 +95,7 @@ import (
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
-		endpoint, err := healthcheckURL(os.LookupEnv)
+		endpoint, err := healthcheckURL(os.LookupEnv, os.Args[2:]...)
 		if err != nil {
 			os.Exit(1)
 		}
@@ -267,6 +267,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			runErr = fmt.Errorf("shut down observability: %w", err)
 		}
 	}()
+
+	// Read before anything starts: a bad value refuses the boot instead of
+	// surfacing at the first SIGTERM.
+	shutdownTimeout, err := shutdownTimeoutFromEnv(os.LookupEnv)
+	if err != nil {
+		return err
+	}
 
 	// Database
 	dbDSN := envOr("DATABASE_URL", "postgres://localhost:5432/elitea?sslmode=disable")
@@ -2570,14 +2577,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
 	}
 
-	// The compose browser edge (#1359 P2): /app and /docs relayed to the web
-	// container, `/` redirected to /app/. Unset in a cluster.
+	// The browser edge (#1359 P2, P3): /app and /docs relayed to the web
+	// container, `/` redirected to /app/. Compose sets it, and the chart sets
+	// it to the elitea-web Service whenever it renders one.
 	webUpstream, err := webedge.ParseUpstream(os.Getenv(webedge.UpstreamEnv))
 	if err != nil {
 		return fmt.Errorf("configure web edge: %w", err)
 	}
 	if webUpstream != nil {
-		logger.Info("compose browser edge enabled", "web_upstream", webUpstream.String())
+		logger.Info("browser edge enabled", "web_upstream", webUpstream.String())
 	}
 
 	r := api.NewRouter(api.RouterConfig{
@@ -2827,7 +2835,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if runtimeRoot != nil {
 		runtimeLifecycleRoot = runtimeRoot
 	}
-	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, 15*time.Second); err != nil {
+	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, shutdownTimeout); err != nil {
 		return err
 	}
 	slog.Info("server stopped")

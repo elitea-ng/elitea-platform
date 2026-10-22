@@ -72,6 +72,9 @@ type PostgresStore struct {
 	stop      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// maxConns is the pool's ceiling (WithMaxConns); zero keeps pgx's.
+	maxConns int
 }
 
 // ErrClaimLost refuses a new invocation while this process does not hold its
@@ -117,6 +120,17 @@ func WithReconcileInterval(d time.Duration) StoreOption {
 	return func(s *PostgresStore) { s.reconcileEvery = d }
 }
 
+// maxDatabaseConns bounds <PREFIX>DATABASE_MAX_CONNS, as elitea-main bounds
+// its own pools.
+const maxDatabaseConns = 64
+
+// WithMaxConns sets the pool's connection ceiling. Zero or less keeps the
+// pgx default. The owner claim's connection is outside the pool and not
+// counted here.
+func WithMaxConns(n int) StoreOption {
+	return func(s *PostgresStore) { s.maxConns = n }
+}
+
 // WithOwnerGrace sets how long a claimed owner's lock must stay free, from
 // this process's first sighting of it free, before its rows are orphans.
 // The default is ownerGraceChecks claim-check intervals.
@@ -145,16 +159,8 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("invocation store: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("invocation store: %w", err)
-	}
 	store := &PostgresStore{
-		pool: pool, dsn: dsn, owner: claimedOwnerPrefix + owner, logger: logger,
+		dsn: dsn, owner: claimedOwnerPrefix + owner, logger: logger,
 		claimCheck: claimCheckInterval, reconcileEvery: reconcileInterval,
 		freeSince: map[string]time.Time{},
 		stop:      make(chan struct{}), done: make(chan struct{}),
@@ -162,6 +168,22 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	for _, option := range options {
 		option(store)
 	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("invocation store: %w", err)
+	}
+	if store.maxConns > 0 {
+		config.MaxConns = int32(min(store.maxConns, maxDatabaseConns))
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("invocation store: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("invocation store: %w", err)
+	}
+	store.pool = pool
 	if store.ownerGrace <= 0 {
 		store.ownerGrace = ownerGraceChecks * store.claimCheck
 	}

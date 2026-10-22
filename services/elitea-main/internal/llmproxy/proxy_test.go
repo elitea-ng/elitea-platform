@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -333,4 +335,86 @@ func (d *deadlineWriter) SetWriteDeadline(tm time.Time) error {
 		d.deadlineCleared = true
 	}
 	return nil
+}
+
+// TestProxy_KeepsAnIdleEventStreamAlive: a model that reasons for minutes
+// before its first token leaves the relayed stream silent, and a proxy in
+// front of elitea-main (100 seconds for a Cloudflare-style proxy) drops the
+// call. The relay writes an SSE comment into an idle stream, between events
+// only, and leaves a non-stream body untouched.
+func TestProxy_KeepsAnIdleEventStreamAlive(t *testing.T) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/llm/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":`)
+			w.(http.Flusher).Flush()
+			time.Sleep(150 * time.Millisecond)
+			_, _ = io.WriteString(w, `[]}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(150 * time.Millisecond)
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer backend.Close()
+
+	p := proxyTo(t, backend, "")
+	p.streamKeepalive = 20 * time.Millisecond
+
+	rec := newFlushRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", nil))
+	body := strings.Join(rec.chunks, "")
+	if !strings.HasPrefix(body, "data: first\n\n: keepalive\n\n") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("relayed stream = %q; want the events intact with a keepalive comment between them", body)
+	}
+
+	rec = newFlushRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil))
+	if body := strings.Join(rec.chunks, ""); body != `{"data":[]}` {
+		t.Fatalf("a JSON body was altered: %q", body)
+	}
+}
+
+// An event stream whose length the gateway declared (a unary answer) is copied
+// byte for byte: a keepalive comment would overrun the Content-Length the
+// client was given. The body pauses longer than the keepalive interval.
+func TestProxy_NoKeepaliveInADeclaredLengthEventStream(t *testing.T) {
+	const body = "data: first\n\ndata: [DONE]\n\n"
+	p := &Proxy{logger: slog.Default(), streamKeepalive: 20 * time.Millisecond}
+	resp := &Response{
+		StatusCode:    http.StatusOK,
+		Header:        http.Header{"Content-Type": {"text/event-stream"}},
+		Body:          io.NopCloser(&pausingReader{parts: []string{body[:13], body[13:]}, pause: 150 * time.Millisecond}),
+		ContentLength: int64(len(body)),
+	}
+	rec := newFlushRecorder()
+	p.writeResponse(rec, httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", nil), resp)
+	if got := strings.Join(rec.chunks, ""); got != body {
+		t.Fatalf("relayed body = %q; want exactly the %d declared bytes %q", got, len(body), body)
+	}
+	if cl := rec.Header().Get("Content-Length"); cl != strconv.Itoa(len(body)) {
+		t.Fatalf("Content-Length = %q; want %d", cl, len(body))
+	}
+}
+
+// pausingReader returns one part per Read, sleeping before every part but the
+// first.
+type pausingReader struct {
+	parts []string
+	pause time.Duration
+	n     int
+}
+
+func (r *pausingReader) Read(b []byte) (int, error) {
+	if r.n >= len(r.parts) {
+		return 0, io.EOF
+	}
+	if r.n > 0 {
+		time.Sleep(r.pause)
+	}
+	n := copy(b, r.parts[r.n])
+	r.n++
+	return n, nil
 }

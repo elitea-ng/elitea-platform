@@ -31,8 +31,13 @@ on:
       - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
@@ -86,8 +91,13 @@ on:
       - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
@@ -293,7 +303,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - uses: actions/setup-go@v7
         with:

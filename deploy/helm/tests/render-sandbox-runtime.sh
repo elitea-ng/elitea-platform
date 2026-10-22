@@ -66,4 +66,50 @@ refuse 'image must use' --set image=python:3.12-slim-trixie
 refuse 'nodeSelector' --set-json 'nodeSelector=null'
 refuse 'k3s.service' --set k3s.service=rke2-agent
 refuse 'kata is a placeholder' --set kata.enabled=true
+# Standalone: the release name and namespace by default, the overrides when set.
+helm template rt "$chart" --namespace ns --set namespace=other --set fullnameOverride=x > "$work/over.yaml"
+python3 - "$work/over.yaml" <<'PY'
+import sys, yaml
+got = sorted((d['kind'], d['metadata']['name'], d['metadata'].get('namespace')) for d in yaml.safe_load_all(open(sys.argv[1])) if d)
+assert got == [('ConfigMap', 'x-scripts', 'other'), ('DaemonSet', 'x-installer', 'other'), ('RuntimeClass', 'gvisor', None)], got
+PY
+
+# As the elitea chart's `sandboxRuntime` dependency (file://../elitea-sandbox-runtime,
+# built into charts/ by deploy/helm/elitea/build-deps.sh): off by default; on, the installer goes to its own privileged
+# namespace under its own name, not the platform release's.
+# The operator fixture: the values a default install cannot default (S10).
+el=(elitea deploy/helm/elitea -n elitea -f deploy/helm/tests/fixtures/operator-values.yaml
+    --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
+    --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
+# The archive build-deps.sh made must be THIS chart as it is now: a stale one
+# would render an installer this test never read.
+sv="$(awk '$1 == "version:" { print $2; exit }' deploy/helm/elitea-sandbox-runtime/Chart.yaml)"
+arc="deploy/helm/elitea/charts/elitea-sandbox-runtime-${sv}.tgz"
+[ -f "$arc" ] || { echo "$arc is missing: run deploy/helm/elitea/build-deps.sh" >&2; exit 1; }
+mkdir -p "$work/arc" && tar -xzf "$arc" -C "$work/arc"
+diff -r -x .helmignore "$work/arc/elitea-sandbox-runtime/templates" deploy/helm/elitea-sandbox-runtime/templates >/dev/null \
+  && cmp -s "$work/arc/elitea-sandbox-runtime/values.yaml" deploy/helm/elitea-sandbox-runtime/values.yaml \
+  || { echo "$arc differs from deploy/helm/elitea-sandbox-runtime: run deploy/helm/elitea/build-deps.sh" >&2; exit 1; }
+helm template "${el[@]}" 2>/dev/null > "$work/el-off.yaml"
+helm template "${el[@]}" --set sandboxRuntime.enabled=true 2>/dev/null > "$work/el-on.yaml"
+helm template "${el[@]}" --set sandboxRuntime.enabled=true --set sandboxRuntime.mode=containerd \
+  --set sandboxRuntime.runtimeClass.create=false 2>/dev/null > "$work/el-eks.yaml"
+python3 - "$work" <<'PY'
+import sys, yaml, pathlib
+w = pathlib.Path(sys.argv[1])
+def load(n): return {(d['kind'], d['metadata']['name']): d for d in yaml.safe_load_all((w / n).read_text()) if d}
+off, on, eks = load('el-off.yaml'), load('el-on.yaml'), load('el-eks.yaml')
+assert not [k for k in off if k[0] in ('DaemonSet', 'RuntimeClass')], 'sandboxRuntime renders while off'
+ds = on['DaemonSet', 'elitea-sandbox-runtime-installer']
+assert ds['metadata']['namespace'] == 'elitea-sandbox-runtime'
+assert on['ConfigMap', 'elitea-sandbox-runtime-scripts']['metadata']['namespace'] == 'elitea-sandbox-runtime'
+pod = ds['spec']['template']['spec']
+assert pod['initContainers'][0]['securityContext']['privileged'] is True
+assert on['RuntimeClass', 'gvisor']['handler'] == 'runsc'
+# The installer is the only thing that moved: no platform object lands in its namespace.
+moved = sorted(k for k, d in on.items() if d['metadata'].get('namespace') == 'elitea-sandbox-runtime')
+assert moved == [('ConfigMap', 'elitea-sandbox-runtime-scripts'), ('DaemonSet', 'elitea-sandbox-runtime-installer')], moved
+e = {x['name']: x['value'] for x in eks['DaemonSet', 'elitea-sandbox-runtime-installer']['spec']['template']['spec']['initContainers'][0]['env']}
+assert e['MODE'] == 'containerd' and ('RuntimeClass', 'gvisor') not in eks
+PY
 echo 'sandbox runtime chart: ok'

@@ -22,7 +22,11 @@ metadata:
   labels:
     {{- include "elitea-deepwiki.labels" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.deepwiki "field" "deepwiki") }}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.deepwiki) }}
   replicas: {{ .Values.deepwiki.replicaCount }}
+  {{- end }}
+  {{- /* No `replicas:` while an HPA or ScaledObject owns the Deployment (autoscaling.yaml). */}}
   selector:
     matchLabels:
       {{- include "elitea-deepwiki.selectorLabels" . | nindent 6 }}
@@ -35,6 +39,10 @@ spec:
     metadata:
       labels:
         {{- include "elitea-deepwiki.selectorLabels" . | nindent 8 }}
+      {{- with (include "elitea.scaling.scrapeAnnotations" (dict "v" .Values.deepwiki "port" .Values.deepwiki.admin.port "path" "/metrics") | trim) }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.deepwiki.podSecurityContext }}
       securityContext:
@@ -46,7 +54,14 @@ spec:
       # invocations are durable (PostgreSQL), and a restarted service
       # reconciles rows left running by a previous owner into a terminal error
       # the caller can act on. Draining forever would be the wrong trade.
-      terminationGracePeriodSeconds: {{ .Values.deepwiki.terminationGracePeriodSeconds }}
+      #
+      # The host stops its gRPC listener (up to 10s), waits for running
+      # invocations for ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS, then cancels and records
+      # what is left; 10s more for the store and NATS to close.
+      {{- $drain := include "elitea.integer" (dict "field" "deepwiki.env.ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" "value" (get $env "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" | default "30" | toString) "min" 0) | int }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "deepwiki" "grace" .Values.deepwiki.terminationGracePeriodSeconds "parts" (list (list "gRPC stop" 10) (list "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.deepwiki.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.deepwiki "selector" (include "elitea-deepwiki.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.deepwiki.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-deepwiki
@@ -104,7 +119,7 @@ spec:
             - name: ELITEA_DEEPWIKI_NATS_URL
               value: {{ include "elitea.natsUrl" . | quote }}
             {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # Its NATS identity, elitea-deepwiki (templates/natsClient.yaml).
             - name: ELITEA_DEEPWIKI_NATS_TLS_CA_FILE
               value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
@@ -155,7 +170,7 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
             - name: runtime-ca
@@ -297,7 +312,7 @@ spec:
                 path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 8 }}{{- end }}
-        {{- if .Values.nats.tls.enabled }}
+        {{- if .Values.natsClient.tls.enabled }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-deepwiki.fullname" .))) | nindent 8 }}
         {{- end }}
       {{- with .Values.deepwiki.nodeSelector }}

@@ -686,7 +686,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ONE chart for the platform. It ships every first-party image, so no
+          # ONE chart for the platform, NATS JetStream and Qdrant included (the
+          # upstream nats and qdrant charts are Chart.lock dependencies, built
+          # before packaging and carried in the package). It ships every first-party image, so no
           # single `image:` names it — `platformImageTag` below stamps the one
           # top-level `image.tag` every component resolves from instead. Without
           # that a chart published at a release number would install `latest`
@@ -694,13 +696,6 @@ jobs:
           - chart: elitea
             image: ""
             platformImageTag: true
-          # NATS stays separate: commodity infrastructure the platform chart
-          # points at rather than owns, and it vendors an upstream subchart, so
-          # packaging needs `helm dependency build` and network access.
-          - chart: nats
-            image: ""
-          - chart: nats-bootstrap
-            image: ""
           # The optional sandbox runtime installer (ADR-0034): a node-level
           # chart kept apart from `elitea`, which never touches nodes. Its
           # image is a pinned third-party Debian 13 digest, so nothing is
@@ -717,7 +712,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2
@@ -855,20 +850,16 @@ jobs:
 
           yq '{"version": .version, "appVersion": .appVersion}' "$CHART"
 
-      - name: Build chart dependencies
+      # The elitea chart's dependencies (the upstream nats and qdrant charts
+      # and our elitea-sandbox-runtime) are not committed: build them from
+      # Chart.lock, then prove every one resolved (`ok` only; an unknown status fails too,
+      # scripts/ci/check-chart-deps.mjs). `helm package` puts them in the
+      # published chart, so an OCI install needs nothing built.
+      - name: Build the chart dependencies
         run: |
           CHART_DIR="deploy/helm/${{ matrix.chart }}"
-          if [ "$(yq -r '.dependencies // [] | length' "${CHART_DIR}/Chart.yaml")" -gt 0 ]; then
-            # dependency build refuses an http(s) repository it has no
-            # definition for, so register each one the chart names first.
-            yq -r '.dependencies[].repository // ""' "${CHART_DIR}/Chart.yaml" \
-              | grep -E '^https?://' | sort -u | while read -r repo; do
-                  helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update
-                done
-            helm dependency build "$CHART_DIR"
-          else
-            echo "no dependencies declared"
-          fi
+          if [ -f "${CHART_DIR}/build-deps.sh" ]; then bash "${CHART_DIR}/build-deps.sh"; fi
+          node scripts/ci/check-chart-deps.mjs "$CHART_DIR"
 
       - name: Package chart
         run: |
@@ -883,7 +874,8 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           TGZ="/tmp/charts/${{ matrix.chart }}-${VERSION}.tgz"
 
-          # `helm push` prints the pushed digest on stderr. Capture it here
+          # `helm push` prints the pushed digest ("Digest: sha256:..."; Helm 3
+          # on stderr, Helm 4 on stdout, so both streams). Capture it here
           # rather than re-resolving the tag afterwards, so the signature is
           # bound to the artifact this job pushed and not to whatever the tag
           # points at by the time the next step runs.
@@ -1008,7 +1000,7 @@ jobs:
           # `elitea` chart, so a rollback warned about six charts that no longer
           # exist and left the one chart this release actually published in
           # place — pointing at images the step above had just deleted.
-          CHARTS=("elitea" "nats" "nats-bootstrap" "elitea-sandbox-runtime")
+          CHARTS=("elitea" "elitea-sandbox-runtime")
           ORG="${{ github.repository_owner }}"
 
           # Report what could not be deleted. Every call here used to end in

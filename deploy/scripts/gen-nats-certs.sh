@@ -35,7 +35,7 @@ DAYS="${NATS_CERT_DAYS:-825}"
 TRUST_DOMAIN="elitea.internal"
 # One identity per client, and one bootstrap identity per NATS account that
 # owns assets (MAIN, GATEWAY, RUNTIME, WORKER; SCHEDULER and SUBAPP own none:
-# deploy/helm/nats/values.yaml).
+# deploy/helm/elitea/values.yaml).
 IDENTITIES="elitea-main elitea-main-runtime elitea-llm-gateway elitea-scheduler elitea-worker elitea-deepwiki elitea-inventory elitea-nats-bootstrap-main elitea-nats-bootstrap-gateway elitea-nats-bootstrap-runtime elitea-nats-bootstrap-worker"
 
 command -v openssl >/dev/null || { echo "ERROR: openssl not found" >&2; exit 1; }

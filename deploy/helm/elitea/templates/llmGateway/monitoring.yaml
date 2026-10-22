@@ -1,0 +1,4 @@
+{{- if .Values.llmGateway.enabled }}
+{{- /* Scrapes the gateway's GET /metrics on its plain-HTTP listener (:8083). elitea.scaling.podMonitor. */ -}}
+{{- include "elitea.scaling.podMonitor" (dict "ctx" . "v" .Values.llmGateway "name" (include "elitea-llm-gateway.fullname" .) "labels" (include "elitea-llm-gateway.labels" .) "selector" (include "elitea-llm-gateway.selectorLabels" .) "port" "http" "path" "/metrics") }}
+{{- end }}

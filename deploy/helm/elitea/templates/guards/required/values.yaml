@@ -1,0 +1,33 @@
+{{- /*
+  The FIRST template Helm renders, on purpose. Helm renders templates deepest
+  path first (Helm 3 and 4 alike: engine sortTemplates, by path depth and then
+  name), and this is the only template three directories down, so its single
+  message comes before any component's own fail-on-first guard.
+
+  It reports, in ONE failure:
+    * every value a default install needs that only the operator can supply
+      (elitea.requiredValuesMissing): production
+      authentication and its public origin, the worker's identity, the git
+      allowlists, the gateway's self origins;
+    * every enabled feature whose prerequisite is switched off, and a store
+      left on with nothing to read it
+      (elitea.featureDependencies), e.g. vector.enabled=false beside the
+      DeepWiki engine.
+  It also applies the one-switch-per-feature derivation
+  (elitea.applyFeatureSwitches) before anything else reads main.env.
+
+  It renders no object.
+*/ -}}
+{{- include "elitea.applyFeatureSwitches" . -}}
+{{- $missing := include "elitea.requiredValuesMissing" . -}}
+{{- $conflicts := include "elitea.featureDependencies" . -}}
+{{- if or $missing $conflicts -}}
+{{- $msg := "this install cannot render yet." -}}
+{{- if $missing -}}
+{{- $msg = printf "%s\n\nSet these values (the chart cannot default them):\n  - %s" $msg (join "\n  - " (splitList "\n" $missing)) -}}
+{{- end -}}
+{{- if $conflicts -}}
+{{- $msg = printf "%s\n\nThese switches disagree (each line says how to settle it):\n  - %s" $msg (join "\n  - " (splitList "\n" $conflicts)) -}}
+{{- end -}}
+{{- fail (printf "%s\n\nEvery Secret the chart names has a fixed default name; docs/UPGRADING.md lists them, and externalSecrets.enabled renders an ExternalSecret for each." $msg) -}}
+{{- end -}}

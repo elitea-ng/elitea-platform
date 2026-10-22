@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"fmt"
 	"io"
@@ -105,7 +106,14 @@ func main() {
 		pool          *pgxpool.Pool
 		modelResolver *llmproxy.ModelResolver
 	)
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := databasePoolConfig(cfg.DatabaseURL, os.LookupEnv)
+	if errors.Is(err, errDatabaseMaxConns) {
+		slog.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if err == nil {
+		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+	}
 	if err != nil {
 		logger.Warn("database pool unavailable; provider credentials, models resolver and budget enforcement disabled", "err", err)
 		pool = nil

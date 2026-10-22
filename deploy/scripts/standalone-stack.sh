@@ -2579,10 +2579,9 @@ except Exception as error:
 
     echo "→ chat critical path (#284 smoke):"
     # Precondition first, because the failure it produces is a bare HTTP 500
-    # that names nothing. Three tenant chat tables the agent-execution queries
-    # depend on are created by no migration in this repo — they are owned by
-    # pylon's tenant-schema lifecycle, which a pylon-free stack does not have.
-    # See #287; agent_chat_baseline.sql states the assumption in its header.
+    # that names nothing. The three tenant chat tables the agent-execution
+    # queries depend on come from tenant migration
+    # 0123_agent_chat_message_tables.sql (#287 found them missing).
     # The chat driver: a PAT whose user owns a personal project AND holds the
     # start route's permission IN it. That project — not project 1 — is where
     # the turn runs, because the /llm hop resolves the caller's PERSONAL project

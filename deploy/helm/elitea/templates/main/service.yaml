@@ -5,6 +5,10 @@ metadata:
   name: {{ include "elitea-main.fullname" . }}
   labels:
     {{- include "elitea-main.labels" . | nindent 4 }}
+  {{- with include "elitea-main.serviceAnnotations" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.main.service.type }}
   ports:

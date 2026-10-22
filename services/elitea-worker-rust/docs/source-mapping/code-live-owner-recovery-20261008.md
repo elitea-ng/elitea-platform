@@ -607,7 +607,7 @@ The branch head is `e7a291985`. These runs used a two-node kind cluster, `k8s108
   one control-plane node (also hosts Main, Supervisor, PostgreSQL, NATS, Web, front door) and one worker node
   (`elitea.ai/sandbox=true`; hosts the Worker and every Code Pod). Kubelet `podPidsLimit: 128` on both nodes.
 - Calico v3.30.3 (`disableDefaultCNI`), so NetworkPolicy is enforced. cert-manager v1.19.2.
-- NATS: `deploy/helm/nats` (scale-1 profile, secured, 2 Gi PVC) plus `deploy/helm/nats-bootstrap`.
+- NATS: `deploy/helm/elitea` (scale-1 profile, secured, 2 Gi PVC) plus `deploy/helm/elitea natsBootstrap`.
 - PostgreSQL `pgvector/pgvector:0.8.1-pg18-trixie` with TLS (the Supervisor connects with `verify-full`).
   The real-model product dump (`main-c0f2e5f9b`) was restored; shared migrations 158 and tenants 148 are already the
   branch level (the migration hook found nothing to apply). AgentState database at migration 13.
@@ -777,7 +777,7 @@ Probe Pods used the pre-warmed runner image in the preparation namespace, the ex
 - Main, Worker and Web are selected by tag plus verified `imageID`, not by digest in the manifest.
 - Follow-ups: Worker gRPC keepalive (MDEL-js); user-code failure suspending for operator reconcile; the nats-bootstrap
   chart renders `deltas.maxBytes: 1073741824` as `1.073741824e+09` under Helm 4.1.0 (install needed `--set-string`).
-- Helm follow-ups: (1) `deploy/helm/nats-bootstrap` renders `deltas.maxBytes: 1073741824` as `1.073741824e+09` under
+- Helm follow-ups: (1) `deploy/helm/elitea natsBootstrap` renders `deltas.maxBytes: 1073741824` as `1.073741824e+09` under
   Helm 4.1.0, which `nats` rejects ("bytes must end in B, K, KB..."); the install used `--set-string`. (2) The
   Supervisor Deployment has no `nodeSelector`/affinity value; it was patched after install and `helm upgrade` reverts the
   patch. (3) The chart has no way to admit the Supervisor to Main's content listener (extra NetworkPolicy above).

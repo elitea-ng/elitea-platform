@@ -254,3 +254,26 @@ func TestEgressPolicyRulesAreTheSharedOnes(t *testing.T) {
 		t.Error("HostOf")
 	}
 }
+
+// <PREFIX>DATABASE_MAX_CONNS sizes the store's pool: unset keeps the pgx
+// default (zero here), 1..64 is taken, and anything else refuses to start.
+func TestTheDatabaseMaxConnsSetting(t *testing.T) {
+	read := func(value string) (spi.Settings, error) {
+		pairs := map[string]string{}
+		if value != "" {
+			pairs["ELITEA_DEEPWIKI_DATABASE_MAX_CONNS"] = value
+		}
+		return spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(pairs))
+	}
+	if s, err := read(""); err != nil || s.DatabaseMaxConns != 0 {
+		t.Fatalf("unset: %d, %v", s.DatabaseMaxConns, err)
+	}
+	if s, err := read("6"); err != nil || s.DatabaseMaxConns != 6 {
+		t.Fatalf("6: %d, %v", s.DatabaseMaxConns, err)
+	}
+	for _, bad := range []string{"0", "65", "-2", "six"} {
+		if _, err := read(bad); !errors.Is(err, spi.ErrConfig) {
+			t.Errorf("%q: err = %v, want ErrConfig", bad, err)
+		}
+	}
+}

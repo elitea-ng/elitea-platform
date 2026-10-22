@@ -11,7 +11,7 @@
 # client logs nats_auth=none at WARN. This overlay switches all three NATS
 # users in compose to the cluster posture:
 #
-#   * `nats` runs the nats.conf rendered from deploy/helm/nats — TLS required,
+#   * `nats` runs the nats.conf rendered from deploy/helm/elitea — TLS required,
 #     verify_and_map, the chart's own accounts and permission table — with the dev NATS CA
 #     material mounted at the chart's container paths, so the config needs no
 #     edit;

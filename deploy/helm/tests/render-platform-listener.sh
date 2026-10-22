@@ -38,6 +38,18 @@
 # Usage: deploy/helm/tests/render-platform-listener.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CHART="$REPO/deploy/helm/elitea"
@@ -175,11 +187,11 @@ renders() {
   fi
 }
 
-refuses "plain Ingress with Form sign-in" "identityHeadersStrippedByController" \
+# A plain Ingress renders with Form sign-in on (#1359 P3): elitea-main strips
+# every identity header itself, so the old "the controller strips X-Auth-*"
+# acknowledgement is gone.
+renders "plain Ingress with Form sign-in" \
   --set main.ingress.enabled=true --set main.ingress.gatewayApi=false
-renders "plain Ingress acknowledged" \
-  --set main.ingress.enabled=true --set main.ingress.gatewayApi=false \
-  --set main.ingress.identityHeadersStrippedByController=true
 # Chart defaults carry no Form sign-in (the standalone values file turns it on).
 if helm template "${GATEWAY_RENDER_POSTURE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
   --set main.ingress.enabled=true --set main.ingress.gatewayApi=false >"$WORK/out.yaml" 2>"$WORK/err.txt"; then

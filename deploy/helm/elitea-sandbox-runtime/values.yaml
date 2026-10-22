@@ -8,6 +8,12 @@
 #   kubectl label namespace elitea-sandbox-runtime pod-security.kubernetes.io/enforce=privileged
 #   helm install sandbox-runtime deploy/helm/elitea-sandbox-runtime -n elitea-sandbox-runtime
 
+# Where the DaemonSet and its ConfigMap go. Empty: the release's namespace.
+# It must admit privileged pods (pod-security.kubernetes.io/enforce=privileged).
+namespace: ""
+# The prefix of the DaemonSet and ConfigMap names. Empty: the release name.
+fullnameOverride: ""
+
 # k3s: adds the runtime to k3s's containerd template
 #   (/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl, or
 #   config-v3.toml.tmpl on containerd 2.0), generated from k3s's base

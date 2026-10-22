@@ -29,6 +29,127 @@ app.kubernetes.io/name: {{ include "elitea-main.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/*
+elitea-main.webUpstream — ELITEA_WEB_UPSTREAM, the origin elitea-main relays
+`/app…` and `/docs…` to (internal/api/webedge, #1359 P3). Empty when the chart
+renders no elitea-web, which turns the relay and the `/` → `/app/` redirect
+off and leaves elitea-main serving its own routes only.
+
+elitea-main is the ONLY browser edge: the Ingress or HTTPRoute
+(templates/main/ingress.yaml) is one `/` rule to it, and the path decisions a
+split route used to make — the SPA, the docs, the MCP server inside `/app`, the
+root redirect — are made in Go. The hop is browser traffic relayed, not a
+service-to-service call, so it is plain HTTP to the web Service, the same
+Service a browser-facing route once named directly.
+*/}}
+{{/*
+elitea-main.healthcheckExec — the exec probe that reads one probe path over
+loopback inside the container: `<main.probes.execCommand> -healthcheck <path>`.
+The one place the binary path and the flag are spelled. Takes (list $ path).
+*/}}
+{{- define "elitea-main.healthcheckExec" -}}
+{{- $root := index . 0 -}}
+exec:
+  command: [{{ $root.Values.main.probes.execCommand | default "/elitea-main" | quote }}, "-healthcheck", {{ index . 1 | quote }}]
+{{- end }}
+
+{{- define "elitea-main.webUpstream" -}}
+{{- if .Values.web.enabled -}}
+{{- printf "http://%s:%v" (include "elitea-web.fullname" .) .Values.web.service.port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.gkeIngress — "true" when the standard Ingress is a GKE one
+(main.ingress.gke): gke.enabled, or className / the kubernetes.io/ingress.class
+annotation naming gce or gce-internal. Empty otherwise, and always empty on
+the HTTPRoute path (BackendConfig and FrontendConfig apply to a GKE Ingress
+only; templates/guards.yaml refuses gke.enabled with gatewayApi).
+*/}}
+{{- define "elitea-main.gkeIngress" -}}
+{{- $i := .Values.main.ingress -}}
+{{- if and .Values.main.enabled $i.enabled (not $i.gatewayApi) -}}
+{{- $class := index ($i.annotations | default dict) "kubernetes.io/ingress.class" | default "" -}}
+{{- if or $i.gke.enabled (has $i.className (list "gce" "gce-internal")) (has $class (list "gce" "gce-internal")) -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/* The BackendConfig the Service names: the chart's own, or the operator's. */}}
+{{- define "elitea-main.gkeBackendConfigName" -}}
+{{- $b := .Values.main.ingress.gke.backendConfig -}}
+{{- if $b.create -}}{{- default (include "elitea-main.fullname" .) $b.name -}}{{- else -}}{{- $b.name -}}{{- end -}}
+{{- end }}
+
+{{/* The FrontendConfig the Ingress names: the chart's own, or the operator's. */}}
+{{- define "elitea-main.gkeFrontendConfigName" -}}
+{{- $f := .Values.main.ingress.gke.frontendConfig -}}
+{{- if $f.create -}}{{- default (include "elitea-main.fullname" .) $f.name -}}{{- else -}}{{- $f.name -}}{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.serviceAnnotations — the Service's annotations as a YAML map: the
+GKE wiring (container-native load balancing and the BackendConfig binding on
+the `http` port only — the runtime listeners on the same Service are gRPC
+over mTLS and never sit behind the load balancer), then main.service.annotations,
+which wins on a clash.
+*/}}
+{{- define "elitea-main.serviceAnnotations" -}}
+{{- $out := dict -}}
+{{- if include "elitea-main.gkeIngress" . -}}
+{{- $_ := set $out "cloud.google.com/neg" (dict "ingress" true | toJson) -}}
+{{- with include "elitea-main.gkeBackendConfigName" . -}}
+{{- $_ := set $out "cloud.google.com/backend-config" (dict "ports" (dict "http" .) | toJson) -}}
+{{- end -}}
+{{- end -}}
+{{- $out = merge (deepCopy (.Values.main.service.annotations | default dict)) $out -}}
+{{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
+{{/*
+elitea-main.ingressAnnotations — the Ingress's annotations as a YAML map:
+the GKE class, the FrontendConfig binding and the cert-manager issuer, then
+main.ingress.annotations, which wins on a clash.
+
+GKE's ingress controller is selected by the kubernetes.io/ingress.class
+ANNOTATION. GKE ships no IngressClass object named gce or gce-internal, so an
+Ingress with spec.ingressClassName: gce is ignored: no load balancer, and the
+BackendConfig and FrontendConfig never apply. A className of gce or
+gce-internal is therefore rendered as the annotation (elitea-main.ingressClassName
+drops it from spec); gke.enabled with no class at all means gce.
+*/}}
+{{- define "elitea-main.ingressAnnotations" -}}
+{{- $i := .Values.main.ingress -}}
+{{- $out := dict -}}
+{{- if include "elitea-main.gkeIngress" . -}}
+{{- if not (hasKey ($i.annotations | default dict) "kubernetes.io/ingress.class") -}}
+{{- $_ := set $out "kubernetes.io/ingress.class" (has $i.className (list "gce" "gce-internal") | ternary $i.className "gce") -}}
+{{- end -}}
+{{- with include "elitea-main.gkeFrontendConfigName" . -}}
+{{- $_ := set $out "networking.gke.io/v1beta1.FrontendConfig" . -}}
+{{- end -}}
+{{- end -}}
+{{- with $i.certManager -}}
+{{- if .issuer }}{{ $_ := set $out "cert-manager.io/issuer" .issuer }}{{ end -}}
+{{- if .clusterIssuer }}{{ $_ := set $out "cert-manager.io/cluster-issuer" .clusterIssuer }}{{ end -}}
+{{- if .issuerKind }}{{ $_ := set $out "cert-manager.io/issuer-kind" .issuerKind }}{{ end -}}
+{{- if .issuerGroup }}{{ $_ := set $out "cert-manager.io/issuer-group" .issuerGroup }}{{ end -}}
+{{- end -}}
+{{- $out = merge (deepCopy ($i.annotations | default dict)) $out -}}
+{{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
+{{/*
+elitea-main.ingressClassName — spec.ingressClassName, or empty: a GKE class
+(gce, gce-internal) is an annotation, never an IngressClass name
+(elitea-main.ingressAnnotations).
+*/}}
+{{- define "elitea-main.ingressClassName" -}}
+{{- $c := .Values.main.ingress.className | default "" -}}
+{{- if not (has $c (list "gce" "gce-internal")) }}{{ $c }}{{ end -}}
+{{- end }}
+
 {{- define "elitea-main.serviceAccountName" -}}
 {{- if .Values.main.serviceAccount.create }}
 {{- default (include "elitea-main.fullname" .) .Values.main.serviceAccount.name }}
@@ -138,7 +259,7 @@ false
 elitea-main.validateEventsNats — refuse a render where elitea-main cannot know
 the NATS the gateway uses. When the gateway reads GATEWAY_NATS_URL from a Secret
 (llmGateway.secrets), the chart cannot see the value, so deriving main's URL
-from the `nats` block could point it at a different broker: soft alerts would
+from the `natsClient` block could point it at a different broker: soft alerts would
 never reach the project stream, or main would crash on a host that does not
 exist. The operator names main's URL as well — main.secrets (preferred when it
 carries credentials) or main.env.
@@ -148,7 +269,7 @@ carries credentials) or main.env.
 {{- $mainSecrets := .Values.main.secrets | default dict -}}
 {{- $gwSecrets := .Values.llmGateway.secrets | default dict -}}
 {{- if and .Values.llmGateway.enabled (hasKey $gwSecrets "GATEWAY_NATS_URL") (not (get $mainEnv "ELITEA_EVENTS_NATS_URL")) (not (hasKey $mainSecrets "ELITEA_EVENTS_NATS_URL")) -}}
-{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `nats` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
+{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `natsClient` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
 {{- end -}}
 {{- end }}
 
@@ -844,84 +965,70 @@ cannot boot.
 This helper refuses that values file at render time instead.
 */}}
 {{/*
-elitea-main.validateConnectionBudget — the ceiling nothing enforced.
+elitea-main.validateConnectionBudget — the ceiling nothing enforced, for EVERY
+component that opens PostgreSQL connections (S11; it counted elitea-main
+alone before).
 
-elitea-main opens the six runtime-plane pools per replica when the runtime
-plane is on (36 connections, and validateDependencies forbids them sharing
-capacity) PLUS its primary pool. Multiplied by the HPA's ceiling that is ~400
-against a stock max_connections of 100, and the chart set no pool size at all.
+THE RULE: Σ (replica ceiling × connections per replica) over every component
+≤ postgresql.maxConnections − postgresql.reservedConnections.
 
-TWO CHECKS, and the first matters more than the arithmetic.
+The replica ceiling is the autoscaler's maxReplicas while one owns the
+Deployment, else replicaCount: the question is what this release may consume
+WITHOUT anybody doing anything, and `replicaCount` would check a state the
+autoscaler is free to leave. Per component:
 
-`ELITEA_DATABASE_MAX_CONNS` unset does not mean "small". cmd/elitea-main's
-databasePoolConfig returns EARLY when it is unset, so pgx applies its own
-default of max(4, numCPU) — a number that depends on the node the pod lands on
-and which this chart cannot know. A budget computed around an unknowable term
-is a budget that reports a number it cannot stand behind, so the guard refuses
-to compute one instead.
+  elitea-main      ELITEA_DATABASE_MAX_CONNS, plus the six runtime-plane pools
+                   when the runtime plane is on (36; validateDependencies
+                   forbids them sharing capacity), plus elitea-vector's token
+                   introspection pool (2) when vector.enabled, plus the
+                   AgentState receipt pool (4) per DISTINCT DSN file the
+                   compiled snapshots and Code debug artifacts read (8 when the
+                   two files differ). Behind pgbouncer the server side is
+                   poolSize + reservePoolSize ONCE, plus the AgentState pools,
+                   which never go through the pooler.
+  llm-gateway      GATEWAY_DATABASE_MAX_CONNS.
+  scheduler        its ELITEA_DATABASE_MAX_CONNS.
+  deepwiki host    ELITEA_DEEPWIKI_DATABASE_MAX_CONNS + 1 (the owner claim's
+                   own connection), when the host has its invocation store.
+  deepwiki engine  2 + 2 + ELITEA_DEEPWIKI_QUERY_POOL_SIZE
+                   + 4 × ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS, when the engine
+                   sidecar runs with a database.
+  inventory engine ELITEA_INVENTORY_POOL_SIZE, when the engine sidecar runs
+                   with a database. (The Inventory host has no store.)
+  worker           limits.delivery_max_concurrency AgentState connections,
+                   when postgresql.agentStateSharesServer (the agent-state
+                   database lives on this server; dbInit creates it there).
 
-The count is deliberately for elitea-main alone. The scheduler, gateway and
-worker hold one pool each and do not autoscale; they are covered by
-`reservedConnections`, along with the Jobs and anything else sharing the
-server. Modelling every component here would drift the moment one changes,
-and the term that actually moves is the one this counts.
+A pool size that is unset is not "small": every one of these services falls
+back to pgx's max(4, numCPU), which depends on the node the pod lands on. A
+budget computed around an unknowable term reports a number it cannot stand
+behind, so the guard refuses to compute one and names the setting instead.
 
- The replica count is the HPA's maxReplicas when autoscaling is on, because the
- question is what this release may consume WITHOUT anybody doing anything —
- `replicaCount` would check a state the autoscaler is free to leave.
+Exhaustion does not surface on the component that caused it: the NEXT one to
+connect — usually a migration Job or the scheduler — fails with 'sorry, too
+many clients already'. So the refusal lists every component's share.
 
- When pgbouncer.enabled, the check splits: the server-side term becomes the
- pooler's poolSize + reservePoolSize ONCE for the whole cluster (main's
- replicas share its server pool, and max_db_connections caps it at exactly
- that sum), and a second client-side term keeps every replica's pools under
- pgbouncer.maxClientConn. See the pooler's section in values.yaml.
- */}}
+`reservedConnections` covers what this chart does not model: the hook Jobs,
+interactive psql, backups, and anything else sharing the server.
+*/}}
 {{- define "elitea-main.validateConnectionBudget" -}}
 {{- $main := .Values.main -}}
 {{- $pg := .Values.postgresql | default dict -}}
+{{- $maxConn := int (default 100 $pg.maxConnections) -}}
+{{- $reserved := int (default 25 $pg.reservedConnections) -}}
+{{- $available := sub $maxConn $reserved -}}
 {{- $env := $main.env | default dict -}}
 {{- $runtimeOn := and $main.runtime $main.runtime.enabled -}}
-
-{{- $primary := get $env "ELITEA_DATABASE_MAX_CONNS" | toString -}}
-{{- if and $runtimeOn (not $primary) -}}
-{{- fail "main.runtime.enabled is true but main.env.ELITEA_DATABASE_MAX_CONNS is unset, so this release's connection use cannot be computed. cmd/elitea-main/database_pool.go returns early when it is unset and pgx then applies max(4, numCPU) — a value that depends on the node the pod lands on. With the runtime plane on, each replica ALSO opens 36 isolated runtime-plane connections that may not share capacity, so at autoscaling.maxReplicas the total is the number that exhausts the server. Set it explicitly (1..64)." -}}
-{{- end -}}
-
-{{- $replicas := int (default 1 $main.replicaCount) -}}
-{{- if and $main.autoscaling $main.autoscaling.enabled -}}
-{{- $replicas = int $main.autoscaling.maxReplicas -}}
-{{- end -}}
-
 {{- $pb := .Values.pgbouncer | default dict -}}
-{{- if $pb.enabled -}}
-{{/*
-  With the pooler in the path, the arithmetic splits in two, and each half
-  guards a different exhaustion.
+{{- $parts := list -}}
+{{- $total := 0 -}}
 
-  Server side: every main replica's pools share the pooler's single server
-  pool, so main's server-side cost is poolSize + reservePoolSize ONCE, for the
-  whole cluster — the number the replica count used to multiply. The pooler
-  cannot open more than that (its max_db_connections is rendered as the sum),
-  so this term is exact, not a ceiling. It does not depend on
-  ELITEA_DATABASE_MAX_CONNS, so it runs even when that is unset.
-*/}}
-{{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
-{{- $poolAvailable := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
-{{- $compiledDirect := 0 -}}
-{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
-{{/* The private receipt DSN is independent of the product PgBouncer route. */}}
-{{- $compiledDirect = mul 4 $replicas -}}
+{{- /* ── elitea-main ─────────────────────────────────────────────────────── */ -}}
+{{- $primary := get $env "ELITEA_DATABASE_MAX_CONNS" | toString -}}
+{{- if not $primary -}}
+{{- fail (printf "main.env.ELITEA_DATABASE_MAX_CONNS is unset, so this release's connection use cannot be computed. cmd/elitea-main/database_pool.go returns early when it is unset and pgx then applies max(4, numCPU) — a value that depends on the node the pod lands on.%s Set it explicitly (1..64)." (ternary " With the runtime plane on, each replica ALSO opens 36 isolated runtime-plane connections that may not share capacity, so at autoscaling.maxReplicas the total is the number that exhausts the server." "" (not (not $runtimeOn)))) -}}
 {{- end -}}
-{{- $serverTotal := add $poolServer $compiledDirect -}}
-{{- if gt $serverTotal $poolAvailable -}}
-{{- if $compiledDirect -}}
-{{- fail (printf "this release can open %d PostgreSQL server connections (%d PgBouncer plus %d independent Code receipt connections across %d Main replicas), but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Lower the pool or replica ceiling, or increase the measured server budget." $serverTotal $poolServer $compiledDirect $replicas $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
-{{- end -}}
-{{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
-{{- end -}}
-{{- end -}}
-
-{{- if $primary -}}
+{{- $mainReplicas := int (include "elitea.scaling.maxReplicas" $main) -}}
 {{- $perReplica := int $primary -}}
 {{- if $runtimeOn -}}
 {{/* The compiled phase-one limits, overridable per pool. Kept in the same
@@ -936,38 +1043,91 @@ and the term that actually moves is the one this counts.
 {{- if .Values.vector.enabled -}}
 {{/* The seventh pool, opened only when ELITEA_VECTOR_INTROSPECTION_CLIENTS is
      rendered (vector.enabled): elitea-vector's token introspection reads the
-     claim-token table on its own bounded pool, so a burst of introspection
-     calls cannot starve the lease/control pool. */}}
+     claim-token table on its own bounded pool. */}}
 {{- $perReplica = add $perReplica (int (default 2 (get $env "ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS"))) -}}
 {{- end -}}
 {{- end -}}
-
-{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
-{{/* Debug and compiled receipts share the same four-connection AgentState pool. */}}
-{{- $perReplica = add $perReplica 4 -}}
+{{- /*
+  The AgentState receipt pool: four connections per DISTINCT DSN file. The
+  compiled snapshots and the Code debug artifacts share one pool when they read
+  the same file, and open one each when the files differ.
+*/ -}}
+{{- $dsnFiles := list -}}
+{{- $materialDir := ($main.runtime.material | default dict).mountPath | default "" | toString | trimSuffix "/" -}}
+{{- if ($main.runtime.rustCompiledSnapshots | default dict).enabled -}}
+{{- $dsnFiles = append $dsnFiles (printf "%s/agent-checkpoint-connection" $materialDir) -}}
 {{- end -}}
+{{- if ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
+{{- $dsnFiles = append $dsnFiles (printf "%s/agent-checkpoint-connection" $materialDir) -}}
+{{- end -}}
+{{- $agentStateDirect := mul 4 (len (uniq $dsnFiles)) -}}
+{{- $perReplica = add $perReplica $agentStateDirect -}}
 
 {{- if $pb.enabled -}}
 {{/*
-  Client side: the pooler does not limit how many client connections elitea-
-  main opens; it only bounds what they cost on the server. The sum of every
-  replica's pools still has to fit under pgbouncer.maxClientConn, or the
-  pooler starts refusing main's own connections and the read plane fails with
-  'no more connections allowed'.
+  With the pooler in the path, main's server-side cost is poolSize +
+  reservePoolSize ONCE for the whole cluster (max_db_connections caps the
+  pooler at exactly that sum), plus the AgentState pools, which are direct.
+  The client side keeps every replica's pools under pgbouncer.maxClientConn,
+  or the pooler refuses main's own connections.
 */}}
-{{- $client := mul $perReplica $replicas -}}
-{{- $clientCap := int $pb.maxClientConn -}}
-{{- if gt $client $clientCap -}}
-{{- fail (printf "this release's elitea-main pools can open %d client connections (%d per replica x %d replicas), but pgbouncer.maxClientConn allows %d. The pooler refuses the excess and main loses its own database: lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise pgbouncer.maxClientConn." $client $perReplica $replicas $clientCap) -}}
+{{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
+{{- if gt $poolServer $available -}}
+{{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $available $maxConn $reserved) -}}
 {{- end -}}
+{{- $client := mul (sub $perReplica $agentStateDirect) $mainReplicas -}}
+{{- if gt $client (int $pb.maxClientConn) -}}
+{{- fail (printf "this release's elitea-main pools can open %d client connections (%d per replica x %d replicas), but pgbouncer.maxClientConn allows %d. The pooler refuses the excess and main loses its own database: lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise pgbouncer.maxClientConn." $client (sub $perReplica $agentStateDirect) $mainReplicas (int $pb.maxClientConn)) -}}
+{{- end -}}
+{{- $mainServer := add $poolServer (mul $agentStateDirect $mainReplicas) -}}
+{{- $total = add $total $mainServer -}}
+{{- $parts = append $parts (printf "elitea-main %d PostgreSQL server connections (%d PgBouncer%s)" $mainServer $poolServer (ternary (printf " plus %d independent Code receipt connections across %d Main replicas" (mul $agentStateDirect $mainReplicas) $mainReplicas) "" (gt $agentStateDirect 0))) -}}
 {{- else -}}
+{{- $mainTotal := mul $perReplica $mainReplicas -}}
+{{- $total = add $total $mainTotal -}}
+{{- $parts = append $parts (printf "elitea-main %d PostgreSQL connections (%d per elitea-main replica x %d replicas)" $mainTotal $perReplica $mainReplicas) -}}
+{{- end -}}
 
-{{- $total := mul $perReplica $replicas -}}
-{{- $available := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
+{{- /* ── the other components, each: replica ceiling × per replica ─────── */ -}}
+{{- $rows := list -}}
+{{- if .Values.llmGateway.enabled -}}
+{{- $rows = append $rows (dict "name" "llm-gateway" "field" "llmGateway.env.GATEWAY_DATABASE_MAX_CONNS" "pool" (get (.Values.llmGateway.env | default dict) "GATEWAY_DATABASE_MAX_CONNS") "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.llmGateway)) -}}
+{{- end -}}
+{{- if .Values.scheduler.enabled -}}
+{{- $rows = append $rows (dict "name" "scheduler" "field" "scheduler.env.ELITEA_DATABASE_MAX_CONNS" "pool" (get (.Values.scheduler.env | default dict) "ELITEA_DATABASE_MAX_CONNS") "extra" 0 "replicas" (.Values.scheduler.replicaCount | default 1)) -}}
+{{- end -}}
+{{- if .Values.deepwiki.enabled -}}
+{{- $dwEnv := .Values.deepwiki.env | default dict -}}
+{{- $dwDb := get (fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL"))) "ELITEA_DEEPWIKI_DATABASE_URL" -}}
+{{- if $dwDb -}}
+{{- $dwReplicas := include "elitea.scaling.maxReplicas" .Values.deepwiki -}}
+{{- $rows = append $rows (dict "name" "deepwiki host" "field" "deepwiki.env.ELITEA_DEEPWIKI_DATABASE_MAX_CONNS" "pool" (get $dwEnv "ELITEA_DEEPWIKI_DATABASE_MAX_CONNS") "extra" 1 "replicas" $dwReplicas) -}}
+{{- if eq (include "elitea-deepwiki.sidecar" .) "native" -}}
+{{- $workers := include "elitea.integer" (dict "field" "deepwiki.env.ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS" "value" (get $dwEnv "ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS" | default "1" | toString) "min" 1) | int -}}
+{{- $rows = append $rows (dict "name" "deepwiki engine" "field" "deepwiki.env.ELITEA_DEEPWIKI_QUERY_POOL_SIZE" "pool" (get $dwEnv "ELITEA_DEEPWIKI_QUERY_POOL_SIZE") "extra" (add 4 (mul 4 $workers)) "replicas" $dwReplicas) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.inventory.enabled (include "elitea-inventory.sidecar" .) (fromJson (include "elitea-inventory.databaseSecrets" .)) -}}
+{{- $rows = append $rows (dict "name" "inventory engine" "field" "inventory.env.ELITEA_INVENTORY_POOL_SIZE" "pool" (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_POOL_SIZE") "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.inventory)) -}}
+{{- end -}}
+{{- if and .Values.worker.enabled (dig "agentStateSharesServer" true $pg) -}}
+{{- $rows = append $rows (dict "name" "worker AgentState" "field" "worker.runtime.limits.delivery_max_concurrency" "pool" .Values.worker.runtime.limits.delivery_max_concurrency "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.worker)) -}}
+{{- end -}}
+{{- range $rows -}}
+{{- $raw := .pool | toString | trim -}}
+{{- if or (eq $raw "") (eq $raw "<nil>") -}}
+{{- fail (printf "%s is unset, so the %s's connection use cannot be computed: the service then applies pgx's max(4, numCPU), which depends on the node the pod lands on. Set it explicitly; postgresql.maxConnections is checked against it." .field .name) -}}
+{{- end -}}
+{{- $per := add (include "elitea.integer" (dict "field" .field "value" $raw "min" 1) | int) (int .extra) -}}
+{{- $n := int .replicas -}}
+{{- $sum := mul $per $n -}}
+{{- $total = add $total $sum -}}
+{{- $parts = append $parts (printf "%s %d (%d x %d)" .name $sum $per $n) -}}
+{{- end -}}
+
 {{- if gt $total $available -}}
-{{- fail (printf "this release can open %d PostgreSQL connections (%d per elitea-main replica x %d replicas) but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Exhaustion does not surface on the replica that caused it: the next component to connect — usually a migration Job or the scheduler — fails with 'sorry, too many clients already'. Lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, raise postgresql.maxConnections to match the server you actually run, or put elitea-main behind the pgbouncer component so its replicas share one server pool." $total $perReplica $replicas $available (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
-{{- end -}}
-{{- end -}}
+{{- fail (printf "this release can open %d PostgreSQL connections at its replica ceilings, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). By component: %s. Exhaustion does not surface on the component that caused it: the next one to connect — usually a migration Job or the scheduler — fails with 'sorry, too many clients already'. Lower a pool (main.env.ELITEA_DATABASE_MAX_CONNS, the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, the per-component *_MAX_CONNS / *_POOL_SIZE) or a replica ceiling (autoscaling.maxReplicas), put elitea-main behind the pgbouncer component, or raise postgresql.maxConnections to match the server you actually run. The Scaling page of the deployment docs has the formula." $total $available $maxConn $reserved (join ", " $parts)) -}}
 {{- end -}}
 {{- end }}
 
@@ -1199,23 +1359,17 @@ too, whatever the value:
 {{- if not $runtime.enabled -}}
 {{/*
   Runtime OFF. config.go returns an empty configuration and ignores every other
-  ELITEA_RUNTIME_* name, so a half-filled block here is silently dead rather
-  than active. That is the failure this chart is meant to end, so say it now.
+  ELITEA_RUNTIME_* name, and so does this chart: elitea-main.runtimeEnv emits
+  nothing and no listener, port or material volume renders.
+
+  The sub-settings are NOT refused here any more (S10). They ship populated —
+  the streams, the dispatch planes, signingKeyId, material.secretName — because
+  the runtime is on by default, so `main.runtime.enabled=false` has to be the
+  ONE switch that turns it off; making the operator also clear six defaults
+  would make it six switches. What depends on the runtime (the worker,
+  elitea-vector, DeepWiki, Inventory) is still refused beside it, by
+  elitea.featureDependencies and each component's own guard.
 */}}
-{{- range $field := list "commandStream" -}}
-{{- if get $runtime $field -}}
-{{- fail (printf "runtime.%s is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.%s." $field $field) -}}
-{{- end -}}
-{{- end -}}
-{{- if get $runtimeNats "url" -}}
-{{- fail "runtime.nats.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.nats.url." -}}
-{{- end -}}
-{{- if get $material "secretName" -}}
-{{- fail "runtime.material.secretName is set but runtime.enabled is false. Set runtime.enabled=true, or clear runtime.material.secretName." -}}
-{{- end -}}
-{{- if or $agent.enabled $ingest.enabled $scheduling.enabled $discovery.enabled -}}
-{{- fail "a runtime dispatch plane is enabled but runtime.enabled is false. internal/runtimecomposition/config.go ignores every dispatch flag while ELITEA_RUNTIME_ENABLED is off, so the routes stay dark. Set runtime.enabled=true." -}}
-{{- end -}}
 {{- else -}}
 
 {{/*
@@ -1264,11 +1418,11 @@ too, whatever the value:
 {{- end -}}
 
 {{/* The runtime plane's NATS connection (ELITEA_RUNTIME_NATS_URL), as the
-     elitea-main-runtime identity. Empty means the top-level `nats` block;
+     elitea-main-runtime identity. Empty means the `natsClient` block;
      templates/natsClient.yaml issues the certificate and refuses a URL that
-     disagrees with nats.tls. */}}
-{{- if not (or (get $runtimeNats "url") .Values.nats.service) -}}
-{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or the top-level nats.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
+     disagrees with natsClient.tls. */}}
+{{- if not (or (get $runtimeNats "url") .Values.natsClient.service) -}}
+{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or natsClient.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
 {{- end -}}
 {{- if and (get $runtimeNats "url") (contains "@" (get $runtimeNats "url" | toString)) -}}
 {{- fail "runtime.nats.url carries user information. With mTLS the client certificate is the identity, and this URL is rendered into a ConfigMap." -}}
@@ -1382,9 +1536,10 @@ too, whatever the value:
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
 {{- end -}}
 {{- else -}}
-{{- if $agent.commandStream -}}
-{{- fail "runtime.agentExecutionDispatch settings are present but runtime.agentExecutionDispatch.enabled is false. config.go refuses that combination: \"runtime agent execution dispatch settings require explicit enablement\"." -}}
-{{- end -}}
+{{- /* Off: the stream name is NOT refused (S10). It ships populated, so
+       enabled=false must be the one switch; runtimeEnv writes the stream only
+       beside ENABLED=true, so config.go never sees the combination it
+       refuses. */ -}}
 {{- end -}}
 
 {{/* Index-ingest dispatch: index start, index cancel, index metadata. */}}
@@ -1412,9 +1567,8 @@ too, whatever the value:
   one stream has one durable consumer, so they share it by construction.
 */}}
 {{- else -}}
-{{- if $ingest.commandStream -}}
-{{- fail "runtime.indexIngestDispatch settings are present but runtime.indexIngestDispatch.enabled is false. config.go: \"runtime index ingest dispatch settings require explicit enablement\"." -}}
-{{- end -}}
+{{- /* Off: the stream name is not refused, as for agentExecutionDispatch
+       above (S10: enabled=false is the one switch). */ -}}
 {{- end -}}
 
 {{/* Index scheduling: the index schedule write and delete routes. */}}
@@ -1494,7 +1648,7 @@ ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID: {{ $scheduling.instanceId | quote }}
 {{/* The runtime command bus (docs/runtime-command-bus.md), as the
      elitea-main-runtime NATS identity (templates/natsClient.yaml). */}}
 ELITEA_RUNTIME_NATS_URL: {{ include "elitea-main.runtimeNatsUrl" . | quote }}
-{{- if .Values.nats.tls.enabled }}
+{{- if .Values.natsClient.tls.enabled }}
 ELITEA_RUNTIME_NATS_TLS_CA_FILE: {{ printf "%s/ca.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_CERT_FILE: {{ printf "%s/tls.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_KEY_FILE: {{ printf "%s/tls.key" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
@@ -1575,7 +1729,7 @@ reads the Secret; the service reads the copies.
 
 {{/*
 elitea-main.runtimeNatsUrl — the runtime plane's NATS URL: runtime.nats.url,
-else the top-level `nats` block (the same broker as every other client; the
+else the `natsClient` block (the same broker as every other client; the
 runtime is a separate identity, not a separate server).
 */}}
 {{- define "elitea-main.runtimeNatsUrl" -}}
@@ -1586,7 +1740,7 @@ runtime is a separate identity, not a separate server).
 {{/*
 elitea-main.runtimeNatsMountPath — where elitea-main-runtime's client
 certificate Secret is mounted. A directory of its own: the live-update plane's
-identity sits at nats.tls.mountPath in the same pod.
+identity sits at natsClient.tls.mountPath in the same pod.
 */}}
 {{- define "elitea-main.runtimeNatsMountPath" -}}
 {{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}

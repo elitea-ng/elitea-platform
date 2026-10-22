@@ -62,7 +62,7 @@
   {
     "slug": "deployment/argocd",
     "title": "GitOps with ArgoCD",
-    "description": "The app-of-apps root, sync-wave order, per-environment value overrides, image promotion, and rollback."
+    "description": "One Application for the whole platform: the app-of-apps root, the sync-wave order inside the elitea chart, where each value comes from, image promotion, and rollback."
   },
   {
     "slug": "deployment/cloud-executor-kubernetes",
@@ -85,9 +85,14 @@
     "description": "The Google Cloud choices for a from-scratch install: a GKE cluster with Workload Identity, Cloud SQL for PostgreSQL, a GCS bucket with no keys, the edge in front of it, and platform models from Vertex AI or AI DIAL authenticated by a service account."
   },
   {
+    "slug": "deployment/gke-argocd",
+    "title": "Deploy on GKE with Argo CD",
+    "description": "A production GKE install from one Argo CD Application: the Google Cloud preconditions with their commands, secrets in Secret Manager through External Secrets, the GKE Ingress, the first sync, and what to check when it fails."
+  },
+  {
     "slug": "deployment/helm-install",
     "title": "Install with Helm",
-    "description": "Prerequisites, secrets to create beforehand, which values file to start from, and the install sequence from nats through the first admin."
+    "description": "Prerequisites, secrets to create beforehand, which values file to start from, and the one-chart install through the first admin."
   },
   {
     "slug": "deployment/operations",
@@ -98,6 +103,11 @@
     "slug": "deployment/overview",
     "title": "Production deployment overview",
     "description": "The target Kubernetes topology, what the Helm chart creates versus what you bring, and where the signed release artefacts live."
+  },
+  {
+    "slug": "deployment/scaling",
+    "title": "Scaling",
+    "description": "What each Elitea component scales on and what it needs first, the PostgreSQL connection budget the chart checks, per-replica capacity caps, the high-availability overlays, disruption budgets and spread, drain and grace periods, and the gateway's expected-replicas rule."
   },
   {
     "slug": "development/backend",
@@ -117,7 +127,7 @@
   {
     "slug": "development/kind",
     "title": "Run a local Kubernetes cluster",
-    "description": "Install the real Helm chart into a kind cluster to prove the DeepWiki provider's two-container pod and mTLS hop, offline."
+    "description": "Install the real Helm chart on its shipped defaults into a kind cluster: the runtime plane, the bundled Qdrant, DeepWiki and Inventory, offline."
   },
   {
     "slug": "development/overview",

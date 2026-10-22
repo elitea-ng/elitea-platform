@@ -89,7 +89,7 @@ services:
         condition: service_started
 
   # Creates every JetStream asset, with the same script the cluster's
-  # nats-bootstrap hook Job runs (deploy/helm/nats-bootstrap/files/bootstrap.sh).
+  # nats-bootstrap hook Job runs (deploy/helm/elitea/files/nats-bootstrap.sh).
   # elitea-main only BINDS to its presence bucket and refuses to start when it
   # is missing (#1076), so it waits for this to complete. Plaintext and no
   # client identity, like the server above: compose's posture. The secured
@@ -100,7 +100,7 @@ services:
     environment:
       NATS_URL: "nats://nats:4222"
     volumes:
-      - ./helm/nats-bootstrap/files/bootstrap.sh:/bootstrap/bootstrap.sh:ro
+      - ./helm/elitea/files/nats-bootstrap.sh:/bootstrap/bootstrap.sh:ro
     depends_on:
       nats-health:
         condition: service_healthy

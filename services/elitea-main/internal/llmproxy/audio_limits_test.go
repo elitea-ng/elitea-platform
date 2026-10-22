@@ -2,6 +2,7 @@ package llmproxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
@@ -205,6 +209,25 @@ func TestAudio_AProviderThatNeverAnswersTimesOutWith504(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, audioRequest("/llm/v1/audio/speech", strings.NewReader(`{"model":"tts","input":"hi"}`)))
 
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504; body=%s", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec.Body.Bytes()); code != "upstream_timeout" {
+		t.Fatalf("code = %q, want upstream_timeout", code)
+	}
+}
+
+// TestAudio_GatewayDeadlineBeforeTheEdgesIsStillA504: the gateway enforces
+// the deadline gRPC sent it and can fail the call a moment before this side's
+// context ends. The DeadlineExceeded status alone names the timeout.
+func TestAudio_GatewayDeadlineBeforeTheEdgesIsStillA504(t *testing.T) {
+	ctx := context.WithValue(context.Background(), audioRefusalKey{}, &audioRefusal{})
+	r := httptest.NewRequest(http.MethodPost, "/llm/v1/audio/speech", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	if !writeAudioRefusal(rec, r, status.Error(codes.DeadlineExceeded, "stream terminated by RST_STREAM with error code: CANCEL")) {
+		t.Fatal("writeAudioRefusal = false, want the timeout refusal")
+	}
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("status = %d, want 504; body=%s", rec.Code, rec.Body.String())
 	}

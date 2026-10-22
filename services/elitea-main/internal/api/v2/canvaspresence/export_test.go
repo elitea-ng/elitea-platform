@@ -8,7 +8,7 @@ import (
 )
 
 // BootstrapBucket creates bucket with the settings the nats-bootstrap Job
-// gives ELITEA_CANVAS_PRESENCE (deploy/helm/nats-bootstrap/files/bootstrap.sh:
+// gives ELITEA_CANVAS_PRESENCE (deploy/helm/elitea/files/nats-bootstrap.sh:
 // History 1, TTL 2m, file storage). The plaintext test server has no
 // bootstrap of its own, and NewNATSStore only binds. The secured test in
 // cmd/elitea-main runs the real script instead.

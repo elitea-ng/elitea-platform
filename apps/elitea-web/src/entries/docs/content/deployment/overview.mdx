@@ -3,7 +3,7 @@ title: "Production deployment overview"
 description: "The target Kubernetes topology, what the Helm chart creates versus what you bring, and where the signed release artefacts live."
 ---
 
-Elitea's Kubernetes path is one Helm chart, `elitea`, composed with two supporting charts (`nats`, `nats-bootstrap`) through ArgoCD's app-of-apps pattern — there is no umbrella chart. This page is the map; [Deploy from scratch](/deployment/from-scratch) walks a complete first install, and [Install with Helm](/deployment/helm-install) is the shorter reference.
+Elitea's Kubernetes path is one Helm chart, `elitea`, for everything: the platform, NATS JetStream with its stream bootstrap, the vector store and, where a cluster needs it, the sandbox-runtime installer. ArgoCD syncs it as one Application through an app-of-apps root. This page is the map; [Deploy from scratch](/deployment/from-scratch) walks a complete first install, [Install with Helm](/deployment/helm-install) is the shorter reference, and [Deploy on GKE with Argo CD](/deployment/gke-argocd) is the GitOps install on Google Cloud.
 
 <Info title="Compose also exists">
 A one-host Compose stack (`docker-compose.standalone-full.yml`) runs the same topology for evaluation and small teams — see [Install Elitea](/getting-started/install). This section covers the Kubernetes path only.
@@ -13,9 +13,9 @@ A one-host Compose stack (`docker-compose.standalone-full.yml`) runs the same to
 
 ```mermaid
 flowchart TB
-    Browser["Browser"] --> Edge["Ingress / Gateway API"]
-    Edge --> Web["elitea-web (SPA)"]
+    Browser["Browser"] --> Edge["Ingress / Gateway API: one / route"]
     Edge --> Main["elitea-main"]
+    Main -->|"relays /app, /docs"| Web["elitea-web (SPA)"]
 
     Main --> Gateway["LLM gateway"]
     Main --> Scheduler["elitea-scheduler"]
@@ -43,14 +43,14 @@ Every arrow into the worker and the NATS command bus is mutually authenticated (
 
 ## What the chart creates, and what you bring
 
-The chart is **one release** — elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the database-preparation Job, and (opt-in) the DeepWiki and Inventory provider services with their own migration Jobs and the vector store: elitea-vector with Qdrant (`vector.enabled`), which indexing and the native DeepWiki and Inventory engines need. `nats` and `nats-bootstrap` are separate charts, synced first.
+The chart is **one release** — elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the database-preparation Job, the DeepWiki and Inventory provider services with their own migration Jobs, and the vector store: elitea-vector (`vector.enabled`) with Qdrant (`qdrant.enabled`, the upstream qdrant chart bundled like NATS), which indexing and the native DeepWiki and Inventory engines need. The runtime plane, the worker, the vector store, DeepWiki and Inventory are all on by default, one switch each (`<feature>.enabled: false` leaves one out). NATS JetStream and its bootstrap Job are in the same release (`nats.enabled`, on by default), ordered ahead of the workloads; the sandbox-runtime installer (`sandboxRuntime.enabled`) is off unless a k3s or EKS cluster needs gVisor on its nodes.
 
 <CardGroup cols={2}>
   <Card title="PostgreSQL" icon="database">No chart provisions it. Point `postgresql.existingSecret` at a Secret holding the DSN; the database may start empty (the migration Job bootstraps the schema itself), but an administrator DSN is still needed for `CREATE DATABASE`. Plain PostgreSQL is enough: no extension, because every vector is in Qdrant.</Card>
-  <Card title="NATS JetStream" icon="waypoints">The `nats` and `nats-bootstrap` charts ship the coordination substrate the LLM gateway's budget counters and the scheduler dial — install them, but they are commodity infrastructure this chart points at rather than owns.</Card>
+  <Card title="cert-manager and secrets" icon="key">cert-manager must be installed: the bundled NATS CA, every NATS identity and the in-cluster mTLS hops are its `Certificate`s. Secrets come from you, or from your secret manager through the chart's `externalSecrets` block (External Secrets Operator).</Card>
   <Card title="Object storage" icon="package">An S3-compatible endpoint for artifacts and DeepWiki/Inventory output. The bucket must exist before the first sync (or set `objectInit.enabled: true` for a self-hosted S3-compatible store you administer directly); a missing bucket lets the deployment look green and then crash-loop on the next boot step.</Card>
-  <Card title="Ingress" icon="route">No Ingress or HTTPRoute renders until `main.ingress.enabled` is on, and even then it is one `/` rule with elitea-main as the sole backend — see [Install with Helm](/deployment/helm-install) for the edge caveat.</Card>
-  <Card title="OIDC/SAML identity provider, TLS" icon="shield-check">The chart consumes an authentication configuration document or `OIDC_ISSUER_URL`; it issues no certificates of its own beyond the in-cluster mTLS hops (cert-manager `ClusterIssuer`, brought by you).</Card>
+  <Card title="Ingress" icon="route">No Ingress or HTTPRoute renders until `main.ingress.enabled` is on. Then it is one `/` rule with elitea-main as the sole backend, and that is the whole edge: elitea-main relays `/app` and `/docs` to elitea-web. Your ingress controller or Gateway, DNS and public certificate are yours; on GKE, `main.ingress.gke` adds what the Google load balancer needs.</Card>
+  <Card title="OIDC/SAML identity provider, TLS" icon="shield-check">The chart consumes an authentication configuration document or `OIDC_ISSUER_URL`; it issues no certificates of its own beyond the in-cluster mTLS hops (cert-manager issuers, brought by you).</Card>
 </CardGroup>
 
 ## Sizing: the PostgreSQL connection budget
@@ -63,7 +63,7 @@ When the server cannot hold the replicas you need, turn on the chart's transacti
 
 ## Published artefacts
 
-Every chart (`elitea`, `nats`, `nats-bootstrap`) and every first-party image is built, cosign-signed (keyless) and pushed to `ghcr.io/elitea-ng` by the release job in `.github/workflows/publish.yml`, after the images they reference are already pushed and signed.
+Every chart (`elitea`, and the standalone `elitea-sandbox-runtime`) and every first-party image is built, cosign-signed (keyless) and pushed to `ghcr.io/elitea-ng` by the release job in `.github/workflows/publish.yml`, after the images they reference are already pushed and signed.
 
 ```bash
 helm install elitea oci://ghcr.io/elitea-ng/charts/elitea --version <tag>
@@ -92,4 +92,4 @@ If any part of a release fails, the rollback job deletes the pushed charts along
 
 Continue to [Install with Helm](/deployment/helm-install) for the step-by-step install, or [GitOps with ArgoCD](/deployment/argocd) if you are deploying through the app-of-apps.
 
-{/* source: deploy/README.md:163-431 (chart table, composition decision, distribution); deploy/helm/elitea/values-standalone.yaml:1-20 (connection budget); deploy/helm/elitea/values.yaml:80-136 (postgresql.maxConnections, reservedConnections); deploy/helm/elitea/Chart.yaml (chart description) */}
+{/* source: deploy/README.md:163-431 (chart table, composition decision, distribution); deploy/helm/elitea/values-standalone.yaml:1-20 (connection budget); deploy/helm/elitea/values.yaml:80-136 (postgresql.maxConnections, reservedConnections); deploy/helm/elitea/Chart.yaml (chart description, dependencies); .github/workflows/publish.yml (chart matrix); docs/UPGRADING.md (one chart, one edge route) */}

@@ -4,6 +4,477 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Scale-out readiness: optional KEDA and prometheus-adapter, an all-component connection budget, drain and grace periods
+
+**Affects:** every Kubernetes install of the `elitea` chart, and especially
+installs that set `postgresql.maxConnections` close to elitea-main's share,
+override a gateway `preStop.command`, a grace period or
+`LLM_BUDGET_EXPECTED_REPLICAS`, run Inventory on more than one replica, or
+restrict `sourceRepos` in an Argo CD AppProject for a git source.
+
+**What changed.**
+
+* **Two optional dependencies, both off:** `keda` (kedacore chart 2.21.0,
+  `keda.enabled`) and `prometheus-adapter` (prometheus-community chart
+  5.3.0, alias `prometheusAdapter`, `prometheusAdapter.enabled`). Both are
+  cluster-wide, so a cluster runs ONE of each: enable them only in a cluster
+  that has none (`helm install` refuses when it can see one this release does
+  not own). With KEDA already in the cluster, set nothing, or
+  `scaling.keda.clusterInstalled: true` where the chart cannot see it (Argo
+  CD). A git source in an AppProject that restricts `sourceRepos` must now
+  also list `https://kedacore.github.io/charts` and
+  `https://prometheus-community.github.io/helm-charts`, even with both off;
+  the published OCI chart carries them.
+* **Autoscalers for DeepWiki and the gateway pick their source.**
+  `deepwiki.autoscaling` and `llmGateway.autoscaling` take `source: auto`
+  (default), which uses KEDA's Prometheus trigger, then KEDA's postgresql
+  trigger (DeepWiki) or a custom metrics adapter (gateway), then CPU. The
+  gateway HPA no longer assumes an adapter: without one it scales on CPU.
+  `llmGateway.autoscaling.maxReplicas` 10 → 4. The worker's ScaledObject is
+  accepted with the release's KEDA, the cluster's, or
+  `scaling.keda.clusterInstalled`.
+* **Inventory runs on one replica.** Its host keeps invocations in memory;
+  `inventory.autoscaling.maxReplicas` above 1 is refused.
+* **The connection budget counts every component** at its replica ceiling:
+  elitea-main, the gateway (`GATEWAY_DATABASE_MAX_CONNS`, new default `"8"`),
+  the scheduler (`ELITEA_DATABASE_MAX_CONNS`, new default `"4"`), the DeepWiki
+  host and engine (`ELITEA_DEEPWIKI_DATABASE_MAX_CONNS` `"4"`,
+  `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` `"8"`), the Inventory engine
+  (`ELITEA_INVENTORY_POOL_SIZE` `"8"`) and the worker's AgentState pool
+  (`postgresql.agentStateSharesServer`, default true). The refusal lists each
+  share. `postgresql.maxConnections` 500 → 600; `values-standalone.yaml`
+  210 → 280; `values-gke.yaml` 200 → 500 (a 4 vCPU / 16 GB Cloud SQL
+  instance's default). An unset primary pool is refused even with the
+  runtime plane off.
+* **Drain and grace.** elitea-main gets a preStop sleep of 10 s,
+  `ELITEA_SHUTDOWN_TIMEOUT: "30s"` and `terminationGracePeriodSeconds: 50`;
+  the gateway's preStop is the native sleep action (`preStop.sleepSeconds:
+  10`; `preStop.command` is REMOVED and refused) with a grace of 190;
+  DeepWiki and Inventory drain for `*_DRAIN_TIMEOUT_SECONDS` 30; the worker's
+  grace is 45. A grace period shorter than what runs inside it is refused.
+  The native sleep action needs **Kubernetes 1.30 or newer**.
+* **elitea-main's SSE caps** are 256 streams per replica, 16 per principal
+  and 128 per project (were 16/4/8).
+* **`LLM_BUDGET_EXPECTED_REPLICAS` is derived** from the gateway's replica
+  ceiling (`autoscaling.maxReplicas`, else `replicaCount`). An explicit
+  value below it is refused.
+* **Spread and disruption budgets.** Each multi-replica workload gets soft
+  zone and node spread (`scaling.topologySpread.enabled`). PodDisruptionBudgets
+  render only where the floor is above one replica, and the gateway's and the
+  worker's are on by default. No Deployment carries `replicas:` while an
+  autoscaler owns it.
+
+**What to do.**
+
+1. Set `postgresql.maxConnections` to your server's real `max_connections`
+   (`SHOW max_connections;`). If the render is refused, read the per-component
+   list in the message and lower a pool or a replica ceiling, or raise the
+   server.
+2. Delete `llmGateway.preStop.command` and `llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS`
+   from your values (the latter unless you want it above the ceiling).
+3. Check that the cluster runs Kubernetes 1.30 or newer. On an older one,
+   set `main.preStop.sleepSeconds: 0` and `llmGateway.preStop.sleepSeconds:
+   0` (no preStop hook; the drain still runs after SIGTERM).
+4. With Argo CD and a git source, add the two repositories above to the
+   AppProject's `sourceRepos`.
+5. To uninstall a release with `keda.enabled: true`, delete its
+   ScaledObjects and TriggerAuthentications first, or the KEDA CRDs stay in
+   `Terminating`.
+
+The deployment docs' Scaling page has what each component scales on, the
+budget formula and the per-replica caps.
+
+## DeepWiki, Inventory and the runtime on by default; one switch per feature; Qdrant is the upstream chart — BREAKING
+
+**Affects:** every Kubernetes install of the `elitea` chart. Installs that
+relied on a feature being OFF by default, installs that ran the chart's own
+Qdrant (`vector.qdrant.mode: internal`), and AppProjects that restrict
+`sourceRepos` for a git source.
+
+**What changed.**
+
+* **On by default:** the runtime plane (`main.runtime.enabled`, with agent
+  execution, index ingest and toolkit discovery on its default streams), the
+  agent worker (`worker.enabled`), elitea-vector (`vector.enabled`) with a
+  bundled one-node Qdrant (`qdrant.enabled`), DeepWiki (`deepwiki.enabled`)
+  and Inventory (`inventory.enabled`). Other default changes:
+  `postgresql.maxConnections` 100 → 500 (elitea-main's default ceiling of
+  10 replicas at about 44 connections each; set it to your server's
+  `max_connections`, and lower `main.autoscaling.maxReplicas` to fit, as
+  `values-gke.yaml` does with 3), `vector.collection.replicationFactor` 2 → 1,
+  `main.runtime.signingKeyId` `standalone-runtime-v1` (the default key id of
+  `deploy/scripts/gen-runtime-certs.sh`). New, with the old behaviour as
+  the default: `main.rollingUpdate` and `worker.rollingUpdate` (`maxSurge:
+  1, maxUnavailable: 0`); `values-gke.yaml` sets both to `maxSurge: 0,
+  maxUnavailable: 1`, so no rollout exceeds its 4 vCPU / 10 GiB budget.
+* **One switch per feature.** The chart derives elitea-main's side from the
+  provider's block: `ELITEA_DEEPWIKI_ENABLED` / `ELITEA_INVENTORY_ENABLED`, the
+  git allowlists (copied from `deepwiki.env` / `inventory.env`), the client
+  certificate paths and their mounts, the platform gRPC targets and the
+  `ELITEA_VECTOR_*` settings. An explicit `main.env` value that agrees is kept;
+  one that disagrees fails the render and names the switch to set instead.
+  `main.fileConfig.deepwikiClientMaterial.enabled` and
+  `inventoryClientMaterial.enabled` now default to `null` (follow the
+  provider); an explicit `false` beside an enabled provider is refused.
+  `main.runtime.agentExecutionDispatch` / `indexIngestDispatch` settings with
+  `enabled: false` are no longer refused: `enabled` is the switch.
+* **No hand-minted certificates.** With cert-manager, the DeepWiki and
+  Inventory callback client certificates (`elitea-deepwiki-callback-client`,
+  `elitea-inventory-callback-client`, one DNS SAN `elitea-subapp-callback`)
+  and Qdrant's TLS certificate (`elitea-qdrant-tls`) are issued by the chart
+  from the runtime-CA issuer (`elitea-runtime-ca`, kind `ClusterIssuer` by
+  default; the same issuer as `vector.mtls.issuerRef`). To bring your own
+  callback certificate, set `<app>.callbackClient.certManager.enabled: false`.
+* **Fixed Secret names.** Every Secret the chart reads has a default name, and
+  `externalSecrets.enabled` renders an ExternalSecret for each:
+
+  | Secret | Keys |
+  |---|---|
+  | `elitea-main-db` | `database-url` |
+  | `elitea-runtime-material` | the nine runtime files (`runtime-ca.crt`, `command-signing-key.pem`, `command-signing-keyring.json`, the control/output/content keypairs) |
+  | `elitea-worker-material` | `runtime-ca.crt`, `agent-worker-client.crt/.key`, `command-signing-keyring.json`, `worker-output-spool-key`, `agent-checkpoint-connection` |
+  | `elitea-main-auth-material` | `auth-attempt-key`, `auth-pat-signing-key`, `auth-form-users.json` |
+  | `elitea-main-llm-gateway-secrets` | `gateway-identity-secret` |
+  | `elitea-llm-gateway-secrets` | `identity-secret`, `secrets-master-key` |
+  | `elitea-qdrant-api` | `api-key` (was `vector.qdrant.apiKeySecret.name`, no default) |
+  | `elitea-deepwiki-secrets` | `identity-secret` |
+  | `elitea-inventory-secrets` | `identity-secret` |
+
+* **Missing values fail the render with ONE message.** A values file that
+  lacks something only you know (the authentication document and its
+  `public_origin`, `platform.aiProjectId`, `DEPLOYMENT_URL`,
+  `worker.runtimeSession.expectedIdentity`, the two git allowlists,
+  `networkPolicies.main.ingressFrom`, `GATEWAY_SELF_LLM_ORIGINS`,
+  `llmGateway.egressPosture`, and `vector.qdrant.external.url` when Qdrant is
+  not bundled) is refused with every missing value and every disagreeing
+  switch listed together, starting `this install cannot render yet.`
+* **Qdrant is the upstream qdrant chart** (1.19.2, `condition:
+  qdrant.enabled`, pinned in `Chart.lock`, carried by the published chart)
+  instead of the chart's own StatefulSet. It runs one node; layer
+  `values-qdrant-ha.yaml` for three (Raft clustering with peer TLS, a
+  PodDisruptionBudget, anti-affinity, `replicationFactor: 2`). REST and gRPC
+  are TLS (the old StatefulSet was plaintext inside the cluster), peer traffic
+  too when clustered. `qdrant.enabled: false` is bring-your-own Qdrant at
+  `vector.qdrant.external.url` (`vector.qdrant.external.caSecretName` for a
+  private CA). Two things the upstream chart cannot do itself, and how this
+  chart covers them:
+  - Qdrant runs as the chart's own ServiceAccount `elitea-vectordb`, with
+    `automountServiceAccountToken: false`, because the subchart's account has
+    no such setting.
+  - The subchart cannot read `image.pullSecrets`: if Qdrant's image comes
+    through your registry, list the same Secrets under
+    `qdrant.imagePullSecrets` (the install NOTES warn when you set one and
+    not the other).
+
+  The upstream chart's `helm test` Pod is not supported. It is a
+  `helm.sh/hook: test` resource, so `helm install` and `helm upgrade` never
+  create it and Argo CD skips Helm test hooks; do not run `helm test` on
+  this release.
+
+  | Before | After |
+  |---|---|
+  | `vector.qdrant.mode: internal` | `qdrant.enabled: true` (the default) |
+  | `vector.qdrant.mode: external` | `qdrant.enabled: false` with `vector.qdrant.external.url` |
+  | `vector.qdrant.internal.replicas` | `qdrant.replicaCount` (above 1 needs clustering: use `values-qdrant-ha.yaml`) |
+  | `vector.qdrant.internal.storage.size` / `.storageClassName` | `qdrant.persistence.size` / `.storageClassName` |
+  | `vector.qdrant.internal.resources` | `qdrant.resources` |
+  | `vector.qdrant.internal.image` | `qdrant.image` (`tag` without `-unprivileged`; `useUnprivilegedImage: true` adds it) |
+  | `vector.qdrant.internal.podSecurityContext` / `securityContext` | `qdrant.podSecurityContext` / `qdrant.containerSecurityContext` |
+  | `vector.qdrant.internal.nodeSelector` / `tolerations` / `affinity` | `qdrant.nodeSelector` / `tolerations` / `affinity` |
+  | StatefulSet `elitea-qdrant` | StatefulSet `elitea-vectordb` |
+  | PVCs `storage-elitea-qdrant-<n>` | PVCs `qdrant-storage-elitea-vectordb-<n>` |
+  | Services `elitea-qdrant`, `elitea-qdrant-headless` | Services `elitea-vectordb`, `elitea-vectordb-headless` |
+  | NetworkPolicy `elitea-qdrant-netpol` | NetworkPolicy `elitea-vectordb-netpol` |
+
+  The render refuses `vector.qdrant.mode` and `vector.qdrant.internal` with
+  this map, and refuses `qdrant.apiKey` (the upstream chart's `lookup` breaks
+  `helm template` and Argo CD): the key always comes from
+  `elitea-qdrant-api`.
+
+**What to do.**
+
+1. **Keep a feature off by saying so.** Each of these is now on unless your
+   values set it to `false`:
+
+   ```yaml
+   main:
+     runtime:
+       enabled: false
+   worker:
+     enabled: false
+   vector:
+     enabled: false
+   qdrant:
+     enabled: false     # with vector off: the render refuses a Qdrant nobody reads
+   deepwiki:
+     enabled: false
+   inventory:
+     enabled: false
+   ```
+
+   The render refuses a switch that another feature still needs (vector off
+   under DeepWiki, say) and lists every such conflict in one message.
+2. **Give Qdrant a volume.** The bundled Qdrant claims a 50Gi
+   PersistentVolumeClaim from the default StorageClass
+   (`qdrant.persistence.storageClassName: ""`). A cluster with no default
+   StorageClass needs one named.
+3. **Create the Secrets under their fixed names** (table above), or let
+   `externalSecrets` render them. Drop `vector.qdrant.apiKeySecret.name` if
+   it named `elitea-qdrant-api`; another name still works when the
+   `QDRANT__SERVICE__API_KEY` entry in `qdrant.env` names it too.
+4. **Remove the derived settings from `main.env`** (`ELITEA_DEEPWIKI_*` /
+   `ELITEA_INVENTORY_*` enable flags, allowlists and client paths) and the
+   `main.fileConfig.*ClientMaterial` blocks, or keep them only where they
+   agree. Delete a hand-made `elitea-deepwiki-callback-client` Secret, or set
+   `callbackClient.certManager.enabled: false` to keep it.
+5. **Move the Qdrant data.** The upgrade deletes the old `elitea-qdrant`
+   StatefulSet; its PVCs stay, but the new `elitea-vectordb` starts empty.
+   Either:
+   * **snapshot and restore**: BEFORE the upgrade, for each collection,
+     `POST /collections/<name>/snapshots` on the old Qdrant (port 6333, header
+     `api-key`) and download the snapshot; AFTER it, upload each to the new one
+     with `POST /collections/<name>/snapshots/upload?priority=snapshot` over
+     HTTPS (trust the `ca.crt` of the `elitea-qdrant-tls` Secret); or
+   * **rebuild**: regenerate the DeepWiki wikis, rebuild the Inventory graphs
+     and re-run the index ingests; the sources of truth are in PostgreSQL and
+     the git hosts.
+
+   Then delete the old claims: `kubectl -n elitea delete pvc -l
+   app.kubernetes.io/name=elitea-qdrant` (only the old `storage-elitea-qdrant-*`
+   claims carry that label; the new ones are labelled `app: elitea-qdrant`).
+   Check the list with `get` first.
+6. **Argo CD git source:** a restricted AppProject must also list
+   `https://qdrant.github.io/qdrant-helm` in `sourceRepos`. The published OCI
+   chart carries the qdrant chart, so an OCI source needs nothing; an
+   air-gapped install mirrors the OCI chart.
+
+## GKE Ingress support and SSE keepalives on /llm and MCP streams
+
+**Affects:** Kubernetes installs on GKE that publish elitea-main through a
+standard Ingress; every client of `/llm` streaming and of MCP `tools/call`
+streams (no action needed).
+
+**What changed.**
+
+* `main.ingress.gke` renders the GKE companions of the Ingress: the
+  `cloud.google.com/neg` and `cloud.google.com/backend-config` annotations on
+  the elitea-main Service (the `http` port only), a BackendConfig
+  (`timeoutSec: 3600`, connection draining, HTTP `/healthz` health check on
+  8080, optional `securityPolicy`) and a FrontendConfig (`redirectToHttps`,
+  optional `sslPolicy`), bound with `networking.gke.io/v1beta1.FrontendConfig`.
+  It turns on with `gke.enabled`, `className: gce` / `gce-internal`, or the
+  same value in the `kubernetes.io/ingress.class` annotation.
+* `main.ingress.certManager` (`issuer` or `clusterIssuer`, plus `issuerKind`
+  and `issuerGroup` for an external issuer) annotates the Ingress for
+  cert-manager. `main.service.annotations` is new.
+* elitea-main writes `: keepalive` SSE comments into an idle `/llm` event
+  stream (between events only) and into an MCP `tools/call` stream while it
+  waits for the result, every 25 seconds of silence. Conforming SSE parsers
+  ignore comments.
+
+**What to do.**
+
+* On GKE, set `main.ingress.gke.enabled: true` and admit `35.191.0.0/16` and
+  `130.211.0.0/22` in `networkPolicies.main.ingressFrom`. If you already
+  manage a BackendConfig or FrontendConfig, set its `create: false` and
+  `name`.
+
+## Helm 4 is the supported CLI; Helm 3 still renders the chart
+
+**Affects:** anyone who runs `helm install` / `helm upgrade` by hand. Argo CD
+installs are not affected.
+
+**What changed.** CI lints, installs (the kind smoke) and publishes the charts
+with Helm **4.3.1**, and checks on every pull request that Helm **3.22**
+renders the `elitea` chart to the same objects, because Argo CD renders with
+the Helm 3 it bundles. Supported: Helm 4.3 or newer for the CLI (recommended),
+Helm 3.8 or newer where Argo CD (or another Helm 3 tool) renders the chart.
+
+**What to do with the Helm 4 CLI.**
+
+- `helm upgrade` of a release that Helm 3 installed keeps client-side apply
+  (`--server-side=auto` follows the release's previous method); a new install
+  uses server-side apply. Nothing to do unless an upgrade reports a
+  field-manager conflict, then rerun it with `--force-conflicts`.
+- `--atomic` is now `--rollback-on-failure`.
+- `--wait` now waits with kstatus (`--wait=watcher`). The first-install rule
+  is unchanged: no `--wait` on a FIRST install of the elitea chart (see "One
+  chart: NATS bundled").
+- `helm push`, `helm pull oci://…` and `helm registry login` are unchanged.
+
+## One edge route: elitea-main serves `/` and relays `/app` and `/docs` to elitea-web — BREAKING
+
+**Affects:** Kubernetes installs that publish the platform through
+`main.ingress.enabled`, and any cluster that applied
+`deploy/gateway-api/httproute.yaml` or a copy of it (#1359 P3).
+
+**What changed.**
+
+* **elitea-main is the browser edge in a cluster too.** The chart sets
+  `ELITEA_WEB_UPSTREAM` to the elitea-web Service (`http://elitea-web:80`)
+  whenever `web.enabled` is true. elitea-main then redirects `/` to `/app/`,
+  relays `/app…` and `/docs…` to elitea-web, and keeps the paths it serves
+  itself under `/app` — the MCP server at `/app/<project id>/mcp[/…]` and
+  the two icon file servers — exactly as it does in compose.
+* **The edge is ONE `/` rule to elitea-main**, on the chart's HTTPRoute, its
+  Ingress, and `deploy/gateway-api/httproute.yaml`. The second HTTPRoute
+  (`elitea-web`, `/app`, `/docs` and the `/` redirect) and the per-path rule
+  list are gone. MCP clients now work on every Gateway: the carve-out once
+  needed a RegularExpression path match, which the manifest never carried.
+  The chart's HTTPRoute now renders `PathPrefix` for `main.ingress.pathType:
+  Prefix` (it rendered `Prefix`, which Gateway API does not accept).
+* **The plain-Ingress identity guard is gone**, with
+  `main.ingress.identityHeadersStrippedByController`. elitea-main reads no
+  `X-Auth-*` header and deletes every client identity header itself, so a
+  plain Ingress with Form sign-in renders. The HTTPRoute keeps its
+  `stripIdentityHeaders` filter as defence in depth.
+* **Probes.** With the edge on, elitea-main refuses `/readyz` and `/startupz`
+  to a non-loopback caller, so the startup and readiness probes run
+  `/elitea-main -healthcheck <path>` inside the container. `-healthcheck`
+  takes an optional path (`/readyz`, the default, `/startupz` or `/healthz`).
+  The chart refuses any other `main.probes.{startup,readiness}.path` while
+  the edge is on. Liveness stays an httpGet on `/healthz`. An older
+  elitea-main ignores the path argument and reports `/healthz`, so a probe
+  passes before the replica is ready: with `web.enabled` (the default),
+  `main.image.tag` must be this release or later. Leave it unset to follow
+  the chart's appVersion. `main.probes.execCommand` names the binary and
+  `main.probes.*.timeoutSeconds` the probe timeouts.
+* **NetworkPolicy.** elitea-web gets `elitea-web-netpol`: its port admits
+  elitea-main, `networkPolicies.web.extraIngressFrom` and
+  `networkPolicies.probeFrom` only.
+
+**What to do.**
+
+* A cluster that applied `deploy/gateway-api/httproute.yaml`: re-apply it, and
+  delete the old `elitea-web` HTTPRoute (`kubectl delete httproute elitea-web`).
+  Keep `elitea-main`'s HTTPRoute pointing at port 8080.
+* An Ingress or route of your own that sent `/app` or `/docs` to elitea-web:
+  send them to elitea-main instead, or simply route `/` to elitea-main.
+* Remove `main.ingress.identityHeadersStrippedByController` from your values
+  (it is ignored).
+* Anything else that reached elitea-web directly (a debug pod, a scraper):
+  list it in `networkPolicies.web.extraIngressFrom`.
+
+## One chart: NATS bundled — BREAKING for Kubernetes installs
+
+**Affects:** every Kubernetes install that ran the `nats` and
+`nats-bootstrap` charts (or the three Argo CD Applications `elitea-nats`,
+`elitea-nats-bootstrap` and `elitea`). Compose is not affected.
+
+**What changed.**
+
+- The upstream NATS chart (1.3.9, unchanged) is a dependency of the `elitea`
+  chart with `condition: nats.enabled`, **on by default**, pinned in the
+  committed `Chart.lock`; `charts/` itself is never committed. How each
+  install path gets it:
+  - **The published OCI chart** (`oci://ghcr.io/elitea-ng/charts/elitea`,
+    recommended) carries it: nothing to build.
+  - **An Argo CD git source** (`path: deploy/helm/elitea`): Argo CD runs
+    `helm dependency build` itself. A restricted AppProject must list
+    `https://nats-io.github.io/k8s/helm/charts/` in `sourceRepos`, and the
+    repo-server must reach it (since S10 also
+    `https://qdrant.github.io/qdrant-helm`; see "DeepWiki, Inventory and the
+    runtime on by default" above).
+  - **The Helm CLI from a clone:** run `deploy/helm/elitea/build-deps.sh`
+    (`helm dependency build` from `Chart.lock`) before `helm install`,
+    `template` or `lint`.
+  - **Air-gapped:** mirror the published OCI chart, which already carries
+    the NATS chart, rather than building from a clone.
+- The NATS CA, server and route certificates, the NetworkPolicy, the alerts
+  and the approver policies (the old `nats` wrapper chart) render from
+  `templates/nats/`; the stream and KV bootstrap Job (the old
+  `nats-bootstrap` chart) from `templates/natsBootstrap/`. Resource names are
+  unchanged: StatefulSet and Service `elitea-nats`, Issuer `elitea-nats-ca`,
+  Job `elitea-nats-bootstrap`, JetStream PVC `elitea-nats-js-elitea-nats-0`.
+- The `nats` and `nats-bootstrap` charts are no longer published, and
+  `deploy/argocd/applications/` holds one Application, `elitea`.
+- Values moved:
+
+  | Was | Now |
+  | --- | --- |
+  | `elitea` chart `nats.service`, `.namespace`, `.port`, `.tls`, `.networkPolicyClientNamesManaged` | `natsClient.*` (same keys) |
+  | `nats` chart `security.*`, `networkPolicy.*`, `alerts.*` | `nats.security.*`, `nats.networkPolicy.*`, `nats.alerts.*` |
+  | `nats` chart `nats.*` (the upstream chart's values) | `nats.*` (same keys) |
+  | `nats-bootstrap` chart values | `natsBootstrap.*` (same keys; `natsUrl` now defaults from `natsClient`) |
+  | `deploy/helm/nats/values-ha.yaml` | `deploy/helm/elitea/values-nats-ha.yaml` |
+
+  The chart refuses the old client keys under `nats` and names the new place.
+- The NATS PodMonitor is off by default (`nats.promExporter.podMonitor.enabled`);
+  the exporter sidecar still runs.
+- **Ordering.** With Argo CD the server, its certificates and the bootstrap
+  Job are in sync wave `-10` and the Job is a `Sync` hook, so the streams
+  exist before the workloads (wave 0) start. With the Helm CLI the Job is a
+  `post-install,post-upgrade` hook; the workloads restart until it has run.
+  Do not use `helm install --wait` on a first install: it waits for workloads
+  that wait for the hook that runs after the wait.
+- **Your own NATS.** Set `nats.enabled=false` and point `natsClient` at your
+  server (`natsClient.service`, `.namespace`, `.tls.issuerRef`). The
+  bootstrap Job still runs against it; turn it off with
+  `natsBootstrap.enabled=false` if you create the streams yourself.
+
+**Data impact.** None when you follow the steps: the StatefulSet keeps its
+name and volume claim template, so the new StatefulSet rebinds the existing
+JetStream PVC (`elitea-nats-js-elitea-nats-0`, and `-1`/`-2` in HA). NATS is
+down from deleting the old StatefulSet until the new pod is Ready (a minute
+or two); the services reconnect on their own and model calls during the gap
+fail their budget check. If the PVC is lost, the effect is the one described
+in "NATS is secured" below: budget counters and rate-limit windows restart
+from zero for the period, undrained write-behind deltas are lost, and
+presence rebuilds within one heartbeat.
+
+**What to do (Argo CD).** The old root prunes removed children, and each
+child carries the `resources-finalizer.argocd.argoproj.io` finalizer, so
+removing them from git as they are would delete every NATS resource. Detach
+them first:
+
+1. Turn off auto-sync on the root Application, so it does not prune before
+   step 3:
+   `kubectl -n argocd patch application <root> --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'`
+2. Detach the two NATS Applications from their resources:
+   ```bash
+   for app in elitea-nats-bootstrap elitea-nats; do
+     kubectl -n argocd patch application "$app" --type json \
+       -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+     kubectl -n argocd delete application "$app"   # no finalizer: nothing cascades
+   done
+   ```
+   (`argocd app delete <app> --cascade=false` does the same.)
+3. Delete the old StatefulSet. Its selector names the old release
+   (`app.kubernetes.io/instance: elitea-nats`), and a selector cannot be
+   changed in place. Deleting it stops the NATS pod; the PVC stays.
+   ```bash
+   kubectl -n elitea delete statefulset elitea-nats
+   kubectl -n elitea get pvc elitea-nats-js-elitea-nats-0   # still Bound
+   ```
+4. Update your values (the table above), and your copy of the root's
+   applications directory: delete the `elitea-nats` and
+   `elitea-nats-bootstrap` manifests, drop any `nats.service` parameter from
+   the `elitea` Application, and point it at the new chart version.
+5. Re-enable auto-sync on the root, and sync `elitea`. It adopts the
+   Services, Certificates, Issuers and NetworkPolicy of the same names,
+   creates the new StatefulSet (which rebinds the PVC), and runs the
+   bootstrap in wave `-10`.
+6. Verify: `kubectl -n elitea rollout status statefulset/elitea-nats`, the
+   `elitea-nats-bootstrap` Job succeeded, and `elitea-scheduler`'s
+   `/readyz/budget-writeback` is 200.
+
+**What to do (Helm CLI).** Helm does not move objects between releases, so
+uninstall the two old releases first; `helm uninstall` keeps the JetStream
+PVC (it belongs to the StatefulSet's claim template, not the release).
+
+```bash
+helm -n elitea uninstall elitea-nats-bootstrap
+helm -n elitea uninstall elitea-nats
+kubectl -n elitea get pvc elitea-nats-js-elitea-nats-0   # still there
+helm -n elitea upgrade elitea oci://ghcr.io/elitea-ng/charts/elitea \
+  --version <version> -f your-values.yaml        # no --wait
+```
+
+cert-manager keeps an issued Secret when its Certificate is deleted (unless
+it runs with `--enable-certificate-owner-ref`), so the new Certificates find
+the same CA and server Secrets; where one is gone it is issued again, and
+every client re-reads its certificate on the next handshake.
+
 ## pgvector is removed: every vector is in Qdrant behind elitea-vector — BREAKING
 
 **Affects:** every install. PostgreSQL no longer needs (or gets) the `vector`
@@ -481,7 +952,8 @@ never sets the new variable.
   redirect URIs, because the published ports are the same.
 * A custom compose file that used `deploy/traefik/dynamic*.yml` must set
   `ELITEA_WEB_UPSTREAM` on elitea-main and publish its `:8080` instead.
-* Do not set `ELITEA_WEB_UPSTREAM` in a cluster.
+* Do not set `ELITEA_WEB_UPSTREAM` in a cluster. (Superseded by "One edge
+  route" above: the chart now sets it itself.)
 
 ## Runtime content listener (:9445) and supervisor owner calls are gRPC
 
@@ -737,6 +1209,10 @@ certificate and chart/env names (`ELITEA_RUNTIME_PLATFORM_*`,
    sub-application callback identity), then
    recreate the stack. The `standalone_runtime_edge` volume is unused and can
    be removed.
+8. `main.env.LLM_GATEWAY_URL` must name the gateway's gRPC listener,
+   `https://elitea-llm-gateway-grpc:8443` (`llmGateway.service.grpcName` /
+   `grpcPort`). The chart refuses the HTTP port (`:8083`, health and metrics
+   only), which values written for the edge Traefik often still name.
 
 ## The X-Auth-* edge identity plane is removed; Form sessions resolve in elitea-main — BREAKING for external auth edges
 
@@ -819,7 +1295,8 @@ probes, list the probe sources in `networkPolicies.probeFrom`. The Argo CD
 sample has a new parameter for the gateway namespace
 (`networkPolicies.main.ingressFrom[0]...`) next to the other values to fill in.
 
-**Related, unchanged checks.** A plain `networking.k8s.io/v1` Ingress with Form
+**Related, unchanged checks.** (Superseded by "One edge route" above: the
+guard below is removed.) A plain `networking.k8s.io/v1` Ingress with Form
 sign-in is still refused unless the controller removes the inbound `X-Auth-*`
 and `X-Elitea-*` identity headers and
 `main.ingress.identityHeadersStrippedByController=true` says so. (Superseded
@@ -1068,8 +1545,9 @@ migrated (greenfield, by decision). After the switch:
    (`security.approverPolicy`).
 2. Restrict `create` on cert-manager `Certificate`/`CertificateRequest` and
    read on `Secret` in the NATS namespace to the deployer and operators: those
-   rights can mint any NATS identity (`deploy/helm/nats/README.md`, "Who can
-   mint a NATS identity").
+   rights can mint any NATS identity (`deploy/helm/elitea/NATS.md`, "Who can
+   mint a NATS identity"; the `deploy/helm/nats` chart this entry names is now
+   bundled into `deploy/helm/elitea`).
 3. Install NATS, `nats-bootstrap` and the platform into one namespace (or use
    a `ClusterIssuer`; the platform chart refuses a different `nats.namespace`
    with the namespaced Issuer). With Argo CD, sync the updated

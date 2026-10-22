@@ -1,0 +1,546 @@
+# values-gke.yaml — an EXAMPLE values file for Google Kubernetes Engine: the
+# core platform (chat, agents, indexing) with no static cloud credential in the
+# cluster. Copy it, replace every <...> and every example.com, and install:
+#
+#   helm install elitea deploy/helm/elitea -n elitea -f values-gke.yaml
+#
+# WHAT IT ASSUMES EXISTS FIRST (the operator's preconditions, like the
+# database — this chart creates none of them):
+#   * a GKE cluster with Workload Identity Federation and Dataplane V2;
+#   * cert-manager, with the elitea-internal-ca and elitea-runtime-ca Issuers;
+#   * the External Secrets Operator and a ClusterSecretStore for GCP Secret
+#     Manager (its controller authenticates through its own Workload Identity);
+#   * Cloud SQL for PostgreSQL 16+, private IP, "Allow only SSL connections",
+#     with the role and the two databases created by hand (dbInit below);
+#   * KEDA, installed once for the cluster (scaling below);
+#   * a GCS bucket with uniform bucket-level access, and a Google service
+#     account bound to the elitea-main KSA with roles/iam.workloadIdentityUser
+#     and granted, on that bucket only, object read/write/delete PLUS
+#     storage.buckets.get and storage.buckets.update: elitea-main rewrites the
+#     bucket's lifecycle rule at every start and exits when it cannot, so
+#     roles/storage.objectAdmin alone crash-loops it. roles/storage.admin
+#     bound on the bucket (not the project) covers both, or pair objectAdmin
+#     with a custom role holding the two bucket permissions. objectInit stays
+#     OFF: the chart never creates a GCS bucket.
+#
+# ── THE BUDGET ───────────────────────────────────────────────────────────────
+#
+# Sized for 4 vCPU / 10 GiB of REQUESTS reserved for the release, INCLUDING
+# the peak of any one rollout. Requests, steady state:
+#
+#   component                    replicas   cpu each   mem each      cpu    mem
+#   elitea-main                         2     400m      768Mi       800m   1536Mi
+#   elitea-web                          2      10m       32Mi        20m     64Mi
+#   elitea-scheduler                    1      50m       64Mi        50m     64Mi
+#   elitea-llm-gateway                  1     250m      512Mi       250m    512Mi
+#   agent worker                        1    1500m        3Gi      1500m   3072Mi
+#   elitea-vector                       2     100m      128Mi       200m    256Mi
+#   Qdrant                              1     250m        1Gi       250m   1024Mi
+#   DeepWiki (host + engine)            1     200m     1152Mi       200m   1152Mi
+#   Inventory (host + engine)           1     150m      384Mi       150m    384Mi
+#   OTel collector                      1      50m      128Mi        50m    128Mi
+#   NATS server (JetStream)             1     200m      512Mi       200m    512Mi
+#   ─────────────────────────────────────────────────────────────────────────
+#   STEADY STATE                                                   3670m   8704Mi
+#                                                               (3.67 vCPU, 8.5 GiB)
+#
+#   + the largest rollout surge. elitea-main and the worker do NOT surge
+#     here (rollingUpdate maxSurge 0 / maxUnavailable 1): a surge worker
+#     alone (+1500m/+3Gi) would take the peak to 5.2 vCPU / 11.5 GiB.
+#     The largest remaining surges are the gateway (+250m) and DeepWiki
+#     (+1152Mi), one Deployment at a time:
+#   = PEAK DURING A ROLLOUT, at most                               3920m   9856Mi
+#                                                               (3.92 vCPU, 9.6 GiB)
+#
+# Not counted, and why:
+#   * the hook Jobs (migrations, workload-session, nats-bootstrap at 50m/64Mi)
+#     and the session-renew CronJob run for seconds, before or beside the
+#     Deployments, never all at once;
+#   * init containers: Kubernetes takes the larger of an init container and
+#     the app containers, never the sum, and every init here is at or below
+#     its pod's app request;
+#   * elitea-main's autoscaler above minReplicas: at its maxReplicas of 3 the
+#     steady state is 4070m / 9472Mi, just past the CPU budget: scaling out
+#     under load is what the headroom above the reservation is for;
+#   * PgBouncer (off: three main replicas fit Cloud SQL's connections, see
+#     postgresql below) — on, it adds 10m/32Mi;
+#   * KEDA's own pods: it is the cluster's add-on (scaling below), not this
+#     release's, so its operator, metrics server and webhook (about 300m and
+#     300Mi of requests together) come out of the cluster's add-on capacity;
+#   * the autoscalers above their floors: the worker (KEDA, up to 4), DeepWiki
+#     (KEDA, up to 3) and the gateway (CPU, up to 3) start at one replica each,
+#     and their scale-out, like elitea-main's, is what the headroom above the
+#     reservation is for.
+# deploy/helm/tests/render-gke-budget.sh renders this file, sums the requests
+# of every Deployment and StatefulSet at their replica counts and adds the
+# largest rendered surge, so a change here that breaks 4 vCPU / 10 GiB, at
+# steady state or during a rollout, fails CI.
+
+platform:
+  aiProjectId: "1"
+
+# ── Secrets: GCP Secret Manager through the External Secrets Operator ───────
+# One Secret Manager secret, `elitea-platform`, holding a flat JSON object
+# whose properties are "<Kubernetes Secret>/<key>". `helm template` this file
+# and read the ExternalSecrets for the exact property list. Large material
+# (runtime and worker certificates) can move to its own secret per Kubernetes
+# Secret with externalSecrets.secrets.<name>.remoteKey.
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: <gcp-secret-manager-store>
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  remoteKey: elitea-platform
+  secrets:
+    # The DSN in one Secret Manager secret of its own, rotated with the
+    # database password and nothing else:
+    #   postgres://elitea_v2:<password>@<cloud-sql-private-ip>:5432/elitea_v2?sslmode=require
+    elitea-main-db:
+      keys:
+        database-url:
+          remoteKey: elitea-database-url
+
+# ── Cloud SQL for PostgreSQL 16+ ────────────────────────────────────────────
+# Private IP, SSL required. Every DSN carries ?sslmode=require: elitea-main,
+# the gateway and the scheduler (pgx), the psql Jobs (libpq) and the Rust
+# worker's agent-checkpoint-connection (sqlx) all honour it; it encrypts and
+# does not verify the server certificate (the chart mounts no server CA yet,
+# so verify-ca / verify-full are not available). No Cloud SQL Auth Proxy.
+postgresql:
+  existingSecret: elitea-main-db
+  key: database-url
+  # The instance's max_connections. A 4 vCPU / 16 GB Cloud SQL for PostgreSQL
+  # instance defaults to 500 (Cloud SQL sizes the flag by memory: 15 GB up to
+  # 30 GB is 500; https://cloud.google.com/sql/docs/postgres/flags). If you
+  # set the flag yourself, state that number here instead.
+  #
+  # Every component at its replica ceiling (the chart checks the sum):
+  #   elitea-main       3 x (6 primary + 36 runtime + 2 vector)   = 132
+  #   llm-gateway       3 x GATEWAY_DATABASE_MAX_CONNS 8          =  24
+  #   scheduler         1 x 4                                     =   4
+  #   deepwiki host     3 x (4 + 1 owner claim)                   =  15
+  #   deepwiki engine   3 x (2 + 2 + query pool 8 + 4 x 1)        =  48
+  #   inventory engine  1 x POOL_SIZE 8                           =   8
+  #   worker AgentState 4 x delivery_max_concurrency 32           = 128
+  #                                                               -----
+  #                                                                 359
+  # against 500 - 25 reserved = 475: 116 to spare, which is a fourth
+  # elitea-main replica (44) with room, or a worker ceiling of 7.
+  maxConnections: 500
+  reservedConnections: 25
+
+# Cloud SQL has no superuser, so the database is prepared by hand, once, as
+# the instance's `postgres` user (values.yaml, dbInit, has the reasoning):
+#   GRANT elitea_v2 TO postgres;
+#   CREATE DATABASE elitea_v2 OWNER elitea_v2;
+#   CREATE DATABASE elitea_v2_agentstate OWNER elitea_v2;
+dbInit:
+  enabled: false
+  externallyManaged: true
+
+# The agent-state history, applied as elitea_v2 against
+# elitea_v2_agentstate (the DSN is the worker's agent-checkpoint-connection).
+agentStateMigrations:
+  enabled: true
+  databaseSecret:
+    name: elitea-worker-material
+    key: agent-checkpoint-connection
+
+# Never on GKE: the bucket is a precondition (the chart refuses gcs here).
+objectInit:
+  enabled: false
+
+# ── Autoscaling ─────────────────────────────────────────────────────────────
+# KEDA is a PRECONDITION here, installed once for the cluster, not by this
+# release (the Scaling page of the deployment docs, "GKE"):
+#
+#   helm install keda kedacore/keda --version 2.21.0 -n keda --create-namespace
+#
+# scaling.keda.clusterInstalled says so for renders that cannot ask the
+# cluster (`helm template`, Argo CD without the cluster's API versions). The
+# other option is keda.enabled=true: this release installs KEDA itself (the
+# pinned kedacore chart, in the release's namespace). Choose it only for a
+# cluster with no KEDA (one per cluster), add KEDA's three pods to the
+# resource budget, and with Argo CD list https://kedacore.github.io/charts in
+# the AppProject's sourceRepos for a git source (the OCI chart carries it).
+# The cluster-wide install is the default here because KEDA is cluster
+# infrastructure: it outlives this release, and deleting this release then
+# never takes the CRDs (and every other team's ScaledObjects) with it.
+#
+# With KEDA: the worker scales on its JetStream backlog, DeepWiki on its
+# running invocations (KEDA's postgresql trigger, reading the same Secret the
+# host does; Cloud SQL's private IP is reachable from the KEDA operator), and
+# the gateway on CPU (no Prometheus is assumed here; with one, set
+# scaling.prometheus.serverAddress and the gateway and DeepWiki move to their
+# Prometheus triggers by themselves).
+scaling:
+  keda:
+    clusterInstalled: true
+
+networkPolicies:
+  enabled: true
+  main:
+    # Container-native load balancing: Google's front ends and health checkers
+    # reach the pods directly from these ranges; there are no ingress pods.
+    ingressFrom:
+      - ipBlock:
+          cidr: 35.191.0.0/16
+      - ipBlock:
+          cidr: 130.211.0.0/22
+
+main:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 3
+  # Replace a replica rather than surge a third: one of the two keeps serving.
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+  resources:
+    requests:
+      cpu: 400m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  # Keyless GCS: elitea-main is the only workload that opens the bucket (the
+  # worker and the sub-application hosts reach artifacts through its gRPC
+  # ArtifactObjectService). The chart refuses gcs without this annotation,
+  # because ADC would otherwise fall through to the node's identity.
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-main@<PROJECT_ID>.iam.gserviceaccount.com
+
+  # The GKE Ingress (external Application Load Balancer, container-native
+  # load balancing): one `/` rule to elitea-main, which serves the API and
+  # relays /app and /docs to elitea-web. The chart renders a BackendConfig
+  # (timeoutSec 3600 for SSE, health check on /healthz, connection draining,
+  # an optional Cloud Armor policy) and a FrontendConfig (HTTP -> HTTPS).
+  ingress:
+    enabled: true
+    className: gce
+    annotations:
+      # A global static IP reserved beforehand (gcloud compute addresses
+      # create elitea-ip --global); your DNS record points at it.
+      kubernetes.io/ingress.global-static-ip-name: elitea-ip
+    hosts:
+      - elitea.example.com
+    # cert-manager issues this Secret (main.ingress.certManager below adds
+    # the annotations); the load balancer serves it.
+    tls:
+      - secretName: elitea-tls
+        hosts:
+          - elitea.example.com
+    certManager:
+      clusterIssuer: letsencrypt
+    gke:
+      enabled: true
+      backendConfig:
+        # The Cloud Armor policy that admits only your CDN/proxy ranges, if
+        # one sits in front (for example a Cloudflare-only allowlist).
+        securityPolicy: ""
+      frontendConfig:
+        sslPolicy: ""
+
+  env:
+    DEPLOYMENT_URL: "https://elitea.example.com"
+    # The pod CIDR plus Google's load-balancer ranges.
+    ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>,35.191.0.0/16,130.211.0.0/22"
+
+    ELITEA_CONFIGURATIONS_ENABLED: "true"
+    ELITEA_PROJECT_INFO_ENABLED: "true"
+    ELITEA_INDEX_TYPES_ENABLED: "true"
+    ELITEA_APPLICATION_SKILLS_ENABLED: "true"
+    ELITEA_CONFIGURATIONS_MUTATION_ENABLED: "false"
+    ELITEA_ALLOW_PROJECT_OWN_LLMS: "false"
+
+    OIDC_ISSUER_URL: "https://accounts.google.com"
+    OIDC_CLIENT_ID: "<client id>"
+    OIDC_REDIRECT_URI: "https://elitea.example.com/auth/oidc/callback"
+    ELITEA_INITIAL_GLOBAL_ADMINS: "email:admin@example.com"
+
+    STORAGE_BACKEND: "gcs"
+    STORAGE_CONTAINER: "<PROJECT_ID>-elitea-artifacts"
+    GCS_ENDPOINT: ""
+
+    LLM_GATEWAY_URL: "https://elitea-llm-gateway-grpc:8443"
+    LLM_GATEWAY_CLIENT_CERT: "/run/elitea-llm-gateway/tls.crt"
+    LLM_GATEWAY_CLIENT_KEY: "/run/elitea-llm-gateway/tls.key"
+    LLM_GATEWAY_CA_FILE: "/run/elitea-llm-gateway/ca.crt"
+
+  # Every value below arrives through externalSecrets. The S3 / Azure keys
+  # of values.yaml stay referenced as optional and get no ExternalSecret on
+  # gcs.
+  secrets:
+    APPLICATION_SECRET_KEY:
+      secretName: elitea-main-sso
+      key: application-secret-key
+      optional: false
+    OIDC_CLIENT_SECRET:
+      secretName: elitea-main-sso
+      key: oidc-client-secret
+      optional: false
+
+  fileConfig:
+    llmGatewayClientMaterial:
+      enabled: true
+      secretName: elitea-main-gateway-client-tls   # issued by cert-manager
+      mountPath: /run/elitea-llm-gateway
+    authConfig:
+      enabled: true
+      material:
+        mountPath: /run/elitea-auth
+        secretName: elitea-main-auth-material
+      document:
+        schema_version: elitea.auth.form.v2
+        public_origin: https://elitea.example.com
+        trusted_proxy_cidrs:
+          - 10.0.0.0/8
+          - 35.191.0.0/16
+          - 130.211.0.0/22
+        redirects:
+          direct_access_denied: /app/
+          main_access_denied: /auth/login
+          default_login: /app/
+          default_logout: /app/
+        cookie:
+          name: elitea_browser_auth
+          same_site: lax
+          lifetime_seconds: 86400
+        credentials:
+          attempt_key_file: /run/elitea-auth/auth-attempt-key
+          pat_signing_key_file: /run/elitea-auth/auth-pat-signing-key
+          credential_headers: []
+        mappers:
+          contract: elitea.auth_mappers.tracked.v1
+        authorization:
+          main_configured_public_rules: []
+        identity:
+          initial_global_admins: []
+        provider:
+          kind: form
+          form:
+            users_json_file: /run/elitea-auth/auth-form-users.json
+
+  # The runtime plane, its streams and dispatch planes are on by default
+  # (values.yaml main.runtime); only the signing key id is this install's.
+  runtime:
+    signingKeyId: "elitea-runtime-v1"
+
+web:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+scheduler:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+llmGateway:
+  replicaCount: 1
+  # CPU here (no Prometheus assumed); LLM_BUDGET_EXPECTED_REPLICAS follows
+  # maxReplicas by itself.
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  # Keyless Vertex AI / AI DIAL for PLATFORM credentials only.
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-llm@<PROJECT_ID>.iam.gserviceaccount.com
+  workloadIdentity:
+    enabled: true
+  egressPosture: "allowlist"
+  env:
+    GATEWAY_SELF_LLM_ORIGINS: >-
+      https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
+    GATEWAY_EGRESS_ALLOWLIST: >-
+      <region>-aiplatform.googleapis.com,aiplatform.googleapis.com
+  mtls:
+    enabled: true
+    issuerRef:
+      name: elitea-internal-ca
+      kind: Issuer
+
+worker:
+  replicaCount: 1
+  # The JetStream backlog, through the cluster's KEDA (scaling above). Four
+  # is the connection budget's choice (postgresql above), not KEDA's.
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
+  materialSecretName: elitea-worker-material
+  # Stop the old worker before the new one starts: a surge worker (1500m/3Gi)
+  # does not fit the budget. Commands wait in JetStream and PostgreSQL's
+  # outbox for the minute the new one takes to start (see the header).
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+  resources:
+    requests:
+      cpu: 1500m
+      memory: 3Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  runtime:
+    publicBaseUrl: https://elitea.example.com
+  runtimeSession:
+    enabled: true
+    expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
+
+vector:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  mtls:
+    issuerRef:
+      name: elitea-runtime-ca
+      kind: Issuer
+  mainClient:
+    enabled: true
+  collection:
+    replicationFactor: 1
+
+# The bundled Qdrant (the upstream qdrant chart): one node on a 50Gi
+# standard-rwo (Persistent Disk) volume, PVC qdrant-storage-elitea-vectordb-0.
+# Its certificate comes from vector.mtls.issuerRef above. HA: layer
+# values-qdrant-ha.yaml (three nodes, three volumes).
+qdrant:
+  persistence:
+    size: 50Gi
+    storageClassName: standard-rwo
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 4Gi
+
+# DeepWiki and Inventory are on by default. Their git allowlists are this
+# install's (the chart copies each to elitea-main); their callback client
+# certificates come from the namespaced runtime-CA Issuer, like the vector
+# stack's. Sized down from values.yaml for a small cluster: the engines'
+# requests rise with the repositories they index.
+deepwiki:
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+  # Running invocations, through KEDA's postgresql trigger (`auto` picks it:
+  # KEDA is there and no Prometheus is configured).
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+  callbackClient:
+    certManager:
+      issuerRef:
+        name: elitea-runtime-ca
+        kind: Issuer
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  engine:
+    native:
+      # 150m, not 250m: the request is what the scheduler reserves, and the
+      # engine bursts to its limit while it indexes. Its rollout surge has to
+      # fit the budget beside the steady state (see the header).
+      resources:
+        requests:
+          cpu: 150m
+          memory: 1Gi
+
+inventory:
+  env:
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
+  callbackClient:
+    certManager:
+      issuerRef:
+        name: elitea-runtime-ca
+        kind: Issuer
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  engine:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+otelCollector:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# PgBouncer is off: three elitea-main replicas fit max_connections 200. On, it
+# would need serverTlsSslmode: require against an SSL-only Cloud SQL.
+pgbouncer:
+  enabled: false
+  serverTlsSslmode: require
+
+# The bundled NATS server (upstream nats chart 1.3.9 values): one replica
+# with JetStream on a 10Gi PVC. HA: layer values-nats-ha.yaml.
+nats:
+  enabled: true
+  config:
+    cluster:
+      enabled: false
+    jetstream:
+      fileStore:
+        pvc:
+          size: 10Gi
+  container:
+    merge:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          memory: 1Gi
+
+# The stream/consumer bootstrap hook Job.
+natsBootstrap:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+# The sandbox-runtime installer is not needed on GKE: GKE Sandbox ships the
+# gvisor RuntimeClass. Off (the default).
+sandboxRuntime:
+  enabled: false

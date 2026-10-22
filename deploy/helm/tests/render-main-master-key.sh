@@ -23,7 +23,10 @@ CHART="$REPO/deploy/helm/elitea"
 # Without it every render stops at that guard before any master-key logic runs.
 # It changes only elitea-main's NetworkPolicy, never its env; the guard itself
 # is asserted by render-network-policies.sh.
-ONLY_MAIN=(--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false
+# fixtures/features-off.yaml: the pre-S10 switches (runtime, worker, vector,
+# Qdrant, DeepWiki, Inventory off), so "only main" is only main.
+ONLY_MAIN=(-f "$REPO/deploy/helm/tests/fixtures/features-off.yaml"
+  --set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false
   --set otelCollector.enabled=false --set worker.enabled=false
   --set networkPolicies.main.noExternalIngress=true)
 WORK="$(mktemp -d)"

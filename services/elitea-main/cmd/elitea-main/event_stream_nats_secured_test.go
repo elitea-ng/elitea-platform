@@ -23,7 +23,7 @@ import (
 // and the natsbus relay — as the elitea-main identity against a nats-server
 // started from the NATS chart's own rendered config, after the real
 // bootstrap.sh created the assets (#1076). A grant missing from
-// deploy/helm/nats/values.yaml fails here, not in a cluster.
+// deploy/helm/elitea/values.yaml fails here, not in a cluster.
 func TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions(t *testing.T) {
 	s := natstest.Start(t)
 	s.Bootstrap(t, nil)
@@ -341,7 +341,7 @@ func waitRoster(t *testing.T, store *v2canvaspresence.NATSStore, key string, wan
 // claim after a delete marker — as the elitea-main identity on two
 // connections ("replicas") against the chart's rendered config, after the
 // real bootstrap.sh created the bucket (issue 1231). A grant missing from
-// deploy/helm/nats/values.yaml fails here, not in a cluster.
+// deploy/helm/elitea/values.yaml fails here, not in a cluster.
 func TestSecuredPlatformMCPReplayRunsOnTheChartsPermissions(t *testing.T) {
 	s := natstest.Start(t)
 	s.Bootstrap(t, nil)

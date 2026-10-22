@@ -1,15 +1,4 @@
 {{- if .Values.llmGateway.enabled }}
-{{- if .Values.llmGateway.podDisruptionBudget.enabled }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "elitea-llm-gateway.fullname" . }}
-  labels:
-    {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
-spec:
-  minAvailable: {{ .Values.llmGateway.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      {{- include "elitea-llm-gateway.selectorLabels" . | nindent 6 }}
-{{- end }}
+{{- /* Rendered only while the floor is above one replica: elitea.scaling.pdb. */}}
+{{- include "elitea.scaling.pdb" (dict "ctx" . "v" .Values.llmGateway "name" (include "elitea-llm-gateway.fullname" .) "labels" (include "elitea-llm-gateway.labels" .) "selector" (include "elitea-llm-gateway.selectorLabels" .)) }}
 {{- end }}

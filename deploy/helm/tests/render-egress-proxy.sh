@@ -22,6 +22,18 @@
 # Usage: deploy/helm/tests/render-egress-proxy.sh
 # Needs: helm, python3 with PyYAML. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 cd "$(dirname "$0")/../../.."
 
 chart=deploy/helm/elitea
@@ -323,7 +335,7 @@ expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSe
 expect_refusal "a grace period without the audit's last reports" "plus 10 for the last audit reports" \
   --set egressProxy.terminationGracePeriodSeconds=75
 expect_refusal "the audit identity is elitea-vector's" "must differ from vector.mtls.clientDnsName" \
-  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=q --set postgresql.maxConnections=1000 \
+  --set vector.enabled=true --set qdrant.enabled=true --set postgresql.maxConnections=1000 \
   --set egressProxy.audit.clientDnsName=elitea-vector
 # The default values keep elitea-main's runtime plane off.
 if out="$(helm template t "$chart" --namespace platform -f "$fixture" \

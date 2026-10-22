@@ -19,6 +19,7 @@ export const deploymentTab: NavTab = {
       pages: [
         { kind: 'page', slug: 'deployment/from-scratch', title: 'Deploy from scratch' },
         { kind: 'page', slug: 'deployment/gcp', title: 'Deploy on Google Cloud (GKE)' },
+        { kind: 'page', slug: 'deployment/gke-argocd', title: 'Deploy on GKE with Argo CD' },
         { kind: 'page', slug: 'deployment/helm-install', title: 'Install with Helm' },
         { kind: 'page', slug: 'deployment/argocd', title: 'GitOps with ArgoCD' },
         { kind: 'page', slug: 'deployment/cloud-executor-kubernetes', title: 'Cloud executor on Kubernetes' },
@@ -30,6 +31,7 @@ export const deploymentTab: NavTab = {
       pages: [
         { kind: 'page', slug: 'deployment/configuration', title: 'Post-install configuration' },
         { kind: 'page', slug: 'deployment/operations', title: 'Day-2 operations' },
+        { kind: 'page', slug: 'deployment/scaling', title: 'Scaling' },
       ],
     },
   ],

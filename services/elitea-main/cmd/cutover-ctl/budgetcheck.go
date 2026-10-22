@@ -302,7 +302,7 @@ func defaultBudgetCheckNATSURL(lookup func(string) (string, bool)) string {
 // budgetCheckNATSPrefix names the client identity budget-check presents on a
 // secured NATS: elitea-main's (ELITEA_EVENTS_NATS_TLS_{CA,CERT,KEY}_FILE).
 // budget-check only SUBSCRIBES to the project event subjects, which is
-// exactly what that identity may do (deploy/helm/nats/values.yaml), so an
+// exactly what that identity may do (deploy/helm/elitea/values.yaml), so an
 // operator runs it with the elitea-main client certificate instead of a new
 // identity widening the permission table. With none of the three set it
 // connects plaintext, for the compose posture.

@@ -56,6 +56,14 @@ data:
     server_idle_timeout = 300
     server_lifetime = 3600
 
+    ; TLS to PostgreSQL (pgbouncer.serverTlsSslmode). A server that accepts
+    ; only TLS (Cloud SQL "Allow only SSL connections") refuses a pooler that
+    ; does not offer it, at the first server connection, not at start.
+    server_tls_sslmode = {{ .Values.pgbouncer.serverTlsSslmode | default "prefer" }}
+    {{- with .Values.pgbouncer.serverTlsCaFile }}
+    server_tls_ca_file = {{ . }}
+    {{- end }}
+
     ; Ignore extra_float_digits at connect time; pgx sets it to 13 by default.
     ignore_startup_parameters = extra_float_digits
 {{- end }}

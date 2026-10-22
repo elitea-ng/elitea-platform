@@ -56,7 +56,7 @@ metadata:
     # touched — the previous generation of pods keeps serving.
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "0"
-    # Same policy as deploy/helm/nats-bootstrap's hook Job, for the same
+    # Same policy as the nats-bootstrap hook Job (templates/natsBootstrap), for the same
     # reason: delete the PREVIOUS run right before the next one is created
     # (keeps the Job name reusable release-over-release, since a Job's pod
     # template is immutable), but leave a FAILED Job in place — don't delete

@@ -4,7 +4,7 @@
 #
 #   scripts/nats/ci-secure-test-env.sh
 #
-# 1. Renders the NATS chart's own nats.conf (render-secure-conf.sh), scale-1
+# 1. Renders the elitea chart's bundled NATS server's own nats.conf (render-secure-conf.sh), scale-1
 #    and HA — the permission table and the route TLS under test are the
 #    chart's, never a copy.
 # 2. Downloads the nats CLI the bootstrap script runs (pinned version and
@@ -31,7 +31,7 @@ conf="${RUNNER_TEMP}/nats-secure.conf"
 bash "${root}/scripts/nats/render-secure-conf.sh" "$conf"
 # The HA profile, for the route identity test (natstest.StartCluster).
 ha_conf="${RUNNER_TEMP}/nats-secure-ha.conf"
-bash "${root}/scripts/nats/render-secure-conf.sh" "$ha_conf" "${root}/deploy/helm/nats/values-ha.yaml"
+bash "${root}/scripts/nats/render-secure-conf.sh" "$ha_conf" "${root}/deploy/helm/elitea/values-nats-ha.yaml"
 
 zip="${RUNNER_TEMP}/natscli.zip"
 curl -fsSL -o "$zip" \

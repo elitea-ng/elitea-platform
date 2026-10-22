@@ -134,7 +134,7 @@ func NewNATSPlatformReplays(ctx context.Context, js jetstream.JetStream, bucket 
 	kv, err := js.KeyValue(ctx, bucket)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrBucketNotFound) {
-			return nil, fmt.Errorf("platform MCP replay store: KV bucket %s does not exist; it is created by the nats-bootstrap Job (deploy/helm/nats-bootstrap; in compose, the nats-bootstrap service) — run it before elitea-main", bucket)
+			return nil, fmt.Errorf("platform MCP replay store: KV bucket %s does not exist; it is created by the nats-bootstrap Job (deploy/helm/elitea natsBootstrap; in compose, the nats-bootstrap service) — run it before elitea-main", bucket)
 		}
 		return nil, fmt.Errorf("platform MCP replay store: bind KV bucket %s: %w", bucket, err)
 	}

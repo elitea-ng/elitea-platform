@@ -190,7 +190,7 @@ malformed-input PostgreSQL row now cites the foreign-card and disagreement tests
 
 ## Follow-ups
 
-1. **Browser Authorize for a pipeline MCP node** needs a stack that issues a token: the `oauth-emulator` overlay, or
+1. **Browser Authorize for a pipeline MCP node** needs a stack that issues a token: an OAuth emulator overlay (the old `oauth-emulator` one was removed), or
    a mock `/mcp-auth` that accepts a bearer token. With the current mock, an authorized retry would still be
    refused, which ends the node with the "authorized Toolkit was not available" stop (`direct_tool.rs`,
    `mcp_authorization_stopped(refresh_failed)`).

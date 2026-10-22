@@ -1,14 +1,20 @@
-# The MINIMAL chart values for the kind stack: elitea-main serving the DeepWiki
-# facade, and the DeepWiki provider pod in its shipping two-container shape
-# (ADR-0023 H2) — the Go sub-application host plus the native engine sidecar.
+# The chart values for the kind stack: the chart's SHIPPED DEFAULTS (S10) —
+# elitea-main with its runtime plane, elitea-vector beside the bundled Qdrant
+# (the upstream qdrant subchart, TLS on), and the DeepWiki and Inventory
+# providers in their shipping two-container shape (ADR-0023 H2): the Go
+# sub-application host plus the native engine sidecar, each engine running its
+# FIXTURE runner so no LLM and no git host is needed.
 #
-# The runtime plane is ON (#1359 U5): the provider uploads its pages over
-# elitea.runtime.v1.ArtifactObjectService on elitea-main's platform gRPC
-# listener, which only the runtime plane opens. That plane needs the NATS
-# command bus (deploy/helm/nats + nats-bootstrap, installed by kind-stack.sh)
-# and the runtime material from deploy/scripts/gen-runtime-certs.sh.
+# One switch per feature: nothing below wires elitea-main's ELITEA_DEEPWIKI_*,
+# ELITEA_INVENTORY_* or ELITEA_VECTOR_* env, the facade client material or the
+# callback client certificates. The chart derives all of it, and cert-manager
+# issues every certificate from the two ClusterIssuers kind-stack.sh creates
+# (elitea-internal-ca for the provider hops, elitea-runtime-ca for the runtime
+# CA gen-runtime-certs.sh minted).
 #
-# Everything the facade does not need is off. Read deploy/kind/README.md for
+# Off, for weight and nothing else: the worker, the LLM gateway, the web UI
+# and the scheduler. Each is one `enabled: false` below; the smoke proves the
+# chart's defaults install, not the product. Read deploy/kind/README.md for
 # what `up` installs around this file.
 
 image:
@@ -20,13 +26,26 @@ postgresql:
   existingSecret: elitea-db
   key: database-url
 
-# The in-repo NATS chart, release elitea-nats in this namespace
-# (kind-stack.sh install_nats): the runtime command bus, elitea-main's live
-# updates and the DeepWiki host's cancellation fan-out. The chart's defaults
-# (service elitea-nats, client certificates from the elitea-nats-ca Issuer)
-# are exactly that install, so nothing is overridden here.
+# NATS JetStream, bundled (nats.enabled, the default): the runtime command
+# bus, elitea-main's live updates and the DeepWiki host's cancellation
+# fan-out. natsClient's defaults (service elitea-nats, client certificates from
+# the elitea-nats-ca Issuer) name it, so only what a throwaway cluster cannot
+# provide changes here.
+nats:
+  config:
+    jetstream:
+      fileStore:
+        pvc:
+          # The upstream chart derives max_file_store from this size, and
+          # JetStream RESERVES each stream's MaxBytes against it at creation:
+          # the bootstrap's GATEWAY_BUDGET_DELTAS alone reserves 1 GiB
+          # (natsBootstrap.deltas.maxBytes), so a 1Gi store refuses it
+          # ("insufficient storage resources available", 10047) once any other
+          # bounded stream exists. kind's local-path provisioner does not
+          # enforce the size, so the headroom costs no disk.
+          size: 4Gi
 
-# ── Off: nothing here is on the DeepWiki path ────────────────────────────────
+# ── Off: not on the paths `verify` proves ────────────────────────────────────
 # dbInit creates the agent-state database for the WORKER, which this install
 # does not run. `externallyManaged: true` is the statement
 # templates/guards.yaml asks for, and it is true: nothing here needs that
@@ -40,6 +59,10 @@ scheduler:
   enabled: false
 llmGateway:
   enabled: false
+# No worker, yet the runtime plane (main.runtime, on by default) still creates
+# its JetStream dispatch streams and elitea-main publishes into them: nothing
+# consumes them here, which is fine for an install smoke that never runs an
+# agent. A real install keeps the worker on.
 worker:
   enabled: false
 otelCollector:
@@ -105,15 +128,6 @@ main:
           kind: form
           form:
             users_json_file: /run/elitea-auth/auth-form-users.json
-    # The facade's client keypair, issued by the chart's own
-    # deepwiki-facade-client Certificate. cert-manager writes tls.crt / tls.key
-    # / ca.crt into the Secret, which is exactly the three names the env paths
-    # below point at.
-    deepwikiClientMaterial:
-      enabled: true
-      secretName: elitea-main-deepwiki-client-tls
-      mountPath: /run/elitea-deepwiki
-
   env:
     APPLICATION_SECRET_KEY: "changeme-kind"
     COOKIE_SECURE: "false"
@@ -144,43 +158,20 @@ main:
     S3_REGION: "us-east-1"
     S3_FORCE_PATH_STYLE: "true"
 
-    # ── The DeepWiki facade ──────────────────────────────────────────────────
-    ELITEA_DEEPWIKI_ENABLED: "true"
-    ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "elitea-deepwiki-svc:9443"
-    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
-    ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /run/elitea-deepwiki/tls.crt
-    ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /run/elitea-deepwiki/tls.key
-    ELITEA_DEEPWIKI_CA_FILE: /run/elitea-deepwiki/ca.crt
 
-  # --- Runtime plane (#1359 U5) ----------------------------------------------
-  # On for the platform listener (:9446), the provider's only way back to
-  # elitea-main: its artifact uploads (ArtifactObjectService) and, with a
-  # native runner, its model calls (ModelService). The base plane only:
-  # configuration validation. No worker runs here, so no agent or index
-  # dispatch.
+  # The runtime plane (main.runtime) runs on its defaults: on, with the
+  # material Secret elitea-runtime-material, which kind-stack.sh creates from
+  # deploy/certs/runtime (gen-runtime-certs.sh signs with the chart's default
+  # key id, standalone-runtime-v1). Its platform listener is the providers'
+  # only way back to elitea-main.
   runtime:
-    enabled: true
-    commandStream: "ELITEA_RT_V1_VALIDATE"
-    maxOutstanding: 64
-    # gen-runtime-certs.sh's default; must equal the key id inside
-    # command-signing-keyring.json.
-    signingKeyId: "standalone-runtime-v1"
-    listeners:
-      controlAddress: ":9443"
-      outputAddress: ":9444"
-      contentAddress: ":9445"
-    # elitea-main refuses to start with an empty ModelService allowlist. The
-    # fixture engine calls no model, so the chart adds no identity of its own;
-    # name the sub-application callback identity, the one a native engine
-    # would be admitted under.
+    # elitea-main refuses to start with an empty ModelService allowlist, and
+    # the chart admits a provider's callback identity only for a NATIVE engine.
+    # Both engines here run their fixtures, which call no model, so name the
+    # identity a native engine would be admitted under.
     modelService:
       extraClients:
         - "dns:elitea-subapp-callback"
-    # kind-stack.sh creates this Secret from deploy/certs/runtime (the nine
-    # files values-standalone.yaml lists).
-    material:
-      mountPath: /run/elitea-runtime
-      secretName: elitea-runtime-material
 
 deepwiki:
   enabled: true
@@ -213,12 +204,10 @@ deepwiki:
   platformGrpc:
     clients: [elitea-main]
   # The client identity the host and engine present on elitea-main's platform
-  # listener (dns:elitea-subapp-callback). kind-stack.sh creates the Secret
-  # from gen-runtime-certs.sh's subapp-callback-client.{crt,key}; the runtime
-  # CA comes from worker.materialSecretName (elitea-worker-material), which
+  # listener (dns:elitea-subapp-callback) is the chart's default Certificate,
+  # issued from the elitea-runtime-ca ClusterIssuer. The runtime CA they trust
+  # comes from worker.materialSecretName (elitea-worker-material), which
   # kind-stack.sh creates with that one key.
-  callbackClient:
-    secretName: elitea-deepwiki-callback-client
   env:
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
     ELITEA_DEEPWIKI_MODEL_ALLOWLIST: "*"
@@ -231,6 +220,68 @@ deepwiki:
       memory: 256Mi
     limits:
       memory: 2Gi
+  # S11: the bundled-KEDA proof. DeepWiki scales on the running rows of its
+  # shared invocation store (the KEDA postgresql trigger, which `auto` picks
+  # because this host has a database and no Prometheus is configured), and
+  # `verify` asserts the ScaledObject turns Ready=True — which needs the
+  # bundled KEDA's CRDs, its operator, the hook that created the object on
+  # this FIRST install (templates/_scaling.tpl, kedaAnnotations) and a scaler
+  # that really connected to PostgreSQL with the TriggerAuthentication's
+  # credential. maxReplicas 2 keeps the second pod off this small node unless
+  # an invocation is running.
+  autoscaling:
+    enabled: true
+    source: auto
+    minReplicas: 1
+    maxReplicas: 2
+
+# KEDA, installed by this release (keda.enabled; the pinned kedacore chart).
+# A kind cluster has none, which is the precondition: KEDA is one per cluster.
+keda:
+  enabled: true
+
+inventory:
+  enabled: true
+  image:
+    tag: kind
+    pullPolicy: IfNotPresent
+  engine:
+    # As for DeepWiki: the HOST runs `sidecar` (the chart default) and the
+    # engine sidecar runs `fixture`, a canned knowledge graph that needs no
+    # model and no git host. The migrate Job still runs, against the same
+    # database as elitea-main.
+    runner: fixture
+    image:
+      tag: kind
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 1Gi
+  env:
+    # Required by the render (fail-closed); the chart copies it to
+    # elitea-main. The fixture clones nothing.
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+# elitea-vector and the bundled Qdrant run on the chart's defaults (one node,
+# REST and gRPC over TLS from the elitea-runtime-ca issuer). Only the volume is
+# smaller: kind's local-path provisioner does not enforce the size anyway.
+vector:
+  image:
+    pullPolicy: IfNotPresent
+qdrant:
+  persistence:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
 
 # The kind stack reaches elitea-main by kubectl port-forward (kind-stack.sh), so
 # no pod outside the chart needs to open a connection to it.

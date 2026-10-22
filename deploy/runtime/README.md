@@ -98,7 +98,7 @@ key names are the file names that `gen-runtime-certs.sh` writes.
 The worker may not create a consumer (its NATS permissions deny it). A
 consumer that can create its own durable can, after losing one, recreate it in
 a way that skips every command in flight. The `nats-bootstrap` service runs
-[`deploy/helm/nats-bootstrap/files/bootstrap.sh`](../helm/nats-bootstrap/files/bootstrap.sh),
+[`deploy/helm/elitea/files/nats-bootstrap.sh`](../helm/elitea/files/nats-bootstrap.sh),
 the same script the cluster's hook Job runs, as the only identity that may.
 
 ## Workload sessions are provisioned, never self-registered
@@ -332,21 +332,6 @@ when they differ, and the mismatch error of a failed start names both values
 and this command.
 
 ## What still does not work
-
-The chat loop has not been driven end to end from a message to a streamed
-reply. Verified: an authenticated dispatch reaches the agent-execution use case,
-the worker joins the consumer group over TLS, and a completion through
-elitea-main → gateway → mock returns the mock's echo (streaming and unary).
-Joining those into one journey is #284.
-
-Toolkit-bearing agents will fail here regardless. The SDK resolves toolkits
-through `/api/v2/elitea_core/tools_list/{project_id}`, which the retired `deploy/centry-hybrid`
-stack routed to **pylon**; Go's equivalent is a different path and answers 501 by
-design. Nested application references and the artifact toolkit are pylon-backed
-in a mixed deployment for the same reason. A plain adhoc turn touches none of them.
-
-The web chat surface also still emits into a noop socket.io client rather than
-subscribing to `{events_url}`; that port is #93.
 
 Next-input suggestions are inert (#334). No server owns a suggestion policy,
 so elitea-main wires no policy source and every turn carries

@@ -1,0 +1,4 @@
+{{- if .Values.worker.enabled }}
+{{- /* Rendered only while the floor is above one replica: elitea.scaling.pdb. */}}
+{{- include "elitea.scaling.pdb" (dict "ctx" . "v" .Values.worker "name" (include "elitea-worker.fullname" .) "labels" (include "elitea-worker.labels" .) "selector" (printf "%s\napp.kubernetes.io/component: worker" (include "elitea-worker.selectorLabels" .))) }}
+{{- end }}

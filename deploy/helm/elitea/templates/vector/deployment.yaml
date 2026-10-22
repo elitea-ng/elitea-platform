@@ -1,6 +1,6 @@
 {{- if .Values.vector.enabled }}
 {{- include "elitea-vector.validateGuards" . -}}
-{{- $external := eq (.Values.vector.qdrant.mode | toString) "external" }}
+{{- $external := not (include "elitea-vector.qdrantTls" .) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,6 +10,7 @@ metadata:
   annotations:
     {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.vector "field" "vector") }}
   {{- if not .Values.vector.autoscaling.enabled }}
   replicas: {{ .Values.vector.replicaCount }}
   {{- end }}
@@ -33,6 +34,7 @@ spec:
       serviceAccountName: {{ include "elitea-vector.serviceAccountName" . }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: {{ .Values.vector.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.vector "selector" (include "elitea-vector.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.vector.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-vector
@@ -107,6 +109,13 @@ spec:
             # reads SSL_CERT_FILE, which then is the only trusted root.
             - name: SSL_CERT_FILE
               value: /etc/elitea-vector/qdrant-ca/ca.crt
+            {{- else if include "elitea-vector.qdrantTls" . }}
+            # This release's Qdrant serves TLS with a certificate from the
+            # same issuer as elitea-vector's own (ADR-0031 decision 8), so
+            # the issuer's ca.crt beside the server pair is the one root
+            # qdrant-client trusts (rustls-native-certs reads SSL_CERT_FILE).
+            - name: SSL_CERT_FILE
+              value: {{ .Values.vector.mtls.mountPath }}/ca.crt
             {{- end }}
           # The health listener is plain HTTP, so a kubelet probe can use it;
           # the gRPC listener requires a client certificate.

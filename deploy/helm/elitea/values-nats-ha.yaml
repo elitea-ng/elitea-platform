@@ -1,0 +1,90 @@
+# HA profile (design §8.1.1): 3 NATS nodes, JetStream file storage, KV buckets +
+# stream created at replicas=3 so every write is RAFT-quorum-replicated and
+# survives any single-node loss. A 1-replica store has no quorum, so multi-node
+# HA REQUIRES replicas>=3 (odd count for quorum; use 5 for larger fault
+# tolerance).
+#
+# Layer it on the chart's values.yaml:
+#   helm upgrade --install elitea deploy/helm/elitea -f values-nats-ha.yaml ...
+# It also sets natsBootstrap.replicas to 3, so the KV buckets and streams are
+# themselves quorum-replicated (a replicas=1 asset on a 3-node cluster still
+# has no quorum; templates/natsBootstrap/guards.yaml refuses the mismatch).
+#
+# The gateway's LLM_BUDGET_EXPECTED_REPLICAS (it bounds the degraded
+# per-replica cap, design §8.5) is derived by the chart from the gateway's
+# replica ceiling — autoscaling.maxReplicas, else replicaCount — so an HA
+# install sets nothing for it. An explicit value below that ceiling is refused.
+#
+# Values nest under `nats:` because the upstream chart is a dependency named
+# `nats` (see Chart.yaml).
+nats:
+  config:
+    jetstream:
+      enabled: true
+      fileStore:
+        enabled: true
+        pvc:
+          enabled: true
+          size: 20Gi
+      memoryStore:
+        enabled: false
+    # 3-node RAFT cluster — quorum survives any single-node failure. Use 5 for
+    # higher fault tolerance (odd count only).
+    cluster:
+      enabled: true
+      replicas: 3
+      # Routes are TLS with mutual verification (#1076), on their OWN
+      # identity: each server presents the route certificate
+      # (templates/nats/route-certificate.yaml: `server auth` + `client auth`, the
+      # *.<headless> names) and verifies its peer against the ROUTE CA, whose
+      # ca.crt cert-manager writes into the same Secret — not the client CA,
+      # or any service's client certificate could join the cluster as a
+      # peer. Without TLS every message crosses the cluster network in
+      # plaintext. templates/nats/guards.yaml refuses a clustered render without
+      # either.
+      tls:
+        enabled: true
+        secretName: elitea-nats-route-tls
+        merge:
+          verify: true
+          # The upstream chart would otherwise point this at nats.tlsCA, the
+          # CLIENT CA.
+          ca_file: /etc/nats-certs/cluster/ca.crt
+          timeout: 3
+
+  container:
+    image:
+      repository: nats
+      tag: "2.12.0"
+    merge:
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+
+
+  # Spread the quorum across nodes so a single node loss cannot take two
+  # replicas (which would break quorum).
+  podTemplate:
+    topologySpreadConstraints:
+      kubernetes.io/hostname:
+        maxSkew: 1
+        whenUnsatisfiable: DoNotSchedule
+
+  service:
+    enabled: true
+
+  natsBox:
+    enabled: false
+
+  promExporter:
+    enabled: true
+    # The Prometheus Operator's PodMonitor (its CRDs must be installed).
+    podMonitor:
+      enabled: true
+
+natsBootstrap:
+  replicas: 3

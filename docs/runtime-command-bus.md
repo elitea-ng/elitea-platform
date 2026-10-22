@@ -9,8 +9,8 @@ file is the wire and deployment contract the three parties implement:
 | Producer (elitea-main) | `services/elitea-main/internal/transport/commandbus` |
 | Rust worker | `services/elitea-worker-rust/src/transport/nats_jetstream.rs` |
 | Python worker | `services/elitea-worker-python/src/elitea_worker/transport/nats_jetstream.py` |
-| Streams, consumers, dead-letter bucket | `deploy/helm/nats-bootstrap/files/bootstrap.sh` (the only owner) |
-| Who may do what | `deploy/helm/nats/values.yaml` (the permission table) |
+| Streams, consumers, dead-letter bucket | `deploy/helm/elitea/files/nats-bootstrap.sh` (the only owner) |
+| Who may do what | `deploy/helm/elitea/values.yaml` (the permission table) |
 
 The Redis Streams transport is deleted. There is no transport flag and no
 mixed mode: a deployment runs this bus or no runtime plane.
@@ -61,7 +61,7 @@ A stream name is `ELITEA_RT_V1_<ROUTE>`; the route token in its subjects is
 | DenyDelete / DenyPurge | true | only an ack removes a command; no client can delete one |
 
 Durability (owner decision Q2): every write is synced. The NATS server runs
-with `jetstream { sync_interval: always }` (deploy/helm/nats), so a publish
+with `jetstream { sync_interval: always }` (deploy/helm/elitea), so a publish
 or an ack is on disk before the client sees its reply.
 
 ## Subjects and headers
@@ -163,7 +163,7 @@ created by that account's bootstrap, history 1, TTL
 `worker` (the worker's client name), `recorded_at_unix_millis`. No envelope
 bytes, no delivery ID, no command field: the record says where to look, not
 what the command said. The alert is new records being written —
-`EliteaRuntimeCommandDeadLettered` in deploy/helm/nats/templates/prometheusrule.yaml,
+`EliteaRuntimeCommandDeadLettered` in deploy/helm/elitea/templates/nats/prometheusrule.yaml,
 `max(increase(nats_stream_last_seq{stream_name="KV_ELITEA_RT_V1_DEADLETTER"}[1h])) > 0` —
 plus the workers' ERROR log line `worker_command.dead_lettered` and their
 in-process counter. Any write moves the bucket's last sequence, so the alert
@@ -184,7 +184,7 @@ agree by accident.
 
 ## Identities and permissions (the RUNTIME and WORKER accounts)
 
-The NATS server has one account per plane (`deploy/helm/nats/values.yaml`:
+The NATS server has one account per plane (`deploy/helm/elitea/values.yaml`:
 MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER). The three streams, their
 durables and the replay wake-up subject live in **RUNTIME**, with the
 producer. The workers are in **WORKER**, whose JetStream holds the

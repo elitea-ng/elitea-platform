@@ -267,7 +267,7 @@ func composePlatformMCPReplays(ctx context.Context, conn *nats.Conn, logger *slo
 	store, err := newPlatformMCPReplayStore(ctx, conn)
 	if err != nil {
 		logger.Error("platform MCP tools of local turns are disabled: the platform MCP replay store could not be bound; "+
-			"run the nats-bootstrap Job (deploy/helm/nats-bootstrap; in compose, the nats-bootstrap service), which creates and configures KV bucket "+
+			"run the nats-bootstrap Job (deploy/helm/elitea natsBootstrap; in compose, the nats-bootstrap service), which creates and configures KV bucket "+
 			desktopopsapi.PlatformReplayBucket+", then restart elitea-main (until then executeRemoteToolkitTool answers 501 for toolkit id 0)",
 			"bucket", desktopopsapi.PlatformReplayBucket, "err", err)
 		return nil

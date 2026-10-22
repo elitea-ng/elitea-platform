@@ -13,13 +13,31 @@
 # ZERO lag, and zero lag scales the fleet DOWN. The failure looks like a
 # healthy, quiet deployment while the backlog grows.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 CHART="deploy/helm/elitea"
 
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-      --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
+      --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
+      # Since S11 the connection budget counts the worker's AgentState pool at
+      # its replica ceiling: 10 x 32 = 320 on top of main's 168 and the
+      # gateway's and scheduler's 12 is 500, more than the standalone profile's
+      # 255. A server sized for the fleet, so the guard under test here is the
+      # autoscaler's and never the budget's.
+      --set postgresql.maxConnections=600)
 KEDA=(--api-versions keda.sh/v1alpha1)
 
 failures=0
@@ -50,8 +68,11 @@ fi
 # million or more as "1e+06", which KEDA cannot parse. --set would hand the
 # chart an int64 and hide it, hence the file.
 printf 'worker:\n  autoscaling:\n    activationLagThreshold: 1000000\n' > "$work/big.yaml"
-if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true -f "$work/big.yaml" \
-    | grep -qF 'activationLagThreshold: "1000000"'; then
+# To a file, not `| grep -q`: under pipefail grep -q exiting at the first
+# match can SIGPIPE helm and fail a render that printed the line.
+helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true -f "$work/big.yaml" \
+  > "$work/big-render.yaml"
+if grep -qF 'activationLagThreshold: "1000000"' "$work/big-render.yaml"; then
   pass "a values-file activationLagThreshold of 1000000 renders as an integer"
 else
   fail "activationLagThreshold 1000000 from a values file did not render as \"1000000\""
@@ -105,7 +126,7 @@ scaler_account=$(awk '/type: nats-jetstream/{f=1} f && /^ *account:/{gsub(/.*acc
 if [ "$scaler_account" = "RUNTIME" ]; then
   pass "the scaler reads the RUNTIME account's /jsz"
 else
-  fail "the scaler reads account '$scaler_account', not RUNTIME (deploy/helm/nats accounts); it would see zero lag"
+  fail "the scaler reads account '$scaler_account', not RUNTIME (nats.config.merge.accounts); it would see zero lag"
 fi
 
 # Consumer LAG (num_pending), not a pending-entries count.

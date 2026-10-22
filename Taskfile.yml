@@ -202,8 +202,17 @@ tasks:
       - cd services/elitea-main && go test -count=1 ./tests/deployedge/...
 
   # ── Helm ──────────────────────────────────────────────────────────────────────
+  helm:deps:
+    desc: Build the elitea chart's dependencies (nats, qdrant, elitea-sandbox-runtime) into charts/ from Chart.lock
+    # Once per `task` run: every helm:* task needs it, and a second build
+    # would delete charts/ under a render already in flight.
+    run: once
+    cmds:
+      - bash deploy/helm/elitea/build-deps.sh
+
   helm:lint:
     desc: Lint all Helm charts
+    deps: [helm:deps]
     cmds:
       # Same defect as the Go loops above (#409). A bare loop reports the
       # status of its LAST chart, so a broken early chart read as a pass. A
@@ -240,15 +249,41 @@ tasks:
       - task: helm:gateway-master-key
       - task: helm:gateway-workload-identity
       - task: helm:indexing-runtime
+      - task: helm:nats-bundled
+      - task: helm:default-on
+      - task: helm:scaling
+
+  helm:scaling:
+    desc: Check scale-out readiness (S11) — every autoscaler with and without its source, bundled KEDA and prometheus-adapter on/off, no replicas under an autoscaler, spread and PDBs, grace periods, the all-component connection budget and the gateway's expected replicas
+    deps: [helm:deps]
+    cmds:
+      # S11. Needs helm, python3 and PyYAML.
+      - bash deploy/helm/tests/render-scaling.sh
+
+  helm:default-on:
+    desc: Check the shipped defaults (runtime, worker, vector with the bundled Qdrant, DeepWiki, Inventory on) render with only the operator's values, each feature is one switch, and missing values are refused in one message
+    deps: [helm:deps]
+    cmds:
+      # S10. Needs helm, python3 and PyYAML.
+      - bash deploy/helm/tests/render-default-on.sh
+
+  helm:nats-bundled:
+    desc: Check that Chart.lock matches Chart.yaml and every dependency resolves, NATS renders on and off, a mismatched natsClient is refused, and the packaged chart renders the same
+    deps: [helm:deps]
+    cmds:
+      # Needs helm, node, python3 and PyYAML.
+      - bash deploy/helm/tests/render-nats-bundled.sh
 
   helm:indexing-runtime:
     desc: Check that worker.indexingRuntime reaches elitea-main as ELITEA_INDEXING_RUNTIME (default python) and that an unknown value, or rust without the Rust worker, is refused
+    deps: [helm:deps]
     cmds:
       # ADR-0030 decision 6 / ADR-0031 V1. Needs python3 with PyYAML.
       - bash deploy/helm/tests/render-indexing-runtime.sh
 
   helm:worker-node-recovery:
     desc: Check that worker.runtime.agentNodeRecovery is written for the Rust worker only when true, never for the Python worker, and that a non-boolean recovery switch is refused
+    deps: [helm:deps]
     cmds:
       # G-WORKER-01 (services/elitea-worker-rust/docs/recovery-guarantees.md).
       # Needs python3 with PyYAML.
@@ -256,6 +291,7 @@ tasks:
 
   helm:main-master-key:
     desc: Check that elitea-main is handed SECRETS_MASTER_KEY from a Secret, and that the chart refuses a values set without one
+    deps: [helm:deps]
     cmds:
       # #1176 made every render declare who may reach elitea-main. #1175,
       # merged after it from an older base, added this script without that
@@ -265,6 +301,7 @@ tasks:
 
   helm:gateway-master-key:
     desc: Check that elitea-llm-gateway is handed SECRETS_MASTER_KEY from a required Secret, and that the chart refuses a values set without one
+    deps: [helm:deps]
     cmds:
       # The gateway refuses to start without the key, as elitea-main does.
       # Needs yq.
@@ -272,12 +309,14 @@ tasks:
 
   helm:gateway-workload-identity:
     desc: Check that llmGateway.workloadIdentity.enabled renders GATEWAY_WORKLOAD_IDENTITY_ENABLED, the ServiceAccount binding, and the metadata egress rule only when true
+    deps: [helm:deps]
     cmds:
       # Keyless platform credentials for Vertex AI and AI DIAL. Needs yq.
       - bash deploy/helm/tests/render-gateway-workload-identity.sh
 
   helm:code-consumers:
     desc: Check opt-in Code consumers and private material boundaries
+    deps: [helm:deps]
     cmds:
       - python3 scripts/runtime/test_code_consumers_deployment.py
       - python3 scripts/runtime/test_code_material_install.py
@@ -285,11 +324,13 @@ tasks:
 
   helm:compiled-snapshots:
     desc: Check opt-in compiled Rust startup material and render contracts
+    deps: [helm:deps]
     cmds:
       - python3 deploy/helm/tests/render-compiled-snapshots.py
 
   helm:edge-healthz:
     desc: Check that the chart's browser edge publishes /healthz with no authenticating filter in front of it
+    deps: [helm:deps]
     cmds:
       # #569: on the cluster /healthz sat in the HTTPRoute rule that carries
       # the edge-auth ExtensionRef, and the policy did not name it, so every
@@ -300,6 +341,7 @@ tasks:
 
   helm:capabilities:
     desc: Check that the elitea-main chart renders the capability flags the composition root reads
+    deps: [helm:deps]
     cmds:
       # `helm lint` proves the chart is well formed. It does not read the
       # rendered environment, so it stayed green for as long as the chart set
@@ -311,6 +353,7 @@ tasks:
 
   helm:llmpath:
     desc: Check that the charts do not ship the LLM path off, and that the gateway guards refuse
+    deps: [helm:deps]
     cmds:
       # #473 wrote this script for issues #463, #467, #458 and #464, and no job
       # ran it. It asserts both directions: the charts render the LLM path ON,
@@ -321,6 +364,7 @@ tasks:
 
   helm:bf02b:
     desc: Check the NATS profiles, the KV/stream bootstrap, the gateway Service and the ArgoCD sync-wave order
+    deps: [helm:deps]
     cmds:
       # It was `deploy/test_bf0_2b.sh`, and no workflow, task or script called
       # it (#485). Two defects came out on the first run: the gateway chart has

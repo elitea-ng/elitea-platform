@@ -1,10 +1,10 @@
 // Package deployedge_test gates the browser edges this repository ships.
 //
-// There are two. In a cluster it is the Gateway API HTTPRoute
-// (deploy/gateway-api/httproute.yaml, edge_gateway_api_test.go). In a compose
-// stack it is elitea-main itself, with its web relay turned on
-// (internal/api/webedge, compose_edge_harness_test.go) — the compose Traefik
-// that used to stand there is gone (#1359 P2).
+// There is one: elitea-main itself, with its web relay turned on
+// (internal/api/webedge, compose_edge_harness_test.go). The compose Traefik
+// that used to stand in front of it is gone (#1359 P2), and in a cluster the
+// Ingress or Gateway API HTTPRoute is a single `/` rule to elitea-main
+// (deploy/gateway-api/httproute.yaml, edge_gateway_api_test.go; #1359 P3).
 //
 // This file holds the one rule that replaced the Traefik-only gates (#338,
 // #379): no Traefik configuration ships at all. Those gates existed because a

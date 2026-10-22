@@ -61,20 +61,8 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.vector.autoscaling.targetCPUUtilizationPercentage }}
 {{- end }}
-{{- if .Values.vector.podDisruptionBudget.enabled }}
+{{- with (include "elitea.scaling.pdb" (dict "ctx" . "v" .Values.vector "name" (include "elitea-vector.fullname" .) "labels" (include "elitea-vector.labels" .) "selector" (include "elitea-vector.selectorLabels" .) "annotations" (include "elitea-vector.syncWave" .))) }}
 ---
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "elitea-vector.fullname" . }}
-  labels:
-    {{- include "elitea-vector.labels" . | nindent 4 }}
-  annotations:
-    {{- include "elitea-vector.syncWave" . | nindent 4 }}
-spec:
-  minAvailable: {{ .Values.vector.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      {{- include "elitea-vector.selectorLabels" . | nindent 6 }}
+{{- . }}
 {{- end }}
 {{- end }}

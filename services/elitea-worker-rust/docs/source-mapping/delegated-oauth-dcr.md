@@ -530,7 +530,7 @@ The UI does not send refresh tokens or client secrets in execution requests.
 The shared tab refresh owner prevents duplicate rotation within that tab.
 It does not prove concurrent refresh coordination between separate browser tabs.
 
-The isolated fixture is documented in `deploy/oauth-emulator/README.md`.
+The isolated fixture (`deploy/oauth-emulator/`) was removed with the deploy/ cleanup: it targeted a rehearsal stack that no longer exists.
 Its stored OpenAPI mode supports delegated authorization and client credentials, not DCR.
 Its separate MCP modes support public and confidential DCR protocol tests.
 

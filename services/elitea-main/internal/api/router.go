@@ -145,9 +145,10 @@ type AuthDeps struct {
 // #194 (AI draft generation, tool testing and MCP tool sync have no backend).
 
 type RouterConfig struct {
-	// WebUpstream turns elitea-main into the browser edge of a compose stack
-	// (ELITEA_WEB_UPSTREAM; see internal/api/webedge). Nil in a cluster, where
-	// the Gateway API HTTPRoute routes /app and /docs to elitea-web.
+	// WebUpstream turns elitea-main into the browser edge (ELITEA_WEB_UPSTREAM;
+	// see internal/api/webedge): /app and /docs are relayed to elitea-web.
+	// Compose sets it, and so does the chart whenever it renders elitea-web.
+	// Nil when nothing serves the SPA next to this process.
 	WebUpstream        *url.URL
 	Auth               AuthDeps
 	AuthValidator      apimw.TokenValidator
@@ -1413,8 +1414,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	}
 
 	r := chi.NewRouter()
-	// The compose browser edge goes first, so the web container's answers
-	// leave untouched (internal/api/webedge). A no-op when WebUpstream is nil.
+	// No inbound request header is an identity (#1359). Every name an edge,
+	// elitea-main or the LLM gateway ever read as one is deleted here, FIRST,
+	// before any route runs and before the relay to elitea-web below, so
+	// neither elitea-main nor the web container depends on an edge to strip
+	// them. See StripClientIdentityHeaders for the one deliberate exception.
+	// tests/deployedge TestWebRelayCarriesNoClientIdentity holds the order.
+	r.Use(apimw.StripClientIdentityHeaders)
+	// The browser edge goes next, so the web container's answers leave the
+	// API's response middleware untouched (internal/api/webedge). A no-op when
+	// WebUpstream is nil.
 	r.Use(webedge.Middleware(cfg.WebUpstream))
 	permissionResolver := legacyrbac.NewPostgresResolver(cfg.Pool)
 
@@ -1442,11 +1451,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// Mounted here, in front of every route, because the per-handler copies
 	// covered only the routes somebody remembered (see the middleware doc).
 	r.Use(apimw.SecurityHeaders)
-	// No inbound request header is an identity (#1359). Every name an edge,
-	// elitea-main or the LLM gateway ever read as one is deleted here, before
-	// any route runs, so elitea-main no longer depends on an edge to strip
-	// them. See StripClientIdentityHeaders for the one deliberate exception.
-	r.Use(apimw.StripClientIdentityHeaders)
 	// Keep the raw socket peer available to any trust-aware proxy resolver.
 	// Generic RealIP processing before authentication would make X-Real-IP and
 	// X-Forwarded-For caller-controlled trust inputs.

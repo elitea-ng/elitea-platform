@@ -13,6 +13,18 @@
 # Usage: deploy/helm/tests/render-deepwiki.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 CHART="deploy/helm/elitea"
 
@@ -136,6 +148,10 @@ fi
 # base already set, which is how a refusal is provoked without rebuilding the
 # whole argument list and accidentally omitting something else too.
 
+expect() {
+  local what="$1" got="$2" want="$3"
+  if [ "$got" != "$want" ]; then fail "$what is '$got', expected '$want'"; else note "$what: $got"; fi
+}
 echo "== the guards refuse a half-configured install =="
 refuses() {
   local description="$1"; shift
@@ -151,12 +167,29 @@ refuses() {
 }
 
 refuses "provider with no git allowlist"        --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=
-refuses "facade with no git allowlist"          --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=
 refuses "the retired base URL (#1359)"         --set main.env.ELITEA_DEEPWIKI_BASE_URL=https://elitea-deepwiki-svc:8443
 refuses "facade with no provider to dial"       --set deepwiki.enabled=false
-refuses "facade with no client certificate"     --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=
 refuses "facade with a path outside the mount"  --set main.env.ELITEA_DEEPWIKI_CA_FILE=/elsewhere/ca.crt
-refuses "facade with no material mounted"       --set main.fileConfig.deepwikiClientMaterial.enabled=false
+refuses "facade with its material switched off" --set main.fileConfig.deepwikiClientMaterial.enabled=false
+refuses "a facade allowlist unlike the provider's" --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=gitlab.com
+refuses "the facade switched off beside the provider" --set main.env.ELITEA_DEEPWIKI_ENABLED=false
+
+# S10: deepwiki.enabled is ONE switch. What the facade used to need by hand
+# (the enable flag, the three certificate paths, the client material, the git
+# allowlist) is derived from the provider's settings, so leaving each of them
+# out renders the same facade instead of being refused.
+echo "== deepwiki.enabled alone composes elitea-main's facade =="
+derived="$(render $RUNTIME $VECTOR --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com 2>&1)" \
+  || fail "deepwiki.enabled with the provider's settings alone does not render: $derived"
+derived_env() { printf '%s' "$derived" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$1" -; }
+expect "derived ELITEA_DEEPWIKI_ENABLED" "$(derived_env ELITEA_DEEPWIKI_ENABLED)" "true"
+expect "derived ELITEA_DEEPWIKI_GIT_ALLOWLIST (copied from deepwiki.env)" "$(derived_env ELITEA_DEEPWIKI_GIT_ALLOWLIST)" "github.com"
+expect "derived ELITEA_DEEPWIKI_CLIENT_CERT_FILE" "$(derived_env ELITEA_DEEPWIKI_CLIENT_CERT_FILE)" "/run/elitea-deepwiki/tls.crt"
+expect "derived ELITEA_DEEPWIKI_CLIENT_KEY_FILE" "$(derived_env ELITEA_DEEPWIKI_CLIENT_KEY_FILE)" "/run/elitea-deepwiki/tls.key"
+expect "derived ELITEA_DEEPWIKI_CA_FILE" "$(derived_env ELITEA_DEEPWIKI_CA_FILE)" "/run/elitea-deepwiki/ca.crt"
+expect "derived client material Secret (the facade-client Certificate's)" \
+  "$(printf '%s' "$derived" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-main") | .spec.template.spec.volumes[] | select(.name == "deepwiki-client-material") | .secret.secretName' -)" \
+  "elitea-main-deepwiki-client-tls"
 refuses "an unrecognised ENABLED spelling"      --set main.env.ELITEA_DEEPWIKI_ENABLED=ture
 
 # The retired Python engine's settings. Each must be refused by ITS guard,
@@ -275,10 +308,6 @@ native="$(render $COMPLETE --set image.tag=9.9.9)" \
   || fail "the default runner does not render: $native"
 dw() { printf '%s' "$native" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
 job() { printf '%s' "$native" | yq eval-all "select(.kind == \"Job\" and .metadata.name == \"elitea-deepwiki-migrate\") | $1" -; }
-expect() {
-  local what="$1" got="$2" want="$3"
-  if [ "$got" != "$want" ]; then fail "$what is '$got', expected '$want'"; else note "$what: $got"; fi
-}
 expect "native containers" "$(dw '.spec.template.spec.containers[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
 expect "native engine image" "$(dw '.spec.template.spec.containers[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
 expect "native engine command (the image's own ENTRYPOINT/CMD)" "$(dw '.spec.template.spec.containers[1].command')" "null"
@@ -487,7 +516,9 @@ explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}'
 expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
 facade_off="$(render $RUNTIME $VECTOR --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
   || fail "the engine with its service on and the facade off does not render: $facade_off"
-expect "facade off: nothing derived for a caller that is not composed" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
+# S10: the provider's switch composes the facade too, so there is no "engine
+# on, facade off" install any more: the target is derived for it.
+expect "the provider alone composes the facade, and its target is derived" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9443"
 if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then
   fail "a platform target beside a facade that is off renders"
 else
@@ -502,7 +533,7 @@ fi
 # render is refused; an explicit value wins.
 
 echo "== the engine reaches elitea-vector =="
-CHART_VECTOR="--set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key "
+CHART_VECTOR="--set vector.enabled=true --set qdrant.enabled=true "
 engine_vector_url() {
   printf '%s' "$1" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[] | select(.name == "engine") | .env[] | select(.name == "ELITEA_DEEPWIKI_VECTOR_URL") | .value' -
 }
@@ -512,7 +543,7 @@ expect "derived from this chart's elitea-vector" "$(engine_vector_url "$with_cha
 explicit_vector="$(render $COMPLETE $CHART_VECTOR )" \
   || fail "an explicit elitea-vector beside this chart's does not render: $explicit_vector"
 expect "an explicit elitea-vector wins" "$(engine_vector_url "$explicit_vector" | sort -u)" "https://vector.elsewhere.invalid:9470"
-refuses_with "a native engine with no elitea-vector" "vector.enabled is false and deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL is unset" \
+refuses_with "a native engine with no elitea-vector" "deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL for an elitea-vector deployed elsewhere" \
   ${COMPLETE/"$VECTOR"/} 
 if fixture_novector="$(render ${COMPLETE/"$VECTOR"/}  --set deepwiki.engine.runner=fixture 2>&1)"; then
   expect "the fixture runner needs no elitea-vector" "$(engine_vector_url "$fixture_novector")" ""
