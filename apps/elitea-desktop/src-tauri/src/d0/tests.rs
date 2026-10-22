@@ -2167,7 +2167,8 @@ async fn project_skill_is_fetched_by_host_not_ui() {
     let mut req = request(&h.workspace_id);
     req.prompt = "/Deploy the release".into();
     // The UI names the skill by id only; whatever text it might hold is not read.
-    req.project_skills = vec![json!("12")];
+    // Picked twice (either spelling of the id), it is read once.
+    req.project_skills = vec![json!("12"), json!(12)];
     h.host.start(req).await.unwrap();
     until_done(&h).await;
     let fetched = seen(&h.server, "/elitea_core/skill/prompt_lib/1/12");

@@ -1346,6 +1346,35 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.skills).toEqual([{ source: 'project', id: '21' }]);
     });
 
+    it('reads every page of the project\'s skills and labels them in /help', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const pages: string[] = [];
+      const row = (id: number, name: string) => ({ id: String(id), project_id: '42', name, type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' });
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, ({ request }) => {
+          const page = new URL(request.url).searchParams.get('page') ?? '1';
+          pages.push(page);
+          // A full first page, then a short second one holding the skill asked for.
+          // bulk-000 shares its id with the agent's "style": the /help rows are keyed by source too.
+          const items = page === '1' ? Array.from({ length: 100 }, (_, i) => row(i === 0 ? 7 : 100 + i, `bulk-${String(i).padStart(3, '0')}`)) : [row(300, 'last-page')];
+          return HttpResponse.json({ items, total: 101, page: Number(page), page_size: 100, total_pages: 2 });
+        }),
+      );
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, '/last');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/last-page']));
+      expect(pages).toEqual(['1', '2']);
+      // /help labels a project skill as the project's, beside the agent's of the same id.
+      await user.clear(input);
+      await user.type(input, '/help{Enter}');
+      const help = await screen.findByTestId('workspace-help');
+      expect(help).toHaveTextContent('/bulk-000 — A skill of this project');
+      expect(help).not.toHaveTextContent('A skill of this agent');
+      expect(help).toHaveTextContent('/style — The house style');
+    });
+
     it('sends no skill when the message does not start with one', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc, [{ id: '7', name: 'style' }]);

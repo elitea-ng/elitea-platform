@@ -10,13 +10,14 @@
  * - The agent's skills, then the project's (`composerSkills.ts`), come last.
  *
  * A name is offered once: a host command hides a custom command of its
- * name, and a custom command hides a skill of its name (the message would
- * run the command).
+ * name, and a custom command hides a skill of its name in any case (the
+ * message would run the command). A message runs the longest name it
+ * starts with (`invokedPick`).
  */
 import type { CustomCommand, TurnCommand } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
-import { matchingSkills, type ComposerSkill } from './composerSkills';
+import { invokedSkill, matchingSkills, type ComposerSkill } from './composerSkills';
 
 export type WorkspaceCommandId = 'new' | 'plan' | 'undo' | 'agent' | 'model' | 'clear' | 'compact' | 'help';
 
@@ -104,8 +105,9 @@ export function customCommandDetail(command: CustomCommand): string {
 
 /**
  * The custom command `text` runs: the message (leading blanks aside)
- * starts with `/<name>` followed by whitespace or its end; the arguments
- * are the rest. `null` when it runs none.
+ * starts with `/<name>` followed by whitespace or its end, in any case
+ * (names are lowercase); the longest such name wins and the arguments are
+ * the rest. `null` when it runs none.
  */
 export function invokedCustomCommand(text: string, commands: readonly CustomCommand[]): TurnCommand | null {
   const message = text.trimStart();
@@ -113,9 +115,29 @@ export function invokedCustomCommand(text: string, commands: readonly CustomComm
   for (const command of offered(commands)) {
     const token = customCommandToken(command);
     const next = message.charAt(token.length);
-    if (message.startsWith(token) && (next === '' || /\s/u.test(next)) && (best === null || command.name.length > best.name.length)) best = command;
+    if (message.slice(0, token.length).toLowerCase() === token && (next === '' || /\s/u.test(next)) && (best === null || command.name.length > best.name.length)) best = command;
   }
   return best === null ? null : { name: best.name, arguments: message.slice(customCommandToken(best).length).trim() };
+}
+
+/** What a message runs: a custom command, else a skill, else neither. */
+export interface InvokedPick {
+  command: TurnCommand | null;
+  skill: ComposerSkill | null;
+}
+
+/**
+ * What `text` runs, the custom commands and the skills matched alike (in
+ * any case): the longest name the message starts with wins, so a skill
+ * picked from the menu (`/review code`) is applied even beside a custom
+ * command that is a prefix of it (`/review`). A custom command wins over a
+ * skill of the same name, which the menu hides.
+ */
+export function invokedPick(text: string, commands: readonly CustomCommand[], skills: readonly ComposerSkill[]): InvokedPick {
+  const command = invokedCustomCommand(text, commands);
+  const skill = invokedSkill(text, skills);
+  if (skill !== null && (command === null || skill.name.length > command.name.length)) return { command: null, skill };
+  return { command, skill: null };
 }
 
 /** One row of the "/" menu. */

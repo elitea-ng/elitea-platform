@@ -296,9 +296,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       return;
     }
     const mentions = composer.referencedPaths(question, picked);
-    // A custom command first: it hides a skill of its name in the menu too.
-    const command = composer.invokedCustomCommand(question, customCommands);
-    const skill = command === null ? composer.invokedSkill(question, skills) : null;
+    // The longest name the message starts with; a custom command over a skill of its name.
+    const { command, skill } = composer.invokedPick(question, customCommands, skills);
     const sending = command === null ? onSend(question, mentions, skillPicks(skill)) : onSend(question, mentions, [], command);
     void sending.then((sent) => {
       if (sent) clearInput();

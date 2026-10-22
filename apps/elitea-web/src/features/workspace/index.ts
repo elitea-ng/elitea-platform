@@ -7,8 +7,8 @@
  */
 import { lazy } from 'react';
 
-import { customCommandDetail, customCommandSource, customCommandToken, invokedCustomCommand, modelCommandName, slashMenu } from './model/composerCommands';
-import { invokedSkill, matchingSkills, skillToken } from './model/composerSkills';
+import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu } from './model/composerCommands';
+import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
@@ -41,10 +41,9 @@ export const composer = {
   customCommandToken,
   customCommandSource,
   customCommandDetail,
-  invokedCustomCommand,
+  invokedPick,
   matchingSkills,
   skillToken,
-  invokedSkill,
   ModelChip,
 };
 

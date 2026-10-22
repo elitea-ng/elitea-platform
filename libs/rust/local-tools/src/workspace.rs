@@ -676,6 +676,42 @@ impl Workspace {
         }))
     }
 
+    /// Open the directory `path` for listing, every component opened from
+    /// the root with `O_DIRECTORY | O_NOFOLLOW`: no symlink is followed on
+    /// the way or at the end, so what is listed is the folder `path` names
+    /// even if a component is swapped for a symlink meanwhile. The deny
+    /// rules are checked.
+    ///
+    /// # Errors
+    ///
+    /// Not found, a symlink or not a directory on the way, or denied.
+    pub fn open_dir(&self, path: &WsPath) -> ToolResult<OwnedFd> {
+        self.check(path, Intent::Read)?;
+        let mut dir = self.root_dir()?;
+        for name in path.components() {
+            dir = match rustix::fs::openat(
+                &dir,
+                name.as_str(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(next) => next,
+                Err(Errno::NOENT) => {
+                    return Err(ToolError::new(
+                        ErrorCode::NotFound,
+                        format!("`{path}` does not exist"),
+                    ));
+                }
+                Err(_) => {
+                    return Err(ToolError::invalid(format!(
+                        "`{path}` is not a directory reached without a symlink"
+                    )));
+                }
+            };
+        }
+        Ok(dir)
+    }
+
     /// Open a regular file for reading, confined.
     ///
     /// # Errors
@@ -1033,6 +1069,25 @@ mod tests {
             .expect("dir")
             .collect();
         assert_eq!(leftovers.len(), 1, "no temporary file is left behind");
+    }
+
+    #[test]
+    fn open_dir_follows_no_symlink_and_honours_deny() {
+        let (root, _outside, ws) = workspace(&["secret"]);
+        std::fs::create_dir_all(root.path().join("real/sub")).expect("dir");
+        std::fs::create_dir_all(root.path().join("secret")).expect("dir");
+        symlink("real", root.path().join("alias")).expect("dir link");
+        let path = |p: &str| WsPath::from_relative(std::path::Path::new(p)).expect("path");
+        assert!(ws.open_dir(&path("real/sub")).is_ok());
+        assert_eq!(code(ws.open_dir(&path("missing"))), ErrorCode::NotFound);
+        for linked in ["alias", "alias/sub"] {
+            assert_eq!(
+                code(ws.open_dir(&path(linked))),
+                ErrorCode::InvalidArgument,
+                "{linked}"
+            );
+        }
+        assert_eq!(code(ws.open_dir(&path("secret"))), ErrorCode::Denied);
     }
 
     #[test]

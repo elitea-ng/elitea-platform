@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CustomCommand } from '@/shared/desktop/workspaceIpc';
 
-import { customCommandDetail, customCommandSource, invokedCustomCommand, matchingCustomCommands, slashMenu } from './composerCommands';
+import { customCommandDetail, customCommandSource, invokedCustomCommand, invokedPick, matchingCustomCommands, slashMenu } from './composerCommands';
 import type { ComposerSkill } from './composerSkills';
 
 function command(name: string, source: CustomCommand['source'], extra: Partial<CustomCommand> = {}): CustomCommand {
@@ -93,13 +93,41 @@ describe('invokedCustomCommand', () => {
     expect(invokedCustomCommand('/review\nall of it', COMMANDS)).toEqual({ name: 'review', arguments: 'all of it' });
   });
 
-  it('is none for a longer word, a later "/", another case or a host command\'s name', () => {
+  it('matches in any case, as the menu filters', () => {
+    expect(invokedCustomCommand('/Review x', COMMANDS)).toEqual({ name: 'review', arguments: 'x' });
+    expect(invokedCustomCommand('/FRONTEND:Lint', COMMANDS)).toEqual({ name: 'frontend:lint', arguments: '' });
+  });
+
+  it('is none for a longer word, a later "/" or a host command\'s name', () => {
     expect(invokedCustomCommand('/reviewer x', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('please /review', COMMANDS)).toBeNull();
-    expect(invokedCustomCommand('/Review x', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/help', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/model gpt-5', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/compact', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/review', [])).toBeNull();
+  });
+});
+
+describe('invokedPick', () => {
+  const skill = (name: string, extra: Partial<ComposerSkill> = {}): ComposerSkill => ({ id: name, name, ...extra });
+  const SKILLS = [skill('review code'), skill('Review'), skill('Deploy', { project: true })];
+
+  it('applies a skill whose name is longer than the custom command it starts with', () => {
+    // Picking "review code" from the menu inserts `/review code `.
+    expect(invokedPick('/review code src/a.rs', COMMANDS, SKILLS)).toEqual({ command: null, skill: SKILLS[0] });
+    expect(invokedPick('/Review Code', COMMANDS, SKILLS)).toEqual({ command: null, skill: SKILLS[0] });
+    // `/review` alone (or with other words) is still the command.
+    expect(invokedPick('/review src/a.rs', COMMANDS, SKILLS)).toEqual({ command: { name: 'review', arguments: 'src/a.rs' }, skill: null });
+  });
+
+  it('lets a custom command shadow a skill of its name in any case, typed by hand too', () => {
+    expect(invokedPick('/REVIEW now', COMMANDS, SKILLS)).toEqual({ command: { name: 'review', arguments: 'now' }, skill: null });
+    expect(slashMenu('review', COMMANDS, SKILLS).flatMap((entry) => (entry.kind === 'skill' ? [entry.skill.name] : []))).toEqual(['review code']);
+  });
+
+  it('is a skill when no command matches, and neither for plain text', () => {
+    expect(invokedPick('/deploy it', COMMANDS, SKILLS)).toEqual({ command: null, skill: SKILLS[2] });
+    expect(invokedPick('/Review it', [], SKILLS)).toEqual({ command: null, skill: SKILLS[1] });
+    expect(invokedPick('hello', COMMANDS, SKILLS)).toEqual({ command: null, skill: null });
   });
 });

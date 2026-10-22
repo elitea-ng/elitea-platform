@@ -11,11 +11,15 @@
 //! the workspace's `.claude/commands/`, then the person's folder. Each is
 //! read one level deep, plus one level of sub-folders whose files become
 //! `folder:name`. The first command of a name wins: a workspace command
-//! shadows the person's command of the same name.
+//! shadows the person's command of the same name, even one that cannot be
+//! read (too large, not UTF-8, denied, a symlink): that one is skipped
+//! with why, and no other file of the name is run instead.
 //!
 //! **Reads.** Workspace files go through the confined [`Workspace`]
 //! (`openat` + `O_NOFOLLOW`, `path_deny` and the session's deny list): a
-//! symlinked file or folder is not read, a denied one is skipped. The
+//! symlinked file or folder is not read, a denied one is skipped, and a
+//! folder's names are read from the folder opened without following any
+//! symlink ([`Workspace::open_dir`]), never by its path again. The
 //! person's folder is opened without following a symlink, and it, its
 //! sub-folders and its files must be the person's own and writable by no
 //! one else (another user could otherwise swap a template). A file is at
@@ -33,14 +37,16 @@
 //! plain text, never run or read. A repository cannot grant tools, pick a
 //! model or run a command through a template.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as _;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
-use rustix::fs::{Mode, OFlags};
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 
+use crate::error::ErrorCode;
 use crate::workspace::{EntryKind, Intent, Workspace, WsPath};
 
 /// The workspace folders read, in precedence order.
@@ -145,35 +151,74 @@ struct Found {
     shown: String,
 }
 
-/// The workspace's command files, in precedence order.
-fn workspace_files(workspace: &Workspace, out: &mut Listing) -> Vec<(Found, WsPath)> {
+/// Which commands a walk looks at: every one ([`list`]), or only the one
+/// named ([`find`]), whose candidates are the same files in the same order.
+#[derive(Clone, Copy)]
+enum Wanted<'a> {
+    All,
+    One(&'a str),
+}
+
+impl Wanted<'_> {
+    /// Whether a top-level file of stem `stem` may be it.
+    fn file(self, stem: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::One(name) => name == stem,
+        }
+    }
+
+    /// Whether the sub-folder `folder` may hold it.
+    fn folder(self, folder: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::One(name) => name.split_once(':').is_some_and(|(f, _)| f == folder),
+        }
+    }
+
+    /// Whether the file `stem` of the sub-folder `folder` is it.
+    fn inner(self, folder: &str, stem: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::One(name) => name.split_once(':') == Some((folder, stem)),
+        }
+    }
+}
+
+/// The workspace's command files, in precedence order: each a path to
+/// read, or why it cannot be (it still claims its name).
+fn workspace_files(
+    workspace: &Workspace,
+    wanted: Wanted<'_>,
+    out: &mut Listing,
+) -> Vec<(Found, Result<WsPath, String>)> {
     let mut found = Vec::new();
+    let mut push = |name: String, path: WsPath, ok: Result<(), String>| {
+        found.push((
+            Found {
+                name,
+                shown: path.display_string(),
+            },
+            ok.map(|()| path),
+        ));
+    };
     for folder in WORKSPACE_FOLDERS {
         let Ok(dir) = WsPath::from_relative(Path::new(folder)) else {
             continue;
         };
         for (names, path) in workspace_dir(workspace, &dir, out) {
             match names {
-                Entry::File(stem) => found.push((
-                    Found {
-                        name: stem,
-                        shown: path.display_string(),
-                    },
-                    path,
-                )),
-                Entry::Folder(prefix) => {
+                Entry::File(stem, ok) if wanted.file(&stem) => push(stem, path, ok),
+                Entry::Folder(prefix) if wanted.folder(&prefix) => {
                     for (inner, inner_path) in workspace_dir(workspace, &path, out) {
-                        if let Entry::File(stem) = inner {
-                            found.push((
-                                Found {
-                                    name: format!("{prefix}:{stem}"),
-                                    shown: inner_path.display_string(),
-                                },
-                                inner_path,
-                            ));
+                        if let Entry::File(stem, ok) = inner
+                            && wanted.inner(&prefix, &stem)
+                        {
+                            push(format!("{prefix}:{stem}"), inner_path, ok);
                         }
                     }
                 }
+                _ => {}
             }
         }
     }
@@ -181,7 +226,9 @@ fn workspace_files(workspace: &Workspace, out: &mut Listing) -> Vec<(Found, WsPa
 }
 
 enum Entry {
-    File(String),
+    /// A file of a valid command name, or why it cannot be read (a
+    /// symlink).
+    File(String, Result<(), String>),
     Folder(String),
 }
 
@@ -192,59 +239,61 @@ fn child(dir: &WsPath, name: &str) -> Option<WsPath> {
 }
 
 /// The `.md` files and sub-folders of `dir`, by name. Nothing when `dir`
-/// is denied, reached through a symlink or not a folder.
+/// is denied, reached through a symlink or not a folder. The names are
+/// read from the folder opened without following any symlink (never by
+/// its path again), so a folder swapped meanwhile is not listed.
 fn workspace_dir(workspace: &Workspace, dir: &WsPath, out: &mut Listing) -> Vec<(Entry, WsPath)> {
     let shown = dir.display_string();
     if let Some(rule) = workspace.denied_by(dir, Intent::Read) {
         out.skipped.push((shown, format!("denied by {rule}")));
         return Vec::new();
     }
-    match workspace.stat(dir) {
-        Ok(Some(EntryKind::Dir)) => {}
-        Ok(Some(EntryKind::Symlink)) => {
-            out.skipped.push((shown, "a symlink".to_owned()));
+    let fd = match workspace.open_dir(dir) {
+        Ok(fd) => fd,
+        Err(error) if error.code() == ErrorCode::NotFound => return Vec::new(),
+        Err(_) => {
+            // A symlink at the end or on the way (`.claude`), or a file.
+            let linked = matches!(workspace.stat(dir), Ok(Some(EntryKind::Symlink)))
+                || workspace.final_target(dir).ok().as_ref() != Some(dir);
+            if linked {
+                out.skipped.push((shown, "a symlink".to_owned()));
+            }
             return Vec::new();
         }
-        _ => return Vec::new(),
-    }
-    // A folder on the way (`.claude`) may itself be a symlink.
-    if workspace.final_target(dir).ok().as_ref() != Some(dir) {
-        out.skipped.push((shown, "a symlink".to_owned()));
-        return Vec::new();
-    }
-    let Ok(listing) = std::fs::read_dir(workspace.absolute(dir)) else {
-        return Vec::new();
     };
-    let mut names: Vec<String> = listing
-        .take(MAX_FOLDER_ENTRIES)
-        .flatten()
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
-    names.sort();
     let mut entries = Vec::new();
-    for name in names {
+    for name in names_in(&fd) {
         let Some(path) = child(dir, &name) else {
             continue;
         };
-        match workspace.stat(&path) {
-            Ok(Some(EntryKind::File)) => {}
-            Ok(Some(EntryKind::Dir)) => {
+        let Ok(stat) = rustix::fs::statat(&fd, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) else {
+            continue;
+        };
+        let stem = stem_of(&name);
+        match FileType::from_raw_mode(stat.st_mode) {
+            FileType::RegularFile => {}
+            FileType::Directory => {
                 let folder = name.to_lowercase();
                 if is_name_part(&folder) {
                     entries.push((Entry::Folder(folder), path));
                 }
                 continue;
             }
-            Ok(Some(EntryKind::Symlink)) => {
-                if stem_of(&name).is_some() {
-                    out.skipped
-                        .push((path.display_string(), "a symlink".to_owned()));
+            FileType::Symlink => {
+                match stem {
+                    Some(stem) if is_name_part(&stem) => {
+                        entries.push((Entry::File(stem, Err("a symlink".to_owned())), path));
+                    }
+                    Some(_) => out
+                        .skipped
+                        .push((path.display_string(), "a symlink".to_owned())),
+                    None => {}
                 }
                 continue;
             }
             _ => continue,
         }
-        let Some(stem) = stem_of(&name) else {
+        let Some(stem) = stem else {
             continue;
         };
         if !is_name_part(&stem) {
@@ -252,7 +301,7 @@ fn workspace_dir(workspace: &Workspace, dir: &WsPath, out: &mut Listing) -> Vec<
                 .push((path.display_string(), "not a valid command name".to_owned()));
             continue;
         }
-        entries.push((Entry::File(stem), path));
+        entries.push((Entry::File(stem, Ok(())), path));
     }
     entries
 }
@@ -347,7 +396,7 @@ fn read_user_file(dir: &OwnedFd, name: &str) -> Result<Vec<u8>, String> {
 }
 
 /// The person's command files, each read (or the reason it was not).
-fn user_files(user_dir: &Path) -> Vec<(Found, Result<Vec<u8>, String>)> {
+fn user_files(user_dir: &Path, wanted: Wanted<'_>) -> Vec<(Found, Result<Vec<u8>, String>)> {
     let root = rustix::fs::open(
         user_dir,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -360,7 +409,7 @@ fn user_files(user_dir: &Path) -> Vec<(Found, Result<Vec<u8>, String>)> {
     let mut found = Vec::new();
     for name in names_in(&root) {
         if let Some(stem) = stem_of(&name) {
-            if is_name_part(&stem) {
+            if is_name_part(&stem) && wanted.file(&stem) {
                 let read = read_user_file(&root, &name);
                 found.push((
                     Found {
@@ -373,14 +422,16 @@ fn user_files(user_dir: &Path) -> Vec<(Found, Result<Vec<u8>, String>)> {
             continue;
         }
         let folder = name.to_lowercase();
-        if !is_name_part(&folder) {
+        if !is_name_part(&folder) || !wanted.folder(&folder) {
             continue;
         }
         let Some(sub) = private_dir(open_at(&root, &name, OFlags::DIRECTORY)) else {
             continue;
         };
         for inner in names_in(&sub) {
-            let Some(stem) = stem_of(&inner).filter(|stem| is_name_part(stem)) else {
+            let Some(stem) =
+                stem_of(&inner).filter(|stem| is_name_part(stem) && wanted.inner(&folder, stem))
+            else {
                 continue;
             };
             let read = read_user_file(&sub, &inner);
@@ -518,25 +569,34 @@ fn entry(found: Found, source: Source, bytes: &[u8]) -> Result<CommandEntry, Str
 
 /// Every command, by name: the workspace's (`workspace`, when given) then
 /// the person's (`user_dir`, when given), the first of a name winning.
+/// A file of a valid name that cannot be read (too large, not UTF-8,
+/// denied, a symlink) still claims its name: it is skipped with why, and
+/// a later file of the name is shadowed by it, never offered instead.
 #[must_use]
 pub fn list(workspace: Option<&Workspace>, user_dir: Option<&Path>) -> Listing {
+    collect(workspace, user_dir, Wanted::All)
+}
+
+fn collect(workspace: Option<&Workspace>, user_dir: Option<&Path>, wanted: Wanted<'_>) -> Listing {
     let mut out = Listing::default();
     let mut read: Vec<(Found, Source, Result<Vec<u8>, String>)> = Vec::new();
     if let Some(workspace) = workspace {
-        for (found, path) in workspace_files(workspace, &mut out) {
-            let bytes = read_workspace_file(workspace, &path);
+        for (found, path) in workspace_files(workspace, wanted, &mut out) {
+            let bytes = path.and_then(|path| read_workspace_file(workspace, &path));
             read.push((found, Source::Workspace, bytes));
         }
     }
     if let Some(user_dir) = user_dir {
-        for (found, bytes) in user_files(user_dir) {
+        for (found, bytes) in user_files(user_dir, wanted) {
             read.push((found, Source::User, bytes));
         }
     }
+    // Each name's first file, read or not: (where, from which source).
+    let mut claimed: HashMap<String, (String, Source)> = HashMap::new();
     let mut commands: Vec<CommandEntry> = Vec::new();
     for (found, source, bytes) in read {
-        if let Some(winner) = commands.iter().find(|command| command.name == found.name) {
-            let why = format!("shadowed by {} ({})", winner.path, winner.source.as_str());
+        if let Some((path, by)) = claimed.get(&found.name) {
+            let why = format!("shadowed by {path} ({})", by.as_str());
             out.skipped.push((found.shown, why));
             continue;
         }
@@ -547,6 +607,7 @@ pub fn list(workspace: Option<&Workspace>, user_dir: Option<&Path>) -> Listing {
             ));
             continue;
         }
+        claimed.insert(found.name.clone(), (found.shown.clone(), source));
         let shown = found.shown.clone();
         match bytes.and_then(|bytes| entry(found, source, &bytes)) {
             Ok(command) => commands.push(command),
@@ -558,7 +619,11 @@ pub fn list(workspace: Option<&Workspace>, user_dir: Option<&Path>) -> Listing {
     out
 }
 
-/// The command `name`, read again now (as [`list`] would list it).
+/// The command `name`, read again now, as [`list`] would list it: only the
+/// files that could be it are looked at (the workspace's `name.md` or
+/// `folder/name.md` in each folder, then the person's), in the same order,
+/// and only those are read. `None` when there is none, or when the first of
+/// the name cannot be read. ([`MAX_COMMANDS`] does not apply to one name.)
 #[must_use]
 pub fn find(
     workspace: Option<&Workspace>,
@@ -568,7 +633,7 @@ pub fn find(
     if !is_command_name(name) {
         return None;
     }
-    list(workspace, user_dir)
+    collect(workspace, user_dir, Wanted::One(name))
         .commands
         .into_iter()
         .find(|command| command.name == name)
@@ -734,6 +799,154 @@ mod tests {
         );
         assert!(find(None, Some(user.path()), "nope").is_none());
         assert!(find(None, Some(user.path()), "../review").is_none());
+    }
+
+    #[test]
+    fn a_workspace_command_that_cannot_be_read_still_shadows_the_users() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            ".claude/commands/deploy.md",
+            &"a".repeat(usize::try_from(MAX_FILE_BYTES).unwrap() + 1),
+        );
+        write(dir.path(), ".elitea/commands/ship.md", "");
+        fs::write(dir.path().join(".elitea/commands/ship.md"), [0xff, 0xfe]).unwrap();
+        write(dir.path(), ".claude/commands/ship.md", "the other ship");
+        write(dir.path(), "inside.md", "INSIDE");
+        std::os::unix::fs::symlink(
+            dir.path().join("inside.md"),
+            dir.path().join(".claude/commands/linked.md"),
+        )
+        .unwrap();
+        write(dir.path(), ".claude/commands/secret.md", "SECRET");
+        let user = user_dir();
+        for name in ["deploy", "ship", "linked", "secret", "mine"] {
+            write(user.path(), &format!("{name}.md"), "MY TEMPLATE");
+        }
+        let workspace = open(&dir, &["secret.md"]);
+        let listing = list(Some(&workspace), Some(user.path()));
+        assert_eq!(names(&listing), [("mine", Source::User)]);
+        for (path, why) in [
+            (".claude/commands/deploy.md", "over 16 KiB"),
+            (".elitea/commands/ship.md", "not UTF-8"),
+            (".claude/commands/linked.md", "a symlink"),
+            (
+                ".claude/commands/ship.md",
+                "shadowed by .elitea/commands/ship.md (workspace)",
+            ),
+            (
+                "deploy.md",
+                "shadowed by .claude/commands/deploy.md (workspace)",
+            ),
+            (
+                "ship.md",
+                "shadowed by .elitea/commands/ship.md (workspace)",
+            ),
+            (
+                "linked.md",
+                "shadowed by .claude/commands/linked.md (workspace)",
+            ),
+            (
+                "secret.md",
+                "shadowed by .claude/commands/secret.md (workspace)",
+            ),
+        ] {
+            assert!(
+                listing.skipped.contains(&(path.to_owned(), why.to_owned())),
+                "{path}: {listing:?}"
+            );
+        }
+        for name in ["deploy", "ship", "linked", "secret"] {
+            assert_eq!(
+                find(Some(&workspace), Some(user.path()), name),
+                None,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            find(Some(&workspace), Some(user.path()), "mine").map(|c| c.template),
+            Some("MY TEMPLATE".to_owned())
+        );
+    }
+
+    #[test]
+    fn find_answers_as_list_does() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), ".elitea/commands/review.md", "elitea review");
+        write(dir.path(), ".claude/commands/review.md", "claude review");
+        write(dir.path(), ".claude/commands/Fix-Issue.MD", "fix");
+        write(dir.path(), ".claude/commands/frontend/lint.md", "lint");
+        write(
+            dir.path(),
+            ".elitea/commands/Frontend/Test.md",
+            "elitea test",
+        );
+        write(
+            dir.path(),
+            ".claude/commands/frontend/test.md",
+            "claude test",
+        );
+        let user = user_dir();
+        write(user.path(), "review.md", "my review");
+        write(user.path(), "standup.md", "my standup");
+        write(user.path(), "team/sync.md", "my sync");
+        write(user.path(), "frontend/lint.md", "my lint");
+        let workspace = open(&dir, &[]);
+        let listing = list(Some(&workspace), Some(user.path()));
+        assert_eq!(
+            names(&listing),
+            [
+                ("fix-issue", Source::Workspace),
+                ("frontend:lint", Source::Workspace),
+                ("frontend:test", Source::Workspace),
+                ("review", Source::Workspace),
+                ("standup", Source::User),
+                ("team:sync", Source::User),
+            ]
+        );
+        for command in &listing.commands {
+            assert_eq!(
+                find(Some(&workspace), Some(user.path()), &command.name).as_ref(),
+                Some(command)
+            );
+        }
+        assert_eq!(listing.commands[2].template, "elitea test");
+        for missing in ["nope", "frontend", "frontend:nope", "team:review", "fix"] {
+            assert_eq!(
+                find(Some(&workspace), Some(user.path()), missing),
+                None,
+                "{missing}"
+            );
+        }
+        // Without the workspace, the person's own answer.
+        assert_eq!(
+            find(None, Some(user.path()), "review").map(|c| c.template),
+            Some("my review".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_symlinked_folder_on_the_way_is_not_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "real/commands/x.md", "INSIDE");
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join(".claude")).unwrap();
+        write(dir.path(), ".elitea/real/y.md", "INSIDE TOO");
+        std::os::unix::fs::symlink(
+            dir.path().join(".elitea/real"),
+            dir.path().join(".elitea/commands"),
+        )
+        .unwrap();
+        let listing = list(Some(&open(&dir, &[])), None);
+        assert_eq!(names(&listing), [] as [(&str, Source); 0]);
+        for path in [".elitea/commands", ".claude/commands"] {
+            assert!(
+                listing
+                    .skipped
+                    .contains(&(path.to_owned(), "a symlink".to_owned())),
+                "{listing:?}"
+            );
+        }
+        assert_eq!(find(Some(&open(&dir, &[])), None, "x"), None);
     }
 
     #[test]

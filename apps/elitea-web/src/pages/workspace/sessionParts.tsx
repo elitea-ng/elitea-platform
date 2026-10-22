@@ -52,7 +52,7 @@ function HelpRow({ name, text }: { name: string; text: string }): React.JSX.Elem
   );
 }
 
-/** `/help`: the host commands, the custom commands (with their source), the agent's skills, then "@". */
+/** `/help`: the host commands, the custom commands (with their source), the agent's skills, the project's, then "@". */
 function HelpNotice({ onClose, customCommands, skills }: HelpNoticeProps): React.JSX.Element {
   const entries = composer.slashMenu('', customCommands, skills);
   return (
@@ -73,9 +73,9 @@ function HelpNotice({ onClose, customCommands, skills }: HelpNoticeProps): React
             case 'skill':
               return (
                 <HelpRow
-                  key={`skill:${entry.skill.id}`}
+                  key={`skill:${entry.skill.project === true ? 'project' : 'agent'}:${entry.skill.id}`}
                   name={composer.skillToken(entry.skill)}
-                  text={entry.skill.description ?? t('workspace.command.skill', 'A skill of this agent')}
+                  text={entry.skill.description ?? (entry.skill.project === true ? t('workspace.command.projectSkill', 'A skill of this project') : t('workspace.command.skill', 'A skill of this agent'))}
                 />
               );
           }

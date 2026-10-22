@@ -109,6 +109,7 @@
   "workspace.command.sourceUser": "yours",
   "workspace.command.ignored": "ignored: {{keys}}",
   "workspace.command.skill": "A skill of this agent",
+  "workspace.command.projectSkill": "A skill of this project",
   "workspace.send": "Send",
   "workspace.planMode": "Plan mode (no changes)",
   "workspace.command.mention": "Reference a file or folder of this workspace",

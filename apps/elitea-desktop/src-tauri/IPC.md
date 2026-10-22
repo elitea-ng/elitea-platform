@@ -135,7 +135,7 @@ type Workspace = {
 | `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
 | `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
-| `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
+| `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's, even one that cannot be read (too large, not UTF-8, denied, a symlink): that one is not listed, and no other file of its name is offered or run in its place. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
@@ -488,7 +488,8 @@ the bound project's own skills (the menu's "Project skills": `listSkills`,
 less the names the version carries), by its id (a positive integer, or its
 decimal string; else `invalid_request`). The host never takes its text
 from the UI: after the version is read and before the turn is started, it
-reads the skill itself under the person's token
+reads the skill itself under the person's token (all picked ids at once,
+an id picked twice read once)
 (`GET /api/v2/elitea_core/skill/prompt_lib/{project_id}/{id}`, `getSkill`:
 the `base` version's `name` and `instructions`); one the person cannot read
 (`403`, `404`) or without instructions is refused with `skill_unknown`.
@@ -512,7 +513,8 @@ for a file in a sub-folder; lowercase letters, digits, `-` and `_`, else
 the template from the UI: at the start, before any request, it reads the
 command again the way `commands_list` does (so an edit since the menu was
 listed applies; a command gone, symlinked or denied by now is refused with
-`command_unknown`) and expands it: `$ARGUMENTS` becomes all of the
+`command_unknown`, never replaced by a same-named one further down; only
+the files that could be that name are read) and expands it: `$ARGUMENTS` becomes all of the
 arguments, `$1`…`$9` their shell-split words (empty when absent), in one
 pass, and nothing else is expanded. The turn's `prompt` is then the
 literal `/<name> <arguments>`, whatever the UI sent: the thread history,
@@ -535,7 +537,8 @@ Arguments: <the arguments as typed>
 followed by the "@" list. Reads are confined like AGENTS.md's: a
 workspace file goes through the confined workspace (`O_NOFOLLOW`, a
 symlinked file or folder is not read, `path_deny` and the session's deny
-list are honoured); the person's folder, its sub-folders and its files are
+list are honoured, and a folder's names are read from the folder opened
+without following any symlink); the person's folder, its sub-folders and its files are
 opened without following a symlink and must be the person's own and
 writable by no one else. At most 200 commands, 16 KiB per file, UTF-8.
 Front matter (a `---` block at the top, flat `key: value` lines): only

@@ -80,12 +80,12 @@ function latestMeter(turn: WorkspaceTurn) {
 /**
  * What the "/" menu offers besides the host commands: the custom commands and the project's own skills (after the
  * agent's), both the local host's only (`local`: none for the cloud copy). The project's skills are read once the
- * composer got focus (which also prewarms the send).
+ * composer got focus (which also prewarms the send) or `/help` is open (`helpOpen`), which lists them too.
  */
-function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: number, local: boolean, skills: readonly ComposerSkill[], prewarm: () => void) {
+function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: number, local: boolean, skills: readonly ComposerSkill[], prewarm: () => void, helpOpen: boolean) {
   const customCommands = useCustomCommands(ipc, workspaceId, local);
   const [focused, setFocused] = useState(false);
-  const projectSkills = useProjectSkills(projectId, focused && local, skills);
+  const projectSkills = useProjectSkills(projectId, (focused || helpOpen) && local, skills);
   const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
   const onFocus = (): void => {
     setFocused(true);
@@ -99,7 +99,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
-  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, !cloudMode, skills, session.prewarm);
+  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, !cloudMode, skills, session.prewarm, commands.notice === 'help');
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,

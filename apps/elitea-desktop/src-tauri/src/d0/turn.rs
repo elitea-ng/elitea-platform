@@ -449,14 +449,17 @@ async fn start_turn(
 }
 
 /// The project skills `request` picks, read by the host (`getSkill`) and
-/// admitted, in request order. A skill the person cannot read (`403`,
+/// admitted, in request order (an id picked twice is read once, at its
+/// first place), all read at once. A skill the person cannot read (`403`,
 /// `404`) is `skill_unknown`.
 async fn project_skills(
     api: &PlatformApi,
     request: &TurnRequest,
 ) -> Result<Vec<InvokedSkill>, TurnError> {
-    let mut out = Vec::new();
-    for id in skills::project_ids(&request.project_skills)? {
+    let mut ids = skills::project_ids(&request.project_skills)?;
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(*id));
+    futures::future::try_join_all(ids.into_iter().map(|id| async move {
         let skill = api
             .project_skill(request.project_id, id)
             .await
@@ -469,9 +472,9 @@ async fn project_skills(
                 ),
                 _ => TurnError::from(error),
             })?;
-        out.push(skills::from_project(request.project_id, id, &skill)?);
-    }
-    Ok(out)
+        skills::from_project(request.project_id, id, &skill)
+    }))
+    .await
 }
 
 /// The platform refused a start for its conversation or participant
@@ -1716,12 +1719,22 @@ impl AgentHost {
         let policy = self.policy()?;
         // A custom command is read again now (it may have changed since the
         // menu listed it) and expanded here, before any request.
+        // The files are read off the async executor.
         let command = match &request.command {
-            Some(pick) => Some(slash_commands::resolve(
-                Some(&self.command_folder(&bound.path, &policy)?),
-                self.deps.user_commands_dir.as_deref(),
-                pick,
-            )?),
+            Some(pick) => {
+                let folder = self.command_folder(&bound.path, &policy)?;
+                let user_dir = self.deps.user_commands_dir.clone();
+                let pick = pick.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        slash_commands::resolve(Some(&folder), user_dir.as_deref(), &pick)
+                    })
+                    .await
+                    .map_err(|_| {
+                        TurnError::new("internal", "the command lookup stopped unexpectedly")
+                    })??,
+                )
+            }
             None => None,
         };
         // The "@" references, checked against the folder the way the
@@ -1851,8 +1864,11 @@ impl AgentHost {
         }
         // The project skills picked by id: read by the host under the
         // person's token, checked with the version's picks before the start.
+        // Joined with the version's picks now, so a turn they do not fit is
+        // refused before its start; joined again only when the revalidation
+        // beside the start brings a changed version.
         let project_skills = project_skills(&api, request).await?;
-        skills::with_project(&invoked, &project_skills)?;
+        let invoked = skills::with_project(&invoked, &project_skills)?;
         let fresh_participant = match looked_up {
             Some(answer) => {
                 let answering = answer?;
@@ -2001,7 +2017,7 @@ impl AgentHost {
                 let (readmitted, invoked) = readmitted;
                 (
                     self.requested_model(request, readmitted, models.as_deref())?,
-                    invoked,
+                    skills::with_project(&invoked, &project_skills)?,
                 )
             }
             Some(Err(error)) => {
@@ -2011,7 +2027,6 @@ impl AgentHost {
         };
         events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
-        let invoked = skills::with_project(&invoked, &project_skills)?;
         let (admitted, models) = self
             .thread_model(request, &api, events, admitted, &memory, models)
             .await;
