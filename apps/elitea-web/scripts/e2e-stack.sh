@@ -1702,8 +1702,8 @@ ON CONFLICT (id) DO NOTHING;
 -- fails its preflight on the rest — a FIRST seed then breaks while a second
 -- one "fixes" it, which is exactly how this was found.
 --
--- In a real legacy deployment the runtime provisioned `p_<id>` when it created
--- the project; this seeder is that provisioner's stand-in, so it owes the same
+-- In a real deployment the project provisioner creates `p_<id>` with the
+-- project; this seeder is that provisioner's stand-in, so it owes the same
 -- schema. elitea-migrate VALIDATES the schema and never creates one
 -- (`migrate/runner.go:50`), and its `-all-tenants` preflight ERRORS on any
 -- create_success project that lacks one — so a project row seeded without a

@@ -42,10 +42,11 @@ believed without checking the checker:
 2. every `^  /artifacts…:` path key in `api/openapi/v2.yaml` — no match;
 3. a plain grep for `artifact/default` and `artifacts/default` across the Go
    service — no match;
-4. `deploy/traefik/dynamic.yml`: on the standalone stack, `PathPrefix('/api/')`
-   goes to elitea-main and nowhere else;
-5. `deploy/docker-compose.yml` carries no legacy main runtime — only
-   the legacy indexer, the index-plane shim;
+4. the standalone stack's edge (then `deploy/traefik/dynamic.yml`; since
+   #1366 elitea-main is the edge itself): `/api/` goes to elitea-main and
+   nowhere else;
+5. `deploy/docker-compose.yml` carries no legacy main runtime (at the time,
+   only the legacy indexer shim, which #339 later deleted);
 6. the vendored UI's calls are same-origin by construction: `deepwikiui` injects
    `base_url: ""` and sets `connect-src 'self'`, so they reach elitea-main.
 

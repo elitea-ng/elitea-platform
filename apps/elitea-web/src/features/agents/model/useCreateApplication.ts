@@ -23,8 +23,8 @@ import { applicationErrorMessage } from '../lib/errorMessage';
  *    failure); the caller decides what to do with its own form state.
  *
  * 2. **No per-field error mapping.** The baseline's `error.data.forEach(({loc,
- *    msg}) => formik.setFieldError(loc[0], msg))` assumes the OLD
- *    legacy FastAPI backend's `[{loc, msg, ctx}]` pydantic validation-error
+ *    msg}) => formik.setFieldError(loc[0], msg))` assumes the
+ *    legacy backend's `[{loc, msg, ctx}]` pydantic validation-error
  *    array. The real Go handler for this endpoint
  *    (`services/elitea-main/internal/api/v2/applications/handler.go:345-479`,
  *    `Create`) responds with the flat `{"error": "message"}` shape on
