@@ -35,16 +35,18 @@
 #   agent worker                        1    1500m        3Gi      1500m   3072Mi
 #   elitea-vector                       2     100m      128Mi       200m    256Mi
 #   Qdrant                              1     250m        1Gi       250m   1024Mi
+#   DeepWiki (host + engine)            1     300m     1152Mi       300m   1152Mi
+#   Inventory (host + engine)           1     150m      384Mi       150m    384Mi
 #   OTel collector                      1      50m      128Mi        50m    128Mi
 #   NATS server (JetStream)             1     200m      512Mi       200m    512Mi
 #   ─────────────────────────────────────────────────────────────────────────
-#   STEADY STATE                                                   3320m   7168Mi
-#                                                               (3.32 vCPU, 7.0 GiB)
+#   STEADY STATE                                                   3770m   8704Mi
+#                                                               (3.77 vCPU, 8.5 GiB)
 #
 #   + worker rolling update (maxSurge 1: a second worker
 #     overlaps until the first drains)                          +1500m  +3072Mi
-#   = DURING A WORKER ROLLOUT                                      4820m  10240Mi
-#                                                               (4.82 vCPU, 10.0 GiB)
+#   = DURING A WORKER ROLLOUT                                      5270m  11776Mi
+#                                                               (5.27 vCPU, 11.5 GiB)
 #
 # Not counted, and why:
 #   * the hook Jobs (migrations, workload-session, nats-bootstrap at 50m/64Mi)
@@ -54,7 +56,7 @@
 #     the app containers, never the sum, and every init here is at or below
 #     its pod's app request;
 #   * elitea-main's autoscaler above minReplicas: at its maxReplicas of 3 the
-#     steady state is 3720m / 7936Mi, still inside the budget; a main rollout
+#     steady state is 4170m / 9472Mi, just past the CPU budget; a main rollout
 #     surges one 400m/768Mi pod the same way;
 #   * PgBouncer (off: three main replicas fit Cloud SQL's connections, see
 #     postgresql below) — on, it adds 10m/32Mi.
@@ -266,22 +268,10 @@ main:
           form:
             users_json_file: /run/elitea-auth/auth-form-users.json
 
+  # The runtime plane, its streams and dispatch planes are on by default
+  # (values.yaml main.runtime); only the signing key id is this install's.
   runtime:
-    enabled: true
-    commandStream: "ELITEA_RT_V1_VALIDATE"
-    maxOutstanding: 64
-    toolkitDiscovery:
-      enabled: true
-    agentExecutionDispatch:
-      enabled: true
-      commandStream: "ELITEA_RT_V1_AGENT"
-    indexIngestDispatch:
-      enabled: true
-      commandStream: "ELITEA_RT_V1_AGENT"
     signingKeyId: "elitea-runtime-v1"
-    material:
-      mountPath: /run/elitea-runtime
-      secretName: elitea-runtime-material
 
 web:
   replicaCount: 2
@@ -331,7 +321,6 @@ llmGateway:
       kind: Issuer
 
 worker:
-  enabled: true
   replicaCount: 1
   materialSecretName: elitea-worker-material
   resources:
@@ -348,7 +337,6 @@ worker:
     expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
 
 vector:
-  enabled: true
   replicaCount: 2
   resources:
     requests:
@@ -362,22 +350,65 @@ vector:
       kind: Issuer
   mainClient:
     enabled: true
-  qdrant:
-    apiKeySecret:
-      name: elitea-qdrant-api
-      key: api-key
-    internal:
-      replicas: 1
-      storage:
-        size: 50Gi
+  collection:
+    replicationFactor: 1
+
+# The bundled Qdrant (the upstream qdrant chart): one node on a 50Gi
+# standard-rwo (Persistent Disk) volume, PVC qdrant-storage-elitea-vectordb-0.
+# Its certificate comes from vector.mtls.issuerRef above. HA: layer
+# values-qdrant-ha.yaml (three nodes, three volumes).
+qdrant:
+  persistence:
+    size: 50Gi
+    storageClassName: standard-rwo
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 4Gi
+
+# DeepWiki and Inventory are on by default. Their git allowlists are this
+# install's (the chart copies each to elitea-main); their callback client
+# certificates come from the namespaced runtime-CA Issuer, like the vector
+# stack's. Sized down from values.yaml for a small cluster: the engines'
+# requests rise with the repositories they index.
+deepwiki:
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+  callbackClient:
+    certManager:
+      issuerRef:
+        name: elitea-runtime-ca
+        kind: Issuer
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  engine:
+    native:
       resources:
         requests:
           cpu: 250m
           memory: 1Gi
-        limits:
-          memory: 4Gi
-  collection:
-    replicationFactor: 1
+
+inventory:
+  env:
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
+  callbackClient:
+    certManager:
+      issuerRef:
+        name: elitea-runtime-ca
+        kind: Issuer
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  engine:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
 
 otelCollector:
   enabled: true

@@ -69,11 +69,18 @@
 #     must exist. The NATS client certificates (elitea-main-runtime,
 #     elitea-worker) are issued by cert-manager from the NATS CA. deploy/runtime/README.md names the keys.
 #
-# CHAT is off unless you turn on `main.runtime.enabled` and `worker.enabled`
-# together. The chart refuses a values file that still sets `runtimeRedis`
-# (removed; docs/UPGRADING.md). It also refuses the
-# incoherent combinations at render time rather than installing something that
-# reports every pod Ready and then answers no message.
+# CHAT IS OFF IN THIS APPLICATION. The chart turns the runtime plane, the
+# worker, elitea-vector with Qdrant, DeepWiki and Inventory ON by default
+# (S10), and those need values only you have: production authentication
+# with its public origin, the worker's identity, the git allowlists (the
+# render lists every missing one in a single message). This Application
+# states the six switches OFF below, so it syncs with the parameters it
+# carries; flip them back, and supply those values in your own values file
+# (deploy/argocd/examples/gke/ and values-gke.yaml show a complete set), to
+# run chat. The chart refuses a values file that still sets `runtimeRedis`
+# (removed; docs/UPGRADING.md). It also refuses the incoherent combinations
+# at render time rather than installing something that reports every pod
+# Ready and then answers no message.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -89,8 +96,9 @@ spec:
   project: default
   # A git source has no charts/ (it is never committed): the repo-server runs
   # `helm dependency build` from the committed Chart.lock, so it must reach
-  # https://nats-io.github.io/k8s/helm/charts/, and a project that restricts
-  # sourceRepos must list it. The published OCI chart carries its
+  # https://nats-io.github.io/k8s/helm/charts/ and
+  # https://qdrant.github.io/qdrant-helm, and a project that restricts
+  # sourceRepos must list both. The published OCI chart carries its
   # dependencies and needs neither (deploy/argocd/examples/gke/).
   source:
     repoURL: https://github.com/elitea-ng/elitea-platform
@@ -117,6 +125,23 @@ spec:
         # tls://elitea-nats.elitea.svc.cluster.local:4222 with a client
         # certificate from the bundled NATS CA (#1076). To use a NATS you
         # run yourself, set nats.enabled=false and natsClient.* instead.
+
+        # The features that are on by default and need values this file
+        # does not carry (see CHAT IS OFF above). Each is ONE switch; the
+        # render refuses a combination that leaves a dependant without what
+        # it needs, naming the switch to flip.
+        - name: main.runtime.enabled
+          value: "false"
+        - name: worker.enabled
+          value: "false"
+        - name: vector.enabled
+          value: "false"
+        - name: qdrant.enabled
+          value: "false"
+        - name: deepwiki.enabled
+          value: "false"
+        - name: inventory.enabled
+          value: "false"
 
         # ── YOU MUST FILL THESE IN ────────────────────────────────────────
         #

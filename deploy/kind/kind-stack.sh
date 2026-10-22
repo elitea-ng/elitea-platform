@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# A local Kubernetes stack for the DeepWiki provider, installed from THIS
-# repository's Helm chart the way it ships to production (ADR-0023):
+# A local Kubernetes stack installed from THIS repository's Helm chart on its
+# SHIPPED DEFAULTS (S10): elitea-main with its runtime plane, elitea-vector and
+# the bundled Qdrant, and the DeepWiki and Inventory providers (ADR-0023):
 #
 #   * the provider pod is TWO containers — the Go sub-application host
 #     (ghcr.io/elitea-ng/elitea-subapp-host) with ELITEA_DEEPWIKI_RUNNER=native,
@@ -10,7 +11,11 @@
 #   * the facade -> provider hop is mutually authenticated, with both
 #     certificates issued by cert-manager from one internal CA ClusterIssuer,
 #     exactly as templates/deepwiki/certificates.yaml asks for;
-#   * the engine sidecar runs the FIXTURE runner, so a generation completes
+#   * every runtime-CA certificate (the providers' callback client, the
+#     elitea-vector pair, Qdrant's TLS) is issued by cert-manager from a second
+#     ClusterIssuer, elitea-runtime-ca, backed by gen-runtime-certs.sh's CA:
+#     nothing is minted by hand for the chart;
+#   * both engine sidecars run their FIXTURE runners, so a generation completes
 #     with no LLM and no git host;
 #   * the provider uploads its pages over gRPC on elitea-main's platform
 #     listener (#1359 U5), so elitea-main runs its runtime plane, on the
@@ -40,6 +45,10 @@ MAIN_IMAGE="ghcr.io/elitea-ng/elitea-main:${TAG}"
 # and no git host) and the migration Job (`migrate`), one image for both.
 # A cold build compiles ~420 crates. See README.md, "Known limits".
 ENGINE_IMAGE="ghcr.io/elitea-ng/elitea-deepwiki-engine-native:${TAG}"
+# The Inventory engine sidecar (inventory.engine.runner=fixture) and its
+# migrate Job, and elitea-vector, the only Qdrant client.
+INVENTORY_ENGINE_IMAGE="ghcr.io/elitea-ng/elitea-inventory-engine:${TAG}"
+VECTOR_IMAGE="ghcr.io/elitea-ng/elitea-vector:${TAG}"
 
 # The seeded credential. The row is written by seed.sql; the bearer is minted
 # from it below.
@@ -108,13 +117,20 @@ build_images() {
     "$ENGINE" build -f "${REPO_ROOT}/services/elitea-main/Containerfile" --target e2e \
       -t "$MAIN_IMAGE" "$REPO_ROOT"
   fi
-  if have_image "$ENGINE_IMAGE"; then
-    note "$ENGINE_IMAGE present"
-  else
-    note "building $ENGINE_IMAGE"
-    "$ENGINE" build -f "${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile" \
-      -t "$ENGINE_IMAGE" "$REPO_ROOT"
-  fi
+  local image containerfile
+  for image in "$ENGINE_IMAGE" "$INVENTORY_ENGINE_IMAGE" "$VECTOR_IMAGE"; do
+    case "$image" in
+      "$ENGINE_IMAGE") containerfile=services/elitea-deepwiki-engine/Containerfile ;;
+      "$INVENTORY_ENGINE_IMAGE") containerfile=services/elitea-inventory-engine/Containerfile ;;
+      *) containerfile=services/elitea-vector/Containerfile ;;
+    esac
+    if have_image "$image"; then
+      note "$image present"
+    else
+      note "building $image"
+      "$ENGINE" build -f "${REPO_ROOT}/${containerfile}" -t "$image" "$REPO_ROOT"
+    fi
+  done
 }
 
 # Third-party images are pulled once to the HOST and side-loaded, so a repeated
@@ -123,6 +139,9 @@ INFRA_IMAGES=(
   docker.io/library/postgres:18
   docker.io/rustfs/rustfs:latest
   rustfs/rc:latest
+  # The bundled Qdrant (qdrant.image, useUnprivilegedImage). Moves with the
+  # tag in values.yaml.
+  docker.io/qdrant/qdrant:v1.19.2-unprivileged
 )
 
 load_images() {
@@ -147,7 +166,8 @@ except Exception:
   # An explicit template: BSD mktemp reads `-t X` as a prefix, GNU as a
   # template, and this repository has been bitten by that difference.
   archive="$(mktemp "${TMPDIR:-/tmp}/elitea-kind-XXXXXX.tar")"
-  for image in "$MAIN_IMAGE" "$HOST_IMAGE" "$ENGINE_IMAGE" "${INFRA_IMAGES[@]}"; do
+  for image in "$MAIN_IMAGE" "$HOST_IMAGE" "$ENGINE_IMAGE" "$INVENTORY_ENGINE_IMAGE" \
+      "$VECTOR_IMAGE" "${INFRA_IMAGES[@]}"; do
     if printf '%s\n' "$present" | grep -qxF "$image"; then
       note "$image already in the node"
       continue
@@ -195,6 +215,20 @@ install_cert_manager() {
     sleep 2
   done
   kc wait --for=condition=Ready --timeout=120s clusterissuer/elitea-internal-ca
+
+  say "Creating the runtime CA ClusterIssuer (elitea-runtime-ca)"
+  # The CA elitea-main's platform listener verifies clients against, and the
+  # one elitea-vector and Qdrant are issued from: gen-runtime-certs.sh's
+  # runtime-ca, so the chart's Certificates and the hand-held runtime material
+  # share one root. Like the internal CA, a ClusterIssuer's Secret lives in
+  # cert-manager's namespace.
+  bash "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
+  kc -n cert-manager create secret tls elitea-runtime-ca-tls \
+    --cert="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
+    --key="${RUNTIME_MATERIAL_DIR}/runtime-ca.key" \
+    --dry-run=client -o yaml | kc apply -f -
+  kc apply -f "${SCRIPT_DIR}/manifests/runtime-ca-issuer.yaml"
+  kc wait --for=condition=Ready --timeout=120s clusterissuer/elitea-runtime-ca
 }
 
 # The production-authentication material. deploy/scripts/gen-runtime-certs.sh
@@ -231,12 +265,9 @@ ensure_runtime_material() {
   kc -n "$NS" create secret generic elitea-worker-material \
     --from-file="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
     --dry-run=client -o yaml | kc apply -f -
-  # The sub-application callback identity (DNS:elitea-subapp-callback), the
-  # same certificate the compose stacks mount.
-  kc -n "$NS" create secret generic elitea-deepwiki-callback-client \
-    --from-file=tls.crt="${RUNTIME_MATERIAL_DIR}/subapp-callback-client.crt" \
-    --from-file=tls.key="${RUNTIME_MATERIAL_DIR}/subapp-callback-client.key" \
-    --dry-run=client -o yaml | kc apply -f -
+  # No callback client Secret: the chart issues elitea-deepwiki-callback-client
+  # and elitea-inventory-callback-client from the elitea-runtime-ca issuer
+  # (cert-manager takes over the hand-made Secret a pre-S10 cluster holds).
 
   # The three files internal/authcomposition/material.go opens. Their names are
   # the contract: the chart derives every path in the auth document from them.
@@ -265,6 +296,14 @@ install_infra() {
   # provider pod.
   kc -n "$NS" create secret generic elitea-deepwiki-secrets \
     --from-literal=identity-secret='kind-deepwiki-identity' \
+    --dry-run=client -o yaml | kc apply -f -
+  kc -n "$NS" create secret generic elitea-inventory-secrets \
+    --from-literal=identity-secret='kind-inventory-identity' \
+    --dry-run=client -o yaml | kc apply -f -
+  # The bundled Qdrant's API key: Qdrant reads it, and elitea-vector, its only
+  # client, presents it (vector.qdrant.apiKeySecret).
+  kc -n "$NS" create secret generic elitea-qdrant-api \
+    --from-literal=api-key='kind-qdrant-api-key' \
     --dry-run=client -o yaml | kc apply -f -
   # Non-optional in the chart even with llmGateway.enabled=false.
   kc -n "$NS" create secret generic elitea-main-llm-gateway-secrets \
@@ -302,7 +341,7 @@ install_infra() {
 # migration hooks and on the post-install bootstrap Job; the rollout wait
 # below then covers the workloads, which restart until the streams exist.
 install_chart() {
-  say "Installing the chart (NATS + elitea-main + the DeepWiki provider)"
+  say "Installing the chart (NATS, Qdrant, elitea-main, elitea-vector, DeepWiki, Inventory)"
   # From a clone the chart's dependencies are built from Chart.lock first;
   # the published OCI chart carries them.
   bash "${REPO_ROOT}/deploy/helm/elitea/build-deps.sh" >/dev/null
@@ -311,6 +350,7 @@ install_chart() {
     -f "${SCRIPT_DIR}/values-kind.yaml" \
     --timeout 15m
   kc -n "$NS" rollout status statefulset/elitea-nats --timeout=5m
+  kc -n "$NS" rollout status statefulset/elitea-vectordb --timeout=5m
   local d
   for d in $(kc -n "$NS" get deploy -l "app.kubernetes.io/instance=${RELEASE}" -o name); do
     kc -n "$NS" rollout status "$d" --timeout=10m
@@ -524,7 +564,7 @@ cmd_down() {
   say "Deleting the kind cluster ${CLUSTER}"
   kind delete cluster --name "$CLUSTER"
   note "the built images are left in ${ENGINE}; remove them with:"
-  note "  ${ENGINE} rmi ${MAIN_IMAGE} ${HOST_IMAGE} ${ENGINE_IMAGE}"
+  note "  ${ENGINE} rmi ${MAIN_IMAGE} ${HOST_IMAGE} ${ENGINE_IMAGE} ${INVENTORY_ENGINE_IMAGE} ${VECTOR_IMAGE}"
 }
 
 case "${1:-}" in

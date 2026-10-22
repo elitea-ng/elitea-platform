@@ -298,7 +298,7 @@ address. Those copies had already drifted apart.
 
 | Chart (`deploy/helm/`) | ArgoCD Application | Wave | Namespace | Status |
 |---|---|---|---|---|
-| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform, one release.** elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, the vector store, the DeepWiki and Inventory provider services, and NATS JetStream with its bootstrap Job: the upstream NATS chart 1.3.9 is a `Chart.lock` dependency, built by `deploy/helm/elitea/build-deps.sh` from a clone and carried by the published chart (`nats.enabled`, on by default; `natsBootstrap.*`; HA with `values-nats-ha.yaml`). The sandbox-runtime installer is a second dependency, off by default (`sandboxRuntime.enabled`; k3s and EKS turn it on, GKE and AKS leave it off). |
+| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform, one release.** elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, the vector store (elitea-vector and Qdrant), the DeepWiki and Inventory provider services, and NATS JetStream with its bootstrap Job: the upstream NATS chart 1.3.9 is a `Chart.lock` dependency, built by `deploy/helm/elitea/build-deps.sh` from a clone and carried by the published chart (`nats.enabled`, on by default; `natsBootstrap.*`; HA with `values-nats-ha.yaml`). The upstream qdrant chart 1.19.2 is a second one the same way (`qdrant.enabled`, on by default, StatefulSet `elitea-vectordb`; HA with `values-qdrant-ha.yaml`). The sandbox-runtime installer is a third dependency, off by default (`sandboxRuntime.enabled`; k3s and EKS turn it on, GKE and AKS leave it off). |
 | `elitea-sandbox-runtime` | none (a dependency of `elitea`, or installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. Normally enabled through `elitea`'s `sandboxRuntime`; still published standalone. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
 
 The `nats` and `nats-bootstrap` charts are retired and no longer published;
@@ -328,23 +328,31 @@ was the other image deployed nowhere; issue #339 deleted the service, so
 it is no longer built or published either. The Go runtime plane serves index
 ingest through the agent worker, on the same command stream.
 
-One component is off by default and needs TWO settings, not one. `deepwiki`
-is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
-block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its git allowlist and the
-three client-certificate paths, beside the runtime plane (`main.runtime.enabled`)
-and `deepwiki.callbackClient`: the provider calls back only over gRPC on
-elitea-main's platform listener, for its artifacts and models (#1359 U5; there
-is no callback origin any more, and `ELITEA_DEEPWIKI_CALLBACK_BASE_URL` is
-refused). elitea-main reaches the
-provider over gRPC, `elitea.subapp.v1.ProviderService`, at
-`ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET`, which the chart derives; the old
-`ELITEA_DEEPWIKI_BASE_URL` is refused, #1359); elitea-main is
-the only door to it, so a provider nobody can reach is a Deployment doing
-nothing. Both halves refuse to render while half configured
-(`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the
-container's own refusal is a CrashLoopBackOff somebody has to go read logs for.
+DeepWiki, Inventory, the runtime plane, the worker and elitea-vector with
+the bundled Qdrant are ON by default (S10), and each is ONE switch:
+`deepwiki.enabled`, `inventory.enabled`, `main.runtime.enabled`,
+`worker.enabled`, `vector.enabled` (with `qdrant.enabled`, the upstream
+qdrant subchart; `qdrant.enabled=false` beside `vector.enabled` is
+bring-your-own Qdrant at `vector.qdrant.external.url`). The chart derives
+elitea-main's side from the provider's block: `ELITEA_DEEPWIKI_ENABLED` and
+`ELITEA_INVENTORY_ENABLED`, the git allowlists (copied from
+`deepwiki.env` / `inventory.env`), the client-certificate paths and mounts,
+the `ELITEA_VECTOR_*` target and material, and the platform gRPC targets. An
+explicit `main.env` value that agrees is kept; one that disagrees fails the
+render and says which switch to set. DeepWiki (ADR-0022) calls back only over
+gRPC on elitea-main's platform listener, for its artifacts and models (#1359
+U5; there is no callback origin any more, and
+`ELITEA_DEEPWIKI_CALLBACK_BASE_URL` is refused), presenting
+`deepwiki.callbackClient`, which cert-manager issues from the
+`elitea-runtime-ca` issuer by default. elitea-main reaches the provider over
+gRPC, `elitea.subapp.v1.ProviderService`, at
+`ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` (the old `ELITEA_DEEPWIKI_BASE_URL` is
+refused, #1359); elitea-main is the only door to it. Turning one feature off
+while another needs it (the runtime plane under DeepWiki, say) fails the render
+with one message that lists every disagreement, because the container's own
+refusal is a CrashLoopBackOff somebody has to go read logs for.
 
-Two things about it are worth knowing before turning it on. The engine
+Two things about DeepWiki are worth knowing before you deploy it. The engine
 sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`), and its
 default `native` runner keeps every index in PostgreSQL, so the chart
 refuses to render without an `ELITEA_DEEPWIKI_DATABASE_URL` secret
@@ -358,7 +366,8 @@ The `worker` component runs `elitea-worker-rust`, the only agent worker: the
 Python worker was removed (#1312), and the chart refuses `worker.implementation`
 set to anything but `rust`. `worker.indexingRuntime` is `rust`, the only indexing runtime (`python` fails
 the render). With index ingest dispatch on and the worker enabled it needs
-`vector.enabled=true` (with `vector.qdrant.apiKeySecret.name`) or
+`vector.enabled=true` (the default; its Qdrant API key is the Secret
+`elitea-qdrant-api`, key `api-key`) or
 `worker.runtime.vectorTarget`; anything missing fails the render and is named. A
 `main.env.ELITEA_INDEXING_RUNTIME` that disagrees with `worker.indexingRuntime`
 fails the render too. `worker.runtime.agentModelCheckpointRecovery` and

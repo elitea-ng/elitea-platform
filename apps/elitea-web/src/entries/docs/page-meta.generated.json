@@ -122,7 +122,7 @@
   {
     "slug": "development/kind",
     "title": "Run a local Kubernetes cluster",
-    "description": "Install the real Helm chart into a kind cluster to prove the DeepWiki provider's two-container pod and mTLS hop, offline."
+    "description": "Install the real Helm chart on its shipped defaults into a kind cluster: the runtime plane, the bundled Qdrant, DeepWiki and Inventory, offline."
   },
   {
     "slug": "development/overview",

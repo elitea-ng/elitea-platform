@@ -2,8 +2,11 @@ dependencies:
 - name: nats
   repository: https://nats-io.github.io/k8s/helm/charts/
   version: 1.3.9
+- name: qdrant
+  repository: https://qdrant.github.io/qdrant-helm
+  version: 1.19.2
 - name: elitea-sandbox-runtime
   repository: file://../elitea-sandbox-runtime
   version: 0.1.0
-digest: sha256:ff1cf94f1bc8502e690d92fd639e8b70733539546d6380f475d707b56e04febc
-generated: "2026-10-22T09:22:07.410155-04:00"
+digest: sha256:be76d0f001eca206f5498d368e180fcfbab8a8fa527a2775124d213e02bf89cb
+generated: "2026-10-22T11:08:10.031127-04:00"

@@ -17,6 +17,18 @@
 # Usage: deploy/helm/tests/render-llm-path.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 # The single chart contains the LLM gateway, which REFUSES to render until an
 # operator states its two postures. Every render below therefore supplies them:
@@ -468,7 +480,9 @@ fi
 refuses "elitea-main and the gateway naming different public projects" \
   "name different public projects" "$MAIN" \
   --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
-  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID=2
+  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID=2 \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted
 
 refuses "the SPA naming a different public project from elitea-main" \
   "name different public projects" "$MAIN" \

@@ -1,4 +1,5 @@
 {{- if .Values.main.enabled }}
+{{- include "elitea.applyFeatureSwitches" . }}{{- /* idempotent; see _feature-switches.tpl */}}
 {{- /*
   Shared connection addresses, computed once from the `natsClient`
   block and namespace-relative by default. An explicit env entry under this

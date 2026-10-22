@@ -201,7 +201,12 @@ class Helm(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='compiled-render-') as directory:
             filename = Path(directory) / 'values.yaml'; filename.write_text(yaml.safe_dump(value))
             result = subprocess.run([
-                'helm', 'template', 'compiled', str(CHART), '-f', str(CHART / 'values-standalone.yaml'),
+                # fixtures/features-off.yaml first: the pre-S10 switches (vector,
+                # Qdrant, DeepWiki, Inventory off), so the connection budget
+                # below is the receipt pool's and not elitea-vector's.
+                'helm', 'template', 'compiled', str(CHART),
+                '-f', str(CHART.parent / 'tests' / 'fixtures' / 'features-off.yaml'),
+                '-f', str(CHART / 'values-standalone.yaml'),
                 '-f', str(filename), '--namespace', 'platform',
                 '--set', 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1',
                 '--set', 'llmGateway.egressPosture=public-unrestricted',

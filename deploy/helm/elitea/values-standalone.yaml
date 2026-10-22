@@ -385,13 +385,26 @@ main:
       # writes these as real, owner-owned files at mountPath.
       secretName: elitea-runtime-material
 
-# The worker's SPIFFE ID, for when worker.enabled is turned on with this
-# profile: required then (#1359 U2), because it is the identity ModelService
-# admits for the worker's model calls, and the runtime-session Job checks it
-# against the certificate. gen-runtime-certs.sh's default.
+# The worker's SPIFFE ID. The worker is on by default (S10), and this is
+# required with it (#1359 U2): it is the identity ModelService admits for the
+# worker's model calls, and the runtime-session Job checks it against the
+# certificate. gen-runtime-certs.sh's default.
 worker:
   runtimeSession:
     expectedIdentity: "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+
+# DeepWiki and Inventory are on by default (S10) and each is ONE switch: the
+# chart derives elitea-main's facade env and client material from these
+# blocks. What only the operator can state is the posture of each git-host
+# allowlist; the chart copies each to elitea-main. vector (elitea-vector and a
+# one-node Qdrant over TLS) is on by default too, with its API key in the
+# fixed Secret elitea-qdrant-api.
+deepwiki:
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+inventory:
+  env:
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
 
 # This profile ships no edge in front of elitea-main, so nothing outside the
 # chart's own pods is admitted to elitea-main:8080. A deployment that fronts it

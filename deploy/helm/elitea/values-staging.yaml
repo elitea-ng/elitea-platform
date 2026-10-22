@@ -1,7 +1,14 @@
 # Nested under `main:` — this file configured the elitea-main chart when the
 # platform shipped as eight charts; it configures the same component here.
+#
+# The CORE API only: no authentication document here, so none of the
+# features that stand on the runtime plane. values.yaml turns them on by
+# default (S10); this file states each one off by its own switch.
 main:
   replicaCount: 1
+
+  runtime:
+    enabled: false
 
   image:
     tag: "shadow-v0.1"
@@ -32,3 +39,18 @@ main:
 networkPolicies:
   main:
     noExternalIngress: true
+
+# Off: each needs the runtime plane, which needs production authentication
+# this overlay does not configure.
+worker:
+  enabled: false
+vector:
+  enabled: false
+# The bundled Qdrant is elitea-vector's store; with vector off it is a second
+# switch the render asks for by name.
+qdrant:
+  enabled: false
+deepwiki:
+  enabled: false
+inventory:
+  enabled: false

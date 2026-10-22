@@ -686,9 +686,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ONE chart for the platform, NATS JetStream included (the upstream
-          # nats chart is a Chart.lock dependency, built before packaging and
-          # carried in the package). It ships every first-party image, so no
+          # ONE chart for the platform, NATS JetStream and Qdrant included (the
+          # upstream nats and qdrant charts are Chart.lock dependencies, built
+          # before packaging and carried in the package). It ships every first-party image, so no
           # single `image:` names it — `platformImageTag` below stamps the one
           # top-level `image.tag` every component resolves from instead. Without
           # that a chart published at a release number would install `latest`
@@ -850,9 +850,9 @@ jobs:
 
           yq '{"version": .version, "appVersion": .appVersion}' "$CHART"
 
-      # The elitea chart's dependencies (the upstream nats chart and our
-      # elitea-sandbox-runtime) are not committed: build them from Chart.lock,
-      # then prove every one resolved (`ok` only; an unknown status fails too,
+      # The elitea chart's dependencies (the upstream nats and qdrant charts
+      # and our elitea-sandbox-runtime) are not committed: build them from
+      # Chart.lock, then prove every one resolved (`ok` only; an unknown status fails too,
       # scripts/ci/check-chart-deps.mjs). `helm package` puts them in the
       # published chart, so an OCI install needs nothing built.
       - name: Build the chart dependencies

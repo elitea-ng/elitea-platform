@@ -91,7 +91,7 @@ cosign verify ghcr.io/elitea-ng/elitea-main:<tag> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-Separately, `.github/workflows/helm-install-smoke.yml` installs the chart into a real `kind` cluster (not just `helm template`) on every PR touching `deploy/helm/**`, and asserts every pod reaches Ready, the DeepWiki/Inventory provider pod's two containers run the runners the chart set, the facade's provider registration is healthy over its mTLS hop, and a fixture generation completes end to end — the runtime plane, workers and LLM gateway stay off in that smoke run, so it proves the chart installs cleanly, not the full product.
+Separately, `.github/workflows/helm-install-smoke.yml` installs the chart into a real `kind` cluster (not just `helm template`) on every PR touching `deploy/helm/**`, and asserts every pod reaches Ready, the DeepWiki/Inventory provider pod's two containers run the runners the chart set, the facade's provider registration is healthy over its mTLS hop, and a fixture generation completes end to end — it installs the chart's shipped defaults (the runtime plane, the bundled Qdrant and `elitea-vector`, DeepWiki and Inventory), with the worker, the LLM gateway, the web UI and the scheduler off for weight, so it proves the chart installs cleanly, not the full product.
 
 ## Security posture
 

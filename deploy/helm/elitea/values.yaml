@@ -200,7 +200,14 @@ postgresql:
   # The chart cannot read `max_connections` off the server, so the operator
   # states it and elitea-main.validateConnectionBudget refuses to render a
   # topology that would exceed it.
-  maxConnections: 100
+  #
+  # 200 by default (S10), because the runtime plane is now on by default and
+  # the default elitea-main ceiling (autoscaling.maxReplicas 3) costs about
+  # 3 x 44 connections. That is NOT a stock PostgreSQL's 100: SET THIS TO
+  # YOUR SERVER'S max_connections. Below the budget the render names what to
+  # lower; a value above the real server is the one mistake this check
+  # cannot catch.
+  maxConnections: 200
   #
   # A CONNECTION POOLER IS NOT THE ANSWER TO THIS TODAY, and the reason is
   # measured rather than assumed (2026-09-01). pgbouncer in front of this
@@ -2182,12 +2189,17 @@ main:
     # fsGroup, so the other-read bit is the only one that reaches the user
     # that must read them.
     #
-    # secretName is normally deepwiki.mtls.clientSecretName — the Secret the
-    # deepwiki subtree's facade-client Certificate issues. A Secret is
-    # namespace-scoped, so a split-namespace install needs a second
-    # Certificate or the replication described in deploy/README.md.
+    # DERIVED while deepwiki.enabled (S10): the chart turns it on and mounts
+    # deepwiki.mtls.clientSecretName, the Secret its facade-client Certificate
+    # issues, unless secretName or volume is stated here. Set it by hand only
+    # for a provider deployed elsewhere. A Secret is namespace-scoped, so a
+    # split-namespace install needs a second Certificate or the replication
+    # described in deploy/README.md.
     deepwikiClientMaterial:
-      enabled: false
+      # Unset: follows deepwiki.enabled. Only an explicit true (a facade to a
+      # provider deployed elsewhere) or false is the operator's; false beside
+      # deepwiki.enabled=true is refused.
+      enabled: null
       secretName: ""
       mountPath: /run/elitea-deepwiki
       defaultMode: 0444
@@ -2197,10 +2209,13 @@ main:
     # run one provider and not the other, and each hop's material must be
     # revocable on its own.
     #
-    # secretName is normally inventory.mtls.clientSecretName — the Secret the
-    # inventory subtree's facade-client Certificate issues.
+    # DERIVED while inventory.enabled (S10), exactly as deepwikiClientMaterial:
+    # inventory.mtls.clientSecretName unless secretName or volume is stated.
     inventoryClientMaterial:
-      enabled: false
+      # Unset: follows inventory.enabled. Only an explicit true (a facade to a
+      # provider deployed elsewhere) or false is the operator's; false beside
+      # inventory.enabled=true is refused.
+      enabled: null
       secretName: ""
       mountPath: /run/elitea-inventory
       defaultMode: 0444
@@ -2853,17 +2868,20 @@ main:
 
     # --- DeepWiki facade (ADR-0022 P2) -------------------------------------
     #
-    # Off by default: a deployment that does not run the elitea-deepwiki
-    # provider must not register the four /api/v2/deepwiki routes at all.
-    # Turning this on WITHOUT the three mTLS files below is a startup failure,
-    # not a degraded mount — the provider terminates mTLS with CERT_REQUIRED
-    # and would refuse every request, so a facade that came up anyway would be
-    # four routes answering 503 while the flag says the feature is on.
+    # DERIVED FROM deepwiki.enabled (S10): leave every entry of this block
+    # empty and the chart writes ELITEA_DEEPWIKI_ENABLED, the three file paths
+    # (under fileConfig.deepwikiClientMaterial.mountPath, the Secret
+    # deepwiki.mtls.clientSecretName), the platform target and the git
+    # allowlist (deepwiki.env's) whenever this release runs the provider. A
+    # stated value wins where it agrees; "false" beside deepwiki.enabled=true
+    # is refused. Set them by hand only for a provider deployed ELSEWHERE
+    # (deepwiki.enabled=false here). A deployment without the provider
+    # registers none of the four /api/v2/deepwiki routes. An enabled facade
+    # WITHOUT the three mTLS files below is a startup failure, not a degraded
+    # mount — the provider terminates mTLS with CERT_REQUIRED.
     ELITEA_DEEPWIKI_ENABLED: ""
-    # Client certificate material for the hop, mounted from a Secret by the
-    # operator (see mTLS mounts for the gateway hop, which these mirror).
-    # These are PATHS, not key material, so they belong in env and not in
-    # `secrets:` below.
+    # Client certificate material for the hop. These are PATHS, not key
+    # material, so they belong in env and not in `secrets:` below.
     ELITEA_DEEPWIKI_CLIENT_CERT_FILE: ""
     ELITEA_DEEPWIKI_CLIENT_KEY_FILE: ""
     ELITEA_DEEPWIKI_CA_FILE: ""
@@ -2889,7 +2907,9 @@ main:
     # facade checks it before opening the vault (so a host nobody allowed never
     # causes a decrypt) and the provider checks it before building a clone URL
     # (so the credential is never written into one). Two allowlists that could
-    # disagree would mean an invocation that starts and then fails.
+    # disagree would mean an invocation that starts and then fails, so with
+    # deepwiki.enabled the chart copies deepwiki.env.ELITEA_DEEPWIKI_GIT_
+    # ALLOWLIST here and refuses a different value. Set it THERE.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
     # The provider's one listener, host:port (#1359): the facade's SPI calls
     # and the project-deprovision deletions (#1243) are gRPC to it. Normally
@@ -2903,13 +2923,12 @@ main:
 
     # --- Inventory facade (ADR-0023 H4c) -----------------------------------
     #
-    # Off by default, like DeepWiki's and for the same reason: a deployment
-    # that does not run the elitea-inventory provider must not register the
-    # three /api/v2/inventory routes at all. Turning this on WITHOUT the three
-    # mTLS files below is a startup failure, not a degraded mount — the
-    # provider terminates mTLS with CERT_REQUIRED and would refuse every
-    # request, so a facade that came up anyway would be three routes answering
-    # 503 while the flag says the feature is on.
+    # DERIVED FROM inventory.enabled (S10), exactly as the DeepWiki block
+    # above: leave it empty and the chart writes ELITEA_INVENTORY_ENABLED, the
+    # three file paths, the platform target and the git allowlist
+    # (inventory.env's) whenever this release runs the provider. "false"
+    # beside inventory.enabled=true is refused. A deployment without the
+    # provider registers none of the three /api/v2/inventory routes.
     ELITEA_INVENTORY_ENABLED: ""
     # Client certificate material for the hop, mounted from a Secret by
     # fileConfig.inventoryClientMaterial above. These are PATHS, not key
@@ -2992,6 +3011,8 @@ main:
     # knowledge graph ingests — and a deployment that wants one and not the
     # other has to be able to say so. Fail-closed in exactly the same way:
     # unset refuses every source, and `*` disables the control explicitly.
+    # With inventory.enabled the chart copies inventory.env.ELITEA_INVENTORY_
+    # GIT_ALLOWLIST here and refuses a different value. Set it THERE.
     ELITEA_INVENTORY_GIT_ALLOWLIST: ""
 
     # --- The toolkit credential connection check (#319, toolkit half) ---
@@ -3256,28 +3277,34 @@ main:
   #   output-server.crt              content-server.key
   #   output-server.key
   runtime:
-    # OFF by default, because turning it on requires production Form
-    # authentication, and that needs `fileConfig.authConfig.document.public_origin`
-    # — an address only the operator knows, which no chart can default.
+    # ON by default (S10): a default install is the whole product, and chat,
+    # indexing, DeepWiki and Inventory all stand on this plane. It needs
+    # production authentication (fileConfig.authConfig, whose
+    # document.public_origin is an address only the operator knows), the
+    # runtime material Secret (material.secretName, default
+    # elitea-runtime-material) and the worker's identity
+    # (worker.runtimeSession.expectedIdentity). The chart cannot default
+    # those, so a render without them fails with ONE message that lists every
+    # missing value at once (templates/guards/required/values.yaml).
     #
-    # It cannot be turned on ALONE, and it cannot be left off while the worker
-    # runs. The worker dials control/output/content on elitea-main, so either
-    # half without the other admits every chat turn over HTTP and then answers
-    # none of it — silently, with nothing in any log. templates/guards.yaml
-    # refuses that combination at render time rather than letting it install.
+    # It cannot be left off while the worker runs. The worker dials
+    # control/output/content on elitea-main, so either half without the other
+    # admits every chat turn over HTTP and then answers none of it — silently,
+    # with nothing in any log. templates/guards.yaml refuses that combination
+    # at render time rather than letting it install. Turning it off therefore
+    # means worker.enabled, vector.enabled, deepwiki.enabled and
+    # inventory.enabled off as well; each refuses the render without it.
     #
-    # To turn chat on, set both together:
-    #   main.runtime.enabled, worker.enabled
-    # plus fileConfig.authConfig (see below). natsBootstrap (on by default)
-    # creates the command bus's streams and durable consumers
-    # (docs/runtime-command-bus.md), which elitea-main and the worker only bind.
-    enabled: false
+    # natsBootstrap (on by default) creates the command bus's streams and
+    # durable consumers (docs/runtime-command-bus.md), which elitea-main and
+    # the worker only bind.
+    enabled: true
 
     # The base plane: configuration validation. Always required when enabled.
     # One of the command bus's streams — ELITEA_RT_V1_VALIDATE in every shipped
     # profile — and different from every dispatch stream below. A stream's
     # capacity is natsBootstrap.runtime.<route>.maxMsgs.
-    commandStream: ""
+    commandStream: "ELITEA_RT_V1_VALIDATE"
     # The durable admission cap per capability, 1..4096 (ELITEA_RUNTIME_MAX_OUTSTANDING).
     # It is also persisted in the database, and every start fails closed while
     # the two differ. To change it: upgrade with the new value, then run
@@ -3317,9 +3344,9 @@ main:
 
     # The four agent turn routes — the chat send path.
     agentExecutionDispatch:
-      enabled: false
+      enabled: true
       # ELITEA_RT_V1_AGENT. Its durable consumer is fixed by the stream.
-      commandStream: ""
+      commandStream: "ELITEA_RT_V1_AGENT"
       # (currentMainBaseUrl is gone, #1359 U5: the worker's internal MCP
       # calls are elitea.runtime.v1.InternalToolService on the platform gRPC
       # listener it already dials. The render refuses the old key.)
@@ -3333,14 +3360,15 @@ main:
     # (ELITEA_RT_V1_AGENT) is supported, and it is what the standalone compose
     # stack does: one worker then serves both capabilities, because the worker
     # dispatches on the command's capability id rather than on its stream, and
-    # one stream has one durable consumer. Otherwise ELITEA_RT_V1_INDEX.
+    # one stream has one durable consumer. Otherwise ELITEA_RT_V1_INDEX. The
+    # default shares ELITEA_RT_V1_AGENT, so the one default worker serves both.
     indexIngestDispatch:
-      enabled: false
-      commandStream: ""
+      enabled: true
+      commandStream: "ELITEA_RT_V1_AGENT"
 
     # Saved toolkit discovery requires an active worker dispatch.
     toolkitDiscovery:
-      enabled: false
+      enabled: true
 
     # The index schedule write and delete routes. NEEDS indexIngestDispatch.
     indexScheduling:
@@ -3350,8 +3378,10 @@ main:
       instanceId: ""
 
     # Must equal the key id inside command-signing-keyring.json. The composition
-    # cross-checks the two and refuses to start on a mismatch.
-    signingKeyId: ""
+    # cross-checks the two and refuses to start on a mismatch. The default is
+    # deploy/scripts/gen-runtime-certs.sh's (RUNTIME_SIGNING_KEY_ID unset), so
+    # material that script minted works as it is.
+    signingKeyId: "standalone-runtime-v1"
 
     # Exact supervisor grant audiences. Empty disables sandbox grant issuance.
     sandboxAudiences: []
@@ -3496,7 +3526,11 @@ main:
       # same image and the same user, copies each key into a memory-backed
       # emptyDir at mode 0600, and reads every file back through securefile
       # before it exits. A missing key stops the pod there, with a message.
-      secretName: ""
+      #
+      # A FIXED default name, so the Secret is the same in every install and
+      # externalSecrets fills it without a values change. Set it to "" (with
+      # `volume` below) for a CSI source.
+      secretName: elitea-runtime-material
 
       # The mode the kubelet gives each key of that Secret. The init container
       # has to read them, and the kubelet owns them as root, so without a pod
@@ -3600,10 +3634,14 @@ main:
       timeoutSeconds: 3
       failureThreshold: 2
 
+  # maxReplicas 3, not 10 (S10): with the runtime plane on by default every
+  # replica holds about 44 PostgreSQL connections, and the ceiling is what
+  # postgresql.maxConnections is checked against. Raise both together, or
+  # put elitea-main behind pgbouncer.
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 10
+    maxReplicas: 3
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
 
@@ -4636,19 +4674,23 @@ llmGateway:
 
 # ── DeepWiki provider service (ADR-0022) ─────────────────────────────────────
 #
-# OFF by default, and that is the honest default rather than a cautious one:
-# the published image carries the engine SOURCE but not its ~92-package
-# closure, so a deployment that turns this on without also setting an -engine
-# image tag gets a service that serves the whole SPI and refuses every tool.
-# It says so in GET /health rather than pretending, but it is not what an
-# operator flipping `enabled` expects.
+# ON by default (S10). The pod is the Go sub-application host plus the
+# Rust-native engine sidecar (ADR-0026), both published images, so `enabled`
+# is the whole feature.
 #
-# Turning it on is TWO settings, not one: this block, and
-# main.env.ELITEA_DEEPWIKI_ENABLED with its base URL, callback origin and the
-# three client-certificate paths. elitea-main is the only door (decision 5), so
-# a provider nobody can reach is a Deployment doing nothing.
+# ONE SWITCH. deepwiki.enabled also turns on elitea-main's facade: the chart
+# derives main.env.ELITEA_DEEPWIKI_ENABLED, _PLATFORM_GRPC_TARGET, the three
+# client-certificate paths, _GIT_ALLOWLIST (from deepwiki.env below) and
+# main.fileConfig.deepwikiClientMaterial from this block. elitea-main is the
+# only door (decision 5), so a provider nobody can reach is a Deployment doing
+# nothing, and the two halves can no longer be configured apart. An explicit
+# main.env value still wins where it agrees; main.env.ELITEA_DEEPWIKI_ENABLED
+# "false" beside deepwiki.enabled=true is refused (set deepwiki.enabled=false).
+#
+# Off (deepwiki.enabled=false) removes the provider and the facade together;
+# Inventory, chat and indexing are unaffected.
 deepwiki:
-  enabled: false
+  enabled: true
   replicaCount: 1
 
   # The provider reaches elitea-main ONLY over gRPC on its platform listener
@@ -4672,14 +4714,31 @@ deepwiki:
   # callbackViaPlatformEdge (ADR-0027) is refused too.
   callbackClient:
     # A Secret with tls.crt / tls.key: a client certificate (extendedKeyUsage
-    # clientAuth) the runtime CA signed. deploy/scripts/gen-runtime-certs.sh
-    # mints one as subapp-callback-client.crt / .key:
+    # clientAuth, the one DNS SAN elitea-subapp-callback) the runtime CA
+    # signed.
+    #
+    # ISSUED BY THE CHART by default: certManager below renders a
+    # cert-manager Certificate into secretName from the runtime-CA issuer
+    # (the one vector.mtls uses), so a default install mints nothing by hand.
+    # To bring your own, set certManager.enabled=false and create the Secret;
+    # deploy/scripts/gen-runtime-certs.sh mints one as
+    # subapp-callback-client.crt / .key:
     #
     #   kubectl create secret generic elitea-deepwiki-callback-client \
     #     --from-file=tls.crt=subapp-callback-client.crt \
     #     --from-file=tls.key=subapp-callback-client.key
     secretName: elitea-deepwiki-callback-client
     defaultMode: 0440
+    certManager:
+      enabled: true
+      duration: 2160h    # 90d
+      renewBefore: 360h  # 15d
+      issuerRef:
+        # NOT created by this chart. An issuer backed by the RUNTIME CA, the
+        # CA elitea-main's platform listener verifies clients against — the
+        # same issuer as vector.mtls.issuerRef.
+        name: elitea-runtime-ca
+        kind: ClusterIssuer
 
   # The provider pod is TWO containers (ADR-0023 H2): the Go sub-application
   # host, which serves the SPI, composes and uploads, and the Rust-native
@@ -4907,10 +4966,14 @@ deepwiki:
   affinity: {}
 
 # The Inventory provider service (ADR-0023 H4c) — the knowledge-graph builder
-# and retriever. Enable it beside main.env.ELITEA_INVENTORY_ENABLED with its
-# base URL, callback origin and the three client-certificate paths; the chart
-# refuses a half-configured install rather than rendering one that boots and
-# then fails.
+# and retriever. ON by default (S10), and ONE SWITCH like DeepWiki's:
+# inventory.enabled also turns on elitea-main's facade, and the chart derives
+# main.env.ELITEA_INVENTORY_ENABLED, _PLATFORM_GRPC_TARGET, the three
+# client-certificate paths, _GIT_ALLOWLIST (from inventory.env below) and
+# main.fileConfig.inventoryClientMaterial from this block. An explicit
+# main.env value still wins where it agrees; main.env.ELITEA_INVENTORY_ENABLED
+# "false" beside inventory.enabled=true is refused. Off removes both halves;
+# DeepWiki, chat and indexing are unaffected.
 #
 # It has its OWN database schema, like DeepWiki (ADR-0027): the Rust engine
 # keeps each graph in the inventory_graph schema (no extension: the entity
@@ -4918,7 +4981,7 @@ deepwiki:
 # a pre-install migrate Job from the engine image creates it. The engine also
 # clones repositories itself, so it carries its own git allowlist.
 inventory:
-  enabled: false
+  enabled: true
   replicaCount: 1
 
   # The provider reaches elitea-main's platform listener
@@ -4937,17 +5000,29 @@ inventory:
   # and callbackClient.secretName, and the render refuses it without them.
   callbackClient:
     # A Secret with tls.crt / tls.key: a client certificate (extendedKeyUsage
-    # clientAuth) the runtime CA signed. deploy/scripts/gen-runtime-certs.sh
-    # mints one as subapp-callback-client.crt / .key:
+    # clientAuth, the one DNS SAN elitea-subapp-callback) the runtime CA
+    # signed. Issued by the chart by default, exactly as
+    # deepwiki.callbackClient: set certManager.enabled=false to bring your
+    # own (gen-runtime-certs.sh's subapp-callback-client.crt / .key):
     #
     #   kubectl create secret generic elitea-inventory-callback-client \
     #     --from-file=tls.crt=subapp-callback-client.crt \
     #     --from-file=tls.key=subapp-callback-client.key
     #
     # Both engines present the same identity, so DeepWiki's Secret
-    # (deepwiki.callbackClient.secretName) can be named here instead.
+    # (deepwiki.callbackClient.secretName) can be named here instead; while
+    # DeepWiki issues it, this block then issues nothing (one Secret, one
+    # Certificate).
     secretName: elitea-inventory-callback-client
     defaultMode: 0440
+    certManager:
+      enabled: true
+      duration: 2160h    # 90d
+      renewBefore: 360h  # 15d
+      issuerRef:
+        # NOT created by this chart; the runtime-CA issuer, as for DeepWiki.
+        name: elitea-runtime-ca
+        kind: ClusterIssuer
 
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
@@ -5376,9 +5451,21 @@ egressProxy:
 # without a token by its client-certificate identity, for deletion and admin
 # reads only.
 #
-# OFF by default, like the providers. Turning it on NEEDS main.runtime.enabled:
-# introspection is served on the runtime control listener, so without it every
-# request is refused (fail closed). templates/guards.yaml refuses that render.
+# ON by default (S10), like the providers it serves. It NEEDS
+# main.runtime.enabled: introspection is served on the runtime control
+# listener, so without it every request is refused (fail closed).
+# templates/guards.yaml refuses that render.
+#
+# TURNING IT OFF (vector.enabled=false) is refused while anything still needs
+# a vector store, with ONE message naming each of them and its switch: the
+# worker's indexing (main.runtime.indexIngestDispatch.enabled=false, or
+# worker.runtime.vectorTarget for a store deployed elsewhere), the native
+# DeepWiki engine (deepwiki.enabled=false, or deepwiki.env.
+# ELITEA_DEEPWIKI_VECTOR_URL) and the native Inventory engine
+# (inventory.enabled=false, or inventory.env.ELITEA_INVENTORY_VECTOR_URL).
+# Refused rather than switched off for you: a feature that disappears because
+# another switch moved is the silent failure this chart exists to prevent.
+# Chat itself does not need it.
 #
 # TRUST. Every certificate below is issued by mtls.issuerRef, which MUST be an
 # issuer backed by the RUNTIME CA — the CA whose certificate is runtime-ca.crt
@@ -5390,7 +5477,7 @@ egressProxy:
 #   * elitea-vector verifies elitea-main's control-server certificate against
 #     the same ca.crt.
 vector:
-  enabled: false
+  enabled: true
 
   image:
     repository: ghcr.io/elitea-ng/elitea-vector
@@ -5472,9 +5559,11 @@ vector:
 
   collection:
     # Applied when elitea-vector creates a collection on demand. Keep it at or
-    # below qdrant.internal.replicas: a factor above the node count leaves
-    # every shard under-replicated.
-    replicationFactor: 2
+    # below qdrant.replicaCount (the render refuses more): a factor above the
+    # node count leaves every shard under-replicated. 1 with the single
+    # default Qdrant node; values-qdrant-ha.yaml sets 2 beside three nodes
+    # (ADR-0031 decision 8).
+    replicationFactor: 1
     shardNumber: 1
 
   mtls:
@@ -5497,17 +5586,26 @@ vector:
     mountPath: /etc/elitea-vector/tls
     clientMountPath: /etc/elitea-vector/client-tls
 
-  # Qdrant. `internal` runs a StatefulSet of the official image in this
-  # release; `external` points at a cluster you run. Either way elitea-vector
-  # is its only client and holds its API key.
+  # Qdrant, as elitea-vector reaches it. The store itself is the upstream
+  # qdrant chart (top-level `qdrant` below, qdrant.enabled: true by default);
+  # qdrant.enabled=false is bring-your-own: point `external` at a Qdrant you
+  # run. Either way elitea-vector is its only client and holds its API key.
+  # (The pre-S10 `vector.qdrant.mode` and `vector.qdrant.internal` keys are
+  # refused at render time; docs/UPGRADING.md maps them.)
   qdrant:
-    mode: internal
-    # REQUIRED. The Secret and key that hold the Qdrant API key. Not created
-    # by this chart: a generated key would change on every upgrade. The
-    # internal StatefulSet reads the same Secret.
+    # The Secret and key that hold the Qdrant API key. Not created by this
+    # chart: a generated key would change on every upgrade. The bundled Qdrant
+    # reads the same Secret (qdrant.env QDRANT__SERVICE__API_KEY below, which
+    # the render checks names this Secret and key). A FIXED default name, so
+    # externalSecrets fills it without a values change; create it yourself
+    # otherwise (any random string, e.g. `openssl rand -hex 32`):
+    #
+    #   kubectl create secret generic elitea-qdrant-api \
+    #     --from-literal=api-key="$(openssl rand -hex 32)"
     apiKeySecret:
-      name: ""
+      name: elitea-qdrant-api
       key: api-key
+    # Used only with qdrant.enabled=false, and then url is required.
     external:
       # The gRPC URL, e.g. https://qdrant.example.internal:6334.
       url: ""
@@ -5515,43 +5613,6 @@ vector:
       # client trusts the native roots, so the chart points SSL_CERT_FILE at
       # this file, which then is the ONLY trusted root.
       caSecretName: ""
-    internal:
-      image:
-        repository: docker.io/qdrant/qdrant
-        # The -unprivileged build runs as uid 1000 / gid 2000, which the
-        # podSecurityContext below requires; the plain tag runs as root and
-        # writes its init marker into the root-owned /qdrant.
-        tag: v1.19.2-unprivileged
-        pullPolicy: IfNotPresent
-      # ADR-0031 decision 8: three nodes, with collection.replicationFactor 2.
-      # One disables clustering. Peer, REST and gRPC TLS (also decision 8) is
-      # not rendered yet: in-cluster traffic is plaintext, restricted by the
-      # NetworkPolicy to elitea-vector and the peers.
-      replicas: 3
-      storage:
-        size: 50Gi
-        # Empty: the cluster's default StorageClass.
-        storageClassName: ""
-      resources:
-        requests:
-          cpu: 500m
-          memory: 2Gi
-        limits:
-          memory: 8Gi
-      podSecurityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 2000
-        fsGroup: 2000
-        seccompProfile:
-          type: RuntimeDefault
-      securityContext:
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: ["ALL"]
-      nodeSelector: {}
-      tolerations: []
-      affinity: {}
 
   # Extra plain env for elitea-vector (RUST_LOG, OTEL_EXPORTER_OTLP_ENDPOINT).
   # The chart sets every ELITEA_VECTOR_* variable itself.
@@ -5591,9 +5652,157 @@ vector:
   tolerations: []
   affinity: {}
 
+# =============================================================================
+# qdrant — the vector store behind elitea-vector (ADR-0031): the UPSTREAM
+# qdrant chart, a pinned dependency (Chart.yaml), configured here. Everything
+# under this key is that chart's own values (its values.yaml documents the
+# rest); what follows is what this chart needs from it.
+#
+# ON by default, one node. qdrant.enabled=false is bring-your-own: set
+# vector.qdrant.external.url. vector.enabled=false with qdrant.enabled left on
+# is refused (a store nothing reads); turn both off.
+#
+# FIXED NAMES. A subchart cannot read this chart's helpers, so its names are
+# literal here and the render refuses any other: the StatefulSet, the Service
+# elitea-vector dials (https://elitea-vectordb.<namespace>.svc:6334), the
+# headless Service the nodes find each other through, and the pod label the
+# NetworkPolicy selects (app.kubernetes.io/name: elitea-qdrant). Its
+# PersistentVolumeClaims are qdrant-storage-elitea-vectordb-<n>. Installs from
+# before S10 ran a StatefulSet named elitea-qdrant with PVCs
+# storage-elitea-qdrant-<n>; docs/UPGRADING.md moves the data.
+#
+# TLS on REST, gRPC and (clustered) peer traffic, always. This chart renders
+# the node certificate (templates/vector/qdrant-certificate.yaml) from
+# vector.mtls.issuerRef — the runtime CA, which elitea-vector already trusts —
+# into the Secret the `qdrant-tls` volume below names (elitea-qdrant-tls); the
+# SANs cover the Service and every pod under the headless Service. There is no
+# plaintext switch: the render refuses config.service.enable_tls false, and
+# clustering without p2p TLS.
+#
+# HA: values-qdrant-ha.yaml (three nodes, clustering and peer TLS on,
+# replication factor 2, a PodDisruptionBudget). Every node keeps its data on a
+# PersistentVolumeClaim (persistence.size), so the cluster needs a
+# StorageClass that can provision them (the default, or
+# persistence.storageClassName).
+#
+# NOT SUPPORTED: the upstream chart's `apiKey` (it reads the Secret with
+# `lookup`, which `helm template` and Argo CD cannot; the key comes from
+# qdrant.env instead) and its `helm test` Pod (it speaks no API key and the
+# NetworkPolicy admits it nowhere).
+# =============================================================================
+qdrant:
+  enabled: true
+  fullnameOverride: elitea-vectordb
+  nameOverride: elitea-qdrant
+  replicaCount: 1
+  image:
+    repository: docker.io/qdrant/qdrant
+    # The chart appends -unprivileged: that build runs as uid 1000 / gid 2000,
+    # which the security contexts below require; the plain tag runs as root.
+    tag: v1.19.2
+    useUnprivilegedImage: true
+    pullPolicy: IfNotPresent
+  # The subchart does not read image.pullSecrets; list them here too.
+  imagePullSecrets: []
+  # The whole stack of elitea-vector shares Argo CD sync wave -5
+  # (templates/vector/_helpers.tpl, elitea-vector.syncWave).
+  additionalAnnotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  env:
+    # The API key, from vector.qdrant.apiKeySecret (the render checks the two
+    # agree, and refuses an install without it).
+    - name: QDRANT__SERVICE__API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: elitea-qdrant-api
+          key: api-key
+    - name: QDRANT__TELEMETRY_DISABLED
+      value: "true"
+    # For the start command below.
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.namespace
+  # The upstream start script names the peers <pod>.<headless> without the
+  # namespace, a name no certificate can carry verifiably (a wildcard needs
+  # two labels after it). This one uses the fully qualified names the node
+  # certificate lists. Pod 0 starts the cluster; every other pod joins
+  # through it. With clustering off the URIs are unused. (The open-files
+  # limit is raised as the upstream script raises it.)
+  args:
+    - |
+      ulimit -n "$(ulimit -Hn)"
+      self="https://${HOSTNAME}.elitea-vectordb-headless.${POD_NAMESPACE}.svc:6335"
+      if [ "${HOSTNAME##*-}" = "0" ]; then
+        exec ./entrypoint.sh --uri "$self"
+      fi
+      exec ./entrypoint.sh --bootstrap "https://elitea-vectordb-0.elitea-vectordb-headless.${POD_NAMESPACE}.svc:6335" --uri "$self"
+  config:
+    cluster:
+      # One node: no Raft. values-qdrant-ha.yaml turns both on.
+      enabled: false
+      p2p:
+        enable_tls: false
+    service:
+      # REST and gRPC over TLS (the probes follow: HTTPS). Callers
+      # authenticate with the API key; client certificates are not required.
+      enable_tls: true
+    tls:
+      cert: /qdrant/tls/tls.crt
+      key: /qdrant/tls/tls.key
+      # The CA the peers verify each other against (the issuer's).
+      ca_cert: /qdrant/tls/ca.crt
+      # Re-read the files this often (seconds), so a cert-manager renewal is
+      # picked up without a restart.
+      cert_ttl: 3600
+  additionalVolumes:
+    # The node certificate. Its secretName is the one templates/vector/
+    # qdrant-certificate.yaml issues into; change it here and that follows.
+    # 0440 with the pod's fsGroup: readable by Qdrant's group only.
+    - name: qdrant-tls
+      secret:
+        secretName: elitea-qdrant-tls
+        defaultMode: 0440
+  additionalVolumeMounts:
+    - name: qdrant-tls
+      mountPath: /qdrant/tls
+      readOnly: true
+  persistence:
+    size: 50Gi
+    # Empty: the cluster's default StorageClass.
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 4Gi
+  podSecurityContext:
+    fsGroup: 2000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 2000
+    allowPrivilegeEscalation: false
+    privileged: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  podDisruptionBudget:
+    enabled: false
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 worker:
   # The agent worker: the ONLY producer of an answer. Requires main.runtime.enabled.
-  enabled: false
+  # ON by default (S10). Its material Secret (materialSecretName) and its
+  # certificate's SPIFFE ID (runtimeSession.expectedIdentity) are the
+  # operator's; the render lists them with every other missing value.
+  enabled: true
   # The agent worker. Without it an admitted execution streams nothing and ends
   # in a terminal failure: Go admits and projects executions but has no
   # agent-token producer of its own.

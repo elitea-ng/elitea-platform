@@ -1,5 +1,7 @@
 # EXAMPLE — the whole platform on GKE as ONE Argo CD Application: the
-# published `elitea` chart (NATS JetStream and its bootstrap bundled), the
+# published `elitea` chart (NATS JetStream and its bootstrap, and Qdrant,
+# bundled as the upstream charts inside the published one, so an OCI source
+# needs no second repository), the
 # chart's own values-gke.yaml, and the few values only you know.
 #
 # HOW THE VALUES ARE LAYERED (later wins):
@@ -9,7 +11,10 @@
 #      sslmode=require and a hand-prepared database, keyless GCS, the GKE
 #      Ingress with its BackendConfig/FrontendConfig, Google's load-balancer
 #      ranges in the NetworkPolicy, externalSecrets on, and a budget of about
-#      4 vCPU / 10 GiB of requests. Read it once:
+#      3.8 vCPU / 8.5 GiB of requests in steady state with every default on
+#      (the runtime plane, the worker, elitea-vector and Qdrant, DeepWiki and
+#      Inventory). Each feature is one `<feature>.enabled`; set it to false
+#      here to leave one out. Read it once:
 #        helm pull oci://ghcr.io/elitea-ng/charts/elitea --version <v> --untar
 #        less elitea/values-gke.yaml
 #   3. `values` below — every `<...>` and example.com of values-gke.yaml that
@@ -34,8 +39,10 @@
 #                   sync and the previous pods keep serving;
 #   wave -10        the NATS server, its CA and certificates, and the
 #                   stream/KV bootstrap Job (a Sync hook);
-#   wave  -5        elitea-vector and Qdrant;
-#   wave   0        the platform (main, web, scheduler, gateway, collector);
+#   wave  -5        elitea-vector and Qdrant (the bundled qdrant chart) with
+#                   its TLS Certificate;
+#   wave   0        the platform (main, web, scheduler, gateway, collector,
+#                   DeepWiki, Inventory);
 #   wave   1        the agent worker.
 #
 # PRECONDITIONS this Application does not create: the GKE cluster
@@ -77,8 +84,9 @@ spec:
             # values-gke.yaml already reads the DSN from its own secret,
             # elitea-database-url (maps merge, so it needs no restating).
             # The runtime CA keypair the elitea-runtime-ca Issuer signs
-            # elitea-vector's certificates from. No pod reads it, so the
-            # chart lists it only when asked (`extra`).
+            # from: elitea-vector's certificates, Qdrant's TLS and the
+            # DeepWiki/Inventory callback client certificates. No pod reads
+            # it, so the chart lists it only when asked (`extra`).
             elitea-runtime-ca:
               extra: true
               type: kubernetes.io/tls
@@ -133,6 +141,16 @@ spec:
               https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
             GATEWAY_EGRESS_ALLOWLIST: >-
               <REGION>-aiplatform.googleapis.com,aiplatform.googleapis.com
+
+        # DeepWiki and Inventory are on; values-gke.yaml lets them clone from
+        # github.com only. Restate both allowlists for your git hosts (the
+        # chart copies each to elitea-main):
+        # deepwiki:
+        #   env:
+        #     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com,git.example.com"
+        # inventory:
+        #   env:
+        #     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com,git.example.com"
 
         worker:
           runtime:

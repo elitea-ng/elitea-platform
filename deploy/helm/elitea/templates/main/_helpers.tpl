@@ -1320,23 +1320,17 @@ too, whatever the value:
 {{- if not $runtime.enabled -}}
 {{/*
   Runtime OFF. config.go returns an empty configuration and ignores every other
-  ELITEA_RUNTIME_* name, so a half-filled block here is silently dead rather
-  than active. That is the failure this chart is meant to end, so say it now.
+  ELITEA_RUNTIME_* name, and so does this chart: elitea-main.runtimeEnv emits
+  nothing and no listener, port or material volume renders.
+
+  The sub-settings are NOT refused here any more (S10). They ship populated —
+  the streams, the dispatch planes, signingKeyId, material.secretName — because
+  the runtime is on by default, so `main.runtime.enabled=false` has to be the
+  ONE switch that turns it off; making the operator also clear six defaults
+  would make it six switches. What depends on the runtime (the worker,
+  elitea-vector, DeepWiki, Inventory) is still refused beside it, by
+  elitea.featureDependencies and each component's own guard.
 */}}
-{{- range $field := list "commandStream" -}}
-{{- if get $runtime $field -}}
-{{- fail (printf "runtime.%s is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.%s." $field $field) -}}
-{{- end -}}
-{{- end -}}
-{{- if get $runtimeNats "url" -}}
-{{- fail "runtime.nats.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.nats.url." -}}
-{{- end -}}
-{{- if get $material "secretName" -}}
-{{- fail "runtime.material.secretName is set but runtime.enabled is false. Set runtime.enabled=true, or clear runtime.material.secretName." -}}
-{{- end -}}
-{{- if or $agent.enabled $ingest.enabled $scheduling.enabled $discovery.enabled -}}
-{{- fail "a runtime dispatch plane is enabled but runtime.enabled is false. internal/runtimecomposition/config.go ignores every dispatch flag while ELITEA_RUNTIME_ENABLED is off, so the routes stay dark. Set runtime.enabled=true." -}}
-{{- end -}}
 {{- else -}}
 
 {{/*
@@ -1503,9 +1497,10 @@ too, whatever the value:
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
 {{- end -}}
 {{- else -}}
-{{- if $agent.commandStream -}}
-{{- fail "runtime.agentExecutionDispatch settings are present but runtime.agentExecutionDispatch.enabled is false. config.go refuses that combination: \"runtime agent execution dispatch settings require explicit enablement\"." -}}
-{{- end -}}
+{{- /* Off: the stream name is NOT refused (S10). It ships populated, so
+       enabled=false must be the one switch; runtimeEnv writes the stream only
+       beside ENABLED=true, so config.go never sees the combination it
+       refuses. */ -}}
 {{- end -}}
 
 {{/* Index-ingest dispatch: index start, index cancel, index metadata. */}}
@@ -1533,9 +1528,8 @@ too, whatever the value:
   one stream has one durable consumer, so they share it by construction.
 */}}
 {{- else -}}
-{{- if $ingest.commandStream -}}
-{{- fail "runtime.indexIngestDispatch settings are present but runtime.indexIngestDispatch.enabled is false. config.go: \"runtime index ingest dispatch settings require explicit enablement\"." -}}
-{{- end -}}
+{{- /* Off: the stream name is not refused, as for agentExecutionDispatch
+       above (S10: enabled=false is the one switch). */ -}}
 {{- end -}}
 
 {{/* Index scheduling: the index schedule write and delete routes. */}}

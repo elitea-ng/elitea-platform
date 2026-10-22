@@ -54,7 +54,7 @@ Also required: `platform.aiProjectId`, the id of the platform's public/shared pr
 
 <Tabs>
 <Tab title="values.yaml (base)">
-The chart's own defaults: a **default install has no production authentication**, so `ELITEA_CONFIGURATIONS_ENABLED`, `ELITEA_PROJECT_INFO_ENABLED`, `ELITEA_INDEX_TYPES_ENABLED` and `ELITEA_APPLICATION_SKILLS_ENABLED` all render off, and `main.runtime.enabled` is off — no chat. Start here only if you are layering capabilities on by hand.
+The chart's own defaults. The runtime plane, the worker, elitea-vector with the bundled Qdrant, DeepWiki and Inventory are **on**, one switch each (`main.runtime.enabled`, `worker.enabled`, `vector.enabled` with `qdrant.enabled`, `deepwiki.enabled`, `inventory.enabled`); set one to `false` explicitly to leave it out. The base file alone does not render: the values only you know (the authentication document and its `public_origin`, the public project, `DEPLOYMENT_URL`, the worker's identity, the git allowlists, the network-policy peers, the gateway's self origins and egress posture) are listed together in one refusal, so a first `helm template` is the checklist. Qdrant needs a PersistentVolumeClaim (`qdrant.persistence`, 50Gi on the default StorageClass).
 </Tab>
 <Tab title="values-standalone.yaml">
 The full capability set, matching `docker-compose.standalone-full.yml` — every capability flag on, the runtime plane on (agent execution, index ingest), sized for `postgresql.maxConnections: 200` across up to `main.autoscaling.maxReplicas: 4`. Needs both the runtime material Secret and the auth material Secret. This is the reference production shape.
@@ -63,7 +63,7 @@ The full capability set, matching `docker-compose.standalone-full.yml` — every
 The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret, but no Redis, no runtime material Secret and no worker: the Form sign-in state is in PostgreSQL.
 </Tab>
 <Tab title="values-gke.yaml">
-Google Kubernetes Engine with no static cloud credential: Cloud SQL with `sslmode=require` and a hand-prepared database, keyless GCS through Workload Identity, the GKE Ingress with its BackendConfig and FrontendConfig, Google's load-balancer ranges in the NetworkPolicy, and every Secret from Secret Manager through `externalSecrets`. Sized for about 4 vCPU and 10 GiB of requests. See [Deploy on GKE with Argo CD](/deployment/gke-argocd).
+Google Kubernetes Engine with no static cloud credential: Cloud SQL with `sslmode=require` and a hand-prepared database, keyless GCS through Workload Identity, the GKE Ingress with its BackendConfig and FrontendConfig, Google's load-balancer ranges in the NetworkPolicy, and every Secret from Secret Manager through `externalSecrets`. Sized for about 4 vCPU and 9 GiB of requests in steady state, with every default on. See [Deploy on GKE with Argo CD](/deployment/gke-argocd).
 </Tab>
 <Tab title="values-staging.yaml">
 A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
@@ -134,7 +134,7 @@ For other cases, sign in once and open **Settings › Profile**. Each **Sign-in 
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | on | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | on | production authentication |
-| `ELITEA_RUNTIME_ENABLED` (`main.runtime.enabled`) | off | on | production authentication **and** runtime material |
+| `ELITEA_RUNTIME_ENABLED` (`main.runtime.enabled`) | on | on | production authentication **and** runtime material |
 
 <Warning>
 `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` stays off in every shipped values file. It composes a second, asynchronous write route that would win the path from the compatibility route every install currently serves — and the compatibility route already writes `status_ok` inline from the same admission decision, which is what makes a saved credential usable. Turning it on is a separate cutover with its own client-side work, not a fix for an invisible credential.

@@ -29,6 +29,18 @@
 # Usage: deploy/helm/tests/render-external-secrets.sh
 # Needs: helm, python3 + PyYAML. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 cd "$(dirname "$0")/../../.."
 
@@ -49,7 +61,7 @@ full=(-f "$chart/values-standalone.yaml" --namespace platform
   --set llmGateway.egressPosture=allowlist --set llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=elitea.invalid:8000
   --set networkPolicies.main.noExternalIngress=true
   --set worker.enabled=true
-  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key
+  --set vector.enabled=true --set qdrant.enabled=true
   --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com
   --set main.fileConfig.deepwikiClientMaterial.enabled=true
   --set main.fileConfig.deepwikiClientMaterial.secretName=elitea-main-deepwiki-client-tls

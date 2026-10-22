@@ -1,0 +1,20 @@
+# The feature switches as they were BEFORE S10 turned them on by default: the
+# runtime plane, the worker, elitea-vector with its Qdrant, DeepWiki and
+# Inventory all off. Render tests written about something else (an edge
+# route, a master key, the NATS layout) layer this first, so they keep
+# asserting what they were written to assert; a test that needs a feature
+# turns it back on with its own switches. render-default-on.sh covers the
+# shipped defaults themselves.
+main:
+  runtime:
+    enabled: false
+worker:
+  enabled: false
+vector:
+  enabled: false
+qdrant:
+  enabled: false
+deepwiki:
+  enabled: false
+inventory:
+  enabled: false

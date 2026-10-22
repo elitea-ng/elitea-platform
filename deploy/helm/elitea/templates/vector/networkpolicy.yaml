@@ -41,11 +41,12 @@ spec:
       from:
         {{- toYaml . | nindent 8 }}
     {{- end }}
-{{- if eq (.Values.vector.qdrant.mode | toString) "internal" }}
+{{- if include "elitea-vector.qdrantTls" . }}
 ---
-# Ingress to Qdrant: elitea-vector on gRPC, and the Qdrant pods to each other
-# on the peer port. Nothing else reaches the store, which is the layer that
-# backs the API key.
+# Ingress to the bundled Qdrant (the qdrant subchart's pods, selected by the
+# label qdrant.nameOverride pins): elitea-vector on gRPC, and the Qdrant pods
+# to each other on the peer port. Nothing else reaches the store, which is the
+# layer that backs the API key.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

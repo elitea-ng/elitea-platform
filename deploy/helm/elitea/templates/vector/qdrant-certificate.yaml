@@ -1,0 +1,45 @@
+{{- if and .Values.vector.enabled (include "elitea-vector.qdrantTls" .) }}
+{{- $name := include "elitea-vector.qdrantName" . }}
+{{- $headless := printf "%s-headless" $name }}
+# The bundled Qdrant's node certificate (ADR-0031 decision 8). The Qdrant
+# itself is the upstream qdrant subchart (values.yaml `qdrant`), which mounts
+# this Secret through its `qdrant-tls` volume; a subchart cannot render a
+# certificate from this chart's issuer settings, so this chart does. Issued
+# from vector.mtls.issuerRef (the runtime CA elitea-vector already trusts).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
+spec:
+  secretName: {{ include "elitea-vector.qdrantTlsSecret" . }}
+  duration: {{ .Values.vector.mtls.duration }}
+  renewBefore: {{ .Values.vector.mtls.renewBefore }}
+  isCA: false
+  # Server auth for elitea-vector's gRPC calls and the kubelet's HTTPS probes;
+  # client auth too, because each node dials its peers with the same pair.
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+    # The name elitea-vector dials (elitea-vector.qdrantUrl) first.
+    - {{ $name }}.{{ .Release.Namespace }}.svc
+    - {{ $name }}
+    - {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local
+    # Every node's own name under the headless Service: the peer URIs the
+    # start command (qdrant.args) writes.
+    - "*.{{ $headless }}.{{ .Release.Namespace }}.svc"
+    - "*.{{ $headless }}.{{ .Release.Namespace }}.svc.cluster.local"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    encoding: PKCS8
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.vector.mtls.issuerRef.name }}
+    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}

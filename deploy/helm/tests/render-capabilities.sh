@@ -20,6 +20,18 @@
 # Usage: deploy/helm/elitea/tests/render-capabilities.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 # The single chart contains the LLM gateway, which REFUSES to render until an
 # operator states its two postures. Every render below therefore supplies them:
@@ -613,17 +625,19 @@ else
   fail "these runtime file names cannot be Secret keys:$bad_keys"
 fi
 
-if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/standalone.yaml")" = "false" ]; then
-  pass "toolkit discovery stays disabled until explicitly enabled"
+# S10: toolkit discovery ships ON with the runtime plane it rides on; turning
+# it off is one explicit value.
+if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/standalone.yaml")" = "true" ]; then
+  pass "toolkit discovery is on with the runtime plane by default"
 else
-  fail "toolkit discovery is enabled by default"
+  fail "toolkit discovery is not on by default with the runtime plane"
 fi
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" --set main.runtime.toolkitDiscovery.enabled=true >"$WORK/discovery.yaml"
-if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/discovery.yaml")" = "true" ]; then
-  pass "toolkit discovery activation reaches the rendered environment"
+  -f "$CHART/values-standalone.yaml" --set main.runtime.toolkitDiscovery.enabled=false >"$WORK/discovery.yaml"
+if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/discovery.yaml")" = "false" ]; then
+  pass "turning toolkit discovery off reaches the rendered environment"
 else
-  fail "toolkit discovery activation is absent from the rendered environment"
+  fail "toolkit discovery=false is absent from the rendered environment"
 fi
 
 # The operator-supplied volume stays supported, and it renders NO init
@@ -961,8 +975,23 @@ refuses "a Secret mode the init container cannot read" \
   "secretDefaultMode" \
   -f "$CHART/values-standalone.yaml" --set main.runtime.material.secretDefaultMode=256
 
-refuses "a material Secret set while the runtime is off" \
-  "runtime.enabled" \
+# S10: main.runtime.enabled=false is the ONE switch. The sub-settings ship
+# populated (the runtime is on by default), so with the runtime off they must
+# render and stay dark — no runtime env, no listener — rather than make the
+# operator clear each of them.
+runtime_off_stays_dark() {
+  local description="$1" out
+  shift
+  if ! out="$(helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" "$@" 2>&1)"; then
+    fail "the chart refused $description, though main.runtime.enabled=false is the one switch:
+$out"
+  elif grep -qE 'ELITEA_RUNTIME_ENABLED: "true"|ELITEA_RUNTIME_COMMAND_STREAM|runtime-plat' <<<"$out"; then
+    fail "the chart rendered runtime wiring for $description while the runtime is off"
+  else
+    pass "the chart renders $description dark while the runtime is off"
+  fi
+}
+runtime_off_stays_dark "a material Secret set while the runtime is off" \
   --set main.runtime.material.secretName=elitea-runtime-material
 
 # #1081 review G1: with no runtime.nats.url and no natsClient.service the runtime
@@ -972,7 +1001,7 @@ refuses "the runtime with no NATS to publish commands to" \
   -f "$CHART/values-standalone.yaml" --set nats.enabled=false --set natsBootstrap.enabled=false --set-string natsClient.service=
 
 refuses "the runtime without production authentication" \
-  "fileConfig.authConfig.enabled" \
+  "fileConfig.authConfig" \
   -f "$CHART/values-standalone.yaml" --set main.fileConfig.authConfig.enabled=false
 
 refuses "the Configurations plane without ANY authentication" \
@@ -999,12 +1028,10 @@ refuses "index scheduling without index ingest" \
   --set main.runtime.indexScheduling.instanceId=elitea-main-0 \
   --set main.runtime.indexIngestDispatch.enabled=false
 
-refuses "a dispatch plane enabled while the runtime is off" \
-  "runtime.enabled" \
+runtime_off_stays_dark "a dispatch plane enabled while the runtime is off" \
   --set main.runtime.agentExecutionDispatch.enabled=true
 
-refuses "toolkit discovery while the runtime is off" \
-  "runtime.enabled" \
+runtime_off_stays_dark "toolkit discovery while the runtime is off" \
   --set main.runtime.toolkitDiscovery.enabled=true
 
 refuses "toolkit discovery with index dispatch only" \

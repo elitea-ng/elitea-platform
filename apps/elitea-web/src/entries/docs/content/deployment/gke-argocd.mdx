@@ -3,12 +3,12 @@ title: "Deploy on GKE with Argo CD"
 description: "A production GKE install from one Argo CD Application: the Google Cloud preconditions with their commands, secrets in Secret Manager through External Secrets, the GKE Ingress, the first sync, and what to check when it fails."
 ---
 
-This page installs Elitea on Google Kubernetes Engine from **one Argo CD Application** that syncs **one chart**, `oci://ghcr.io/elitea-ng/charts/elitea`. The chart carries everything that runs in the cluster: the platform, NATS JetStream and its stream bootstrap, the vector store and the GKE edge objects. No static cloud credential exists anywhere: object storage and the model providers authenticate as Google service accounts, and every secret comes from Google Secret Manager.
+This page installs Elitea on Google Kubernetes Engine from **one Argo CD Application** that syncs **one chart**, `oci://ghcr.io/elitea-ng/charts/elitea`. The chart carries everything that runs in the cluster: the platform, NATS JetStream and its stream bootstrap, the vector store (elitea-vector and the bundled Qdrant), DeepWiki, Inventory and the GKE edge objects. Each feature is on by default and is one switch (`<feature>.enabled: false` leaves it out). No static cloud credential exists anywhere: object storage and the model providers authenticate as Google service accounts, and every secret comes from Google Secret Manager.
 
 It is the GitOps path through the same install as [Deploy from scratch](/deployment/from-scratch) and [Deploy on Google Cloud (GKE)](/deployment/gcp). Those pages explain each choice; this one lists what must exist, the commands that create it, and the order of the first sync. The examples it refers to are in [`deploy/argocd/examples/gke/`](https://github.com/elitea-ng/elitea-platform/tree/main/deploy/argocd/examples/gke), written to be copied into a GitOps repository your organisation owns.
 
 <Info title="One chart covers everything">
-NATS, its certificates and the bootstrap Job are part of the `elitea` release; there are no separate `nats` or `nats-bootstrap` charts to install. The sandbox-runtime installer is a dependency of the same chart (`sandboxRuntime.enabled`), but GKE does not need it: a GKE Sandbox node pool ships the `gvisor` RuntimeClass. Leave it off. Coming from the three-Application layout? Follow "One chart: NATS bundled" in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first.
+NATS, its certificates and the bootstrap Job are part of the `elitea` release, and so is Qdrant (the upstream qdrant chart, StatefulSet `elitea-vectordb`); there are no separate `nats`, `nats-bootstrap` or Qdrant charts to install. The sandbox-runtime installer is a dependency of the same chart (`sandboxRuntime.enabled`), but GKE does not need it: a GKE Sandbox node pool ships the `gvisor` RuntimeClass. Leave it off. Coming from the three-Application layout? Follow "One chart: NATS bundled" in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first.
 </Info>
 
 ```mermaid
@@ -61,10 +61,10 @@ gcloud compute routers nats create elitea-nat --router elitea-nat-router \
 
 ### cert-manager
 
-Install cert-manager cluster-wide. The NATS CA, every NATS identity, the LLM gateway's mTLS hop and elitea-vector are cert-manager `Certificate`s. Then create the namespace and the two Issuers the values name, exactly as in [Deploy from scratch, Step 1](/deployment/from-scratch#step-1-namespace-and-certificate-authorities):
+Install cert-manager cluster-wide. The NATS CA, every NATS identity, the LLM gateway's, DeepWiki's and Inventory's mTLS hops, elitea-vector, Qdrant's TLS and the providers' callback client certificates are cert-manager `Certificate`s; you mint none of them by hand. Then create the namespace and the two Issuers the values name, exactly as in [Deploy from scratch, Step 1](/deployment/from-scratch#step-1-namespace-and-certificate-authorities):
 
-- `elitea-internal-ca`: self-signed by cert-manager; nothing leaves the cluster.
-- `elitea-runtime-ca`: a CA Issuer backed by the Secret `elitea-runtime-ca`. On this path that Secret comes from Secret Manager (below), so the Issuer turns Ready on the first sync.
+- `elitea-internal-ca`: self-signed by cert-manager; nothing leaves the cluster. It issues the gateway, DeepWiki and Inventory hops.
+- `elitea-runtime-ca`: a CA Issuer backed by the Secret `elitea-runtime-ca`. It issues elitea-vector's pair, Qdrant's `elitea-qdrant-tls` and the `elitea-deepwiki-callback-client` / `elitea-inventory-callback-client` certificates. On this path that Secret comes from Secret Manager (below), so the Issuer turns Ready on the first sync.
 
 The NATS CA is the chart's own (`elitea-nats-ca`, wave `-10`); you create nothing for it. A cert-manager **Cluster**Issuer for the public certificate (ACME, or the origin CA issuer of a proxy in front) is the third thing cert-manager needs; see [Edge](#edge-ip-dns-tls-and-an-optional-proxy).
 
@@ -187,18 +187,18 @@ Argo CD pulls the chart from `ghcr.io` as an OCI Helm chart. Register the regist
 kubectl apply -f bootstrap/helm-repository.yaml
 ```
 
-Argo CD renders the chart with the Helm 3 it bundles, and the chart supports that (Helm 3.8 or newer). The Argo CD project you deploy into must allow the `elitea` namespace as a destination. The OCI chart carries its dependencies (the upstream NATS chart included), so the project needs no other source repository; a git source would also need `https://nats-io.github.io/k8s/helm/charts/` in `sourceRepos` (see [GitOps with Argo CD](/deployment/argocd#source-the-published-chart)).
+Argo CD renders the chart with the Helm 3 it bundles, and the chart supports that (Helm 3.8 or newer). The Argo CD project you deploy into must allow the `elitea` namespace as a destination. The OCI chart carries its dependencies (the upstream NATS and Qdrant charts included), so the project needs no other source repository; a git source would also need `https://nats-io.github.io/k8s/helm/charts/` and `https://qdrant.github.io/qdrant-helm` in `sourceRepos` (see [GitOps with Argo CD](/deployment/argocd#source-the-published-chart)).
 
 ### Resource budget
 
-`values-gke.yaml` is sized for about **4 vCPU and 10 GiB of requests**, with headroom for the worker's rolling update. CI sums the rendered requests and fails a change that breaks it.
+`values-gke.yaml` is sized for about **4 vCPU and 10 GiB of requests** in steady state with every default on (DeepWiki and Inventory included). CI sums the rendered requests and fails a change that breaks it.
 
 | State | CPU requests | Memory requests |
 |---|---|---|
-| Steady state | 3320m | 7168Mi |
-| During a worker rollout (a second worker overlaps) | 4820m | 10240Mi |
+| Steady state | 3770m | 8704Mi |
+| During a worker rollout (a second worker overlaps) | 5270m | 11776Mi |
 
-The worker is the largest pod (1.5 vCPU, 3 GiB). Hook Jobs run for seconds and are not counted. At elitea-main's autoscaler maximum of 3 the steady state is 3720m / 7936Mi.
+The worker is the largest pod (1.5 vCPU, 3 GiB). Hook Jobs run for seconds and are not counted. At elitea-main's autoscaler maximum of 3 the steady state is 4170m / 9472Mi. A worker rollout needs about 1.3 vCPU of headroom above the steady state; leave DeepWiki or Inventory off (`enabled: false`) to win back 450m / 1.5 GiB. Qdrant also needs a 50Gi PersistentVolumeClaim (`standard-rwo`).
 
 ## Steps
 
@@ -227,6 +227,8 @@ p() { jq -n --arg k "$1" --rawfile v "$2" '{($k): $v}'; }
   p elitea-main-auth-material/auth-pat-signing-key     auth-pat-signing-key
   p elitea-main-auth-material/auth-form-users.json     auth-form-users.json
   p elitea-qdrant-api/api-key                          qdrant-api-key
+  p elitea-deepwiki-secrets/identity-secret            deepwiki-identity-secret
+  p elitea-inventory-secrets/identity-secret           inventory-identity-secret
   for f in runtime-ca.crt command-signing-key.pem command-signing-keyring.json \
            control-server.crt control-server.key output-server.crt \
            output-server.key content-server.crt content-server.key; do
@@ -246,7 +248,7 @@ gcloud secrets create elitea-database-url --data-file database-url
 rm elitea-platform.json
 ```
 
-That is the whole inventory for the core install on this page: 27 properties in `elitea-platform`, and the platform DSN alone in `elitea-database-url`, so a password rotation touches one secret. The `elitea-runtime-ca` pair is listed by the example values as an `extra` Secret, because no pod reads it; the `elitea-runtime-ca` Issuer does. Turning on an optional component (DeepWiki, Inventory, the cloud executor) adds Secrets; render the chart with your values and read the ExternalSecrets for the exact property list:
+That is the whole inventory for the install on this page, every default on: 29 properties in `elitea-platform`, and the platform DSN alone in `elitea-database-url`, so a password rotation touches one secret. The `elitea-runtime-ca` pair is listed by the example values as an `extra` Secret, because no pod reads it; the `elitea-runtime-ca` Issuer does. Turning on an optional component (the cloud executor, say) adds Secrets, and turning a default off (`deepwiki.enabled: false`) removes its own; render the chart with your values and read the ExternalSecrets for the exact property list:
 
 ```bash
 helm template elitea oci://ghcr.io/elitea-ng/charts/elitea --version <version> \
@@ -258,7 +260,7 @@ A missing property holds back its **whole** Kubernetes Secret: ESO syncs all key
 <Step title="Write the values">
 Start from the chart's own `values-gke.yaml` and override only what is yours. The example Application, [`applications/elitea.yaml`](https://github.com/elitea-ng/elitea-platform/blob/main/deploy/argocd/examples/gke/applications/elitea.yaml), does exactly that: `valueFiles: [values-gke.yaml]` (the file ships inside the published chart) and a short `values` block with the store name, the hostnames, the Google service accounts, the bucket, the OIDC client and the gateway origins. Pin `targetRevision` to an exact chart version.
 
-Read `values-gke.yaml` once in full: it states the Cloud SQL, GCS, Ingress, NetworkPolicy and NATS settings this page relies on.
+Read `values-gke.yaml` once in full: it states the Cloud SQL, GCS, Ingress, NetworkPolicy, NATS and Qdrant settings this page relies on. It lets DeepWiki and Inventory clone from `github.com` only; restate `deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST` and `inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST` for your git hosts (the chart copies each to elitea-main). For three Qdrant nodes, add the chart's `values-qdrant-ha.yaml`.
 
 ```bash
 helm pull oci://ghcr.io/elitea-ng/charts/elitea --version <version> --untar
@@ -292,8 +294,8 @@ Everything happens inside the one `elitea` Application, in this order:
 | `PreSync` | the platform and agent-state migrations; a failed migration stops the sync |
 | `PreSync`, wave `10` | the workload-session Job (the worker's row in `elitea_runtime.workload_sessions`) |
 | wave `-10` | the NATS server, its CA, server and client certificates, and the `elitea-nats-bootstrap` Job, a `Sync` hook that creates every stream and KV bucket |
-| wave `-5` | elitea-vector and Qdrant |
-| wave `0` | elitea-main, elitea-web, the scheduler, the LLM gateway, the OTel collector, the Ingress, BackendConfig and FrontendConfig |
+| wave `-5` | elitea-vector and Qdrant (the bundled qdrant chart) with its TLS Certificate |
+| wave `0` | elitea-main, elitea-web, the scheduler, the LLM gateway, DeepWiki, Inventory, the OTel collector, the Ingress, BackendConfig and FrontendConfig |
 | wave `1` | the agent worker |
 
 The Google load balancer takes several minutes to program after the Ingress appears, and the certificate is issued once DNS points at the static IP.

@@ -11,6 +11,18 @@
 # covers the script itself as well as the charts it reads. A gate outside the
 # path that starts it is the same false green in another costume (#409, #429).
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 # The single chart contains the LLM gateway, which REFUSES to render until an
 # operator states its two postures. Every render below therefore supplies them:
@@ -238,6 +250,9 @@ app_file, chart, helm_bin = sys.argv[1], sys.argv[2], sys.argv[3]
 src = yaml.safe_load(open(app_file))["spec"]["source"]
 helm = src.get("helm") or {}
 params = {p["name"]: p.get("value", "") for p in helm.get("parameters", [])}
+# Argo CD passes a parameter with --set unless it says forceString: true, so a
+# "false" here is the boolean false, as the switches below rely on.
+forced = {p["name"] for p in helm.get("parameters", []) if p.get("forceString")}
 
 # The values an OPERATOR supplies, and only those. Both are empty in git on
 # purpose, so this stands in for the operator. `.invalid` is reserved by
@@ -262,7 +277,7 @@ argv = [helm_bin, "template", "elitea", chart]
 for vf in helm.get("valueFiles", []):
     argv += ["-f", f"{chart}/{vf}"]
 for name, value in params.items():
-    argv += ["--set-string", f"{name}={operator.get(name, value)}"]
+    argv += ["--set-string" if name in forced else "--set", f"{name}={operator.get(name, value)}"]
 
 done = subprocess.run(argv, capture_output=True, text=True)
 assert done.returncode == 0, (

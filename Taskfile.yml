@@ -203,7 +203,7 @@ tasks:
 
   # ── Helm ──────────────────────────────────────────────────────────────────────
   helm:deps:
-    desc: Build the elitea chart's dependencies (nats, elitea-sandbox-runtime) into charts/ from Chart.lock
+    desc: Build the elitea chart's dependencies (nats, qdrant, elitea-sandbox-runtime) into charts/ from Chart.lock
     # Once per `task` run: every helm:* task needs it, and a second build
     # would delete charts/ under a render already in flight.
     run: once
@@ -250,6 +250,14 @@ tasks:
       - task: helm:gateway-workload-identity
       - task: helm:indexing-runtime
       - task: helm:nats-bundled
+      - task: helm:default-on
+
+  helm:default-on:
+    desc: Check the shipped defaults (runtime, worker, vector with the bundled Qdrant, DeepWiki, Inventory on) render with only the operator's values, each feature is one switch, and missing values are refused in one message
+    deps: [helm:deps]
+    cmds:
+      # S10. Needs helm, python3 and PyYAML.
+      - bash deploy/helm/tests/render-default-on.sh
 
   helm:nats-bundled:
     desc: Check that Chart.lock matches Chart.yaml and every dependency resolves, NATS renders on and off, a mismatched natsClient is refused, and the packaged chart renders the same

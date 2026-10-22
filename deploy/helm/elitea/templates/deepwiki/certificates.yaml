@@ -61,4 +61,8 @@ spec:
     kind: {{ .Values.deepwiki.mtls.issuerRef.kind }}
     group: cert-manager.io
 {{- end }}
+{{- if include "elitea.callbackClientIssued" (dict "ctx" . "provider" "deepwiki") }}
+---
+{{ include "elitea.callbackClientCertificate" (dict "ctx" . "provider" "deepwiki") }}
+{{- end }}
 {{- end }}

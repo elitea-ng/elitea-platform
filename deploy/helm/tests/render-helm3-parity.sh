@@ -29,8 +29,11 @@ POSTURE=(--set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render
          --set-string 'llmGateway.egressPosture=public-unrestricted')
 # name | helm args (one shape per line; word-split on purpose)
 shapes=(
+  "default|-f deploy/helm/tests/fixtures/operator-values.yaml"
+  "qdrant-ha|-f deploy/helm/tests/fixtures/operator-values.yaml -f $CHART/values-qdrant-ha.yaml"
+  "qdrant-external|-f deploy/helm/tests/fixtures/operator-values.yaml --set qdrant.enabled=false --set-string vector.qdrant.external.url=https://qdrant.example.invalid:6334"
   "staging|-f $CHART/values-staging.yaml ${POSTURE[*]}"
-  "standalone|-f $CHART/values-standalone.yaml ${POSTURE[*]} --set vector.enabled=true --set-string vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key --set main.autoscaling.maxReplicas=3"
+  "standalone|-f $CHART/values-standalone.yaml ${POSTURE[*]} --set main.autoscaling.maxReplicas=3"
   "auth-minimal|-f $CHART/values-auth-minimal.yaml ${POSTURE[*]}"
   "gke|-f $CHART/values-gke.yaml"
   "nats-ha|-f $CHART/values-staging.yaml -f $CHART/values-nats-ha.yaml ${POSTURE[*]}"

@@ -26,9 +26,10 @@
 
   NOT IN IT, ON PURPOSE:
     * Secrets a cert-manager Certificate in this chart issues (the gateway,
-      DeepWiki, Inventory, elitea-vector and egress-audit mTLS pairs, every
-      NATS client identity). cert-manager owns them; a second writer would race
-      every renewal. A reference that points at one of them is skipped here.
+      DeepWiki, Inventory, elitea-vector, Qdrant and egress-audit mTLS pairs,
+      the sub-application callback client, every NATS client identity).
+      cert-manager owns them; a second writer would race every renewal. A
+      reference that points at one of them is skipped here.
     * image pull secrets (image.pullSecrets, <component>.imagePullSecrets): a
       dockerconfigjson is cluster plumbing, normally replaced on GKE by
       Artifact Registry access through the node or workload identity.
@@ -148,7 +149,7 @@
 {{- if $v.vector.enabled -}}
 {{- $q := $v.vector.qdrant -}}
 {{- include "elitea.externalSecrets.add" (dict "inv" $inv "name" $q.apiKeySecret.name "keys" (list $q.apiKeySecret.key) "consumer" "elitea-vector / Qdrant API key") -}}
-{{- if and (eq ($q.mode | toString) "external") $q.external.caSecretName -}}
+{{- if and (not (include "elitea-vector.qdrantTls" .)) $q.external.caSecretName -}}
 {{- include "elitea.externalSecrets.add" (dict "inv" $inv "name" $q.external.caSecretName "keys" (list "ca.crt") "consumer" "elitea-vector external Qdrant CA") -}}
 {{- end -}}
 {{- end -}}
@@ -280,6 +281,12 @@
 {{- if $v.vector.enabled -}}
 {{- $names = concat $names (list $v.vector.mtls.serverSecretName $v.vector.mtls.clientSecretName) -}}
 {{- if include "elitea-vector.mainClientEnabled" . -}}{{- $names = append $names $v.vector.mainClient.secretName -}}{{- end -}}
+{{- with include "elitea-vector.qdrantTlsSecret" . -}}{{- if include "elitea-vector.qdrantTls" $ -}}{{- $names = append $names . -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- range $c := list "deepwiki" "inventory" -}}
+{{- if include "elitea.callbackClientIssued" (dict "ctx" $ "provider" $c) -}}
+{{- $names = append $names (get $v $c).callbackClient.secretName -}}
+{{- end -}}
 {{- end -}}
 {{- if include "elitea-egress-proxy.auditEnabled" . -}}
 {{- $names = append $names $v.egressProxy.audit.clientSecretName -}}

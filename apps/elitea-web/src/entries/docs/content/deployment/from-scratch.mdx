@@ -303,12 +303,8 @@ openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-agent-worker" \
   -keyout agent-worker-client.key -out agent-worker-client.csr 2>/dev/null
 sign agent-worker-client "subjectAltName=URI:$WORKER_ID\n$CLIENT_EXT"
 
-# The DeepWiki and Inventory pods' client certificate for their calls on
-# 9446 (models, artifacts, Inventory's source tools): exactly ONE DNS SAN,
-# elitea-subapp-callback, which elitea-main admits by that name.
-openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-subapp-callback" \
-  -keyout subapp-callback-client.key -out subapp-callback-client.csr 2>/dev/null
-sign subapp-callback-client "subjectAltName=DNS:elitea-subapp-callback\n$CLIENT_EXT"
+# (No DeepWiki/Inventory callback client certificate: the chart issues it
+# from the elitea-runtime-ca Issuer.)
 rm -f ./*.csr ./*.srl
 
 # The Ed25519 command-signing pair; the keyring holds its public half.
@@ -330,6 +326,8 @@ openssl rand 32 > worker-output-spool-key          # exactly 32 raw bytes
 printf '%s' "$(token)" > gateway-identity-secret
 printf '%s' "$(token)" > application-secret-key
 openssl rand -hex 32 | tr -d '\n' > qdrant-api-key
+printf '%s' "$(token)" > deepwiki-identity-secret
+printf '%s' "$(token)" > inventory-identity-secret
 # Fernet key: 44 base64url characters, padding included, no newline.
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n' > secrets-master-key
 # URL-safe, because it is embedded in a postgres:// URL.
@@ -388,10 +386,11 @@ k create secret generic elitea-worker-material \
   $(f agent-checkpoint-connection)
 k create secret tls elitea-runtime-ca \
   --cert=runtime-ca.crt --key=runtime-ca.key
-# Only if you install DeepWiki or Inventory (Step 6, Optional components):
-k create secret generic elitea-deepwiki-callback-client \
-  $(f tls.crt=subapp-callback-client.crt tls.key=subapp-callback-client.key)
 k create secret generic elitea-qdrant-api $(f api-key=qdrant-api-key)
+k create secret generic elitea-deepwiki-secrets \
+  $(f identity-secret=deepwiki-identity-secret)
+k create secret generic elitea-inventory-secrets \
+  $(f identity-secret=inventory-identity-secret)
 ```
 
 The key names are part of the contract. The chart and the binaries look files up by these exact names, and nothing renames them for you.
@@ -409,10 +408,11 @@ The key names are part of the contract. The chart and the binaries look files up
 | `elitea-runtime-material` | runtime CA, Ed25519 private key, keyring, three listener keypairs | main | the keyring's `key_id` must equal `main.runtime.signingKeyId` |
 | `elitea-worker-material` | runtime CA, worker client keypair, keyring, spool key, agent-state DSN | worker, agent-state migration Job, workload-session Job | same CA and keyring as the runtime material |
 | `elitea-runtime-ca` | `tls.crt`, `tls.key` | the `elitea-runtime-ca` Issuer | the runtime CA itself |
-| `elitea-deepwiki-callback-client` | `tls.crt`, `tls.key` | the DeepWiki and Inventory engines | signed by the runtime CA, one DNS SAN `elitea-subapp-callback`; only needed with DeepWiki or Inventory |
 | `elitea-qdrant-api` | `api-key` | elitea-vector, Qdrant | generate once; a value that changes on every sync locks elitea-vector out |
+| `elitea-deepwiki-secrets` | `identity-secret` | main, DeepWiki | signs and verifies the identity headers elitea-main sends DeepWiki |
+| `elitea-inventory-secrets` | `identity-secret` | main, Inventory | the same, for Inventory; a different value from DeepWiki's |
 
-The chart creates the remaining certificate Secrets itself through cert-manager. These include the NATS client certificates, the gateway server and client certificates, and the elitea-vector certificates.
+Every name above is the chart's fixed default, so the values file names none of them. The chart creates the remaining certificate Secrets itself through cert-manager. These include the NATS client certificates, the gateway server and client certificates, the elitea-vector certificates, Qdrant's TLS certificate (`elitea-qdrant-tls`) and the DeepWiki and Inventory callback client certificates (`elitea-deepwiki-callback-client`, `elitea-inventory-callback-client`, one DNS SAN `elitea-subapp-callback`, from the `elitea-runtime-ca` Issuer).
 
 <Accordion title="Coming from an older install script?">
 Scripts written before 4.7 also mint `redis-*` passwords, a Redis server keypair, a `redis-users.acl` file and an `elitea-runtime-redis-material` Secret. Nothing reads any of them now; drop them. Scripts written before the platform listener (#1359) also mint a `platform-edge` keypair and an `elitea-platform-edge-tls` Secret, and set `worker.platformEdge`; delete all three. Scripts from the first platform-listener release also mint a `main-platform-client` keypair; elitea-main no longer reads it, so drop it. The `redis-auth-password` and `runtime-ca.crt` keys in the auth material Secret are ignored too. If your old script put the master key in a separate `elitea-secrets-master` Secret, either keep it there and point **both** `main.secrets.SECRETS_MASTER_KEY` and `llmGateway.secrets.SECRETS_MASTER_KEY` at it, or move it. Two different keys would put two incompatible formats in one table.
@@ -646,9 +646,9 @@ worker:
   # platform_origin defaults to https://elitea-main:9446, elitea-main's
   # mTLS platform listener.
 
-# The vector store the Rust indexing runtime writes to.
+# The vector store the Rust indexing runtime, DeepWiki and Inventory write
+# to (on by default). Its Qdrant API key is the Secret elitea-qdrant-api.
 vector:
-  enabled: true
   replicaCount: 2
   mtls:
     issuerRef:
@@ -656,17 +656,35 @@ vector:
       kind: Issuer
   mainClient:
     enabled: true
-  qdrant:
-    apiKeySecret:
-      name: elitea-qdrant-api
-      key: api-key
-    internal:
-      # 3 for HA, then raise collection.replicationFactor.
-      replicas: 1
-      storage:
-        size: 50Gi
-  collection:
-    replicationFactor: 1
+
+# The bundled Qdrant (the upstream qdrant chart, on by default): one node,
+# REST and gRPC over TLS from vector.mtls.issuerRef. For three nodes, add the
+# chart's values-qdrant-ha.yaml. qdrant.enabled: false is bring-your-own,
+# at vector.qdrant.external.url.
+qdrant:
+  persistence:
+    size: 50Gi
+    storageClassName: ""        # "" = the cluster's default StorageClass
+
+# DeepWiki and Inventory (on by default). Cloning is denied until you list
+# the git hosts; the chart copies each list to elitea-main and derives the
+# rest of elitea-main's side. This guide's Issuers are namespaced (Step 1).
+deepwiki:
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
+  mtls:
+    issuerRef: {name: elitea-internal-ca, kind: Issuer}
+  callbackClient:
+    certManager:
+      issuerRef: {name: elitea-runtime-ca, kind: Issuer}
+inventory:
+  env:
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
+  mtls:
+    issuerRef: {name: elitea-internal-ca, kind: Issuer}
+  callbackClient:
+    certManager:
+      issuerRef: {name: elitea-runtime-ca, kind: Issuer}
 
 otelCollector:
   enabled: true
@@ -691,19 +709,17 @@ The worker's index runs reach a default set of public SaaS hosts (GitHub, GitLab
 
 ### Optional components
 
-The values above install the core platform. The components below are off by default. Turn each one on after the base install works, one at a time, and render after each change.
+The values above install the platform with every default on: the runtime plane, the worker, elitea-vector with Qdrant, DeepWiki and Inventory. Each of those is one switch (`main.runtime.enabled`, `worker.enabled`, `vector.enabled` with `qdrant.enabled`, `deepwiki.enabled`, `inventory.enabled`); set it to `false` to leave the feature out, and the render tells you if another feature still needs it. The components below are off by default. Turn each one on after the base install works, one at a time, and render after each change.
 
 | Component | What it adds | Turn it on when |
 |---|---|---|
 | Document extractor (`worker.extractor`) | PDF and Office text extraction, as a sidecar of about 2.5Gi in the worker pod | users index or attach PDF, Word, Excel or PowerPoint files. Without it, those files are skipped as unsupported |
-| DeepWiki (`deepwiki`) | generated, searchable wikis of git repositories | you want the DeepWiki feature |
-| Inventory (`inventory`) | the code and knowledge graph behind Inventory | you want the Inventory feature |
 | Cloud executor (`sandboxKubernetes`) | agent workspaces run in gVisor-isolated pods in a separate namespace | users choose **Send to cloud** |
 | Egress proxy (`egressProxy`) | per-project host allowlists for cloud-executor workspaces | you run the cloud executor and projects restrict its network to named hosts |
 | PgBouncer (`pgbouncer`) | a transaction-mode pooler in front of elitea-main | you need more elitea-main replicas than `max_connections` allows |
 
 <Warning title="Issuers of the optional components">
-DeepWiki, Inventory and the egress proxy's audit certificate default to a cert-manager **`ClusterIssuer`**. This guide creates namespaced `Issuer`s in Step 1, so set `kind: Issuer` in each component's `issuerRef`, as the snippets below do. Otherwise the certificates never issue, and the pods wait for their Secrets forever.
+The egress proxy's audit certificate defaults to a cert-manager **`ClusterIssuer`**, as do DeepWiki's and Inventory's (the values file above already overrides those). This guide creates namespaced `Issuer`s in Step 1, so set `kind: Issuer` in each component's `issuerRef`. Otherwise the certificates never issue, and the pods wait for their Secrets forever.
 </Warning>
 
 <AccordionGroup>
@@ -715,61 +731,14 @@ worker:
 ```
 It needs the indexing runtime, which the values above already turn on. No Secret is needed.
 </Accordion>
-<Accordion title="DeepWiki and Inventory">
-Each one is a separate Deployment that elitea-main calls over mTLS. It writes its own schema (`deepwiki_build`, `inventory_graph`) into the platform database. The database owner from Step 2 already has the rights it needs. Their dense vectors go to elitea-vector, so their engines need `vector.enabled` (the chart refuses a `native` runner without it).
+<Accordion title="DeepWiki and Inventory: what the one switch derives">
+DeepWiki and Inventory are on by default, and the values file above sets everything they need: the git allowlists and the namespaced Issuers. Each one is a separate Deployment that elitea-main calls over mTLS. It writes its own schema (`deepwiki_build`, `inventory_graph`) into the platform database. The database owner from Step 2 already has the rights it needs. Their dense vectors go to elitea-vector, so `vector.enabled: false` beside either one fails the render.
 
-Each one also needs a git host allowlist, because cloning is denied by default. Set the same list on the component and on elitea-main. Then create the shared identity Secrets:
+From `deepwiki.enabled` and `inventory.enabled` the chart derives elitea-main's side: `ELITEA_DEEPWIKI_ENABLED` / `ELITEA_INVENTORY_ENABLED`, the git allowlists (copied from the provider's `env`), the client certificate paths and their mounts (`main.fileConfig.deepwikiClientMaterial` / `inventoryClientMaterial`, issued by the chart), and `ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` / `ELITEA_INVENTORY_PLATFORM_GRPC_TARGET` (`elitea-<app>-svc:9443`). A `main.env` value that agrees is kept; one that disagrees fails the render. The old `*_BASE_URL` keys are refused. A provider with more than one replica also needs its NATS client certificate (`elitea-deepwiki` / `elitea-inventory`, issued by the chart when NATS TLS is on) so a cancel reaches the replica running the job.
 
-```bash
-for c in deepwiki inventory; do
-  k create secret generic "elitea-$c-secrets" \
-    --from-literal=identity-secret="$(openssl rand -base64 32 | tr -d '\n=')"
-done
-```
+The providers call elitea-main only over gRPC on its private listener (port 9446): the engines' model calls (`elitea.llm.v1.ModelService`), artifact uploads and reads from both containers (`elitea.runtime.v1.ArtifactObjectService`), and Inventory's `investigate` source-tool calls (`elitea.runtime.v1.InternalToolService`). So DeepWiki and Inventory need the runtime plane (`main.runtime.enabled`), and their callback client certificates, which the chart issues from the `elitea-runtime-ca` Issuer. The chart mounts those and the runtime CA into both containers of each provider pod, sets `ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL` and `ELITEA_DEEPWIKI_MODEL_SERVICE_URL` (and the `ELITEA_INVENTORY_` pair) to `https://elitea-main:9446`, and adds `dns:elitea-subapp-callback` to the identities elitea-main admits for each service. No provider pod reaches elitea-main on port 8080. The old `ELITEA_DEEPWIKI_CALLBACK_BASE_URL` and `ELITEA_INVENTORY_CALLBACK_BASE_URL` keys and `deepwiki.callbackViaPlatformListener` are refused.
 
-```yaml
-deepwiki:
-  enabled: true
-  env:
-    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
-  mtls:
-    issuerRef: {name: elitea-internal-ca, kind: Issuer}
-  callbackClient:
-    secretName: elitea-deepwiki-callback-client   # from Step 4
-inventory:
-  enabled: true
-  env:
-    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
-  mtls:
-    issuerRef: {name: elitea-internal-ca, kind: Issuer}
-  callbackClient:
-    secretName: elitea-deepwiki-callback-client   # the same identity
-main:
-  env:
-    ELITEA_DEEPWIKI_ENABLED: "true"
-    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
-    ELITEA_DEEPWIKI_CLIENT_CERT_FILE: "/run/elitea-deepwiki/tls.crt"
-    ELITEA_DEEPWIKI_CLIENT_KEY_FILE: "/run/elitea-deepwiki/tls.key"
-    ELITEA_DEEPWIKI_CA_FILE: "/run/elitea-deepwiki/ca.crt"
-    ELITEA_INVENTORY_ENABLED: "true"
-    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
-    ELITEA_INVENTORY_CLIENT_CERT_FILE: "/run/elitea-inventory/tls.crt"
-    ELITEA_INVENTORY_CLIENT_KEY_FILE: "/run/elitea-inventory/tls.key"
-    ELITEA_INVENTORY_CA_FILE: "/run/elitea-inventory/ca.crt"
-  fileConfig:
-    deepwikiClientMaterial:
-      enabled: true
-      secretName: elitea-main-deepwiki-client-tls    # issued by the chart
-    inventoryClientMaterial:
-      enabled: true
-      secretName: elitea-main-inventory-client-tls   # issued by the chart
-```
-
-elitea-main reaches each provider over mTLS gRPC on its platform port; the chart derives `ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` / `ELITEA_INVENTORY_PLATFORM_GRPC_TARGET` (`elitea-<app>-svc:9443`). The old `*_BASE_URL` keys are refused. A provider with more than one replica also needs its NATS client certificate (`elitea-deepwiki` / `elitea-inventory`, issued by the chart when NATS TLS is on) so a cancel reaches the replica running the job.
-
-The providers call elitea-main only over gRPC on its private listener (port 9446): the engines' model calls (`elitea.llm.v1.ModelService`), artifact uploads and reads from both containers (`elitea.runtime.v1.ArtifactObjectService`), and Inventory's `investigate` source-tool calls (`elitea.runtime.v1.InternalToolService`). So DeepWiki and Inventory need the runtime plane (`main.runtime.enabled`, already on above) and the `elitea-deepwiki-callback-client` Secret from Step 4, and the chart refuses to render either one without them. The chart mounts that Secret and the runtime CA into both containers of each provider pod, sets `ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL` and `ELITEA_DEEPWIKI_MODEL_SERVICE_URL` (and the `ELITEA_INVENTORY_` pair) to `https://elitea-main:9446`, and adds `dns:elitea-subapp-callback` to the identities elitea-main admits for each service. No provider pod reaches elitea-main on port 8080. The old `ELITEA_DEEPWIKI_CALLBACK_BASE_URL` and `ELITEA_INVENTORY_CALLBACK_BASE_URL` keys and `deepwiki.callbackViaPlatformListener` are refused.
-
-Turn on both halves together. The chart renders `deepwiki.enabled: true` even when elitea-main's facade is off, and you then get a running service that nothing calls.
+To bring your own callback certificate instead, set `callbackClient.certManager.enabled: false` and create the Secret (`tls.crt`, `tls.key`, one DNS SAN `elitea-subapp-callback`, signed by the runtime CA).
 </Accordion>
 <Accordion title="Cloud executor and egress proxy">
 Follow [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes). It mints the sandbox material, creates the run-token key pair for the egress proxy, and gives the full values.

@@ -1,4 +1,5 @@
 {{- if .Values.main.enabled }}
+{{- include "elitea.applyFeatureSwitches" . }}{{- /* idempotent; see _feature-switches.tpl */}}
 {{- /*
   The database secret, resolved once for every component that reads it.
   An explicit `secrets.DATABASE_URL` under this component wins and is taken

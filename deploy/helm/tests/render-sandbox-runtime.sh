@@ -77,7 +77,8 @@ PY
 # As the elitea chart's `sandboxRuntime` dependency (file://../elitea-sandbox-runtime,
 # built into charts/ by deploy/helm/elitea/build-deps.sh): off by default; on, the installer goes to its own privileged
 # namespace under its own name, not the platform release's.
-el=(elitea deploy/helm/elitea -n elitea
+# The operator fixture: the values a default install cannot default (S10).
+el=(elitea deploy/helm/elitea -n elitea -f deploy/helm/tests/fixtures/operator-values.yaml
     --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
     --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 # The archive build-deps.sh made must be THIS chart as it is now: a stale one

@@ -14,13 +14,25 @@
 #              against your NATS, or be turned off
 #   refusals   nats.enabled with natsClient naming another server; the old
 #              client keys under `nats`
-#   packaged   `helm package` carries both dependencies, and a render
+#   packaged   `helm package` carries every dependency, and a render
 #              of the .tgz equals the render of the directory, so the
 #              published OCI chart needs nothing built
 #
 # Run deploy/helm/elitea/build-deps.sh first (CI does). Needs helm, node,
 # python3 + PyYAML.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # deploy/
 CHART="$DIR/helm/elitea"
@@ -45,13 +57,14 @@ key = lambda d: (d["name"], str(d["version"]), d["repository"])
 want = [key(d) for d in chart.get("dependencies", [])]
 got = [key(d) for d in lock.get("dependencies", [])]
 ok = True
-if [w[0] for w in want] != ["nats", "elitea-sandbox-runtime"]:
-    print(f"FAIL: Chart.yaml dependencies are {[w[0] for w in want]}, want nats and elitea-sandbox-runtime"); ok = False
+if [w[0] for w in want] != ["nats", "qdrant", "elitea-sandbox-runtime"]:
+    print(f"FAIL: Chart.yaml dependencies are {[w[0] for w in want]}, want nats, qdrant and elitea-sandbox-runtime"); ok = False
 if want != got:
     print(f"FAIL: Chart.lock pins {got}, Chart.yaml declares {want} (helm dependency update deploy/helm/elitea, commit Chart.lock)"); ok = False
-nats = [d for d in chart["dependencies"] if d["name"] == "nats"]
-if nats and nats[0].get("condition") != "nats.enabled":
-    print(f"FAIL: nats dependency condition is {nats[0].get('condition')!r}, want nats.enabled"); ok = False
+for dep in ("nats", "qdrant"):
+    found = [d for d in chart["dependencies"] if d["name"] == dep]
+    if found and found[0].get("condition") != f"{dep}.enabled":
+        print(f"FAIL: {dep} dependency condition is {found[0].get('condition')!r}, want {dep}.enabled"); ok = False
 unpacked = [p.name for p in (c / "charts").iterdir() if p.is_dir() or p.is_symlink()] if (c / "charts").exists() else []
 if unpacked:
     print(f"FAIL: charts/ holds unpacked or linked dependencies {unpacked}; build-deps.sh writes archives only"); ok = False
