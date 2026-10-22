@@ -224,8 +224,8 @@ describe('§4.6 check 7 — brand-pack round trip', () => {
     // rendered output no matter which pack is mounted and cannot evidence a
     // repaint. `background.folder.shadow` carries one — the dark half of a
     // light-only baseline token, where the exact rendering equivalent of "no
-    // drop shadow" is a transparent zero-offset shadow (see SYMMETRY_FILLS in
-    // scripts/gen-brand-tokens.mjs). Counting it produced a failure that named
+    // drop shadow" is a transparent zero-offset shadow (see the symmetry fills
+    // in tokens/README.md). Counting it produced a failure that named
     // a leak but described a no-op.
     const isFullyTransparent = (color: string) => /^#[0-9a-f]{6}00$/i.test(color);
 

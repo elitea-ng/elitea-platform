@@ -676,7 +676,18 @@ services:
       # app installs its no-op socket client.
       VITE_SOCKET_SERVER: ""
       VITE_SOCKET_PATH: "/socket.io"
-      VITE_PUBLIC_PROJECT_ID: "1"
+      # NOT "1", for the reason docker-compose.standalone-full.yml gives at its
+      # elitea-web service: the SPA treats the selected project as PUBLIC when
+      # it equals this value, and the working project a developer uses here is
+      # normally 1, so "1" would render the public view on every agents,
+      # pipelines and skills page and hide the private lists. This stack seeds
+      # no data at all (SKIP_MIGRATIONS=1, no seed service: the schema and rows
+      # come from outside), so it has no public project of its own to name;
+      # 99 is an id nothing creates. Pages that need the REAL public project
+      # read `public_project_id` from elitea-main's `platform_settings`
+      # (shared/lib/hooks/usePublicProjectId). Set VITE_PUBLIC_PROJECT_ID to
+      # your database's public project id to test the public view.
+      VITE_PUBLIC_PROJECT_ID: "${VITE_PUBLIC_PROJECT_ID:-99}"
     depends_on:
       - elitea-main
     healthcheck:

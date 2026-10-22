@@ -41,7 +41,9 @@
  * Deliberately NOT implemented here (recorded, not forgotten):
  *   cyclomatic complexity 12 — oxlint native `complexity` rule (.oxlintrc.json)
  *   prop-drill depth 3        — needs cross-module data flow; review + R-L3
- *   import closure ≤ 250      — route-entry analysis lands with R1 (uictl)
+ *   import closure ≤ 250      — NOT gated by any tool (check-gates-selftest lists
+ *                               it as such); route-chunk BYTES are bounded by
+ *                               scripts/check-bundle-budget.mjs
  *   bundle budgets (§3.5 last two rows) — @lhci/cli in the CI build job (§7.6)
  *
  * Parser: @babel/parser (already in the tree via the React Compiler wiring —

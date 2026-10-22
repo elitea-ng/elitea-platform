@@ -577,6 +577,21 @@ jobs:
         working-directory: libs/ts/client-core
         run: npm run check:generated
 
+      # ── Parity manifest ─────────────────────────────────────────────────
+      # What survives of `uictl parity-manifest --validate` (deleted with the
+      # apps/elitea-ui submodule): shard bookkeeping, the §8.3 item schema and
+      # the append-only rules (no id deleted, acceptance text changed only
+      # under a waiver) against the pull request's BASE branch, which the
+      # script fetches at depth 1. On a push there is no base branch and it
+      # compares against HEAD; the pull request run is the guard. The
+      # endpoint-manifest, contract-coverage and visual-coverage gates read
+      # this manifest, so its shape still matters.
+      - name: Parity manifest (schema + append-only ids and acceptance)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          PARITY_BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-parity-manifest.mjs
+
       # ── Endpoint manifest ───────────────────────────────────────────────
       # Issue #426. Both the checker and the manifest it reads are in the tree,
       # so the "pending" branch that let this gate pass with neither is gone.

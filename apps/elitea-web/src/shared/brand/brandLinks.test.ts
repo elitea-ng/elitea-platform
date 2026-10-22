@@ -113,9 +113,9 @@ describe('docsLink', () => {
   it('a pack that states no docsUrl falls through to the compiled default’s relative /docs/, not the literal', () => {
     // `FALLBACK_DOCS_URL` (tier 3 of the resolution order in this file's
     // header comment) is now reachable only if the compiled default pack
-    // itself somehow shipped without a docsUrl, which the generator no
-    // longer produces (see gen-brand-tokens.mjs PACK_META.product) — kept
-    // as a defensive last resort, not exercised by this test.
+    // itself somehow shipped without a docsUrl, which default.pack.json does
+    // not (`product.docsUrl: '/docs/'`, see tokens/README.md) — kept as a
+    // defensive last resort, not exercised by this test.
     const packWithNoDocsUrl = BrandPack.parse({
       ...DEFAULT_BRAND_PACK,
       product: { name: DEFAULT_BRAND_PACK.product.name, shortName: DEFAULT_BRAND_PACK.product.shortName },

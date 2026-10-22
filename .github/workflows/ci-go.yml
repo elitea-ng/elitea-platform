@@ -217,10 +217,9 @@ jobs:
     runs-on: ubuntu-latest
     # Issue #427. This job used to carry a hand-written matrix of two modules,
     # `services/elitea-main` and `services/elitea-scheduler`, while go.work
-    # names nine. gen/go, libs/go/authlib, libs/go/eventslib,
-    # libs/go/observability, libs/go/rpclib, libs/proto/gen/go and tools/uictl
-    # were never linted, and this workflow triggers on `libs/go/**` — so it ran
-    # on their changes and looked at none of them.
+    # named many more (twelve today). The libs/go modules, libs/proto/gen/go
+    # and the other services were never linted, and this workflow triggers on
+    # `libs/go/**` — so it ran on their changes and looked at none of them.
     #
     # A hand-written matrix cannot report what it left out. The module list is
     # read from go.work at run time instead, by the same script the vet and

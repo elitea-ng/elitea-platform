@@ -3,9 +3,8 @@ import { getConfig } from '@/shared/config';
 /**
  * Router basename (spec §7.1 contract rows C3/C6; §9.3 unit R2 task 5).
  *
- * Old-app parity (`apps/elitea-ui/src/routes.js:129-131`, main checkout —
- * the worktree's `apps/elitea-ui` submodule is deliberately unpopulated per
- * the decision record's "Operational notes for implementing agents"):
+ * Old-app parity (`apps/elitea-ui/src/routes.js:129-131` in the old EliteaUI
+ * app; the submodule that held it has been removed from this repository):
  *
  *   export const getBasename = () => (DEV ? '' : VITE_BASE_URI);
  *

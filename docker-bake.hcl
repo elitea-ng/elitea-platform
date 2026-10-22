@@ -31,10 +31,6 @@ group "scheduler" {
   targets = ["elitea-scheduler"]
 }
 
-group "ui" {
-  targets = ["elitea-web"]
-}
-
 target "elitea-main" {
   context    = "."
   dockerfile = "services/elitea-main/Containerfile"

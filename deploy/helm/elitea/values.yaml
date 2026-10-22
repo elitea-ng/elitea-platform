@@ -2343,8 +2343,10 @@ web:
     # (entities/project/model/selectors.ts, routes/-guards/publicProject.ts), so
     # "" makes every such check false: the public-project route guard never
     # matches, `include_shared` inverts, public agent listing goes dark — with
-    # no error and no failing probe. "1" is what every other reference
-    # deployment uses (deploy/docker-compose.yml's elitea-web).
+    # no error and no failing probe. "1" is the chart's rendered fallback; the
+    # compose stacks use "99" instead, because their seeded or hand-loaded
+    # working project is 1 (see the elitea-web service in
+    # deploy/docker-compose.standalone-full.yml for why).
     #
     # UNSET here rather than "1", so `platform.aiProjectId` can fill it. Stating
     # "1" in the chart's own defaults would make every deployment whose public
