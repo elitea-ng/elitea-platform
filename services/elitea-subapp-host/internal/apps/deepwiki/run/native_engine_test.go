@@ -289,6 +289,9 @@ func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
 		// The platform listener the native runner requires; never reached:
 		// the run ends at the engine's clone-host check.
 		"ELITEA_DEEPWIKI_MODEL_SERVICE_URL=http://127.0.0.1:1",
+		// elitea-vector, which the native runner also requires; never
+		// reached either (#1359).
+		"ELITEA_DEEPWIKI_VECTOR_URL=http://127.0.0.1:1",
 	)
 	client := &fakeArtifactClient{}
 	runner := nativeRunner(socket, client)
@@ -356,6 +359,9 @@ func TestTheNativeRunnerReadsAnArtifactFolderInItsWorker(t *testing.T) {
 		"ELITEA_DEEPWIKI_GIT_ALLOWLIST=git.example.com",
 		"ELITEA_DEEPWIKI_SCRATCH_PATH="+scratch,
 		"ELITEA_DEEPWIKI_MODEL_SERVICE_URL=http://"+platform.address,
+		// Required by the native runner; never reached: the run stops once
+		// the folder is read (#1359).
+		"ELITEA_DEEPWIKI_VECTOR_URL=http://127.0.0.1:1",
 	)
 	client := &fakeArtifactClient{}
 	runner := nativeRunner(socket, client)
