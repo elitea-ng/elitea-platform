@@ -212,7 +212,7 @@ fn shared_pipeline_budget_cases_match_mains_save_check() {
     assert_eq!(fixture["budget"]["scalar_bytes"], budget.scalar_bytes);
     assert_eq!(fixture["budget"]["depth"], budget.depth);
     let cases = fixture["cases"].as_array().expect("cases array");
-    assert!(!cases.is_empty());
+    assert_ne!(cases.as_slice(), [] as [serde_json::Value; 0]);
     for case in cases {
         let name = case["name"].as_str().expect("name");
         let yaml = case["yaml"].as_str().expect("yaml");

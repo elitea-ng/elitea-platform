@@ -4391,14 +4391,14 @@ async fn pipeline_regeneration_restarts_paused_and_completed_graphs() {
             .expect("new resume assembly");
         let (mut run, _, _) = resumed.start().expect("new resume start");
         while run.next_event().await.expect("new resume event").is_some() {}
-        assert!(
+        assert_eq!(
             checkpointer
                 .load(&private_thread)
                 .await
                 .expect("load final")
                 .expect("final checkpoint")
-                .pending_nodes
-                .is_empty()
+                .pending_nodes,
+            [] as [String; 0]
         );
     }
 }

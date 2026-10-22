@@ -899,7 +899,7 @@ mod tests {
                 .filter(|(name, _)| name.starts_with("GIT_CONFIG_"))
                 .collect()
         };
-        assert!(git_env(&config).is_empty());
+        assert_eq!(git_env(&config), [] as [(String, String); 0]);
         config.sandbox.git_safe_directory = Some("/workspace".into());
         assert!(git_env(&config).is_empty(), "not a container: unchanged");
         config.sandbox.container = true;
@@ -913,7 +913,7 @@ mod tests {
             .map(|(name, value)| (name.to_owned(), value.to_owned()))
         );
         config.sandbox.git_safe_directory = None;
-        assert!(git_env(&config).is_empty());
+        assert_eq!(git_env(&config), [] as [(String, String); 0]);
     }
 
     /// With the trust env on, every passed-through git config variable is

@@ -187,3 +187,48 @@ func TestNativeCargoFixtureKeepsRecordArchiveOrderAndBounds(t *testing.T) {
 	_, err = ParseNativeSandboxBundle(changed, record.Digest)
 	require.ErrorIs(t, err, ErrContentRejected)
 }
+
+// A bundle another toolchain prepared is served, so the worker can see it is
+// stale and prepare again; only a malformed release or a broken digest is
+// rejected as tampered content.
+func TestNativeCargoBundleFromAnotherToolchainIsStaleNotRejected(t *testing.T) {
+	raw, err := os.ReadFile("testdata/native-cargo-v2.json")
+	require.NoError(t, err)
+	withRust := func(t *testing.T, rust string, rehash bool) ([]byte, string) {
+		t.Helper()
+		var v map[string]any
+		require.NoError(t, json.Unmarshal(raw, &v))
+		v["payload"].(map[string]any)["profile"].(map[string]any)["rust_revision"] = rust
+		if !rehash {
+			changed, err := sandboxJSON(v)
+			require.NoError(t, err)
+			return changed, v["digest"].(string)
+		}
+		changed := nativeRehash(t, v)
+		return changed, v["digest"].(string)
+	}
+	for _, rust := range []string{"1.97.1", "1.100.0", "2.0.0"} {
+		t.Run(rust, func(t *testing.T) {
+			changed, root := withRust(t, rust, true)
+			_, err := ParseNativeSandboxBundle(changed, root)
+			require.NoError(t, err)
+			store, backend, scope, _, _ := sandboxTestStore(t)
+			ref, err := NewPlatformObjectRef(sandboxBundleBucket, scope.key+"/native-v2/"+root+"/elitea-native-bundle-v2.json")
+			require.NoError(t, err)
+			backend.objects[ref] = changed
+			opened, err := store.OpenNativeBundle(context.Background(), scope, root)
+			require.NoError(t, err)
+			require.Equal(t, changed, opened.native)
+		})
+	}
+	for _, rust := range []string{"", "1.99", "1.99.1-nightly", "01.99.1", "1..1", "latest"} {
+		t.Run("malformed "+rust, func(t *testing.T) {
+			changed, root := withRust(t, rust, true)
+			_, err := ParseNativeSandboxBundle(changed, root)
+			require.ErrorIs(t, err, ErrContentRejected)
+		})
+	}
+	changed, root := withRust(t, "1.97.1", false)
+	_, err = ParseNativeSandboxBundle(changed, root)
+	require.ErrorIs(t, err, ErrContentRejected, "the digest still covers rust_revision")
+}

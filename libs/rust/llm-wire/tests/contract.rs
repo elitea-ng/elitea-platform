@@ -67,7 +67,7 @@ fn execution_ids_follow_the_edges_shape_rule() {
 fn every_refusal_has_its_code_and_retry_hint() {
     let contract = contract();
     let cases = contract["refusals"].as_array().cloned().unwrap_or_default();
-    assert!(!cases.is_empty());
+    assert_ne!(cases, [] as [serde_json::Value; 0]);
     for case in cases {
         let name = case["name"].as_str().unwrap_or_default();
         let status = u16::try_from(case["status"].as_u64().unwrap_or(0)).unwrap_or(0);

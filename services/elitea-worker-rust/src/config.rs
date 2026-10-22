@@ -964,7 +964,7 @@ mod tests {
     fn sandbox_profiles_are_optional_and_require_bounded_unique_runtime_identity() {
         let base = config(Path::new("/runtime"));
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(base.clone()).unwrap();
-        assert!(loaded.sandbox_runtimes.is_empty());
+        assert_eq!(loaded.sandbox_runtimes, []);
         assert!(loaded.validate().is_ok());
         let profile = json!({
             "language": "python",

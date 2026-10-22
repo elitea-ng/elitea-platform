@@ -331,7 +331,7 @@ async fn vectors_join_the_search_once_they_exist() {
         .service
         .search(&request("class Model7:", "semantic"), Some(dense.as_ref()))
         .unwrap();
-    assert!(!semantic.hits.is_empty());
+    assert_ne!(semantic.hits, []);
     assert!(
         semantic
             .hits
@@ -551,7 +551,7 @@ async fn a_build_reloads_the_vector_matrix_at_once() {
     s.service.refresh(false).await.unwrap();
     let after = s.service.dense().expect("vectors exist");
     let ids = near(after.as_ref());
-    assert!(!ids.is_empty());
+    assert_ne!(ids, [] as [i64; 0]);
     assert!(ids.iter().all(|id| !gone.contains(id)), "{ids:?} {gone:?}");
 }
 

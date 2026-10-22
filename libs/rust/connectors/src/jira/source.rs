@@ -2312,7 +2312,7 @@ mod tests {
             .pictures("issue/1.md", b"!nosize.png! !denied.png! !flaky.png!")
             .await
             .expect("batch");
-        assert!(batch.pictures.is_empty());
+        assert_eq!(batch.pictures, []);
         assert_eq!(
             batch.skipped.get(TOO_LARGE),
             Some(&1),

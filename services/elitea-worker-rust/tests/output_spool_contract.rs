@@ -804,7 +804,7 @@ fn settlement_and_the_retention_sweep_delete_retired_records() {
             .unwrap(),
         3
     );
-    assert!(retired_files(&root, &binding).is_empty());
+    assert_eq!(retired_files(&root, &binding), [] as [String; 0]);
     for attempt in 1..=2 {
         spool.put(sequence(2), b"progress").unwrap();
         spool

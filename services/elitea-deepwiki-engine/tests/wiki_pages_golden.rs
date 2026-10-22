@@ -146,7 +146,7 @@ async fn the_rust_page_phase_equals_the_python_reference() {
         .map(|p| serde_json::json!({"page_id": p.page_id, "title": p.title, "content": p.content, "status": p.status.as_str()}))
         .collect();
     assert_eq!(pages["pages"], Value::Array(got_pages));
-    assert!(outcome.pages.errors.is_empty());
+    assert_eq!(outcome.pages.errors, [] as [String; 0]);
 
     // Artifacts.
     let python_result = json("result.json");
@@ -248,7 +248,7 @@ async fn page_retrieval_runs_off_the_runtime_thread() {
     let pages = generate_pages(Arc::clone(&generator), &dump.structure, &dump.repo_context)
         .await
         .unwrap();
-    assert!(!pages.pages.is_empty());
+    assert_ne!(pages.pages, []);
     let threads = generator.retrieval.search.threads.lock().unwrap().clone();
     assert!(!threads.is_empty(), "the golden pages search");
     assert!(threads.iter().all(|t| *t != runtime_thread));
@@ -265,5 +265,5 @@ async fn a_stop_starts_no_page() {
         result.map_err(|e| e.message),
         Err("Invocation cancelled".to_owned())
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(model.requests(), [] as [serde_json::Value; 0]);
 }

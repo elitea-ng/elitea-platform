@@ -1846,8 +1846,14 @@ mod tests {
         };
         let config = SandboxConfig::default();
         let shared = config.clone();
-        assert!(config.masks.discover(&request).hide_files.is_empty());
-        assert!(shared.masks.discover(&request).hide_files.is_empty());
+        assert_eq!(
+            config.masks.discover(&request).hide_files,
+            [] as [std::path::PathBuf; 0]
+        );
+        assert_eq!(
+            shared.masks.discover(&request).hide_files,
+            [] as [std::path::PathBuf; 0]
+        );
         assert_eq!(config.masks.walks(), 1, "clones share one cache");
         std::fs::write(ws.join("src/.env"), "x").expect("env");
         config.masks.invalidate();
@@ -1860,7 +1866,10 @@ mod tests {
             deny_globs: Vec::new(),
             ..request
         };
-        assert!(config.masks.discover(&other).hide_files.is_empty());
+        assert_eq!(
+            config.masks.discover(&other).hide_files,
+            [] as [std::path::PathBuf; 0]
+        );
         assert_eq!(config.masks.walks(), 3, "a different request walks");
     }
 

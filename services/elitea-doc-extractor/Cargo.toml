@@ -2,7 +2,7 @@
 name = "elitea-doc-extractor"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 description = "The document extraction sidecar of the Rust indexing worker: PDF and Office bytes to text over elitea.extract.v1 on a Unix socket (ADR-0030 I1)."
 

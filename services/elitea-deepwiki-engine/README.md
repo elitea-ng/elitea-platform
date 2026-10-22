@@ -1531,7 +1531,7 @@ no network.
 
 ## Running
 
-Build with the pinned toolchain (`rust-toolchain.toml`, 1.97.1):
+Build with the pinned toolchain (`rust-toolchain.toml`, 1.99.1):
 
 ```bash
 cd services/elitea-deepwiki-engine

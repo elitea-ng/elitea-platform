@@ -96,7 +96,7 @@ async fn before_continuation_executes_the_node_once() {
             .contains_key(STATIC_PAUSE_METADATA_KEY)
     }));
     let final_checkpoint = checkpointer.load(THREAD).await.unwrap().unwrap();
-    assert!(final_checkpoint.pending_nodes.is_empty());
+    assert_eq!(final_checkpoint.pending_nodes, [] as [String; 0]);
     assert_eq!(final_checkpoint.state["count"], json!(1));
     let session = get_session(sessions.as_ref()).await;
     for payload in [
@@ -161,7 +161,7 @@ nodes:
     let resume = continuation(&definition, checkpointer.as_ref(), sessions.as_ref()).await;
     let finished = run(&definition, checkpointer.clone(), sessions, Some(resume)).await;
     let final_checkpoint = checkpointer.load(THREAD).await.unwrap().unwrap();
-    assert!(final_checkpoint.pending_nodes.is_empty());
+    assert_eq!(final_checkpoint.pending_nodes, [] as [String; 0]);
     assert_eq!(final_checkpoint.state["scratch"], json!(""));
     assert_eq!(final_checkpoint.state[trace_key], trace);
     let text = finished
@@ -228,7 +228,7 @@ async fn after_continuation_does_not_repeat_completed_effects() {
         "after"
     );
     let checkpoint = checkpointer.load(THREAD).await.unwrap().unwrap();
-    assert!(checkpoint.pending_nodes.is_empty());
+    assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
     assert_eq!(checkpoint.state["count"], json!(1));
     let resume = continuation(&definition, checkpointer.as_ref(), sessions.as_ref()).await;
     let _finished = run(&definition, checkpointer.clone(), sessions, Some(resume)).await;
@@ -267,7 +267,7 @@ async fn mixed_before_after_rearms_each_loop_visit_and_advances_effect_step() {
         .await;
         let checkpoint = checkpointer.load(THREAD).await.unwrap().unwrap();
         if index == 6 {
-            assert!(checkpoint.pending_nodes.is_empty());
+            assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
             break;
         }
         let interrupt = events
@@ -746,15 +746,15 @@ async fn nested_before_and_after_resume_the_exact_leaf_without_repeating_effects
         .unwrap()
         .unwrap();
     assert_eq!(leaf.state["count"], json!(1));
-    assert!(leaf.pending_nodes.is_empty());
-    assert!(
+    assert_eq!(leaf.pending_nodes, [] as [String; 0]);
+    assert_eq!(
         checkpointer
             .load(THREAD)
             .await
             .unwrap()
             .unwrap()
-            .pending_nodes
-            .is_empty()
+            .pending_nodes,
+        [] as [String; 0]
     );
 }
 

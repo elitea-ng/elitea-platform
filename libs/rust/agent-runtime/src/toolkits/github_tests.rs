@@ -362,7 +362,7 @@ fn github_app_probe_accepts_pkcs8_and_creates_a_short_lived_rs256_jwt() {
     assert_eq!(payload["iss"], "123456");
     assert_eq!(payload["iat"], 1_700_000_000_u64);
     assert_eq!(payload["exp"], 1_700_000_600_u64);
-    assert!(!parts[2].is_empty());
+    assert_ne!(parts[2], "");
 }
 
 #[test]

@@ -27,7 +27,7 @@ fn every_constant_pattern_compiles() {
         &*PYLON_PARAM_NAMED,
         &*API_PREFIX,
     ] {
-        assert!(!re.as_str().is_empty());
+        assert_ne!(re.as_str(), "");
     }
 }
 

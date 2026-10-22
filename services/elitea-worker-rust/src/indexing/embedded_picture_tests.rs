@@ -1272,5 +1272,8 @@ async fn a_documents_pictures_are_hashed_together_and_in_order() {
     assert_eq!(all[1], digest(b).await);
     assert_eq!(all[0], all[2]);
     assert_ne!(all[0], all[1]);
-    assert!(digests(Vec::new()).await.is_empty());
+    assert_eq!(
+        digests(Vec::new()).await,
+        [] as [std::option::Option<[u8; 32]>; 0]
+    );
 }

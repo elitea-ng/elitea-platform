@@ -82,7 +82,7 @@ async fn the_build_space_answers_phase_2() {
         // Lexical: matches only, best (most negative) first, score_norm the
         // logistic of the rank, ties by node id.
         let hits = store.search_lexical("note", None, 30).unwrap();
-        assert!(!hits.is_empty());
+        assert_ne!(hits, []);
         for pair in hits.windows(2) {
             let (a, b) = (pair[0].fts_rank.unwrap(), pair[1].fts_rank.unwrap());
             assert!(a < b || (a == b && pair[0].node_id < pair[1].node_id));
@@ -96,17 +96,17 @@ async fn the_build_space_answers_phase_2() {
         assert_eq!(ids(&limited), ids(&hits)[..2]);
         // The prefix is a directory: only rows under `notes/`.
         let scoped = store.search_lexical("note", Some("notes"), 30).unwrap();
-        assert!(!scoped.is_empty());
+        assert_ne!(scoped, []);
         assert!(scoped.iter().all(|h| h.rel_path.starts_with("notes/")));
         // A symbol name with punctuation is folded, not parsed.
-        assert!(
-            !store
+        assert_ne!(
+            store
                 .search_lexical("NoteStore.save_note", None, 5)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            []
         );
-        assert!(store.search_lexical("  ", None, 5).unwrap().is_empty());
-        assert!(store.search_lexical("::", None, 5).unwrap().is_empty());
+        assert_eq!(store.search_lexical("  ", None, 5).unwrap(), []);
+        assert_eq!(store.search_lexical("::", None, 5).unwrap(), []);
 
         // Phrase counts.
         assert!(store.count_phrase_matches("save note").unwrap() >= 1);

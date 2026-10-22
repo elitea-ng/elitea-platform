@@ -228,7 +228,7 @@ async fn a_failing_call_is_retried_then_counted() {
         panic!("a failed chunk is not a failed file");
     };
     assert_eq!(extraction.failed_chunks, 1);
-    assert!(extraction.entities.is_empty());
+    assert_eq!(extraction.entities, []);
 }
 
 #[tokio::test]

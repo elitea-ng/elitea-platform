@@ -94,7 +94,8 @@ async fn the_ledger_is_written_once_and_guarded() {
         return;
     };
     // fresh_database applied everything; a second run applies nothing.
-    assert!(migrate::apply_all(&pool).await.expect("rerun").is_empty());
+    let rerun = migrate::apply_all(&pool).await.expect("rerun");
+    assert_eq!(rerun, [] as [String; 0]);
     let rows: Vec<(String, String, String)> =
         sqlx::query_as("SELECT version, name, checksum FROM schema_migrations ORDER BY version")
             .fetch_all(&pool)

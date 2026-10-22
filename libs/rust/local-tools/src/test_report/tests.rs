@@ -51,7 +51,7 @@ fn cargo_json() {
         root,
     );
     assert!(build.parsed);
-    assert!(build.failures.is_empty());
+    assert_eq!(build.failures, []);
     assert_eq!((build.passed, build.failed), (0, 0));
     assert_eq!(build.errors.len(), 1, "{:?}", build.errors);
     let error = &build.errors[0];

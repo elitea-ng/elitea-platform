@@ -446,7 +446,7 @@ async fn the_read_surface_has_the_legacy_shapes() {
         .search_hybrid("run", None, &Scope::default(), &Hybrid::default())
         .await
         .expect("search");
-    assert!(!rows.is_empty());
+    assert_ne!(rows, []);
     let legacy = rows[0].to_legacy();
     assert_eq!(legacy["is_hub"], json!(0));
     assert!(legacy.contains_key("combined_score") && legacy.contains_key("fts_rank"));
@@ -464,7 +464,7 @@ async fn the_read_surface_has_the_legacy_shapes() {
         .await
         .expect("search");
     assert!(scoped.iter().all(|r| r.node.rel_path.starts_with("tests/")));
-    assert!(!scoped.is_empty());
+    assert_ne!(scoped, []);
     let none = db
         .search_hybrid(
             "run",
@@ -477,7 +477,7 @@ async fn the_read_surface_has_the_legacy_shapes() {
         )
         .await
         .expect("search");
-    assert!(none.is_empty());
+    assert_eq!(none, []);
 }
 
 /// The `wikis` row: `registry_from_result`'s fields, kept by a republish

@@ -40,6 +40,10 @@ const T0: i64 = 1_767_225_600_000;
 /// A bag of three topics: cooking, travel, code. Deterministic and offline.
 struct TopicEmbedder;
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl MemoryEmbedder for TopicEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         if text.contains("fail-embedding") {
@@ -743,7 +747,7 @@ async fn every_call_carries_the_claim_token_only() {
     tools.get_memory(&gm("k")).await.expect("g");
     tools.delete_memory("k").await.expect("d");
     let bearers = fake.bearers();
-    assert!(!bearers.is_empty());
+    assert_ne!(bearers, [] as [String; 0]);
     assert!(
         bearers
             .iter()

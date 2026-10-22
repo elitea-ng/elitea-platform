@@ -382,7 +382,7 @@ pub(crate) fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut out = [0_u8; 32];
-    for (slot, pair) in out.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+    for (slot, pair) in out.iter_mut().zip(value.as_bytes().as_chunks::<2>().0) {
         *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
     Some(out)

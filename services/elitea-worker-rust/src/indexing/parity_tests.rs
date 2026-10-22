@@ -281,7 +281,7 @@ async fn a_whitelist_typo_leaves_a_populated_index_intact_and_fails_the_run() {
     assert_eq!(typo.status, IndexIngestStatusV1::Error as i32, "{typo:?}");
     assert!(typo.message.contains("left untouched"), "{}", typo.message);
     assert!(typo.message.contains("filters"), "{}", typo.message);
-    assert!(typo.removed_document_keys.is_empty());
+    assert_eq!(typo.removed_document_keys, [] as [String; 0]);
     assert_eq!(harness.fake.point_count(), points_before);
     assert_eq!(stored(&harness).await.len(), 2);
 
@@ -571,8 +571,11 @@ fn per_page_loader_settings_are_named_when_ignored() {
             ".pdf.extract_images",
         ]
     );
-    assert!(ignored_loader_keys(&Value::Null).is_empty());
-    assert!(ignored_loader_keys(&json!({".md": {"max_tokens": 5}})).is_empty());
+    assert_eq!(ignored_loader_keys(&Value::Null), [] as [String; 0]);
+    assert_eq!(
+        ignored_loader_keys(&json!({".md": {"max_tokens": 5}})),
+        [] as [String; 0]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1201,7 +1204,7 @@ async fn stored_documents_outside_the_filter_are_counted_and_named_not_deleted()
         second.message
     );
     assert_eq!(second.total_documents, Some(2), "{second:?}");
-    assert!(second.removed_document_keys.is_empty());
+    assert_eq!(second.removed_document_keys, [] as [String; 0]);
     assert!(harness.fake.point_count() > points_before);
 }
 

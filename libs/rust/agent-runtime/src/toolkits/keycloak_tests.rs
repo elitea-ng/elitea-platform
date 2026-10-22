@@ -358,7 +358,7 @@ async fn strict_parameter_and_path_admission_fails_before_the_api() {
     ] {
         assert!(tool.execute(context(), arguments).await.is_err());
     }
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
     assert_eq!(
         test_parse_params(Some(&Value::Null)).expect("null params"),
         Map::new()

@@ -130,7 +130,7 @@ fn unpolled_future_creates_no_false_stage_or_interruption() {
             pending::<Result<(), SupervisorError>>(),
         ));
     });
-    assert!(output.is_empty());
+    assert_eq!(output, "");
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn absent_context_emits_nothing_and_keeps_execution_behavior() {
         result,
         Poll::Ready(Err(SupervisorError::Ledger(LedgerError::Fenced)))
     ));
-    assert!(output.is_empty());
+    assert_eq!(output, "");
 }
 
 #[test]

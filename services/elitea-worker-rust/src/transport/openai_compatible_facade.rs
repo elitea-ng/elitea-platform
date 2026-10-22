@@ -581,7 +581,7 @@ impl Llm for EliteaOpenAiCompatibleModel {
     ) -> Result<LlmResponseStream, AdkError> {
         let turn = self
             .calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.invocation.max_model_turns).then_some(current + 1)
             })
             .map(|current| current + 1)

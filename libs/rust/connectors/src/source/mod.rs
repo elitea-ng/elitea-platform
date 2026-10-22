@@ -1002,7 +1002,7 @@ mod tests {
             http.send(get("https://evil.example/next")).await.err(),
             Some(Failure::Refused)
         );
-        assert!(transport.seen().is_empty());
+        assert_eq!(transport.seen(), [] as [String; 0]);
         // A network failure is not a refusal, whatever the allowlist says.
         assert_eq!(
             transport_failure(TransportError::connect()),

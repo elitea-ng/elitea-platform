@@ -103,7 +103,7 @@ fn missing_and_empty_repositories_preserve_dynamic_mode_without_leaking_secret()
     for repositories in [None, Some("")] {
         let parsed = GitLabOrgToolkitConfig::parse(&settings(repositories, &[]))
             .expect("empty dynamic repository mode parses without I/O");
-        assert!(parsed.selected_tools().is_empty());
+        assert_eq!(parsed.selected_tools(), []);
     }
 
     let mut invalid = settings(Some("group/project"), &[]);
@@ -500,7 +500,7 @@ async fn dynamic_repository_mode_requires_and_encodes_an_explicit_trimmed_projec
             .code(),
         GitLabOrgClientErrorCode::Authorization
     );
-    assert!(allowlist_transport.requests().is_empty());
+    assert_eq!(allowlist_transport.requests(), []);
 
     for repository in [
         None,
@@ -517,7 +517,7 @@ async fn dynamic_repository_mode_requires_and_encodes_an_explicit_trimmed_projec
                 .await
                 .is_err()
         );
-        assert!(dynamic_transport.requests().is_empty());
+        assert_eq!(dynamic_transport.requests(), []);
     }
 }
 

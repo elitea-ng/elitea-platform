@@ -222,7 +222,7 @@ async fn drill<S: Send + 'static>(
     assert_eq!(second.status, IndexIngestStatusV1::Ok as i32, "{second:?}");
     assert_eq!(second.indexed_documents, 0, "{toolkit_type}: {second:?}");
     assert_eq!(second.total_documents, Some(expected_keys.len() as u64));
-    assert!(second.removed_document_keys.is_empty());
+    assert_eq!(second.removed_document_keys, [] as [String; 0]);
     assert_eq!(
         store_calls_since(&harness, calls_before),
         vec!["list_documents"],

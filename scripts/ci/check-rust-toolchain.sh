@@ -40,10 +40,12 @@
 #       shape this repository keeps mistaking for a pass.
 #   (e) The toolchain release written into code and data equals the pin. A
 #       native Cargo bundle records the compiler release that built it
-#       (`rust_revision`), and three validators refuse any other value: the
-#       worker (cargo_dependency_bundle.rs), Main (sandbox_native_bundle.go)
-#       and the release audit (rust_compiled_release_manifest.py, which also
-#       reads `release: X.Y.Z` from the image's own `rustc -Vv`). The code
+#       (`rust_revision`). The worker (cargo_dependency_bundle.rs) treats any
+#       other well-formed value as a stale bundle (a lookup miss that prepares
+#       again), and the release audit (rust_compiled_release_manifest.py, which
+#       also reads `release: X.Y.Z` from the image's own `rustc -Vv`) refuses
+#       it. Main (sandbox_native_bundle.go) only stores and serves bundles, so
+#       it checks the release's shape and carries no literal. The code
 #       runner reads its release from rustc at build time (build.rs), so it
 #       carries no literal. Every such literal in the tracked tree, in any
 #       quoting and on either side of a comparison, must equal the pin; each

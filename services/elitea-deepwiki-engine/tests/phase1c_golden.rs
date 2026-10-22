@@ -108,7 +108,7 @@ fn without_phase1c_no_contract_or_markdown_structure_is_added() {
     let parses = builder::parse_repository(&discovery);
     let (graph, _, report) =
         builder::build_index_graph(root, &discovery, parses, &Phase1cFlags::none());
-    assert!(report.timings.is_empty());
+    assert_eq!(report.timings, [] as [(&str, std::time::Duration); 0]);
     assert!(
         graph
             .nodes()

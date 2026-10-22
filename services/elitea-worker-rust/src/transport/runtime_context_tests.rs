@@ -682,7 +682,7 @@ async fn an_over_cap_artifact_read_returns_the_measurement_without_content() {
         .expect("claim-bound artifact read");
 
     assert!(outcome.over_limit);
-    assert!(outcome.content.is_empty());
+    assert_eq!(outcome.content, "");
     assert_eq!(outcome.max_chars, 200_000);
     assert_eq!(outcome.char_length, 300_000);
 }

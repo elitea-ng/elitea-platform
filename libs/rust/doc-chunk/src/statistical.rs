@@ -436,7 +436,7 @@ mod tests {
             .map(|i| vec![1.0, f32::from(i % 4) * 0.7, f32::from(i % 7) * 0.3])
             .collect();
         let chunks = chunks_of(&text, &vectors, &StatisticalSettings::default()).unwrap();
-        assert!(!chunks.is_empty());
+        assert_ne!(chunks, [] as [Chunk; 0]);
         let joined = chunks.iter().map(|c| c.text.as_str()).collect::<String>();
         assert_eq!(joined, text.concat());
     }
@@ -446,10 +446,9 @@ mod tests {
         let text = splits(&[10]);
         let one = chunks_of(&text, &[unit(0, 2)], &StatisticalSettings::default()).unwrap();
         assert_eq!(one.len(), 1);
-        assert!(
-            chunks_of(&[], &[], &StatisticalSettings::default())
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            chunks_of(&[], &[], &StatisticalSettings::default()).unwrap(),
+            [] as [Chunk; 0]
         );
     }
 

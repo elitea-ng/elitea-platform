@@ -200,7 +200,7 @@ fn a_deeply_nested_file_parses_where_python_hits_its_recursion_limit() {
     let results = parse_tree(&dir, &["Deep.cs"]);
     let deep = &results[&dir.join("Deep.cs").to_string_lossy().into_owned()];
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(deep.errors.is_empty());
+    assert_eq!(deep.errors, [] as [String; 0]);
     let names: Vec<&str> = deep.symbols.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["Concat", "Make"]);
 }

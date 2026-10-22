@@ -186,6 +186,24 @@ func nativeDenoFiles(raw []byte) ([]sandboxBundleFile, error) {
 	}
 	return files, nil
 }
+
+// Main stores and serves content-addressed bundles; it never compiles them, so
+// it checks the recorded compiler release's shape, not its value. The digest
+// still covers it. A bundle another toolchain prepared is stale, not tampered:
+// the worker's lookup treats it as a miss and prepares again, and Main and the
+// worker need not move in lockstep when the pin changes.
+func nativeRustRevision(v string) bool {
+	parts := strings.Split(v, ".")
+	if len(v) > 32 || len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || len(p) > 1 && p[0] == '0' || strings.Trim(p, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
+}
 func nativeCargoFiles(r nativeRecord) ([]sandboxBundleFile, error) {
 	type profile struct {
 		Preparation string `json:"preparation_image"`
@@ -216,7 +234,7 @@ func nativeCargoFiles(r nativeRecord) ([]sandboxBundleFile, error) {
 	if r.Platform.Arch == "arm64" {
 		target = "aarch64-unknown-linux-gnu"
 	}
-	if p.Revision != 1 || p.Preparation != r.Preparation || p.Declaration != r.Source || p.Profile.Execution != r.Image || p.Profile.Policy != r.Policy || p.Profile.OS != r.Platform.OS || p.Profile.Arch != r.Platform.Arch || p.Profile.Target != target || p.Profile.Rust != "1.97.1" || !strings.HasPrefix(p.Profile.Preparation, "sha256:") || !sandboxDigest(strings.TrimPrefix(p.Profile.Preparation, "sha256:")) || len(p.Objects) != 2 {
+	if p.Revision != 1 || p.Preparation != r.Preparation || p.Declaration != r.Source || p.Profile.Execution != r.Image || p.Profile.Policy != r.Policy || p.Profile.OS != r.Platform.OS || p.Profile.Arch != r.Platform.Arch || p.Profile.Target != target || !nativeRustRevision(p.Profile.Rust) || !strings.HasPrefix(p.Profile.Preparation, "sha256:") || !sandboxDigest(strings.TrimPrefix(p.Profile.Preparation, "sha256:")) || len(p.Objects) != 2 {
 		return nil, ErrContentRejected
 	}
 	files := make([]sandboxBundleFile, 2)

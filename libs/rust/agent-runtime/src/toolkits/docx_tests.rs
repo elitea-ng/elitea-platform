@@ -255,7 +255,10 @@ async fn an_empty_document_is_valid() {
     let rig = Rig::new().await;
     rig.text("create_document", json!({"file_name": "empty.docx"}))
         .await;
-    assert!(rig.facts("empty.docx").paragraphs().is_empty());
+    assert_eq!(
+        rig.facts("empty.docx").paragraphs(),
+        [] as [&elitea_office_core::DocParagraph; 0]
+    );
     let md = rig
         .text("read_document", json!({"file_name": "empty.docx"}))
         .await;

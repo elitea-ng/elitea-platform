@@ -1093,8 +1093,8 @@ async fn ask_batch(
             refuse(e.message)
         }
     })?;
-    let reply = mapping_reply(&response).map_err(&refuse)?;
-    admin::mappings_from_reply(&reply).map_err(&refuse)
+    let reply = mapping_reply(&response).map_err(refuse)?;
+    admin::mappings_from_reply(&reply).map_err(refuse)
 }
 
 /// A smart-normalisation batch's reply: the forced tool call's arguments,

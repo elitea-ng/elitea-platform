@@ -67,7 +67,7 @@ async fn a_multi_chunk_object_round_trips_byte_identical() {
         .await
         .expect("get");
     assert_eq!(reader.info.media_type, "application/x-test");
-    assert!(!reader.info.etag.is_empty());
+    assert_ne!(reader.info.etag, "");
     assert_eq!(reader.read_to_end(u64::MAX).await.expect("read"), original);
 
     let reader = client
@@ -178,7 +178,7 @@ async fn a_listing_streams_its_pages_and_resumes_at_a_cursor() {
             .collect::<Vec<_>>(),
         ["e"]
     );
-    assert!(last.next_cursor.is_empty());
+    assert_eq!(last.next_cursor, "");
 
     let missing = client
         .list_objects(

@@ -291,7 +291,7 @@ async fn the_four_tools_work_end_to_end_with_the_deployments_model() {
 
     // Every embedding used the deployment's memory model, nothing else.
     let models = harness.gateway.models.lock().expect("models").clone();
-    assert!(!models.is_empty());
+    assert_ne!(models, [] as [String; 0]);
     assert!(
         models.iter().all(|model| model == MEMORY_MODEL),
         "{models:?}"

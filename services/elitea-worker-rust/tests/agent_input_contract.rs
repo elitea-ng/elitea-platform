@@ -15,7 +15,9 @@ fn decode_hex(value: &str) -> Vec<u8> {
     assert_eq!(value.len() % 2, 0, "fixture must contain full bytes");
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let digits = std::str::from_utf8(pair).expect("ASCII hex fixture");
             u8::from_str_radix(digits, 16).expect("valid hex fixture")
@@ -123,7 +125,10 @@ fn python_generated_application_fixture_maps_all_current_fields() {
     assert_eq!(payload.exception_handling_enabled, Some(true));
     assert_eq!(payload.debug_mode, Some(false));
     assert!(payload.parallel_reconcile.is_none());
-    assert!(payload.parallel_terminal_errors.is_empty());
+    assert_eq!(
+        payload.parallel_terminal_errors,
+        [] as [serde_json::Value; 0]
+    );
     assert_eq!(payload.internal_tools, ["lazy_tools_mode"]);
     assert_eq!(payload.chat_history.len(), 1);
     assert_eq!(payload.tools.len(), 1);

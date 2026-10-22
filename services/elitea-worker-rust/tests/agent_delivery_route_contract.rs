@@ -38,7 +38,9 @@ fn vectors() -> BTreeMap<&'static str, &'static str> {
 fn bytes(name: &str) -> Vec<u8> {
     vectors()[name]
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
                 .expect("fixture hex")
@@ -437,7 +439,7 @@ async fn authentication_failure_never_reaches_claim_or_retirement() {
             .await,
         Err(AgentDeliveryError::Protocol(_))
     ));
-    assert!(events(&state).is_empty());
+    assert_eq!(events(&state), [] as [&str; 0]);
     assert_eq!(
         *state
             .retirement_requests

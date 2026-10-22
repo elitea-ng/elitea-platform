@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn in_of_numbers_is_an_or_of_matches() {
         let filter = translated(&json!({"year": {"$in": [2024, 2025]}}));
-        assert!(filter.must.is_empty());
+        assert_eq!(filter.must, []);
         assert_eq!(filter.should.len(), 2);
         assert_eq!(
             filter.should[1].r#match,
@@ -1007,7 +1007,7 @@ mod tests {
     #[test]
     fn or_of_equalities_is_should() {
         let filter = translated(&json!({"$or": [{"a": "1"}, {"b": "2"}]}));
-        assert!(filter.must.is_empty());
+        assert_eq!(filter.must, []);
         assert_eq!(
             filter.should,
             vec![kw("metadata.a", "1"), kw("metadata.b", "2")]
@@ -1029,7 +1029,7 @@ mod tests {
         // not (a == 1 or b == 2): both false, both present
         let either = translated(&json!({"$not": {"$or": [{"a": "1"}, {"b": "2"}]}}));
         assert_eq!(either.must_not.len(), 4);
-        assert!(either.should.is_empty());
+        assert_eq!(either.should, []);
         // a list of filters negates each and ANDs them
         let listed = translated(&json!({"$not": [{"a": "1"}, {"b": "2"}]}));
         assert_eq!(listed, either);
@@ -1039,7 +1039,7 @@ mod tests {
         // not (a != 1) -> a == 1 (a missing key is false under both)
         let flipped = translated(&json!({"$not": {"a": {"$ne": "1"}}}));
         assert_eq!(flipped.must, vec![kw("metadata.a", "1")]);
-        assert!(flipped.must_not.is_empty());
+        assert_eq!(flipped.must_not, []);
     }
 
     #[test]
@@ -1119,7 +1119,7 @@ mod tests {
                     reason,
                 } => {
                     assert_eq!(named, operator);
-                    assert!(!reason.is_empty());
+                    assert_ne!(reason, "");
                 }
                 other => panic!("{operator}: {other}"),
             }

@@ -171,7 +171,7 @@ mod tests {
             .expect_err("incomplete serve command is rejected");
 
         assert!(matches!(error, CliError::InvalidArguments));
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
     }
 
     #[tokio::test]
@@ -193,6 +193,6 @@ mod tests {
 
         assert_eq!(error.code(), "worker_serve.invalid_configuration");
         assert!(!error.retryable());
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
     }
 }

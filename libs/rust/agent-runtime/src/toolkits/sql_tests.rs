@@ -146,7 +146,7 @@ fn catalog_and_nested_configuration_preserve_source_contract() {
         let parsed = SqlToolkitConfig::parse(&settings(None, selected))
             .expect("missing dialect defaults to PostgreSQL and empty means all");
         assert_eq!(parsed.dialect(), SqlDialect::Postgres);
-        assert!(parsed.selected_tools().is_empty());
+        assert_eq!(parsed.selected_tools(), []);
     }
 
     let parsed = SqlToolkitConfig::parse(&settings(

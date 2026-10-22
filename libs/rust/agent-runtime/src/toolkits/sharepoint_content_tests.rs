@@ -866,7 +866,7 @@ async fn upload_file_validates_its_sources_with_the_sdk_sentences() {
             "{arguments}"
         );
     }
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 }
 
 #[tokio::test]
@@ -907,7 +907,7 @@ async fn upload_file_reads_an_artifact_and_names_each_way_the_read_can_fail() {
     )
     .await;
     assert!(sentence.contains("lends no artifact store"), "{sentence}");
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 
     // Each failure of the artifact read is its own sentence.
     let mut seen = Vec::new();
@@ -1189,7 +1189,7 @@ async fn an_upload_over_50_mib_or_64_kib_of_text_is_refused_before_it_is_buffere
     )
     .await;
     assert_eq!(error.category, ErrorCategory::InvalidInput);
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 }
 
 // ------------------------------------------------------------- read_document
@@ -1371,7 +1371,7 @@ async fn read_document_refuses_a_library_root_and_executables_before_any_request
             "{path}"
         );
     }
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 }
 
 #[tokio::test]
@@ -1417,7 +1417,7 @@ async fn read_document_without_a_document_reader_downloads_nothing() {
     )
     .await;
     assert!(sentence.contains("lends no document reader"), "{sentence}");
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 }
 
 #[tokio::test]
@@ -1870,7 +1870,7 @@ async fn a_sharing_link_must_be_https_and_its_download_url_must_stay_on_sharepoi
         .await;
         assert!(sentence.contains(INVALID), "{url}: {sentence}");
     }
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 
     let graph = FakeGraph::new();
     graph.on(
@@ -2098,7 +2098,7 @@ async fn onenote_changes_reject_bad_arguments_before_any_request() {
     )
     .await;
     assert_eq!(error.category, ErrorCategory::InvalidInput);
-    assert!(graph.requests().is_empty());
+    assert_eq!(graph.requests(), [] as [(http::Method, String); 0]);
 }
 
 #[tokio::test]

@@ -602,7 +602,7 @@ async fn a_clean_run_starts_the_index_empty_and_a_dimension_change_writes_nothin
         "{}",
         mismatch.message
     );
-    assert!(mismatch.embedding_model.is_empty());
+    assert_eq!(mismatch.embedding_model, "");
     assert_eq!(
         mismatch.total_documents, None,
         "nothing was written, so the summary says nothing about the store"
@@ -703,7 +703,7 @@ async fn a_non_retryable_gateway_refusal_fails_the_run_at_once() {
         );
         assert_eq!(harness.fake.point_count(), 0);
         assert_eq!(summary.total_documents, None, "the store was not touched");
-        assert!(summary.embedding_model.is_empty());
+        assert_eq!(summary.embedding_model, "");
     }
 }
 
@@ -920,7 +920,7 @@ async fn a_clean_run_that_fails_mid_way_reports_the_store_it_left() {
     assert_eq!(failed.total_chunks, Some(failed.indexed_chunks));
     assert_eq!(failed.documents.len(), 1);
     assert_eq!(failed.documents[0].version, "v2");
-    assert!(failed.removed_document_keys.is_empty());
+    assert_eq!(failed.removed_document_keys, [] as [String; 0]);
     assert!(
         failed.whole_index_record,
         "the namespace was emptied and one document written: the record is the store"
@@ -975,7 +975,7 @@ async fn an_incremental_run_that_fails_mid_way_reports_dropped_and_retained_docu
         "{failed:?}"
     );
     assert_eq!(failed.indexed_documents, 0);
-    assert!(failed.documents.is_empty());
+    assert_eq!(failed.documents, []);
     assert_eq!(
         failed.removed_document_keys.len(),
         1,
@@ -1036,7 +1036,7 @@ async fn a_run_that_only_removes_documents_reports_zero_totals_present() {
     assert_eq!(emptied.total_documents, Some(0));
     assert_eq!(emptied.total_chunks, Some(0));
     assert!(emptied.whole_index_record);
-    assert!(emptied.embedding_model.is_empty());
+    assert_eq!(emptied.embedding_model, "");
     assert_eq!(harness.fake.point_count(), 0);
 }
 
@@ -1100,7 +1100,7 @@ async fn a_stop_after_the_first_write_reports_the_store_and_ends_cancelled() {
     assert_eq!(stopped.total_documents, Some(1));
     assert_eq!(stopped.total_chunks, Some(stopped.indexed_chunks));
     assert_eq!(stopped.documents.len(), 1);
-    assert!(stopped.removed_document_keys.is_empty());
+    assert_eq!(stopped.removed_document_keys, [] as [String; 0]);
     assert!(
         stopped.whole_index_record,
         "the one document written is the whole store"
@@ -1283,8 +1283,8 @@ async fn a_clean_run_whose_namespace_delete_fails_says_nothing_about_the_store()
     assert_eq!(failed.total_documents, None);
     assert_eq!(failed.total_chunks, None);
     assert!(!failed.whole_index_record);
-    assert!(failed.documents.is_empty());
-    assert!(failed.removed_document_keys.is_empty());
+    assert_eq!(failed.documents, []);
+    assert_eq!(failed.removed_document_keys, [] as [String; 0]);
     assert_eq!(failed.indexed_documents, 0);
     assert_eq!(stored(&harness).await.len(), 3, "nothing was written");
 }
@@ -1461,7 +1461,7 @@ fn the_document_record_is_capped_at_the_protocol_bound() {
     let removed: Vec<String> = (0..6000).map(|n| format!("k{n}")).collect();
     let (documents, removed_keys, truncated) = record_for_test(Vec::new(), removed);
     assert!(truncated);
-    assert!(documents.is_empty());
+    assert_eq!(documents, []);
     assert_eq!(removed_keys.len(), 4096);
     assert_eq!(removed_keys[4095], "k4095");
     // Written documents cost more than a bare key, so the byte budget cuts
@@ -1492,7 +1492,7 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
     assert_eq!(summary.status, IndexIngestStatusV1::Error as i32);
     assert!(summary.message.starts_with("Index 'docs' failed: "));
     assert!(summary.message.len() <= 8 * 1024);
-    assert!(summary.embedding_model.is_empty());
+    assert_eq!(summary.embedding_model, "");
     assert_eq!(summary.indexed_documents, 0);
     assert_eq!(summary.total_documents, None);
     assert!(!summary.whole_index_record);

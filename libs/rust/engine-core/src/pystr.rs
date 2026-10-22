@@ -536,7 +536,7 @@ mod tests {
             ["a", "b", "c", "d", "e", "f"]
         );
         assert_eq!(splitlines("\n\nx"), ["", "", "x"]);
-        assert!(splitlines("").is_empty());
+        assert_eq!(splitlines(""), [] as [&str; 0]);
         assert_eq!(splitlines("\u{1f}x"), ["\u{1f}x"]);
     }
 

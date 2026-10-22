@@ -577,7 +577,7 @@ async fn mime_lines_and_multibyte_admission_are_bounded_at_exact_public_limits()
         .await
         .expect_err("over-limit Unicode message fails before connection");
     assert_eq!(error.code(), YagmailClientErrorCode::ResourceExhausted);
-    assert!(rejected.connects().is_empty());
+    assert_eq!(rejected.connects(), [] as [(String, u16); 0]);
 }
 
 #[tokio::test]
@@ -657,7 +657,7 @@ async fn failures_are_phase_aware_and_never_retry_the_effect() {
     assert_eq!(error.code(), YagmailClientErrorCode::Timeout);
     assert!(error.retryable());
     assert_eq!(connector.connects().len(), 1);
-    assert!(connector.writes().is_empty());
+    assert_eq!(connector.writes(), [] as [Vec<u8>; 0]);
 
     let mut responses = plain_success_responses(1);
     let final_response = responses.pop().expect("final accepted response");
@@ -815,7 +815,7 @@ async fn invalid_arguments_fail_before_api_or_network() {
     ] {
         assert!(tool.execute(context(), invalid).await.is_err());
     }
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 }
 
 #[test]

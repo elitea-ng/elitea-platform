@@ -256,7 +256,7 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
     )
     .await
     .expect("delete the stale build");
-    assert!(stale.wikis.is_empty());
+    assert_eq!(stale.wikis, [] as [String; 0]);
     assert_eq!((stale.builds, stale.live_builds), (1, 0));
     for table in TABLES {
         let left: i64 = sqlx::query_scalar(&format!(
@@ -287,7 +287,7 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
     )
     .await
     .expect("again");
-    assert!(again.wikis.is_empty());
+    assert_eq!(again.wikis, [] as [String; 0]);
 }
 
 fn arguments(project: i32, extra: &Value) -> serde_json::Map<String, Value> {
@@ -545,11 +545,11 @@ async fn a_project_deletion_loops_until_empty_or_fails_naming_the_remainder() {
         .await
         .expect("finishes");
     assert_eq!(done.wikis.len(), 3);
-    assert!(
+    assert_eq!(
         delete::project_wikis(&pool, common::project(4))
             .await
-            .expect("left")
-            .is_empty()
+            .expect("left"),
+        [] as [String; 0]
     );
     // The cap landing exactly on the last wiki is a success, not an error.
     publish(&space, &common::key_in(4, "w-x"), "alpha", 1).await;
@@ -748,15 +748,21 @@ async fn the_orphan_sweep_skips_projects_with_activity_after_the_list() {
     .expect("delete");
     assert_eq!(done.deleted.len(), 1);
     assert_eq!(done.deleted[0].0.project_id, 2);
-    assert!(done.failed.is_empty());
+    assert_eq!(
+        done.failed,
+        [] as [(
+            elitea_deepwiki_engine::storage::delete::IndexedProject,
+            String
+        ); 0]
+    );
     assert_eq!(done.skipped.len(), 2);
     assert_eq!(rows(&pool, 2, "w-old").await, vec![0; TABLES.len()]);
     assert!(populated(&rows(&pool, 3, "w-new").await));
-    assert!(
-        !delete::project_wikis(&pool, common::project(4))
+    assert_ne!(
+        delete::project_wikis(&pool, common::project(4))
             .await
-            .expect("wikis")
-            .is_empty()
+            .expect("wikis"),
+        [] as [String; 0]
     );
 }
 
@@ -1105,7 +1111,7 @@ async fn a_wiki_republished_with_another_model_between_steps_is_refused() {
     assert_eq!(chosen, "model-a");
     // Not republished yet: the search is served.
     let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model(chosen.clone());
-    assert!(!search(db).await.expect("same model").is_empty());
+    assert_ne!(search(db).await.expect("same model"), []);
 
     // The wiki is republished with another model BETWEEN the steps.
     publish_with("model-b").await;
@@ -1121,12 +1127,12 @@ async fn a_wiki_republished_with_another_model_between_steps_is_refused() {
     // A caller that chose the current model is served; one that did not
     // record a model (the plain reader) is unaffected.
     let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model("model-b");
-    assert!(!search(db).await.expect("current model").is_empty());
+    assert_ne!(search(db).await.expect("current model"), []);
     let unchecked = UnifiedDb::new(pool.clone(), key.clone());
-    assert!(!search(unchecked).await.expect("unchecked").is_empty());
+    assert_ne!(search(unchecked).await.expect("unchecked"), []);
 
     // A wiki that records no model has nothing to refuse.
     publish(&space, &key, "alpha", 3).await;
     let db = UnifiedDb::new(pool.clone(), key).expecting_embedding_model("anything");
-    assert!(!search(db).await.expect("no model recorded").is_empty());
+    assert_ne!(search(db).await.expect("no model recorded"), []);
 }

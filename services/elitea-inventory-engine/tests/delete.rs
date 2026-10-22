@@ -289,7 +289,7 @@ async fn a_project_delete_covers_every_toolkit_of_the_project_and_no_other() {
     // Repeated once the run ended, it finishes the job.
     let done = delete::delete_project(&pool, 5).await.expect("delete");
     assert_eq!(done.deleted, vec![2]);
-    assert!(done.busy.is_empty());
+    assert_eq!(done.busy, [] as [i64; 0]);
     assert_eq!(
         done.removed,
         Removed {

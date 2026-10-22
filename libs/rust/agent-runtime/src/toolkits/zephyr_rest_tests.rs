@@ -210,10 +210,9 @@ fn tokens_are_header_safe_and_selections_deduplicate() {
         vec![Box::<str>::from("a"), Box::<str>::from("b")]
     );
     let settings = json!({"selected_tools":null});
-    assert!(
-        selected_tools(settings.as_object().expect("object"))
-            .expect("null selection")
-            .is_empty()
+    assert_eq!(
+        selected_tools(settings.as_object().expect("object")).expect("null selection"),
+        [] as [Box<str>; 0]
     );
 }
 

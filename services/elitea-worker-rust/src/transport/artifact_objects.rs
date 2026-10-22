@@ -134,13 +134,13 @@ mod tests {
         let first = objects.list_page("docs", "", "").await.expect("page");
         assert_eq!(first.objects.len(), 1);
         assert_eq!(first.next_cursor, "a.md");
-        assert!(!first.objects[0].etag.is_empty());
+        assert_ne!(first.objects[0].etag, "");
         let second = objects
             .list_page("docs", "", &first.next_cursor)
             .await
             .expect("page");
         assert_eq!(second.objects[0].key, "b.md");
-        assert!(second.next_cursor.is_empty());
+        assert_eq!(second.next_cursor, "");
         let fetched = objects.fetch("docs", "b.md", 1024).await.expect("fetched");
         assert_eq!(fetched.bytes, b"beta");
         assert_eq!(fetched.etag, second.objects[0].etag);

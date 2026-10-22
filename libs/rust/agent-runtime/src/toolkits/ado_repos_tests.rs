@@ -657,7 +657,7 @@ fn a_file_diff_is_bounded_by_bytes_and_by_lines() {
         MAX_DIFF_FILE_BYTES, MAX_DIFF_FILE_LINES, bounded_file_diff,
     };
     let at_cap = "x\n".repeat(MAX_DIFF_FILE_LINES);
-    assert!(bounded_file_diff("edit", &at_cap, &at_cap, "/f").is_empty());
+    assert_eq!(bounded_file_diff("edit", &at_cap, &at_cap, "/f"), "");
     let over = "x\n".repeat(MAX_DIFF_FILE_LINES + 1);
     assert_eq!(
         bounded_file_diff("edit", "a\n", &over, "/f"),

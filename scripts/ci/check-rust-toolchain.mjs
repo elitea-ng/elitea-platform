@@ -20,10 +20,11 @@ import { isAlias, isMap, isScalar, isSeq } from "yaml";
 import { loadYamlNodes } from "./ci-compat.mjs";
 
 // The image index digest of rust:<pin>-trixie (all platforms). Moves with the pin.
-export const RUST_IMAGE_DIGEST = "sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f";
-// The minimum supported Rust version of our own crates: the documented floor,
-// deliberately below the pin (see the PR #1297 body). Must be <= the pin.
-export const MSRV = "1.95";
+export const RUST_IMAGE_DIGEST = "sha256:767c71592f7d1f3f242292000f8efd4e67b6732363da176772f4d220332e264f";
+// The minimum supported Rust version of our own crates: the documented floor
+// (see the PR #1297 body; raised to 1.99 with the 1.99.1 pin in PR #1376).
+// Must be <= the pin.
+export const MSRV = "1.99";
 
 const MIN_TOOLCHAIN_FILES = 9;
 const MIN_CRATES = 30;
@@ -56,9 +57,7 @@ const EXEMPT_CRATES = {
 const VERSION = String.raw`['"]?(\d+\.\d+\.\d+)['"]?`;
 const CHECKER_LINES = {
   "services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs":
-    new RegExp(String.raw`\|\|\s*self\.profile\.rust_revision\s*!=\s*` + VERSION),
-  "services/elitea-main/internal/infra/storage/sandbox_native_bundle.go":
-    new RegExp(String.raw`p\.Profile\.Rust\s*!=\s*` + VERSION),
+    new RegExp(String.raw`^\s*rust_revision\s*==\s*` + VERSION + String.raw`\s*$`),
   "scripts/runtime/rust_compiled_release_manifest.py":
     new RegExp(String.raw`^RUST_RELEASE\s*=\s*` + VERSION + String.raw`\s*\n?$`),
 };

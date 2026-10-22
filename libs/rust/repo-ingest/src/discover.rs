@@ -334,7 +334,7 @@ mod tests {
         let root_str = root.to_str().unwrap();
         let found = discover_files(root_str);
         assert_eq!(found.files("go"), [format!("{root_str}/src/main.go")]);
-        assert!(found.files("javascript").is_empty());
+        assert_eq!(found.files("javascript"), [] as [String; 0]);
         assert_eq!(
             found.files("documentation"),
             [format!("{root_str}/README.md")]

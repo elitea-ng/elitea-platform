@@ -1915,12 +1915,7 @@ async fn generations_publish_atomically_and_clean_up_lazily() {
         ))
         .await
         .expect("cleanup");
-    assert!(
-        h.search(TOKEN_A, read("g1"), None)
-            .await
-            .expect("g1")
-            .is_empty()
-    );
+    assert_eq!(h.search(TOKEN_A, read("g1"), None).await.expect("g1"), []);
     assert_eq!(
         h.search(TOKEN_A, read("g2"), None).await.expect("g2").len(),
         1
@@ -2405,7 +2400,7 @@ async fn an_existing_collection_without_indexes_gets_them_on_write_and_on_read()
         .await
         .expect("search a bare collection")
         .into_inner();
-    assert!(response.points.is_empty());
+    assert_eq!(response.points, []);
     let fields = indexed_fields(&qdrant, &read).await;
     for field in REQUIRED_FIELDS {
         assert!(fields.contains(field), "{field} is indexed after a read");
@@ -3157,7 +3152,7 @@ async fn user_b_cannot_read_count_list_or_delete_user_as_personal_memories_even_
         .await
         .expect("hybrid")
         .into_inner();
-    assert!(hybrid.points.is_empty());
+    assert_eq!(hybrid.points, []);
     // A crafted filter on the document key or a catch-all `should` only
     // narrows within Bob's own (empty) scope.
     let crafted = pb::Filter {
@@ -3167,11 +3162,11 @@ async fn user_b_cannot_read_count_list_or_delete_user_as_personal_memories_even_
         }],
         ..pb::Filter::default()
     };
-    assert!(
+    assert_eq!(
         h.memory_read(TOKEN_BOB, PERSONAL, NAMESPACE_M, Some(crafted))
             .await
-            .expect("read")
-            .is_empty()
+            .expect("read"),
+        []
     );
 
     // Every delete selector of Bob's removes nothing of Alice's.
@@ -3280,11 +3275,11 @@ async fn project_memory_is_shared_inside_a_project_and_never_across_projects() {
     );
     // Another project, even for the same user id: nothing, in either scope.
     for scope in [PERSONAL, PROJECT] {
-        assert!(
+        assert_eq!(
             h.memory_search(TOKEN_ALICE_IN_B, scope, NAMESPACE_M)
                 .await
-                .expect("search")
-                .is_empty()
+                .expect("search"),
+            []
         );
     }
     assert_eq!(
@@ -3993,11 +3988,11 @@ async fn the_memory_tools_temporal_filters_work_on_the_real_store() {
             .expect("boundary")),
         ["vb"]
     );
-    assert!(
+    assert_eq!(
         h.memory_read(TOKEN_ALICE, PROJECT, NAMESPACE_M, as_of(100.0))
             .await
-            .expect("before")
-            .is_empty()
+            .expect("before"),
+        []
     );
     // The same filters on a search.
     let hits = h
@@ -4027,7 +4022,7 @@ async fn the_memory_tools_temporal_filters_work_on_the_real_store() {
         ))
         .await
         .expect("close");
-    assert!(
+    assert_eq!(
         h.memory_read(
             TOKEN_ALICE,
             PROJECT,
@@ -4035,8 +4030,8 @@ async fn the_memory_tools_temporal_filters_work_on_the_real_store() {
             filter(vec![key("k"), is_null])
         )
         .await
-        .expect("none open")
-        .is_empty()
+        .expect("none open"),
+        []
     );
     let hits = h
         .memory_search(TOKEN_ALICE, PROJECT, NAMESPACE_M)

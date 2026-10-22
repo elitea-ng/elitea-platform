@@ -2401,7 +2401,7 @@ mod shared_result_tests {
     fn marks_large_results_without_returning_partial_json() {
         let summary = call_summary(Ok(json!("x".repeat(48 * 1024)))).expect("summary");
         assert!(summary.truncated);
-        assert!(summary.result_json.is_empty());
+        assert_eq!(summary.result_json, "");
         assert_eq!(summary.status, ToolkitCallToolStatusV1::Ok as i32);
     }
 }
@@ -2450,7 +2450,10 @@ mod discovery_authorization_tests {
             result["authorization_required"]["resource_metadata"]["authorization_servers"][0],
             "https://example.invalid"
         );
-        assert!(result["tools"].as_array().unwrap().is_empty());
+        assert_eq!(
+            result["tools"].as_array().unwrap().as_slice(),
+            [] as [serde_json::Value; 0]
+        );
         assert!(result["args_schemas"].as_object().unwrap().is_empty());
         let invalid = ToolkitAuthorizationRequiredV1 {
             resource_metadata_json: b"invalid".to_vec(),

@@ -583,7 +583,10 @@ mod tests {
             ".docx": {"use_llm": false}
         }));
         assert_eq!(config.unserved_use_llm_extensions(), vec![".pdf"]);
-        assert!(from(Value::Null).unserved_use_llm_extensions().is_empty());
+        assert_eq!(
+            from(Value::Null).unserved_use_llm_extensions(),
+            [] as [String; 0]
+        );
     }
 
     #[test]

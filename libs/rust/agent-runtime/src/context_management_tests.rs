@@ -8,7 +8,6 @@ use adk_core::{
     Part, UsageMetadata,
 };
 use async_trait::async_trait;
-use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
 
 use super::*;

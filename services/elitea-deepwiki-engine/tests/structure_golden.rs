@@ -60,6 +60,10 @@ impl ScriptedModel {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl ChatModel for ScriptedModel {
     async fn complete(&self, request: &ChatRequest) -> Result<String, EngineError> {
         let index = {

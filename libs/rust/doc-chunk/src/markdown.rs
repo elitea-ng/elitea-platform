@@ -308,7 +308,7 @@ mod tests {
         assert!(pieces[0].content.contains("# a comment"));
         // `#hashtag` (no space) is not a header either.
         let pieces = split_headers("#hashtag here\nbody", &settings(&headers));
-        assert!(pieces[0].path.is_empty());
+        assert_eq!(pieces[0].path, [] as [(String, String); 0]);
     }
 
     #[test]
@@ -352,6 +352,6 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].metadata["headers"], "");
         assert_eq!(chunks[0].metadata["method_name"], "text");
-        assert!(text("", 512, 10).unwrap_or_default().is_empty());
+        assert_eq!(text("", 512, 10).unwrap_or_default(), [] as [Chunk; 0]);
     }
 }

@@ -56,7 +56,7 @@ class FakeReadback:
         record_raw = release.encoded(record)
         objects = [{"role":role, "name":release.sha(value)+".blob", "bytes":len(value), "sha256":release.sha(value)} for role, value in (("record", record_raw), ("archive", archive))]
         preparation = release.sha(b"unit-only preparation")
-        self.bundle = {"revision":2, "kind":"cargo", "language":"rust", "platform":{"os":"linux", "arch":"arm64", "abi":"gnu"}, "preparation_sha256":preparation, "source_sha256":record["declaration_sha256"], "execution_image_digest":digest, "execution_policy_revision":POLICY, "payload":{"revision":1, "preparation_sha256":preparation, "declaration_sha256":record["declaration_sha256"], "profile":{"preparation_image":IMAGE, "execution_image":digest, "rust_revision":"1.97.1", "target":release.TARGETS["arm64"], "os":"linux", "arch":"arm64", "policy_revision":POLICY}, "objects":objects}}
+        self.bundle = {"revision":2, "kind":"cargo", "language":"rust", "platform":{"os":"linux", "arch":"arm64", "abi":"gnu"}, "preparation_sha256":preparation, "source_sha256":record["declaration_sha256"], "execution_image_digest":digest, "execution_policy_revision":POLICY, "payload":{"revision":1, "preparation_sha256":preparation, "declaration_sha256":record["declaration_sha256"], "profile":{"preparation_image":IMAGE, "execution_image":digest, "rust_revision":"1.99.1", "target":release.TARGETS["arm64"], "os":"linux", "arch":"arm64", "policy_revision":POLICY}, "objects":objects}}
         self.root = release.sha(release.encoded(self.bundle, True))
         self.bundle["digest"] = self.root
         metadata = release.encoded(self.bundle, True)
@@ -92,7 +92,7 @@ class FakeReadback:
         if argv[0] == "tar":
             return self.tree
         if argv[0] == "env":
-            return b"rustc 1.97.1\nrelease: 1.97.1\n" if argv[-2].endswith("rustc") else b"cargo 1.97.1\nrelease: 1.97.1\n"
+            return b"rustc 1.99.1\nrelease: 1.99.1\n" if argv[-2].endswith("rustc") else b"cargo 1.99.1\nrelease: 1.99.1\n"
         raise AssertionError(argv)
 
 
