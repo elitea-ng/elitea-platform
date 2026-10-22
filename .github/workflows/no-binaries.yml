@@ -185,7 +185,9 @@ jobs:
         run: python -m pip install --disable-pip-version-check pytest==8.4.2
       # pytest exits 5 when it collects nothing, so an empty run is red rather
       # than green. The glob floor covers the narrower case where one file of
-      # the set is renamed and the rest still collect.
+      # the set is renamed and the rest still collect. scripts/database/test_*.py
+      # are deliberately not here: they test one-off migration procedures
+      # pinned to the manifest through 0123 and fail on any later tree.
       - name: Run the evidence checker unit tests
         run: |
           set -euo pipefail

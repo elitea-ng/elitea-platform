@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -178,6 +179,22 @@ func TestCutoverVerify_FixtureLoad_MalformedJSON(t *testing.T) {
 	_, err := loadCutoverStateFromFile(tmpPath)
 	if err == nil {
 		t.Fatal("expected error for malformed JSON fixture, got nil")
+	}
+}
+
+// TestCutoverVerify_FixtureLoad_UnknownField asserts that a state recorded
+// with a field the gate no longer reads (the removed litellm_subprocess_present
+// invariant) is refused rather than silently passing.
+func TestCutoverVerify_FixtureLoad_UnknownField(t *testing.T) {
+	tmpPath := filepath.Join(t.TempDir(), "old.json")
+	body := `{"litellm_subprocess_present":true,"legacy_svc_traffic_rps":0,"hard_block_402_confirmed":true}`
+	if err := os.WriteFile(tmpPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err := loadCutoverStateFromFile(tmpPath)
+	if err == nil || !strings.Contains(err.Error(), "litellm_subprocess_present") {
+		t.Fatalf("expected an unknown-field error naming litellm_subprocess_present, got %v", err)
 	}
 }
 

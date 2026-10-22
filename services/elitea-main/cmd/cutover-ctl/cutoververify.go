@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -98,8 +99,12 @@ func loadCutoverStateFromFile(path string) (cutoverState, error) {
 	if err != nil {
 		return cutoverState{}, fmt.Errorf("cutover-verify: cannot read fixture %q: %w", path, err)
 	}
+	// Unknown fields are refused: a state recorded for an invariant the gate
+	// no longer checks must fail loudly, not pass with the field ignored.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 	var state cutoverState
-	if err := json.Unmarshal(data, &state); err != nil {
+	if err := dec.Decode(&state); err != nil {
 		return cutoverState{}, fmt.Errorf("cutover-verify: malformed fixture JSON %q: %w", path, err)
 	}
 	return state, nil

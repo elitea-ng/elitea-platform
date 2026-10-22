@@ -112,7 +112,7 @@ Each skip needs a service this local run did not provide. None of them covers CE
   - They include the opt-in JetStream reliability and visibility-repair gates.
 - **Storage emulators:** 15 elitea-main skips need `S3_ENDPOINT_URL` or the Azure/GCS emulators. This includes the
   `s3`, `azure` and `gcs` subtests of `TestArtifactConformance`.
-- **Deployed stack:** 8 elitea-main contract tests need `CONTRACT_AUTH_TOKEN`.
+- **Deployed stack:** 8 elitea-main contract tests needed `CONTRACT_AUTH_TOKEN` (removed with the Pylon parity tooling in #1386).
 - **Opt-in gates:** 6 elitea-main skips need an explicit flag. The flags are `ELITEA_RUNTIME_SYSTEM_TEST`,
   `ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST`, `ELITEA_INDEX_BINDING_CROSS_PROCESS_TEST`,
   `ELITEA_INDEX_SDK_SERIALIZATION_GATE`, `ELITEA_COMPILED_SNAPSHOT_PG_REQUIRED` and `ELITEA_TEST_LLM_BASE_URL`.
