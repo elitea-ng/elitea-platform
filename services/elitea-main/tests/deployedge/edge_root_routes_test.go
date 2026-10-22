@@ -22,13 +22,12 @@
 // link of the form https://<host>/?utm_source=x therefore skipped the redirect
 // and reached the SPA container at path "/", which its nginx does not serve.
 //
-// THE COMPOSE EDGE IS GO NOW (#1359 P2). Both defects above lived in Traefik's
-// dynamic files, which are deleted. elitea-main is the compose browser edge
-// (internal/api/webedge), so these gates send the paths through the real
-// router with the web relay on and observe which process answers. The
-// Gateway API edge, which still has a rule list, is read by
-// edge_gateway_api_test.go with the shared classification at the end of this
-// file.
+// THE EDGE IS GO NOW (#1359 P2 for compose, P3 for the chart). Both defects
+// above lived in Traefik's dynamic files, which are deleted. elitea-main is the
+// browser edge (internal/api/webedge), so these gates send the paths through
+// the real router with the web relay on and observe which process answers. The
+// cluster's HTTPRoute is one `/` rule to elitea-main, so this classification
+// covers it too; edge_gateway_api_test.go holds the manifest to that shape.
 package deployedge_test
 
 import (
@@ -46,10 +45,10 @@ import (
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
-// The cluster runs a SECOND browser edge, a Gateway API HTTPRoute, and for a
-// whole release this file could not see it (#568). edge_gateway_api_test.go
-// reads it and holds it to the classification below, through the two helpers
-// at the end of this file.
+// The cluster once ran a SECOND browser edge with its own rule list, and for a
+// whole release this file could not see it (#568). That list is gone: the
+// HTTPRoute forwards `/` to elitea-main, and edge_gateway_api_test.go holds it
+// to that one rule.
 
 // rootMountedGoPaths are sample request paths that the Go router serves from
 // the root, outside the /api/ prefix. Each names the router.go site that
@@ -167,20 +166,16 @@ func TestRootRedirectKeepsTheQueryString(t *testing.T) {
 // that is neither forwarded nor listed here, so a new root-mounted family
 // cannot reach production without a decision.
 //
-// This map holds what is true of EVERY edge. An edge that alone cannot carry a
-// route declares that beside itself — see notAtTheGatewayAPIEdge in
-// edge_gateway_api_test.go — so the reason stays next to the edge it belongs
-// to and never widens to the edges that do carry the route.
+// There is one edge now (internal/api/webedge), so this map is the whole list.
 var notAtTheBrowserEdge = map[string]string{
 	"/readyz":   "the readiness body names each dependency's state; the Helm probe and the compose healthcheck reach the pod directly",
 	"/startupz": "the startup probe, for the same reason as /readyz",
 }
 
-// edgeForwards answers whether one edge sends requestPath to elitea-main. Each
-// edge language gets its own implementation: a traefik rule list reads one way
-// and a Gateway API match list reads another, and the classification below must
-// not care which. The two gates then share ONE definition of "classified", so a
-// change to that definition reaches every edge.
+// edgeForwards answers whether the edge sends requestPath to elitea-main. It
+// once had one implementation per edge language (a Traefik rule list, a Gateway
+// API match list); the Go edge is the only one left, observed live by
+// composeEdgeForwards.
 type edgeForwards func(t *testing.T, requestPath string) bool
 
 // browserFacingRouterConfig builds the router with the browser-facing families

@@ -141,8 +141,10 @@ ELITEA_PROMPT_CONTEXT_READS_ENABLED
 # --- when the rejection guard itself goes.
 ELITEA_LITELLM_ALLOW_PROJECT_OWN_LLMS
 
-# --- Compose-only browser edge (#1359 P2, internal/api/webedge). Set, it makes
-# --- elitea-main relay /app and /docs to the web container and redirect `/`,
-# --- the job the deleted compose Traefik did. The chart must NOT set it: in a
-# --- cluster the Gateway API HTTPRoute does that routing and TLS offload.
+# --- The browser edge (#1359 P2/P3, internal/api/webedge). Set, it makes
+# --- elitea-main relay /app and /docs to the web container and redirect `/`.
+# --- The chart DERIVES it from web.enabled (elitea-main.webUpstream in
+# --- templates/main/_helpers.tpl, rendered in templates/main/deployment.yaml)
+# --- rather than taking it from the values `env` map, because it must name the
+# --- web Service the same release renders.
 ELITEA_WEB_UPSTREAM

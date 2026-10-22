@@ -4,6 +4,54 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## One edge route: elitea-main serves `/` and relays `/app` and `/docs` to elitea-web — BREAKING
+
+**Affects:** Kubernetes installs that publish the platform through
+`main.ingress.enabled`, and any cluster that applied
+`deploy/gateway-api/httproute.yaml` or a copy of it (#1359 P3).
+
+**What changed.**
+
+* **elitea-main is the browser edge in a cluster too.** The chart sets
+  `ELITEA_WEB_UPSTREAM` to the elitea-web Service (`http://elitea-web:80`)
+  whenever `web.enabled` is true. elitea-main then redirects `/` to `/app/`,
+  relays `/app…` and `/docs…` to elitea-web, and keeps the paths it serves
+  itself under `/app` — the MCP server at `/app/<project id>/mcp[/…]` and
+  the two icon file servers — exactly as it does in compose.
+* **The edge is ONE `/` rule to elitea-main**, on the chart's HTTPRoute, its
+  Ingress, and `deploy/gateway-api/httproute.yaml`. The second HTTPRoute
+  (`elitea-web`, `/app`, `/docs` and the `/` redirect) and the per-path rule
+  list are gone. MCP clients now work on every Gateway: the carve-out once
+  needed a RegularExpression path match, which the manifest never carried.
+  The chart's HTTPRoute now renders `PathPrefix` for `main.ingress.pathType:
+  Prefix` (it rendered `Prefix`, which Gateway API does not accept).
+* **The plain-Ingress identity guard is gone**, with
+  `main.ingress.identityHeadersStrippedByController`. elitea-main reads no
+  `X-Auth-*` header and deletes every client identity header itself, so a
+  plain Ingress with Form sign-in renders. The HTTPRoute keeps its
+  `stripIdentityHeaders` filter as defence in depth.
+* **Probes.** With the edge on, elitea-main refuses `/readyz` and `/startupz`
+  to a non-loopback caller, so the startup and readiness probes run
+  `/elitea-main -healthcheck <path>` inside the container. `-healthcheck`
+  takes an optional path (`/readyz`, the default, `/startupz` or `/healthz`).
+  The chart refuses any other `main.probes.{startup,readiness}.path` while
+  the edge is on. Liveness stays an httpGet on `/healthz`.
+* **NetworkPolicy.** elitea-web gets `elitea-web-netpol`: its port admits
+  elitea-main, `networkPolicies.web.extraIngressFrom` and
+  `networkPolicies.probeFrom` only.
+
+**What to do.**
+
+* A cluster that applied `deploy/gateway-api/httproute.yaml`: re-apply it, and
+  delete the old `elitea-web` HTTPRoute (`kubectl delete httproute elitea-web`).
+  Keep `elitea-main`'s HTTPRoute pointing at port 8080.
+* An Ingress or route of your own that sent `/app` or `/docs` to elitea-web:
+  send them to elitea-main instead, or simply route `/` to elitea-main.
+* Remove `main.ingress.identityHeadersStrippedByController` from your values
+  (it is ignored).
+* Anything else that reached elitea-web directly (a debug pod, a scraper):
+  list it in `networkPolicies.web.extraIngressFrom`.
+
 ## One chart: NATS bundled — BREAKING for Kubernetes installs
 
 **Affects:** every Kubernetes install that ran the `nats` and
@@ -111,6 +159,8 @@ cert-manager keeps an issued Secret when its Certificate is deleted (unless
 it runs with `--enable-certificate-owner-ref`), so the new Certificates find
 the same CA and server Secrets; where one is gone it is issued again, and
 every client re-reads its certificate on the next handshake.
+
+||||||| parent of d5a46fa59 (feat(helm)!: one edge route — elitea-main serves / and relays /app and /docs to web)
 
 ## pgvector is removed: every vector is in Qdrant behind elitea-vector — BREAKING
 
@@ -589,7 +639,8 @@ never sets the new variable.
   redirect URIs, because the published ports are the same.
 * A custom compose file that used `deploy/traefik/dynamic*.yml` must set
   `ELITEA_WEB_UPSTREAM` on elitea-main and publish its `:8080` instead.
-* Do not set `ELITEA_WEB_UPSTREAM` in a cluster.
+* Do not set `ELITEA_WEB_UPSTREAM` in a cluster. (Superseded by "One edge
+  route" above: the chart now sets it itself.)
 
 ## Runtime content listener (:9445) and supervisor owner calls are gRPC
 
@@ -927,7 +978,8 @@ probes, list the probe sources in `networkPolicies.probeFrom`. The Argo CD
 sample has a new parameter for the gateway namespace
 (`networkPolicies.main.ingressFrom[0]...`) next to the other values to fill in.
 
-**Related, unchanged checks.** A plain `networking.k8s.io/v1` Ingress with Form
+**Related, unchanged checks.** (Superseded by "One edge route" above: the
+guard below is removed.) A plain `networking.k8s.io/v1` Ingress with Form
 sign-in is still refused unless the controller removes the inbound `X-Auth-*`
 and `X-Elitea-*` identity headers and
 `main.ingress.identityHeadersStrippedByController=true` says so. (Superseded

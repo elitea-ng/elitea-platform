@@ -49,7 +49,8 @@ podman compose -f deploy/docker-compose.yml up --build
 
 elitea-main is the browser edge of the local compose stack, on host port `8080`:
 it serves the API itself, relays `/app` and `/docs` to the SPA container and
-redirects `/` to `/app/` (`ELITEA_WEB_UPSTREAM`; compose only, no Traefik).
+redirects `/` to `/app/` (`ELITEA_WEB_UPSTREAM`; no Traefik). The Helm chart
+uses the same edge: its Ingress or HTTPRoute is one `/` route to elitea-main.
 
 Services will be available at:
 

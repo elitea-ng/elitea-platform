@@ -4,10 +4,10 @@
  * `/app/<numeric project id>/<rest>` is this app's project-switch deep link
  * (`src/routes/$projectId.$.tsx` — the `$projectId` param with a `$` splat).
  * It is also, since issue 252, the shape of the MCP SERVER endpoint that
- * `services/elitea-main` serves. Both browser edges carve it out of this
- * app's `/app` prefix and send it to elitea-main: the compose edge in
- * elitea-main itself (`internal/api/webedge`, `^/app/[0-9]+/mcp(/.*)?$`) and
- * the cluster's Gateway API HTTPRoute (`deploy/gateway-api/httproute.yaml`).
+ * `services/elitea-main` serves. The browser edge — elitea-main itself, in
+ * compose and in the chart alike (`internal/api/webedge`,
+ * `^/app/[0-9]+/mcp(/.*)?$`) — carves it out of this app's `/app` prefix and
+ * keeps it; the cluster's Ingress or HTTPRoute is one `/` rule to elitea-main.
  *
  * So the first URL segment `mcp` — exactly `mcp`, followed by `/` or nothing —
  * is RESERVED. Today nothing collides: the routes here are `mcps/...` (plural)

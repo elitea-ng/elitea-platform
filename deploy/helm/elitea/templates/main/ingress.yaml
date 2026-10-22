@@ -1,3 +1,10 @@
+{{- /*
+  The browser edge: ONE `/` rule to elitea-main, as an HTTPRoute or an Ingress
+  (#1359 P3). elitea-main itself redirects `/` to `/app/`, relays `/app…` and
+  `/docs…` to elitea-web (ELITEA_WEB_UPSTREAM) and keeps the MCP server and its
+  file servers under `/app`, so no rule names elitea-web and none needs a
+  RegularExpression match.
+*/ -}}
 {{- if .Values.main.enabled }}
 {{- if .Values.main.ingress.enabled }}
 {{- if .Values.main.ingress.gatewayApi }}
@@ -29,16 +36,17 @@ spec:
   rules:
     - matches:
         - path:
-            type: {{ .Values.main.ingress.pathType }}
+            {{- /* main.ingress.pathType is the networking.k8s.io spelling
+                   (Prefix), which Gateway API spells PathPrefix; the
+                   HTTPRoute used to render `Prefix`, which no Gateway
+                   accepts. Exact is the same word in both. */}}
+            type: {{ eq .Values.main.ingress.pathType "Prefix" | ternary "PathPrefix" .Values.main.ingress.pathType }}
             value: {{ .Values.main.ingress.path }}
-      # Remove client-supplied identity headers before the request reaches
-      # elitea-main (#326). tryTrustedProxyHeaders in
-      # internal/api/middleware/auth.go accepts X-Auth-Type + X-Auth-Id as a
-      # finished identity from any source inside the configured
-      # trusted_proxy_cidrs — which in a cluster is the pod network the Gateway
-      # itself sits on — so a client that can set the header picks its own user.
-      # RequestHeaderModifier acts on the REQUEST going in; it does not affect
-      # headers an authenticating edge adds afterwards.
+      # Remove client-supplied identity headers on the way in (#326). Defence
+      # in depth since #1359: elitea-main deletes the same names itself before
+      # any route runs (apimw.StripClientIdentityHeaders) and reads no X-Auth-*
+      # name as an identity. Kept because it costs nothing and keeps a
+      # caller-chosen value out of anything between the Gateway and the pod.
       filters:
         - type: RequestHeaderModifier
           requestHeaderModifier:

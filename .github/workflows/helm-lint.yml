@@ -174,6 +174,13 @@ jobs:
       - name: The chart edge publishes /healthz with no authenticating filter
         run: bash deploy/helm/tests/render-edge-healthz.sh
 
+      # One edge route (#1359 P3): the Ingress / HTTPRoute is a single `/` rule
+      # to elitea-main, with no RegularExpression and nothing naming elitea-web;
+      # ELITEA_WEB_UPSTREAM names the web Service; the startup and readiness
+      # probes are the loopback -healthcheck the edge needs.
+      - name: The chart edge is one route to elitea-main
+        run: bash deploy/helm/tests/render-edge-route.sh
+
       # The worker templates were rendered by NOTHING before this step: every
       # other render script here, and the template matrix below, set
       # `worker.enabled=false`, and `helm lint` does not enter a body its

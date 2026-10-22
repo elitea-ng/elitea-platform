@@ -1318,14 +1318,19 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   render neither an Ingress nor an HTTPRoute until `main.ingress.enabled` is
   on, so a default install leaves `elitea-web` and `elitea-main` reachable
   in-cluster only. Turning it on renders ONE `/` rule with elitea-main as the
-  only backend. A cluster that also serves the web app from `/app` needs a rule
-  per root-mounted Go route, or the SPA backend swallows them:
-  `deploy/gateway-api/httproute.yaml` is the reviewed edge for that shape, and
-  it must stay in step with elitea-main's compose edge
-  (`internal/api/webedge`, which relays `/app` and `/docs` to elitea-web when
-  `ELITEA_WEB_UPSTREAM` is set; compose only, #1359). Both are checked by
-  `services/elitea-main/tests/deployedge/`, so a new root-mounted family fails
-  CI until every edge routes it (#568).
+  only backend, and that is the whole edge (#1359 P3): elitea-main redirects
+  `/` to `/app/`, relays `/app` and `/docs` to elitea-web
+  (`internal/api/webedge`, turned on by `ELITEA_WEB_UPSTREAM`, which the chart
+  sets to the elitea-web Service whenever `web.enabled` is true) and keeps the
+  MCP server (`/app/<project id>/mcp`) and its icon file servers under `/app`.
+  No rule names elitea-web, and none needs a RegularExpression match.
+  `deploy/gateway-api/httproute.yaml` is the same one-rule shape for a Gateway
+  managed outside the release. `services/elitea-main/tests/deployedge/` drives
+  the routing through the real router and holds the manifest to that shape
+  (#568). With the edge on, elitea-main's startup and readiness probes run
+  `/elitea-main -healthcheck <path>` inside the container, because the edge
+  refuses `/readyz` and `/startupz` to a non-loopback caller, the kubelet
+  included; and elitea-web's NetworkPolicy admits elitea-main only.
 - **One namespace for NATS and the platform.** The Argo CD sample installs
   NATS, its bootstrap and the platform into `elitea`. That is not a
   convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer

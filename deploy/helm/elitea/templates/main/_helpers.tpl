@@ -29,6 +29,25 @@ app.kubernetes.io/name: {{ include "elitea-main.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/*
+elitea-main.webUpstream — ELITEA_WEB_UPSTREAM, the origin elitea-main relays
+`/app…` and `/docs…` to (internal/api/webedge, #1359 P3). Empty when the chart
+renders no elitea-web, which turns the relay and the `/` → `/app/` redirect
+off and leaves elitea-main serving its own routes only.
+
+elitea-main is the ONLY browser edge: the Ingress or HTTPRoute
+(templates/main/ingress.yaml) is one `/` rule to it, and the path decisions a
+split route used to make — the SPA, the docs, the MCP server inside `/app`, the
+root redirect — are made in Go. The hop is browser traffic relayed, not a
+service-to-service call, so it is plain HTTP to the web Service, the same
+Service a browser-facing route once named directly.
+*/}}
+{{- define "elitea-main.webUpstream" -}}
+{{- if .Values.web.enabled -}}
+{{- printf "http://%s:%v" (include "elitea-web.fullname" .) .Values.web.service.port -}}
+{{- end -}}
+{{- end }}
+
 {{- define "elitea-main.serviceAccountName" -}}
 {{- if .Values.main.serviceAccount.create }}
 {{- default (include "elitea-main.fullname" .) .Values.main.serviceAccount.name }}

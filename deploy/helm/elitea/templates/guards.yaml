@@ -79,8 +79,25 @@
 {{- fail "networkPolicies.main.noExternalIngress=true contradicts main.ingress.enabled=true: the Ingress or HTTPRoute exists to carry outside traffic to elitea-main. Set one of them to false, or keep noExternalIngress=false and list the gateway in networkPolicies.main.ingressFrom." }}
 {{- end }}
 
-{{- if and .Values.main.enabled .Values.main.ingress.enabled (not .Values.main.ingress.gatewayApi) .Values.main.fileConfig.authConfig.enabled (not .Values.main.ingress.identityHeadersStrippedByController) }}
-{{- fail "main.ingress.enabled=true with main.ingress.gatewayApi=false renders a plain networking.k8s.io/v1 Ingress, which has no portable way to remove inbound identity headers, while main.fileConfig.authConfig.enabled=true makes elitea-main read the X-Auth-* projection. Either use main.ingress.gatewayApi=true (the HTTPRoute removes main.ingress.stripIdentityHeaders), or configure the ingress controller to delete X-Auth-Type, X-Auth-ID, X-Auth-User-ID, X-Auth-Reference, X-Auth-Signature and the other names in main.ingress.stripIdentityHeaders from inbound requests and then set main.ingress.identityHeadersStrippedByController=true." }}
+{{- /*
+  No guard on a plain Ingress any more (#1359 P3). One used to refuse a
+  networking.k8s.io Ingress while Form sign-in was on unless the operator
+  stated that the controller removed the X-Auth-* identity headers, because
+  elitea-main once trusted them from a proxy address. It reads none of them now
+  and deletes every one itself (apimw.StripClientIdentityHeaders), so a plain
+  Ingress is as safe as the HTTPRoute.
+
+  The browser edge's exec probes (templates/main/deployment.yaml) run
+  `elitea-main -healthcheck <path>`, which reads only the three probe paths;
+  any other path would leave the pod never Ready.
+*/ -}}
+{{- if and .Values.main.enabled (include "elitea-main.webUpstream" .) }}
+{{- range $probe := list "startup" "readiness" }}
+{{- $path := (index $.Values.main.probes $probe).path }}
+{{- if not (has $path (list "/readyz" "/startupz" "/healthz")) }}
+{{- fail (printf "main.probes.%s.path is %q, but with web.enabled=true elitea-main is the browser edge and the %s probe runs `elitea-main -healthcheck <path>`, which reads only /readyz, /startupz or /healthz (the edge refuses /readyz and /startupz to a kubelet httpGet from the node)." $probe $path $probe) }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- if and .Values.main.enabled .Values.main.ingress.enabled .Values.main.ingress.gatewayApi }}

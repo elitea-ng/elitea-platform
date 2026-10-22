@@ -175,11 +175,11 @@ renders() {
   fi
 }
 
-refuses "plain Ingress with Form sign-in" "identityHeadersStrippedByController" \
+# A plain Ingress renders with Form sign-in on (#1359 P3): elitea-main strips
+# every identity header itself, so the old "the controller strips X-Auth-*"
+# acknowledgement is gone.
+renders "plain Ingress with Form sign-in" \
   --set main.ingress.enabled=true --set main.ingress.gatewayApi=false
-renders "plain Ingress acknowledged" \
-  --set main.ingress.enabled=true --set main.ingress.gatewayApi=false \
-  --set main.ingress.identityHeadersStrippedByController=true
 # Chart defaults carry no Form sign-in (the standalone values file turns it on).
 if helm template "${GATEWAY_RENDER_POSTURE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
   --set main.ingress.enabled=true --set main.ingress.gatewayApi=false >"$WORK/out.yaml" 2>"$WORK/err.txt"; then

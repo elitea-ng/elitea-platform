@@ -144,6 +144,11 @@ if deepwiki:
     expected["elitea-deepwiki-netpol"] = DW
 if inventory:
     expected["elitea-inventory-netpol"] = INV
+# elitea-web is behind elitea-main (#1359 P3): wherever the chart renders it,
+# it gets a policy of its own.
+WEB = "Deployment/elitea-web"
+if WEB in pods:
+    expected["elitea-web-netpol"] = WEB
 check(sorted(policies) == sorted(expected), f"policy set {sorted(policies)} != {sorted(expected)}")
 
 for pname, target in expected.items():
@@ -233,6 +238,23 @@ if main:
         check(platform_rule is None, f"main: platform listener rule without a peer")
     check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else []) + (plat if want_platform else [])),
           "main: ports admitted are not exactly 8080 + runtime + platform")
+
+# ── elitea-web ───────────────────────────────────────────────────────────────
+# The browser edge is elitea-main (ELITEA_WEB_UPSTREAM): it is the only peer on
+# the SPA's port. The gateway or ingress controller is never admitted here,
+# because the Ingress / HTTPRoute names elitea-main alone; these renders
+# declare no web.extraIngressFrom.
+web = policies.get("elitea-web-netpol")
+if web:
+    spec = web["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "web: policyTypes must be Ingress only")
+    rules = spec.get("ingress") or []
+    check(len(rules) == 1, f"web: {len(rules)} ingress rules, want one")
+    if rules:
+        check([p["port"] for p in rules[0]["ports"]] == ["http"], f"web: ports {rules[0]['ports']}, want the container's http port only")
+        check(peer_targets(rules[0], "web:http") == [MAIN], "web: the SPA port must admit elitea-main only")
+    env = {e["name"]: e.get("value") for e in deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+    check(env.get("ELITEA_WEB_UPSTREAM") == "http://elitea-web:80", f"main: ELITEA_WEB_UPSTREAM is {env.get('ELITEA_WEB_UPSTREAM')!r}; the policy admits main because main relays to web")
 
 # ── the providers (deepwiki, inventory) ─────────────────────────────────────
 # One port each (#1359): the gRPC listener (provider SPI + platform service),
@@ -393,8 +415,7 @@ YAML
 # profile's noExternalIngress=true.
 GWAPI=(--set networkPolicies.main.noExternalIngress=false --set main.ingress.enabled=true --set main.ingress.gatewayApi=true
        --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system)
-PLAIN=(--set networkPolicies.main.noExternalIngress=false --set main.ingress.enabled=true --set main.ingress.gatewayApi=false
-       --set main.ingress.identityHeadersStrippedByController=true)
+PLAIN=(--set networkPolicies.main.noExternalIngress=false --set main.ingress.enabled=true --set main.ingress.gatewayApi=false)
 # extraIngressFrom satisfies the install-time decision, so what is refused here is
 # the ingress-specific rule: the Ingress / HTTPRoute needs ingressFrom itself.
 EXTRA=(--set 'networkPolicies.main.extraIngressFrom[0].ipBlock.cidr=192.0.2.0/24')
