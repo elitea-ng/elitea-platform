@@ -15,8 +15,8 @@ package repos
 // can answer, from its own tables. That is what this file serves. It keeps the
 // legacy row keys an operator's tooling reads (`task_id`, `status`,
 // `started_at`, `user`) and adds the two the legacy shape had no need for,
-// because pylon had exactly one kind of task and one project: `kind` and
-// `project_id`.
+// because the legacy runtime had exactly one kind of task and one project:
+// `kind` and `project_id`.
 //
 // # The three sources
 //

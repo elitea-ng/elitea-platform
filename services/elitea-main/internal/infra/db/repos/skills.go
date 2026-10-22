@@ -205,8 +205,9 @@ func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.L
 // status read and the INSERT attaches a skill to a published version, which is
 // the state the guard exists to refuse, and `entity_skill_mapping.entity_version_id`
 // carries no foreign key, so nothing at the database level catches it after the
-// fact. Pylon makes the same choice — `_skill_session` owns one session and one
-// commit per attach (legacy/plugins/elitea_core/utils/skill_utils.py:169-188).
+// fact. The legacy runtime makes the same choice — `_skill_session` owns one
+// session and one commit per attach
+// (legacy/plugins/elitea_core/utils/skill_utils.py:169-188).
 //
 // This is the opposite call from #414, and for a reason that is visible here.
 // There the copy sat inside `embedSubAgentsRecursive`, a loop that continues
@@ -216,7 +217,7 @@ func (r *SkillsRepo) List(ctx context.Context, projectID string, params skills.L
 // partial-success channel. It performs one attach. All-or-nothing is the only
 // state a caller can act on.
 //
-// The order of the guards is pylon's order, not a tidier one
+// The order of the guards is the legacy order, not a tidier one
 // (skill_utils.py:1190-1233). The limit runs before the skill lookup, so a full
 // agent version with a bad skill id answers 400 and not 404. Reordering would
 // change the answer to a request the old app can send.
@@ -282,7 +283,7 @@ func (r *SkillsRepo) AttachSkill(
 
 	// A duplicate attach is a 409, NOT an upsert and NOT a silent no-op.
 	//
-	// Pylon checks first and raises SkillAlreadyAttachedError
+	// The legacy runtime checks first and raises SkillAlreadyAttachedError
 	// (skill_utils.py:1212-1218), and the old app depends on the refusal: its
 	// version selector changes a skill's version by detaching and re-attaching,
 	// with the comment "Backend errors on duplicate attach"
@@ -327,11 +328,11 @@ func (r *SkillsRepo) AttachSkill(
 // It runs in a transaction for the same reason AttachSkill does: the
 // published-version guard is a read the DELETE depends on.
 //
-// A detach that matches no row is a 404, not a silent success. Pylon raises
-// SkillNotAttachedError (skill_utils.py:1257-1258), and the old app reads the
-// outcome: its version selector only re-attaches when the detach reports
-// success, so a false success would drop the skill and report a version change
-// that did not happen.
+// A detach that matches no row is a 404, not a silent success. The legacy
+// runtime raises SkillNotAttachedError (skill_utils.py:1257-1258), and the old
+// app reads the outcome: its version selector only re-attaches when the detach
+// reports success, so a false success would drop the skill and report a version
+// change that did not happen.
 func (r *SkillsRepo) DetachSkill(
 	ctx context.Context,
 	projectID, skillID string,
@@ -375,17 +376,18 @@ func (r *SkillsRepo) DetachSkill(
 // A published or an embedded version is frozen: the publish path copies its
 // skill rows into the public catalog (#405) and into every embedded sub-agent
 // (#414), so a later attach or detach on the source would leave the two copies
-// disagreeing with no way to tell which one a consumer holds. Pylon raises
-// AgentVersionNotUpdatableError on both directions, at 409
+// disagreeing with no way to tell which one a consumer holds. The legacy
+// runtime raises AgentVersionNotUpdatableError on both directions, at 409
 // (legacy/plugins/elitea_core/utils/skill_utils.py:1179-1183 and 1245-1249).
 //
 // `requireVersion` is true for attach only, and this is a deliberate departure
-// from pylon. Pylon writes `if agent_version and ...`, so an unknown version id
-// falls through and the attach answers 201 over a row that no read can ever
-// reach: `entity_version_id` has no foreign key, so the row is an orphan that
-// nothing cleans up. Attach therefore refuses an unknown version. Detach keeps
-// pylon's fall-through, because removing an orphan left by an earlier write is
-// the one case where an absent version is still a valid request.
+// from the legacy runtime, which writes `if agent_version and ...`, so an
+// unknown version id falls through and the attach answers 201 over a row that
+// no read can ever reach: `entity_version_id` has no foreign key, so the row is
+// an orphan that nothing cleans up. Attach therefore refuses an unknown
+// version. Detach keeps the legacy fall-through, because removing an orphan
+// left by an earlier write is the one case where an absent version is still a
+// valid request.
 func guardEntityVersion(
 	ctx context.Context,
 	tx pgx.Tx,

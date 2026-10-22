@@ -120,7 +120,7 @@ func TestDefaultModeGrantGivesANonMemberNothing(t *testing.T) {
 }
 
 // A project that carries its OWN per-project grants — the shape every
-// pylon-backed database and every legacy dump has — suppresses the central
+// legacy-backed database and every legacy dump has — suppresses the central
 // fallback entirely, so the grant is inert there. This is why the migration
 // cannot change what an existing deployment's members can do.
 func TestDefaultModeGrantIsInertForAProjectWithItsOwnGrants(t *testing.T) {

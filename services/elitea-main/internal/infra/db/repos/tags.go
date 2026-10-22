@@ -77,9 +77,10 @@ func (r *TagsRepo) Create(ctx context.Context, projectID string, tag tags.Tag) (
 // The associations are deleted EXPLICITLY even though both association tables
 // declare `ON DELETE CASCADE` on `tag_id` in this repository's own schema
 // (internal/infra/db/migrations/001_initial.sql): a schema this service
-// inherited from pylon rather than created is not guaranteed to carry the
-// same constraint, and a delete that depends on one is a delete that fails
-// with a foreign-key violation on exactly the deployments nobody tests on.
+// inherited from the legacy runtime rather than created is not guaranteed to
+// carry the same constraint, and a delete that depends on one is a delete that
+// fails with a foreign-key violation on exactly the deployments nobody tests
+// on.
 //
 // One transaction, so a tag can never lose its associations and keep its row.
 func (r *TagsRepo) Delete(ctx context.Context, projectID, tagID string) error {

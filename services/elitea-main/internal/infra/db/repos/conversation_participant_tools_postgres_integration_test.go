@@ -18,7 +18,7 @@ package repos
 // conversation down.
 //
 // THE TOOLKIT TABLES ARE SEEDED HERE. `elitea_tools` and `entity_tool_mapping`
-// are pylon-owned in the tenant history (tenant/0124 alters `elitea_tools` and
+// are legacy-owned in the tenant history (tenant/0124 alters `elitea_tools` and
 // only where it already exists), so the migrated template this package builds
 // has neither. The seed below declares the two columns each query names, in the
 // shape internal/infra/db/migrations/001_initial.sql gives them.
@@ -30,7 +30,7 @@ import (
 	"testing"
 )
 
-// seedToolkitTables creates the two pylon-owned tables the enrichment reads.
+// seedToolkitTables creates the two legacy-owned tables the enrichment reads.
 func seedToolkitTables(t *testing.T, repo *ConversationsRepo) {
 	t.Helper()
 	if _, err := repo.pool.Exec(context.Background(), `
@@ -229,9 +229,9 @@ func TestAParticipantWithoutAVersionStillLoads(t *testing.T) {
 }
 
 // TestParticipantsLoadWhereTheToolkitTablesDoNotExist: `elitea_tools` and
-// `entity_tool_mapping` belong to pylon in the tenant history, so a deployment
-// can have chat tables and no toolkit tables. The read must answer the
-// participants it has.
+// `entity_tool_mapping` belong to the legacy runtime in the tenant history, so
+// a deployment can have chat tables and no toolkit tables. The read must answer
+// the participants it has.
 func TestParticipantsLoadWhereTheToolkitTablesDoNotExist(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)

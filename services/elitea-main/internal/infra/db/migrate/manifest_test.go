@@ -122,10 +122,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// permission rows suppress the central fallback.
 	// 91: shared/0091_pylon_viewer_secret_list_parity.sql, which withdraws
 	// 0083's `configuration.secrets.secret.list` grant from the default-mode
-	// `viewer` on a pylon-managed auth_core. 0083 states that no existing
-	// deployment gains anything; a pylon-backed database carries no per-project
-	// permission row, so the central fallback is live there and every project
-	// viewer did gain the secret listing.
+	// `viewer` on a legacy-managed auth_core. 0083 states that no existing
+	// deployment gains anything; a legacy-backed database carries no
+	// per-project permission row, so the central fallback is live there and
+	// every project viewer did gain the secret listing.
 	// 93: shared/0093_governance_config_type_check.sql, which constrains
 	// gateway.governance_config.type to the value set every reader switches on,
 	// and carries the correction 0067's checksum-immutable header could not: the
@@ -133,8 +133,8 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// existing row with an unknown type does not fail the release.
 	// 94: shared/0094_mcp_prebuilt_catalogue.sql, the platform-wide catalogue of
 	// pre-built MCP servers. It replaces the indexer_worker plugin descriptor
-	// block that pylon distributes over the Arbiter event bus, which this service
-	// has no way to read.
+	// block that the legacy runtime distributes over the Arbiter event bus, which
+	// this service has no way to read.
 	//
 	// It was written as 0092 and renumbered here. 0093's header records that it
 	// left 0092 free for this file, and 92 IS still free — but a free number is
@@ -153,7 +153,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 96: shared/0096_scim_provisioning.sql, the side table SCIM 2.0 user
 	// provisioning needs. It holds the identity provider's externalId and the
 	// resource timestamps, keyed by user id — the account row itself is
-	// pylon-owned and is read and updated, never reshaped.
+	// legacy-owned and is read and updated, never reshaped.
 	// 97: shared/0097_gateway_model_price_override.sql, which lets an operator
 	// author a model price that the scheduler's price-sync UPSERT will not
 	// overwrite. The column is the handshake between two writers of the same
@@ -249,14 +249,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// tenant/0130, because a dimension is one project's authored content and
 	// these four strings are central role grants.
 	//
-	// It is the first file in this corpus to seed a permission the pylon
+	// It is the first file in this corpus to seed a permission the legacy
 	// catalogue does not declare, and it says why in its own header: Agent
 	// Evaluation is not in the plugin corpus this repository carries, so the
 	// names come from the product's own UI constants rather than from a
 	// `check_api` transcription, and the routes therefore gate through
 	// exported constants instead of router.go's `projectPermission` helper.
 	// The grant gate (router_permission_grant_gate_test.go) still binds; only
-	// the pylon-provenance assertion, which would be false, does not.
+	// the legacy-provenance assertion, which would be false, does not.
 	//
 	// RENUMBERED from 0100 at merge — the FOURTH stream to claim that
 	// number, each correct when it was written. Only the merge sees it.
@@ -284,10 +284,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// here — after 0104 — whose strings are chosen rather than recovered, and
 	// for a sharper reason than 0104's: the legacy `deepwiki_plugin` declares
 	// no permissions at all. It has no `api/` package and no `check_api` call;
-	// its five routes were reached by the pylon provider hub over mTLS and
-	// authorised by the HOP. There is nothing in the pylon catalogue to
-	// transcribe, so the pylon-provenance assertion would be false here for the
-	// same reason it is false for 0104. The grant gate still binds.
+	// its five routes were reached by the legacy provider hub over mTLS and
+	// authorised by the HOP. There is nothing in the legacy catalogue to
+	// transcribe, so the legacy-provenance assertion would be false here for
+	// the same reason it is false for 0104. The grant gate still binds.
 	//
 	// The split is read/generate, not read/write: a viewer may see capacity and
 	// follow a running generation, and may not start one or cancel someone
@@ -307,7 +307,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// bypass it — this deployment can record and show a provider and
 	// physically cannot activate one.
 	//
-	// It claims no pylon-owned table. Every name is new, in a new schema, so
+	// It claims no legacy-owned table. Every name is new, in a new schema, so
 	// it cannot collide with a seeded fixture at 42P07 the way three earlier
 	// migrations did.
 	//
@@ -316,7 +316,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// falsification test for the runner generalisation. It is the third file
 	// here whose strings are chosen rather than recovered, for 0106's reason:
 	// the legacy inventory_plugin has no api/ package and no check_api call,
-	// so the pylon catalogue has nothing to transcribe.
+	// so the legacy catalogue has nothing to transcribe.
 	//
 	// Its grant blocks are 0106's with two strings substituted, copied rather
 	// than factored out: each migration names the permissions it grants
@@ -416,7 +416,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// It also grants `toolkit_catalogue.type.manage` to the administration-mode
 	// super_admin, admin and system. A NEW string, CHOSEN rather than recovered
 	// — the legacy platform has no add-or-remove-a-type surface, so there is no
-	// pylon declaration to transcribe — and deliberately not a reuse of
+	// legacy declaration to transcribe — and deliberately not a reuse of
 	// `runtime.plugins`: that grant already reaches the guardrails deny-list
 	// editor, which stops a type WORKING, while this decides what the product
 	// OFFERS and to which projects.
@@ -435,7 +435,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// four plus `run.read` and `run.create`. It is the RBAC half of the slice;
 	// the tables are tenant/0132.
 	//
-	// It is the SECOND file here, after 0104, to seed permissions the pylon
+	// It is the SECOND file here, after 0104, to seed permissions the legacy
 	// catalogue does not declare, and for the same verified reason: Agent
 	// Evaluation is not in the plugin corpus this repository carries. The
 	// search was repeated for this slice rather than inherited — `eval_dataset`,
@@ -444,7 +444,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// of a feature that was planned and never built. So the names come from the
 	// product's own UI constants and the routes gate through exported
 	// constants rather than router.go's `projectPermission` helper. The grant
-	// gate still binds; only the pylon-provenance assertion, which would be
+	// gate still binds; only the legacy-provenance assertion, which would be
 	// false, does not.
 	//
 	// `run.delete`, `suite.*` and `human_score.*` are declared by the reference
@@ -517,7 +517,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// 121: shared/0121_bulk_invite_permissions.sql, the two administration-mode
 	// grants the cross-project bulk membership invite needs
-	// (`invites.bulkusers`, `invites.bulkprojects`, issue 247). pylon declares
+	// (`invites.bulkusers`, `invites.bulkprojects`, issue 247). Legacy declares
 	// both on the two console pages that route replaces, so the strings are
 	// parity rather than a new policy, and the route would answer 403 on a
 	// clean database without them. A new file for 0120's reason: 0082 is
@@ -551,7 +551,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// personal-access-token expiry notice needs: `issued_at` (so a key whose
 	// WHOLE lifetime is under a day is not warned about the moment it is
 	// minted) and `notified_for_expires` (the dedupe mark, in a place the
-	// notification's own recipient cannot delete). Pylon owns
+	// notification's own recipient cannot delete). The legacy runtime owns
 	// auth_core__token, so this is a side table, the same shape and for the
 	// same reason as 0071.
 	//
@@ -749,7 +749,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// of chat_messages_attachment (#606). Its absence was why an uploaded chat
 	// attachment was conversation-scoped only, with no association to the
 	// message it was sent with: it never rendered inline in the transcript, and
-	// pylon's per-message attachment cleanup had nothing to iterate.
+	// the legacy per-message attachment cleanup had nothing to iterate.
 	//
 	// 128: tenant/0128_owner_id_column_meanings.sql, which writes what
 	// `owner_id` and `author_id` mean onto the columns themselves (#533). The
@@ -758,7 +758,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// written on the wrong assumption returns rows that look valid. The file
 	// adds no constraint: a project column would reference `centry.project`,
 	// which shared/0071, 0073 and 0098 each refuse for the same reason, and a
-	// user column would reference a pylon table that a corpus-only database
+	// user column would reference a legacy table that a corpus-only database
 	// does not have. It records the disagreement over `applications.owner_id`
 	// rather than hiding it.
 	//
@@ -767,10 +767,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// chat_canvas_version_authors. ConversationsRepo referenced the first two
 	// and nothing created either, so POST
 	// /elitea_core/canvases/prompt_lib/{projectID} — a registered route behind
-	// a permission shared/0068 seeds — answered 42P01 on every deployment pylon
-	// never touched, and GetMessageByUUID's unconditional LEFT JOIN would have
-	// done the same for every message read once its GET was bound, which the
-	// same session did.
+	// a permission shared/0068 seeds — answered 42P01 on every deployment the
+	// legacy runtime never touched, and GetMessageByUUID's unconditional LEFT
+	// JOIN would have done the same for every message read once its GET was
+	// bound, which the same session did.
 	//
 	// 130: tenant/0130_eval_dimensions.sql, the evaluation dimension library —
 	// the FIRST and, for now, the ONLY Agent Evaluation table. The baseline UI

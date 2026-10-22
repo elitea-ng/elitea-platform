@@ -8,12 +8,12 @@ package repos
 //
 //   * `chat_messages` — the bare name, not chat_messages_text. A dead legacy
 //     artifact: an older flat one-row-per-message shape. Not created by
-//     001_initial.sql, not by any tenant migration, and not declared in pylon
-//     either. Its successor is the chat_message_group -> chat_message_items ->
-//     chat_messages_text graph.
+//     001_initial.sql, not by any tenant migration, and not declared by the
+//     legacy runtime either. Its successor is the chat_message_group ->
+//     chat_message_items -> chat_messages_text graph.
 //   * `chat_conversation_summaries` — present in this repository exactly once,
-//     in the DELETE that has now gone. Absent from pylon and from the
-//     pg-catalog dump of the live legacy database.
+//     in the DELETE that has now gone. Absent from the legacy runtime and from
+//     the pg-catalog dump of the live legacy database.
 //
 // DeleteMessage was broken twice over: 42P01 where chat_messages is absent, and
 // 42703 on a real legacy database, where the table exists but has no
@@ -242,7 +242,8 @@ func TestDeleteMessageRejectsAnUnknownGroup(t *testing.T) {
 	}
 }
 
-// --- The three authorisation rules ported from pylon (message.py:91-122). ---
+// --- The three authorisation rules ported from the legacy runtime
+// (message.py:91-122). ---
 //
 // Each test below fails with a successful delete against a DeleteMessage that
 // only fixed the table name: an unconditional DELETE ... WHERE uuid = $1 lets
@@ -388,8 +389,8 @@ func TestDeleteMessageRefusesAnythingButTheLastGroup(t *testing.T) {
 	}
 }
 
-// The tiebreaker, which pylon did not have. created_at defaults to a
-// transaction-scoped now(), so groups written by one transaction share a
+// The tiebreaker, which the legacy runtime did not have. created_at defaults to
+// a transaction-scoped now(), so groups written by one transaction share a
 // timestamp to the microsecond; ordering by created_at alone makes "the last
 // message" whichever row Postgres happened to return first. Ordering by
 // (created_at, id) makes it the same group ListMessages renders last.
@@ -412,7 +413,7 @@ func TestDeleteMessageBreaksCreatedAtTiesByID(t *testing.T) {
 	}
 }
 
-// --- Pair deletion (pylon message.py:129-146). ---
+// --- Pair deletion (legacy message.py:129-146). ---
 
 // linkReply makes the group at replyIdx the answer to the group at questionIdx,
 // which is the shape every real turn has.
@@ -646,11 +647,11 @@ func TestDeleteMessageReportsNoAttachmentsWhenThereAreNone(t *testing.T) {
 	}
 }
 
-// A REFUSED delete must report nothing — this is pylon's ordering bug, stated
-// as a test. Pylon deletes the bytes before its summarized/last-message guards
-// run, so a request that then answers 400 has already destroyed the files.
-// Here the guards run first and the caller never learns of an attachment it is
-// not allowed to delete.
+// A REFUSED delete must report nothing — this is the legacy ordering bug,
+// stated as a test. The legacy runtime deletes the bytes before its
+// summarized/last-message guards run, so a request that then answers 400 has
+// already destroyed the files. Here the guards run first and the caller never
+// learns of an attachment it is not allowed to delete.
 func TestDeleteMessageReportsNoAttachmentsWhenItRefuses(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)

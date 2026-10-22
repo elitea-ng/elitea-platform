@@ -162,10 +162,10 @@ type Querier interface {
 	// Token deletion deletes the binding explicitly, in the same transaction, and
 	// does NOT rely on ON DELETE CASCADE (spec-llm-project-scope §3.1). Migration
 	// 0071 guards its foreign key with to_regclass, because elitea-migrate can run
-	// before pylon creates auth_core. When the guard skips, the migration is still
-	// ledgered as applied and no later run adds the constraint, so that database
-	// has no cascade for its whole life. The constraint stays as the second of two
-	// independent guarantees; this query is the first.
+	// before the legacy runtime creates auth_core. When the guard skips, the
+	// migration is still ledgered as applied and no later run adds the constraint,
+	// so that database has no cascade for its whole life. The constraint stays as
+	// the second of two independent guarantees; this query is the first.
 	DeleteTokenProjectBinding(ctx context.Context, tokenID int32) error
 	EnsureRuntimeAdmissionPolicy(ctx context.Context, arg EnsureRuntimeAdmissionPolicyParams) error
 	FinalizeCurrentAgentAuthorizationPause(ctx context.Context, arg FinalizeCurrentAgentAuthorizationPauseParams) (int64, error)
@@ -350,13 +350,13 @@ type Querier interface {
 	// InsertCurrentAgentTextItem does it: these items are written inside the
 	// admission transaction immediately after the question item, so the caller
 	// already knows the sequence (1, 2, ... — the question's text item holds 0,
-	// matching pylon's enumerate(attachments_info, start=1) at
+	// matching the legacy enumerate(attachments_info, start=1) at
 	// rpc/chat_all.py:303). A count(*) here would additionally re-read a table it
 	// is writing to, per attachment.
 	//
 	// `content` is cast to json, NOT jsonb: 0127 records why the deployed column
-	// is json (a shared table pylon also reads/writes, where jsonb's key
-	// reordering and whitespace normalisation would change the stored bytes).
+	// is json (a shared table the legacy runtime also reads/writes, where jsonb's
+	// key reordering and whitespace normalisation would change the stored bytes).
 	InsertCurrentAgentAttachmentItem(ctx context.Context, arg InsertCurrentAgentAttachmentItemParams) error
 	InsertCurrentAgentTextContent(ctx context.Context, arg InsertCurrentAgentTextContentParams) error
 	InsertCurrentAgentTextItem(ctx context.Context, messageGroupID int64) (int32, error)
@@ -582,14 +582,14 @@ type Querier interface {
 	// rendered it, the prompt did not mention it, and a follow-up question about
 	// that file had nothing to answer from.
 	//
-	// The rule is pylon's, not an invention: chat_history.py:67-73 EXTENDS an
-	// attachment item's stored `content` LIST into the group's content array,
-	// in item order, alongside the text chunks -- it does not nest it, and does
-	// not append one object per file. That is why the per-item CROSS JOIN LATERAL
-	// emits chunk ROWS rather than a per-item array: `jsonb_agg` over the rows is
-	// the flattening, and one ORDER BY (order_index, id, chunk_index) then orders
-	// items and, within an item, its chunks -- the pre-#606 ordering unchanged for
-	// a group that has only text.
+	// The rule is the legacy runtime's, not an invention: chat_history.py:67-73
+	// EXTENDS an attachment item's stored `content` LIST into the group's content
+	// array, in item order, alongside the text chunks -- it does not nest it, and
+	// does not append one object per file. That is why the per-item CROSS JOIN
+	// LATERAL emits chunk ROWS rather than a per-item array: `jsonb_agg` over the
+	// rows is the flattening, and one ORDER BY (order_index, id, chunk_index) then
+	// orders items and, within an item, its chunks -- the pre-#606 ordering
+	// unchanged for a group that has only text.
 	//
 	// WHY THE JOINS BECAME LEFT JOINS AND THE FILTER BECAME A WHERE. The old
 	// `FILTER (WHERE message_text.content <> '')` cannot survive: it tests a
@@ -605,7 +605,7 @@ type Querier interface {
 	// represent at all) now survives it.
 	//
 	// `content` IS `json`, NOT `jsonb` (migrations/tenant/0127 records why), and
-	// it is nullable with a pylon-era default of `'{}'::json` -- an OBJECT, not an
+	// it is nullable with a legacy-era default of `'{}'::json` -- an OBJECT, not an
 	// array. chat_history.py:70-74 carries a non-list fallback for exactly that
 	// data. Here the CASE demands `jsonb_typeof(...) = 'array'` before expanding,
 	// because `jsonb_array_elements` on a non-array raises 22023 and would fail
@@ -643,14 +643,14 @@ type Querier interface {
 	// rendered it, the prompt did not mention it, and a follow-up question about
 	// that file had nothing to answer from.
 	//
-	// The rule is pylon's, not an invention: chat_history.py:67-73 EXTENDS an
-	// attachment item's stored `content` LIST into the group's content array,
-	// in item order, alongside the text chunks -- it does not nest it, and does
-	// not append one object per file. That is why the per-item CROSS JOIN LATERAL
-	// emits chunk ROWS rather than a per-item array: `jsonb_agg` over the rows is
-	// the flattening, and one ORDER BY (order_index, id, chunk_index) then orders
-	// items and, within an item, its chunks -- the pre-#606 ordering unchanged for
-	// a group that has only text.
+	// The rule is the legacy runtime's, not an invention: chat_history.py:67-73
+	// EXTENDS an attachment item's stored `content` LIST into the group's content
+	// array, in item order, alongside the text chunks -- it does not nest it, and
+	// does not append one object per file. That is why the per-item CROSS JOIN
+	// LATERAL emits chunk ROWS rather than a per-item array: `jsonb_agg` over the
+	// rows is the flattening, and one ORDER BY (order_index, id, chunk_index) then
+	// orders items and, within an item, its chunks -- the pre-#606 ordering
+	// unchanged for a group that has only text.
 	//
 	// WHY THE JOINS BECAME LEFT JOINS AND THE FILTER BECAME A WHERE. The old
 	// `FILTER (WHERE message_text.content <> '')` cannot survive: it tests a
@@ -666,7 +666,7 @@ type Querier interface {
 	// represent at all) now survives it.
 	//
 	// `content` IS `json`, NOT `jsonb` (migrations/tenant/0127 records why), and
-	// it is nullable with a pylon-era default of `'{}'::json` -- an OBJECT, not an
+	// it is nullable with a legacy-era default of `'{}'::json` -- an OBJECT, not an
 	// array. chat_history.py:70-74 carries a non-list fallback for exactly that
 	// data. Here the CASE demands `jsonb_typeof(...) = 'array'` before expanding,
 	// because `jsonb_array_elements` on a non-array raises 22023 and would fail
@@ -794,13 +794,13 @@ type Querier interface {
 	// #607: persist the text the worker extracted from ONE of this turn's
 	// attachments, so a LATER turn sees the file's contents and not just its name.
 	//
-	// Pylon never needed this statement. It extracts at message-persist time and
-	// appends the text to the item it has in hand, in the same process and the same
-	// session (rpc/chat_all.py:344-377, with flag_modified(item, "content") at :376
-	// because the column is `json`). Here the reader is the worker and the writer is
-	// elitea-main, so the text comes back across a protocol
-	// (AgentExecutionResultV1.attachment_contents) and lands here, on the terminal
-	// path elitea-main already owns.
+	// The legacy runtime never needed this statement. It extracts at
+	// message-persist time and appends the text to the item it has in hand, in the
+	// same process and the same session (rpc/chat_all.py:344-377, with
+	// flag_modified(item, "content") at :376 because the column is `json`). Here
+	// the reader is the worker and the writer is elitea-main, so the text comes
+	// back across a protocol (AgentExecutionResultV1.attachment_contents) and lands
+	// here, on the terminal path elitea-main already owns.
 	//
 	// MATCHED ON item.uuid, NOT ON (bucket, name). Attaching the same file twice in
 	// one conversation is an ordinary thing to do and produces two rows with
@@ -842,10 +842,10 @@ type Querier interface {
 	// accident.
 	//
 	// `content` is cast to json, NOT jsonb, for the reason 0127 records: the column
-	// is `json` because pylon reads and writes the same table, and jsonb's key
-	// reordering and whitespace normalisation would change the stored bytes -- which
-	// for this value includes the `elitea_attachment` marker a later turn's worker
-	// reads to decide the file has already been extracted.
+	// is `json` because the legacy runtime reads and writes the same table, and
+	// jsonb's key reordering and whitespace normalisation would change the stored
+	// bytes -- which for this value includes the `elitea_attachment` marker a later
+	// turn's worker reads to decide the file has already been extracted.
 	UpdateCurrentAgentAttachmentContent(ctx context.Context, arg UpdateCurrentAgentAttachmentContentParams) (int64, error)
 	UpdateCurrentIndexScheduleToolkitMeta(ctx context.Context, arg UpdateCurrentIndexScheduleToolkitMetaParams) (int64, error)
 	UpsertArtifactObject(ctx context.Context, arg UpsertArtifactObjectParams) (EliteaStorageObject, error)

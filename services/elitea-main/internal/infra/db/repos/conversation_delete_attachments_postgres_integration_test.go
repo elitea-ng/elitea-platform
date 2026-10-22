@@ -142,9 +142,10 @@ func TestDeleteConversationReportsNoAttachmentsWhenThereAreNone(t *testing.T) {
 	}
 }
 
-// A REFUSED delete reports nothing, so the handler destroys nothing. Pylon
-// deletes the bytes before its guards run; here the collection is inside the
-// transaction and the refs only reach the caller once the commit succeeded.
+// A REFUSED delete reports nothing, so the handler destroys nothing. The legacy
+// runtime deletes the bytes before its guards run; here the collection is
+// inside the transaction and the refs only reach the caller once the commit
+// succeeded.
 func TestDeleteConversationReportsNoAttachmentsWhenItRefuses(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)

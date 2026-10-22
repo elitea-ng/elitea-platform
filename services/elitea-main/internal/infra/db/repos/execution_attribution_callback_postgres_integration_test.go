@@ -18,7 +18,7 @@ func TestExecutionAttributionVerifierAcceptsOnlyTheCallersOwnCallbackToken(t *te
 	verifier := NewExecutionAttributionVerifier(pool)
 	ctx := context.Background()
 
-	// auth_core__* are pylon-owned: created in their 001_initial shape, as
+	// auth_core__* are legacy-owned: created in their 001_initial shape, as
 	// every fixture in this package does (seedAuthCoreTables). The binding
 	// table is shared/0071's and carries no foreign key to centry.project.
 	seedAuthCoreTables(t, pool)

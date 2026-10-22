@@ -4,7 +4,7 @@ package identityrepo
 // email address.
 //
 // Two browser planes provision accounts on a first login: the SSO plane in
-// internal/api/v2/auth (joinAccountByEmail) and the Form/pylon-parity plane
+// internal/api/v2/auth (joinAccountByEmail) and the Form/legacy-parity plane
 // composed in internal/authcomposition (resolveProvisioningUser here). Each
 // used to carry its own copy of "may this address adopt that row", and the
 // copies drifted: the second one adopted ANY row with a matching address,
@@ -14,9 +14,9 @@ package identityrepo
 // A row is adoptable when BOTH hold:
 //
 //  1. No FEDERATED subject already holds it — no `auth_core__user_provider`
-//     ref in a namespace listed by FederatedRefPatterns. A pylon bare ref or an
-//     invite receipt does not count; see the SSO plane's FederatedRefPrefixes
-//     comment for why those must stay adoptable.
+//     ref in a namespace listed by FederatedRefPatterns. A legacy bare ref or
+//     an invite receipt does not count; see the SSO plane's
+//     FederatedRefPrefixes comment for why those must stay adoptable.
 //  2. It has no `elitea_auth.scim_users` record, OR the asserting provider is
 //     configured to adopt SCIM-provisioned accounts (`adopt_scim_users`). A
 //     directory-provisioned address is the directory's statement about a
