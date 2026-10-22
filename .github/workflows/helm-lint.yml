@@ -286,6 +286,16 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-egress-proxy.sh
 
+      # externalSecrets: one ExternalSecret per Secret the pods read. The test
+      # derives the read set from the RENDERED workloads, so a template that
+      # starts reading a new Secret fails here until the inventory learns it,
+      # instead of installing and waiting on a Secret nothing fills.
+      - name: ExternalSecrets match every Secret the workloads read
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-external-secrets.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \

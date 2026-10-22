@@ -68,6 +68,95 @@ image:
   # Applied to every component's pod spec.
   pullSecrets: []
 
+# ── Secrets from an external secret manager ─────────────────────────────────
+#
+# Every credential this chart consumes is a REFERENCE to a Kubernetes Secret:
+# postgresql.existingSecret, each component's `secrets:` map, the material
+# Secrets (runtime, worker, authentication, callback client). The chart never
+# renders one from a value, except the egress proxy's PUBLIC keys. Who creates
+# those Secrets is the operator's choice:
+#
+#   * By hand (kubectl create secret, the deployment guide's "Mint the
+#     secrets" step), or a plain value in an `env:` map. Fine for a test
+#     cluster. NOT RECOMMENDED IN PRODUCTION: a hand-made Secret has no
+#     rotation path and no audit trail outside the cluster, and an `env:` value
+#     lands in a ConfigMap that anything allowed to read ConfigMaps can read.
+#   * This block. The chart renders one external-secrets.io/v1 ExternalSecret
+#     per Secret its enabled components read, named and keyed EXACTLY as the
+#     pods reference them, and the External Secrets Operator (installed
+#     separately, v0.17+ for the v1 API) fills them from your secret manager —
+#     GCP Secret Manager, AWS Secrets Manager, Vault, Azure Key Vault.
+#
+# THE LIST IS DERIVED, NOT WRITTEN DOWN. templates/externalSecrets/
+# _inventory.tpl reads the same values the workloads read: a Secret appears
+# exactly when an enabled component references it, with the keys it reads.
+# Point main.runtime.material.secretName elsewhere and the ExternalSecret
+# follows. `optional: true` references (S3/Azure keys, SMTP, the DeepWiki /
+# Inventory identity keys) are included only when the deployment uses them —
+# ESO withholds the WHOLE Secret when one property is missing remotely, so an
+# Azure key on a GCS install would hold back the required keys beside it.
+#
+# NOT INCLUDED: Secrets this chart's cert-manager Certificates issue (the mTLS
+# pairs, every NATS client identity) — cert-manager owns them; and image pull
+# secrets. A Secret written by two controllers is rewritten by each in turn, so
+# the chart refuses an entry below that names a cert-manager or chart-rendered
+# Secret.
+#
+# ORDERING. The ExternalSecrets are pre-install/pre-upgrade hooks (weight and
+# Argo sync-wave -30), so they exist before the db-init, migrate and
+# workload-session Jobs that read them; target.creationPolicy is Orphan so the
+# per-upgrade hook recreation never deletes a live Secret.
+#
+# WHERE EACH KEY COMES FROM — first match wins:
+#   1. secrets.<Secret>.keys.<key>.remoteKey (+ optional property): one remote
+#      secret per value, the natural GCP Secret Manager shape.
+#   2. secrets.<Secret>.remoteKey: one remote secret per Kubernetes Secret, a
+#      JSON object whose properties are the key names verbatim:
+#        {"tls.crt": "-----BEGIN...", "tls.key": "-----BEGIN..."}
+#   3. remoteKey below: ONE remote secret for the whole install, a flat JSON
+#      object whose properties are "<Secret name>/<key>":
+#        {"elitea-main-db/database-url": "postgres://...",
+#         "elitea-llm-gateway-secrets/identity-secret": "..."}
+#      `kubectl get externalsecret -o yaml` (or `helm template`) lists every
+#      property the install needs. GCP Secret Manager caps a version at 64 KiB;
+#      the runtime + worker material fit, but split with (2) if yours does not.
+#   No match is a render failure naming the property.
+externalSecrets:
+  enabled: false
+  # The (Cluster)SecretStore, created outside this chart (it carries the
+  # cloud identity ESO authenticates with — on GKE, Workload Identity for the
+  # ESO controller's service account).
+  secretStoreRef:
+    name: ""
+    kind: ClusterSecretStore
+  # How often ESO re-reads the remote value. A rotated secret reaches env
+  # vars only on the next pod start; mounted material (runtime, worker,
+  # callback client) is re-copied by the init containers on restart too.
+  refreshInterval: 1h
+  # Mode 3: one remote secret holding every value as "<Secret>/<key>".
+  remoteKey: ""
+  # Optional remote version for mode 3 (empty = latest).
+  version: ""
+  # Per-Secret settings, keyed by the Kubernetes Secret name:
+  #   <name>:
+  #     enabled: false        # keep providing this Secret yourself (e.g. the
+  #                           # superuser Secret a CloudNativePG Cluster
+  #                           # publishes for dbInit)
+  #     remoteKey: ""         # mode 2
+  #     keys:                 # mode 1, per key; {} = take mode 2/3 for it.
+  #       <key>: {remoteKey: "", property: "", version: ""}
+  #     type: ""              # target Secret type, e.g. kubernetes.io/tls
+  #     refreshInterval: ""   # overrides the one above
+  #     extra: true           # a Secret no pod here reads that the install
+  #                           # still needs (the runtime CA keypair an
+  #                           # Issuer outside the chart signs from); needs keys
+  # Secrets whose key names are YOURS rather than the chart's — the sandbox
+  # supervisor material, egressProxy.publicKeys.existingSecret, and
+  # authentication material when fileConfig.authConfig.configMapName holds
+  # the document — need `keys` listed or a `remoteKey` (all its properties are
+  # copied); the render says which.
+  secrets: {}
+
 # ── PostgreSQL ──────────────────────────────────────────────────────────────
 #
 # A SECRET REFERENCE, not a URL: the DSN carries a password, and a password in
@@ -79,6 +168,10 @@ image:
 # CRDs and a controller whose lifecycle is not this application's, so bundling
 # it would let `helm uninstall` reach the database. Run the operator and its
 # Cluster as their own release and point this at the secret it publishes.
+#
+# In production let `externalSecrets` above fill this Secret from your secret
+# manager; a hand-made Secret, or main.env.DATABASE_URL as a plain value (a
+# ConfigMap), is for test clusters only.
 postgresql:
   existingSecret: "elitea-main-db"
   key: "database-url"
