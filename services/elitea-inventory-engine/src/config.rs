@@ -93,6 +93,18 @@ pub struct Settings {
     /// `llm_settings.api_base` only names the model route. The native runner
     /// requires it; `http://` is accepted for a loopback host only (tests).
     pub model_service: Option<String>,
+    /// `VECTOR_URL`: the origin of elitea-vector (`https://elitea-vector:9470`),
+    /// which holds every graph's entity vectors in Qdrant (#1359;
+    /// `store::vectors`). Reached over mutual TLS with the callback material
+    /// (`CALLBACK_CA_FILE` trusts its server certificate, the callback client
+    /// certificate is presented), and every call carries the invocation's
+    /// callback bearer, which elitea-vector admits for that project and
+    /// source `inventory`. The native runner requires it; `http://` is
+    /// accepted for a loopback host only (tests).
+    pub vector_service: Option<String>,
+    /// `VECTOR_SERVER_NAME`: the name elitea-vector's certificate is verified
+    /// against, when it differs from `VECTOR_URL`'s host.
+    pub vector_server_name: Option<String>,
     /// `MODEL_CONCURRENCY`: the ingestion model calls (extraction,
     /// relations, community labels) in flight at once across this engine
     /// process (default [`DEFAULT_MODEL_CONCURRENCY`]). Set it to the
@@ -109,6 +121,8 @@ pub const CALLBACK_CERT_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_CERT_FILE";
 pub const CALLBACK_KEY_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_KEY_FILE";
 /// The model service origin's setting.
 pub const MODEL_SERVICE_SETTING: &str = "ELITEA_INVENTORY_MODEL_SERVICE_URL";
+/// elitea-vector's origin setting.
+pub const VECTOR_SERVICE_SETTING: &str = "ELITEA_INVENTORY_VECTOR_URL";
 
 impl Settings {
     /// Read the process environment.
@@ -199,7 +213,10 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {MODEL_SERVICE_SETTING}: the native engine reaches the model calls and the source tools only on elitea-main's platform listener (https://elitea-main:9446); llm_settings.api_base never names a host"
             )));
         }
+        let vector_service = vector_service(raw("VECTOR_URL"), runner)?;
         Ok(Self {
+            vector_service,
+            vector_server_name: raw("VECTOR_SERVER_NAME"),
             source_types,
             ingest,
             database_url,
@@ -270,6 +287,27 @@ fn model_service(value: Option<String>) -> Result<Option<String>, ConfigError> {
         }
         Some(origin) => Err(ConfigError(format!(
             "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
+        ))),
+    }
+}
+
+/// `VECTOR_URL`: an https origin (elitea-vector), a loopback `http://` one
+/// (tests), or unset.
+/// The native runner requires it.
+fn vector_service(
+    value: Option<String>,
+    runner: RunnerKind,
+) -> Result<Option<String>, ConfigError> {
+    match value {
+        None if runner == RunnerKind::Native => Err(ConfigError(format!(
+            "{ENV_PREFIX}RUNNER=native needs {VECTOR_SERVICE_SETTING}: the native engine keeps every graph's entity vectors in elitea-vector (https://elitea-vector:9470) and ranks them there"
+        ))),
+        None => Ok(None),
+        Some(origin) if origin.starts_with("https://") || is_loopback_http(&origin) => {
+            Ok(Some(origin.trim_end_matches('/').to_owned()))
+        }
+        Some(origin) => Err(ConfigError(format!(
+            "{VECTOR_SERVICE_SETTING} must be the https origin of elitea-vector, got '{origin}'"
         ))),
     }
 }
@@ -429,8 +467,43 @@ mod tests {
                 "postgresql://u:p@db/inventory",
             ),
             (MODEL_SERVICE_SETTING, "https://elitea-main:9446"),
+            (VECTOR_SERVICE_SETTING, "https://elitea-vector:9470"),
         ]);
         assert!(native.is_ok(), "{native:?}");
+    }
+
+    #[test]
+    fn the_native_runner_needs_elitea_vector() {
+        let base = [
+            ("ELITEA_INVENTORY_RUNNER", "native"),
+            (
+                "ELITEA_INVENTORY_DATABASE_URL",
+                "postgresql://u:p@db/inventory",
+            ),
+            (MODEL_SERVICE_SETTING, "https://elitea-main:9446"),
+        ];
+        assert!(
+            settings(&base).is_err_and(|e| e.to_string().contains(VECTOR_SERVICE_SETTING)),
+            "started without elitea-vector"
+        );
+        let mut with = base.to_vec();
+        with.push((VECTOR_SERVICE_SETTING, "https://elitea-vector:9470/"));
+        with.push(("ELITEA_INVENTORY_VECTOR_SERVER_NAME", "elitea-vector"));
+        let parsed = settings(&with).map(|s| (s.vector_service, s.vector_server_name));
+        assert_eq!(
+            parsed,
+            Ok((
+                Some("https://elitea-vector:9470".to_owned()),
+                Some("elitea-vector".to_owned())
+            ))
+        );
+        let mut plaintext = base.to_vec();
+        plaintext.push((VECTOR_SERVICE_SETTING, "http://elitea-vector:9470"));
+        assert!(
+            settings(&plaintext).is_err_and(|e| e.to_string().contains(VECTOR_SERVICE_SETTING))
+        );
+        // The fixture runner stores nothing and needs none.
+        assert!(settings(&[("ELITEA_INVENTORY_RUNNER", "fixture")]).is_ok());
     }
 
     #[test]

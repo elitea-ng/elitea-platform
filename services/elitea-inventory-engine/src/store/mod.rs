@@ -15,7 +15,7 @@
 
 use crate::graph::Graph;
 use elitea_inventory_core::store::{GraphRead, GraphStamp};
-use elitea_pg_migrate::{Ledger, MigrateError, Migration};
+use elitea_pg_migrate::{Ledger, MigrateError, Migration, Rewritten};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::types::Json;
@@ -72,7 +72,24 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0007_deleted_toolkits.sql",
         include_str!("../../migrations/0007_deleted_toolkits.sql"),
     ),
+    (
+        "0008_entity_vectors_in_qdrant.sql",
+        include_str!("../../migrations/0008_entity_vectors_in_qdrant.sql"),
+    ),
 ];
+
+/// The released migrations that were rewritten, with the checksum of every
+/// text of theirs that was ever released (#1359, pgvector removal): a
+/// database whose ledger records one of them stays valid. Any other checksum
+/// is still refused.
+///
+/// * 0004: the only released text (commit 25cd2a50a, #1142) created the
+///   `vector` extension and `entities.embedding_vector`; the rewrite does
+///   nothing, and 0008 drops what that text created.
+pub const REWRITTEN: &[Rewritten] = &[Rewritten {
+    version: "0004",
+    released_checksums: &["a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f"],
+}];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
 /// bind parameters a statement may carry.
@@ -100,6 +117,11 @@ pub enum StoreError {
     /// future, or not a time).
     #[error("{0}")]
     Listing(String),
+    /// elitea-vector, which holds the entity vectors (`vectors`), failed or
+    /// cannot be reached for this call. A write that reports it wrote
+    /// nothing.
+    #[error("{0}")]
+    Vectors(String),
     /// The toolkit was deleted (its tombstone is in
     /// `inventory_graph.deleted_toolkits`, migration 0007): nothing may
     /// write its graph again. Nothing was changed.
@@ -183,7 +205,7 @@ pub fn embedded_file_names() -> Vec<&'static str> {
 /// [`StoreError::Migration`] for an edited applied migration,
 /// [`StoreError::Database`] for a failed statement.
 pub async fn migrate(pool: &PgPool) -> Result<Vec<String>> {
-    Ok(elitea_pg_migrate::apply(pool, &LEDGER, &embedded()?).await?)
+    Ok(elitea_pg_migrate::apply_with_rewrites(pool, &LEDGER, &embedded()?, REWRITTEN).await?)
 }
 
 /// Why the store's schema cannot serve a read-only command, or `None`
@@ -305,14 +327,53 @@ fn rows(graph: &Graph) -> Result<(Vec<EntityRow>, Vec<RelationRow>)> {
 /// which `jsonb` refuses), [`StoreError::Database`] otherwise. Nothing is
 /// written on an error.
 pub async fn save(pool: &PgPool, key: GraphKey, graph: &Graph) -> Result<i64> {
-    let mut transaction = pool.begin().await?;
-    let revision = write_graph(&mut transaction, key, graph).await?;
-    transaction.commit().await?;
-    Ok(revision)
+    save_with(pool, key, graph, None).await
 }
 
-/// [`save`] inside a caller's transaction (which commits it): takes the
-/// graph's write lock, replaces its rows, returns the new revision.
+/// [`save`], publishing the graph's entity vectors through `vectors`
+/// (`vectors::publish`; without it the first ranking backfills them).
+///
+/// # Errors
+///
+/// See [`save`]; [`StoreError::Vectors`] when the upsert fails (nothing is
+/// written).
+pub async fn save_with(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<i64> {
+    let mut transaction = pool.begin().await?;
+    let written = write_graph(&mut transaction, key, graph, vectors).await?;
+    transaction.commit().await?;
+    written.sweep(key, vectors).await;
+    Ok(written.revision)
+}
+
+/// What [`write_graph`] wrote: the graph's new revision, and the vector
+/// generation it published (with vector access), which every other
+/// generation is swept for once the caller's transaction commits.
+#[derive(Debug)]
+#[must_use = "sweep the superseded vector generations after the commit"]
+pub struct Written {
+    pub revision: i64,
+    pub generation: Option<String>,
+}
+
+impl Written {
+    /// Remove the superseded vector generations, after the commit.
+    pub async fn sweep(&self, key: GraphKey, vectors: Option<&vectors::EntityVectors>) {
+        if let (Some(vectors), Some(generation)) = (vectors, &self.generation) {
+            vectors.sweep(key, generation).await;
+        }
+    }
+}
+
+/// [`save`] inside a caller's transaction (which commits it, then calls
+/// [`Written::sweep`]): takes the graph's write lock, replaces its rows,
+/// publishes its entity vectors (`vectors::publish`: upserted under a new
+/// generation BEFORE the commit, recorded in the graph row), and returns
+/// what it wrote.
 ///
 /// # Errors
 ///
@@ -321,7 +382,8 @@ pub async fn write_graph(
     transaction: &mut sqlx::PgTransaction<'_>,
     key: GraphKey,
     graph: &Graph,
-) -> Result<i64> {
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<Written> {
     let (entities, relations) = rows(graph)?;
     let mut metadata = graph.metadata.clone();
     for stamped in STAMPED_METADATA {
@@ -358,7 +420,29 @@ pub async fn write_graph(
     .await?;
     insert_entities(transaction, key, &entities).await?;
     insert_relations(transaction, key, &relations).await?;
-    Ok(revision)
+    let space = vectors::VectorSpace::of(
+        graph
+            .metadata
+            .get(elitea_inventory_core::embed::MODEL_KEY)
+            .and_then(Value::as_str),
+        entities
+            .iter()
+            .map(|entity| entity.4.as_ref().map_or(0, Vec::len)),
+    );
+    let embedded: Vec<vectors::EntityVector<'_>> = entities
+        .iter()
+        .filter_map(|entity| {
+            entity.4.as_deref().map(|vector| vectors::EntityVector {
+                id: &entity.0,
+                vector,
+            })
+        })
+        .collect();
+    let generation = vectors::publish(transaction, key, &space, &embedded, vectors).await?;
+    Ok(Written {
+        revision,
+        generation,
+    })
 }
 
 async fn insert_entities(
@@ -639,6 +723,21 @@ pub async fn import(
     graph: &Graph,
     replace_state: bool,
 ) -> Result<Imported> {
+    import_with(pool, key, graph, replace_state, None).await
+}
+
+/// [`import`], publishing the graph's entity vectors through `vectors`.
+///
+/// # Errors
+///
+/// See [`import`] and [`save_with`].
+pub async fn import_with(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    replace_state: bool,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<Imported> {
     let mut transaction = pool.begin().await?;
     lock(&mut transaction, key).await?;
     let mut counts = [0i64; 2];
@@ -669,9 +768,12 @@ pub async fn import(
             documents: counts[1],
         });
     }
-    let revision = write_graph(&mut transaction, key, graph).await?;
+    let written = write_graph(&mut transaction, key, graph, vectors).await?;
     transaction.commit().await?;
-    Ok(Imported::Saved { revision })
+    written.sweep(key, vectors).await;
+    Ok(Imported::Saved {
+        revision: written.revision,
+    })
 }
 
 fn object(value: Value) -> Map<String, Value> {

@@ -1,28 +1,23 @@
--- Similarity search in PostgreSQL (pgvector).
+-- REWRITTEN (#1359, pgvector removal). This file replaces the released text
+-- whose checksum is
 --
--- 0001 kept the embedding as float8[] so an export reads back the numbers
--- that were written, and left the choice of search to retrieval. The
--- engine ranked every entity of a graph in Rust, brute force. Here
--- PostgreSQL ranks them: `embedding_vector` is the same vector as pgvector's
--- `vector` (float4, as numpy's float32 compared them), generated from
--- `embedding` so the two can never disagree, and `semantic_search` orders
--- by cosine distance (`<=>`).
+--   a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f
 --
--- NO DIMENSION AND NO INDEX YET. A graph's width is its embedding model's
--- (`_metadata.embeddings_dimension`), so the column takes any width and the
--- scan is exact, per (project, toolkit). An HNSW index needs one width per
--- column (`vector(n)`, at most 2000; `halfvec(n)` up to 4000): a deployment
--- that settles on one model adds it as a partial expression index, e.g.
+-- (the only text of 0004 ever released: commit 25cd2a50a, #1142). That text
+-- ran `CREATE EXTENSION IF NOT EXISTS vector` and added
+-- `inventory_graph.entities.embedding_vector`, a pgvector column generated
+-- from `embedding`, which `store::vectors::rank` ordered by cosine distance.
 --
---   CREATE INDEX ON inventory_graph.entities
---       USING hnsw ((embedding_vector::halfvec(2560)) halfvec_cosine_ops)
---       WHERE vector_dims(embedding_vector) = 2560;
+-- Entity vectors are now ranked in Qdrant behind elitea-vector (source
+-- inventory, the float32 exact `inv_<slug>_<dim>` family; migration 0008 and
+-- `store::vectors`), so a fresh install must not need the `vector` extension
+-- at all: this version does nothing. A database that applied the released
+-- text keeps it in its ledger, and the engine accepts that checksum
+-- (`store::REWRITTEN`, `elitea_pg_migrate::Rewritten`); migration 0008 then
+-- drops the column, and the extension when nothing else uses it. Any other
+-- checksum recorded for 0004 is still refused.
 --
--- An empty array has no vector (pgvector refuses zero dimensions).
+-- `embedding double precision[]` (0001) stays: it is the export and
+-- re-embedding source of truth, plain PostgreSQL.
 
-CREATE EXTENSION IF NOT EXISTS vector;
-
-ALTER TABLE inventory_graph.entities
-    ADD COLUMN embedding_vector vector GENERATED ALWAYS AS (
-        CASE WHEN cardinality(embedding) > 0 THEN embedding::vector END
-    ) STORED;
+SELECT 1;

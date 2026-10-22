@@ -46,6 +46,10 @@ pub struct NativeRunner {
     pool: PgPool,
     settings: Arc<Settings>,
     transport: Transport,
+    /// elitea-vector (`ELITEA_INVENTORY_VECTOR_URL`), which holds the entity
+    /// vectors; each invocation reaches it with its own bearer
+    /// ([`NativeRunner::graphs`]).
+    vector_client: Arc<elitea_vector_index::client::VectorClient>,
     views: Arc<crate::retrieval::ViewCache<store::PgGraphStore>>,
     /// The ingestion model calls in flight across this process
     /// (`ELITEA_INVENTORY_MODEL_CONCURRENCY`).
@@ -180,13 +184,40 @@ impl NativeRunner {
         let views = Arc::new(crate::retrieval::ViewCache::new(store::PgGraphStore::new(
             pool.clone(),
         )));
+        let vector_client = Arc::new(vector_client(&settings)?);
         Ok(Self {
             pool,
+            vector_client,
             settings: Arc::new(settings),
             transport,
             views,
             model_calls,
         })
+    }
+
+    /// Vector access with the invocation's callback `bearer` (its
+    /// `llm_settings.api_key`); `None` for an empty one.
+    fn vectors_with(&self, bearer: &str) -> Option<store::vectors::EntityVectors> {
+        let bearer = bearer.trim();
+        (!bearer.is_empty()).then(|| {
+            store::vectors::EntityVectors::new((*self.vector_client).clone(), bearer.to_owned())
+        })
+    }
+
+    /// The graph store with this invocation's vector access: the bearer the
+    /// platform minted for it (`params.llm_settings.api_key`). Without one
+    /// (a call that did not come through the platform's facade) a write
+    /// publishes no vector generation and the first ranking backfills it.
+    fn graphs(&self, params: &Map<String, Value>) -> store::PgGraphStore {
+        let bearer = params
+            .get("llm_settings")
+            .and_then(|settings| settings.get("api_key"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        self.views
+            .store()
+            .clone()
+            .with_vectors(self.vectors_with(bearer))
     }
 
     /// Run `tool` of the `inventory` / `inventory_search` family.
@@ -401,7 +432,7 @@ impl NativeRunner {
         params: &Map<String, Value>,
     ) -> Result<Value, EngineError> {
         let (toolkit_id, name) = Self::source_identity(params)?;
-        let graphs = self.views.store();
+        let graphs = self.graphs(params);
         let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
             return Err(busy(
                 "an ingestion of this Inventory toolkit is running; remove the source when it finishes",
@@ -443,7 +474,7 @@ impl NativeRunner {
         context.thinking(format!("Importing {name}"));
         context.checkpoint()?;
         let replace = crate::retrieval::flag(params.get("replace_ingestion_state"));
-        let report = transfer::import_graph(&self.pool, key, text, replace)
+        let report = transfer::import_graph_into(&self.graphs(params), key, text, replace)
             .await
             .map_err(import_error)?;
         if json_format(params) {
@@ -579,7 +610,7 @@ impl NativeRunner {
         }
         context.checkpoint()?;
         context.thinking("Applying type mappings to graph...");
-        let graphs = self.views.store();
+        let graphs = self.graphs(params);
         let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
             return Err(busy(
                 "an ingestion of this Inventory toolkit is running; normalise the types when it finishes",
@@ -646,9 +677,10 @@ impl NativeRunner {
     /// `semantic_search` for an investigation, when the graph has vectors:
     /// the query is embedded with the model the graph was built with, so
     /// the two compare (in that model's query format,
-    /// [`crate::embed::query_text`]), and PostgreSQL ranks the entities
-    /// (pgvector's cosine distance, which is scale-free: unnormalised
-    /// vectors rank as normalised ones).
+    /// [`crate::embed::query_text`]), and elitea-vector ranks the entities
+    /// (`store::vectors::rank`: Qdrant's exact cosine similarity over the
+    /// graph's published vectors, which is scale-free: unnormalised vectors
+    /// rank as normalised ones), with the invocation's bearer.
     fn ranker(
         &self,
         view: &crate::retrieval::view::GraphView,
@@ -668,7 +700,13 @@ impl NativeRunner {
                         ..EmbeddingOptions::default()
                     },
                 );
-                let (stop, graphs) = (stop.clone(), self.views.store().clone());
+                let (stop, graphs) = (
+                    stop.clone(),
+                    self.views
+                        .store()
+                        .clone()
+                        .with_vectors(self.vectors_with(settings.api_key.expose())),
+                );
                 let embed: crate::investigate::Embed = Arc::new(move |query: String| {
                     let (client, stop, graphs) = (client.clone(), stop.clone(), graphs.clone());
                     Box::pin(async move {
@@ -875,8 +913,8 @@ impl NativeRunner {
             embeddings,
             full_rebuild: full_rebuild(params),
         };
-        let outcome = ingest::run(
-            &self.pool,
+        let outcome = ingest::run_in(
+            &self.graphs(params),
             key,
             &source,
             &self.settings.ingest,
@@ -979,6 +1017,52 @@ impl NativeRunner {
         };
         Ok(json!({"success": true, "result": text}))
     }
+}
+
+/// The elitea-vector client of `settings` (`ELITEA_INVENTORY_VECTOR_URL`,
+/// required by the native runner): mutual TLS with the callback CA and
+/// client certificate, connected on first use.
+///
+/// # Errors
+///
+/// No URL, a certificate file that cannot be read, or a client that cannot
+/// be built.
+fn vector_client(
+    settings: &Settings,
+) -> Result<elitea_vector_index::client::VectorClient, EngineError> {
+    use elitea_vector_index::client::{ClientConfig, VectorClient};
+    let endpoint = settings.vector_service.clone().ok_or_else(|| {
+        invalid(format!(
+            "the native runner needs {}",
+            crate::config::VECTOR_SERVICE_SETTING
+        ))
+    })?;
+    let read = |path: &std::path::Path, setting: &str| {
+        std::fs::read(path).map_err(|error| {
+            invalid(format!(
+                "{setting} ({}) cannot be read: {error}",
+                path.display()
+            ))
+        })
+    };
+    let plaintext = endpoint.starts_with("http://");
+    let mut config = ClientConfig::new(endpoint);
+    // A loopback http:// endpoint (tests) carries no TLS material.
+    config.allow_insecure = plaintext;
+    if !plaintext {
+        if let Some(ca) = &settings.callback_ca_file {
+            config.ca_pem = Some(read(ca, CA_SETTING)?);
+        }
+        if let Some(identity) = &settings.callback_identity {
+            config.identity_pem = Some((
+                read(&identity.cert_file, identity.cert_file_setting)?,
+                read(&identity.key_file, identity.key_file_setting)?,
+            ));
+        }
+        config.server_name.clone_from(&settings.vector_server_name);
+    }
+    VectorClient::connect_lazy(&config)
+        .map_err(|error| invalid(format!("the elitea-vector client: {error}")))
 }
 
 /// A saved toolkit's tool as a source-tool caller:

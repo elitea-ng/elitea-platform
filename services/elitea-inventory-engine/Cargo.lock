@@ -1479,6 +1479,7 @@ dependencies = [
  "elitea-pg-migrate",
  "elitea-platform-rpc",
  "elitea-repo-ingest",
+ "elitea-vector-index",
  "futures-util",
  "indexmap",
  "jiff",
@@ -1486,6 +1487,7 @@ dependencies = [
  "md-5 0.10.6",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.10.9",
  "sqlx",
  "text-splitter",
@@ -1578,6 +1580,28 @@ dependencies = [
  "tonic",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "elitea-vector-index"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "elitea-engine-core",
+ "futures-util",
+ "prost",
+ "protoc-bin-vendored",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

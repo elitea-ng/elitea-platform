@@ -272,7 +272,9 @@ async fn the_native_runner_maps_through_the_model_and_writes_the_store() {
     let key = GraphKey::new(9, 90).expect("key");
     let first = store::save(&pool, key, &graph()).await.expect("save");
     let gateway = common::gateway(mapper).await;
+    let (_vectors, vector_url) = common::fake_vector(&[("k", 9)]).await;
     let env: HashMap<&str, String> = [
+        ("ELITEA_INVENTORY_VECTOR_URL", vector_url),
         ("ELITEA_INVENTORY_RUNNER", "native".to_owned()),
         (
             "ELITEA_INVENTORY_DATABASE_URL",

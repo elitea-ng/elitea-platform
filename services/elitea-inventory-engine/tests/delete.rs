@@ -443,6 +443,12 @@ fn runner(database: &str) -> NativeRunner {
             "ELITEA_INVENTORY_MODEL_SERVICE_URL",
             "https://elitea-main:9446".to_owned(),
         ),
+        // Required by the native runner; no deletion here reaches it (the
+        // platform deletes a deleted toolkit's vectors itself).
+        (
+            "ELITEA_INVENTORY_VECTOR_URL",
+            "http://127.0.0.1:9".to_owned(),
+        ),
     ]
     .into_iter()
     .collect();

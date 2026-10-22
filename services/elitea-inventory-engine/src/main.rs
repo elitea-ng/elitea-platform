@@ -843,9 +843,15 @@ async fn delete_orphans(
         // rows go: a write since the check above is seen, or queues behind
         // this deletion.
         match delete::delete_graph_guarded(pool, orphan.key, listed_at).await {
+            // The command has no bearer for elitea-vector: the namespace of
+            // whatever entity vectors the graph had there is named, so an
+            // operator can delete them (a deleted project's go with the
+            // platform's DropProject).
             Ok(GuardedDeletion::Deleted { removed, .. }) => println!(
-                "deleted project {project} toolkit {toolkit}: {} entities, {} relations",
-                removed.entities, removed.relations
+                "deleted project {project} toolkit {toolkit}: {} entities, {} relations; any entity vectors it had stay in elitea-vector (source inventory, namespace {})",
+                removed.entities,
+                removed.relations,
+                elitea_inventory_engine::store::vectors::namespace_id(orphan.key)
             ),
             Ok(GuardedDeletion::Busy) => {
                 // An ingestion holds the graph: it is in use, not an orphan.

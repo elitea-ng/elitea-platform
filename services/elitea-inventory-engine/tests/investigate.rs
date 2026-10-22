@@ -124,12 +124,14 @@ async fn investigate_asks_the_model_with_graph_and_source_tools() {
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
 
+    let (_vectors, vector_url) = common::fake_vector(&[("callback-bearer", 7)]).await;
     let env: HashMap<String, String> = [
         ("ELITEA_INVENTORY_RUNNER", "native".to_owned()),
         (
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url("investigate"),
         ),
+        ("ELITEA_INVENTORY_VECTOR_URL", vector_url),
         (
             "ELITEA_INVENTORY_MODEL_SERVICE_URL",
             format!("http://127.0.0.1:{port}"),

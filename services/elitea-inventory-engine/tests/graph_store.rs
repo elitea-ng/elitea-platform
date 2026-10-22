@@ -7,11 +7,18 @@
 //!
 //! ```text
 //! podman run -d --name invpg -e POSTGRES_USER=inventory -e POSTGRES_PASSWORD=inventory \
-//!     -e POSTGRES_DB=inventory -p 15521:5432 docker.io/library/postgres:16
+//!     -e POSTGRES_DB=inventory -p 15521:5432 docker.io/library/postgres:18
 //! export INVENTORY_TEST_DSN=postgresql://inventory:inventory@127.0.0.1:15521/inventory
 //! ```
 //!
 //! Each test works in its own database (`invt_<name>`), created afresh.
+//!
+//! Plain PostgreSQL: the store needs no extension (#1359; the entity vectors
+//! are in elitea-vector, faked in process here). The upgrade tests also run
+//! the released pgvector chain for real when the server offers the `vector`
+//! extension (a `pgvector/pgvector` image), and stand in for it otherwise.
+
+mod common;
 
 use elitea_inventory_engine::graph::{Citation, Graph};
 use elitea_inventory_engine::store::{self, GraphKey, StoreError};
@@ -169,6 +176,21 @@ fn dsn() -> Option<String> {
 
 /// A fresh, migrated database for one test.
 async fn database(name: &str) -> Option<PgPool> {
+    let pool = empty_database(name).await?;
+    let applied = store::migrate(&pool).await.expect("migrate");
+    assert_eq!(
+        applied,
+        [
+            "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    );
+    Some(pool)
+}
+
+/// A fresh, EMPTY database for one test (nothing migrated).
+async fn empty_database(name: &str) -> Option<PgPool> {
     let dsn = dsn()?;
     let database = format!("invt_{name}");
     let mut admin = PgConnection::connect(&dsn).await.expect("connect");
@@ -183,15 +205,7 @@ async fn database(name: &str) -> Option<PgPool> {
     let options = store::connect_options(&dsn)
         .expect("dsn")
         .database(&database);
-    let pool = PgPool::connect_with(options).await.expect("pool");
-    let applied = store::migrate(&pool).await.expect("migrate");
-    assert_eq!(
-        applied,
-        ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
-            .map(str::to_owned)
-            .to_vec()
-    );
-    Some(pool)
+    Some(PgPool::connect_with(options).await.expect("pool"))
 }
 
 fn key(project: i64, toolkit: i64) -> GraphKey {
@@ -345,7 +359,9 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     .expect("ledger");
     assert_eq!(
         ledger,
-        ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+        [
+            "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
+        ]
     );
 }
 
@@ -357,8 +373,21 @@ async fn the_postgresql_store_passes_the_graph_store_conformance_suite() {
     let Some(pool) = database("conformance").await else {
         return;
     };
-    elitea_inventory_core::store_conformance::run(&store::PgGraphStore::new(pool)).await;
+    // The conformance suite writes and ranks project 1's graphs; the
+    // invocation's bearer reaches the fake elitea-vector for that project.
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let graphs =
+        store::PgGraphStore::new(pool).with_vectors(Some(common::entity_vectors(&origin, BEARER)));
+    elitea_inventory_core::store_conformance::run(&graphs).await;
+    // Every graph the suite wrote it deleted, and each delete emptied the
+    // graph's namespace: nothing is left behind in the vector store.
+    assert_eq!(fake.point_count(), 0, "the suite's graphs left vectors");
+    assert!(fake.calls().contains(&"upsert") && fake.calls().contains(&"search"));
 }
+
+/// The bearer the fake elitea-vector admits (for project 1 unless a test
+/// says otherwise).
+const BEARER: &str = "inventory-callback";
 
 /// The view cache over the PostgreSQL store: no graph, no view; a view is
 /// reused while the revision stands and reloaded once it moves.
@@ -501,8 +530,11 @@ async fn the_cached_view_holds_no_vectors_and_the_answers_do_not_change() {
         stats(&cached)
     );
 
-    // The vectors are stored: rank compares them there.
+    // The vectors are stored: rank compares them in elitea-vector (the
+    // graph was saved without vector access, so the ranking backfills it).
+    let (_fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
     let ranked = store::PgGraphStore::new(pool.clone())
+        .with_vectors(Some(common::entity_vectors(&origin, BEARER)))
         .rank(key, &[1.0, 0.0, 0.5, 0.25], 0.99)
         .await
         .expect("rank")
@@ -511,4 +543,300 @@ async fn the_cached_view_holds_no_vectors_and_the_answers_do_not_change() {
         ranked.first().map(|(id, _)| id.as_str()),
         Some(ids[0].as_str())
     );
+}
+
+// ---------------------------------------------------------------------------
+// The pgvector removal (#1359): 0004 rewritten, 0008 drops what it made
+// ---------------------------------------------------------------------------
+
+/// The migrations exactly as `origin/main` released them before the
+/// pgvector removal (`fixtures/PROVENANCE.md`).
+const RELEASED: &[(&str, &str)] = &[
+    (
+        "0001_graph_store.sql",
+        include_str!("fixtures/released_migrations/0001_graph_store.sql"),
+    ),
+    (
+        "0002_sources.sql",
+        include_str!("fixtures/released_migrations/0002_sources.sql"),
+    ),
+    (
+        "0003_documents.sql",
+        include_str!("fixtures/released_migrations/0003_documents.sql"),
+    ),
+    (
+        "0004_entity_vectors.sql",
+        include_str!("fixtures/released_migrations/0004_entity_vectors.sql"),
+    ),
+    (
+        "0005_entity_embedding_hash.sql",
+        include_str!("fixtures/released_migrations/0005_entity_embedding_hash.sql"),
+    ),
+    (
+        "0006_graph_incarnation.sql",
+        include_str!("fixtures/released_migrations/0006_graph_incarnation.sql"),
+    ),
+    (
+        "0007_deleted_toolkits.sql",
+        include_str!("fixtures/released_migrations/0007_deleted_toolkits.sql"),
+    ),
+];
+
+/// The released 0004's checksum: the one `store::REWRITTEN` accepts.
+const RELEASED_0004: &str = "a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f";
+
+async fn scalar_bool(pool: &PgPool, sql: &str) -> bool {
+    sqlx::query_scalar(sql).fetch_one(pool).await.expect(sql)
+}
+
+async fn has_vector_extension(pool: &PgPool) -> bool {
+    scalar_bool(
+        pool,
+        "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')",
+    )
+    .await
+}
+
+async fn has_column(pool: &PgPool, table: &str, column: &str) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                         WHERE table_schema = 'inventory_graph' AND table_name = $1
+                           AND column_name = $2)",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .expect("columns")
+}
+
+/// Migrate `pool` along the RELEASED chain, as a database deployed before
+/// the removal was. With the `vector` extension available the released 0004
+/// runs for real; without it (plain PostgreSQL) its ledger row is recorded
+/// with the released checksum and a stand-in `embedding_vector` column (a
+/// generated `real[]`) takes the pgvector one's place. Returns whether the
+/// real text ran.
+async fn migrate_released(pool: &PgPool) -> bool {
+    let released =
+        elitea_pg_migrate::discover_from(RELEASED.iter().copied()).expect("released set");
+    assert_eq!(
+        released[3].checksum(),
+        RELEASED_0004,
+        "the fixture is the released text"
+    );
+    let available = scalar_bool(
+        pool,
+        "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector')",
+    )
+    .await;
+    if available {
+        elitea_pg_migrate::apply(pool, &store::LEDGER, &released)
+            .await
+            .expect("the released chain");
+    } else {
+        elitea_pg_migrate::apply(pool, &store::LEDGER, &released[..3])
+            .await
+            .expect("0001-0003");
+        sqlx::raw_sql(
+            "ALTER TABLE inventory_graph.entities
+                 ADD COLUMN embedding_vector real[] GENERATED ALWAYS AS (embedding::real[]) STORED;
+             INSERT INTO inventory_graph.schema_migrations (version, name, checksum)
+             VALUES ('0004', 'entity_vectors', 'a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f');",
+        )
+        .execute(pool)
+        .await
+        .expect("the stand-in 0004");
+        elitea_pg_migrate::apply(pool, &store::LEDGER, &released)
+            .await
+            .expect("0005-0007");
+    }
+    available
+}
+
+/// A fresh install creates nothing of pgvector (plain PostgreSQL suffices)
+/// and records the rewritten 0004.
+#[tokio::test]
+async fn a_fresh_install_needs_no_pgvector() {
+    let Some(pool) = database("fresh_install").await else {
+        return;
+    };
+    assert!(!has_vector_extension(&pool).await, "no vector extension");
+    assert!(!has_column(&pool, "entities", "embedding_vector").await);
+    assert!(
+        has_column(&pool, "entities", "embedding").await,
+        "the float8[] stays"
+    );
+    for column in [
+        "vector_generation",
+        "vector_model_slug",
+        "vector_dimension",
+        "vector_other_dimension",
+    ] {
+        assert!(has_column(&pool, "graphs", column).await, "{column}");
+    }
+    let recorded: String = sqlx::query_scalar(
+        "SELECT checksum FROM inventory_graph.schema_migrations WHERE version = '0004'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("0004");
+    let current = store::embedded().expect("embedded");
+    assert_eq!(recorded, current[3].checksum(), "the rewritten text");
+    assert_ne!(recorded, RELEASED_0004);
+}
+
+/// A database on the released chain (pgvector's 0004 applied) accepts the
+/// rewritten 0004, applies 0008 (which drops the column and the extension),
+/// and its stored vectors reach elitea-vector by the first ranking.
+#[tokio::test]
+async fn a_database_on_the_released_chain_upgrades_and_backfills() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = empty_database("released_upgrade").await else {
+        return;
+    };
+    let real = migrate_released(&pool).await;
+    eprintln!(
+        "released 0004: {}",
+        if real {
+            "the real pgvector text"
+        } else {
+            "stand-in (no vector extension on this server)"
+        }
+    );
+    assert_eq!(has_vector_extension(&pool).await, real);
+    assert!(has_column(&pool, "entities", "embedding_vector").await);
+    // A graph written by the released engine: rows only, no generation.
+    sqlx::raw_sql(
+        r#"INSERT INTO inventory_graph.graphs (project_id, application_id, metadata)
+           VALUES (1, 5, '{"embeddings_model": "text-embed-x"}');
+           INSERT INTO inventory_graph.entities
+               (project_id, application_id, entity_id, ordinal, attributes, embedding)
+           VALUES (1, 5, 'b', 0, '{"name": "b"}', '{2, 0, 0, 0}'),
+                  (1, 5, 'a', 1, '{"name": "a"}', '{1, 0, 0, 0}'),
+                  (1, 5, 'c', 2, '{"name": "c"}', '{0, 1, 0, 0}'),
+                  (1, 5, 'zero', 3, '{"name": "zero"}', '{0, 0, 0, 0}'),
+                  (1, 5, 'none', 4, '{"name": "none"}', NULL);"#,
+    )
+    .execute(&pool)
+    .await
+    .expect("a released graph");
+
+    assert_eq!(
+        store::migrate(&pool).await.expect("the new chain"),
+        ["0008".to_owned()]
+    );
+    assert!(!has_column(&pool, "entities", "embedding_vector").await);
+    assert!(!has_vector_extension(&pool).await, "nothing else used it");
+    assert_eq!(
+        store::migrate(&pool).await.expect("again"),
+        Vec::<String>::new()
+    );
+
+    let key = key(1, 5);
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let graphs = store::PgGraphStore::new(pool.clone())
+        .with_vectors(Some(common::entity_vectors(&origin, BEARER)));
+    let ranked = graphs
+        .rank(key, &[1.0, 0.0, 0.0, 0.0], -1.0)
+        .await
+        .expect("rank")
+        .expect("same width");
+    let order: Vec<&str> = ranked.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(
+        order,
+        ["a", "b", "c"],
+        "ties by entity id; the zero vector is not ranked"
+    );
+    assert_eq!(
+        fake.point_count(),
+        3,
+        "the backfill published the non-zero vectors"
+    );
+    let (generation, slug, dimension): (Option<String>, Option<String>, Option<i32>) =
+        sqlx::query_as(
+            "SELECT vector_generation, vector_model_slug, vector_dimension
+               FROM inventory_graph.graphs WHERE project_id = 1 AND application_id = 5",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+    assert!(generation.is_some());
+    assert_eq!(slug, Some(store::vectors::model_slug("text-embed-x")));
+    assert_eq!(dimension, Some(4));
+    // A second ranking searches what the first published: no second upsert.
+    let upserts = |calls: Vec<&str>| calls.iter().filter(|call| **call == "upsert").count();
+    let before = upserts(fake.calls());
+    graphs
+        .rank(key, &[0.0, 1.0, 0.0, 0.0], 0.5)
+        .await
+        .expect("rank")
+        .expect("same width");
+    assert_eq!(upserts(fake.calls()), before);
+    // The width is still numpy's refusal, decided before elitea-vector.
+    assert_eq!(
+        graphs.rank(key, &[1.0, 0.0, 0.0], 0.0).await.expect("rank"),
+        Err("shapes (3,) and (4,) not aligned: 3 (dim 0) != 4 (dim 0)".to_owned())
+    );
+}
+
+/// The released 0004's checksum is accepted, but no other: an edited row is
+/// still refused.
+#[tokio::test]
+async fn a_tampered_checksum_is_still_refused() {
+    let Some(pool) = database("tampered").await else {
+        return;
+    };
+    for version in ["0004", "0005"] {
+        sqlx::query(
+            "UPDATE inventory_graph.schema_migrations SET checksum = 'deadbeef' WHERE version = $1",
+        )
+        .bind(version)
+        .execute(&pool)
+        .await
+        .expect("tamper");
+        assert!(
+            matches!(store::migrate(&pool).await, Err(StoreError::Migration(_))),
+            "{version} with a checksum never released"
+        );
+        let released = if version == "0004" {
+            RELEASED_0004.to_owned()
+        } else {
+            store::embedded().expect("embedded")[4].checksum()
+        };
+        sqlx::query(
+            "UPDATE inventory_graph.schema_migrations SET checksum = $2 WHERE version = $1",
+        )
+        .bind(version)
+        .bind(released)
+        .execute(&pool)
+        .await
+        .expect("restore");
+        assert_eq!(
+            store::migrate(&pool).await.expect("accepted"),
+            Vec::<String>::new()
+        );
+    }
+}
+
+/// On a server with pgvector, an extension something else still uses (say
+/// another engine's table in the same database) is kept, and 0008 succeeds.
+#[tokio::test]
+async fn the_extension_stays_while_something_else_uses_it() {
+    let Some(pool) = empty_database("shared_extension").await else {
+        return;
+    };
+    if !migrate_released(&pool).await {
+        eprintln!("this server offers no vector extension: the shared-extension case did NOT run");
+        return;
+    }
+    sqlx::raw_sql("CREATE TABLE public.other_engine (v vector(3))")
+        .execute(&pool)
+        .await
+        .expect("a dependent table");
+    assert_eq!(
+        store::migrate(&pool).await.expect("0008"),
+        ["0008".to_owned()]
+    );
+    assert!(!has_column(&pool, "entities", "embedding_vector").await);
+    assert!(has_vector_extension(&pool).await, "kept for its other user");
 }

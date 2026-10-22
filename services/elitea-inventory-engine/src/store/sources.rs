@@ -2,6 +2,7 @@
 //! `sources_status.json` held, the file hashes the checkpoint held, and the
 //! lease that keeps two ingestions of one graph apart.
 
+use super::vectors::EntityVectors;
 use super::{GraphKey, Result, StoreError, write_graph};
 use crate::graph::Graph;
 use elitea_content_source::Acl;
@@ -165,7 +166,23 @@ pub async fn complete(
     graph: &Graph,
     completion: &Completion<'_>,
 ) -> Result<i64> {
-    commit_run(pool, key, graph, completion).await
+    commit_run(pool, key, graph, completion, None).await
+}
+
+/// [`complete`], publishing the graph's entity vectors through `vectors`
+/// (`super::vectors::publish`).
+///
+/// # Errors
+///
+/// See [`super::save_with`].
+pub async fn complete_with(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    completion: &Completion<'_>,
+    vectors: Option<&EntityVectors>,
+) -> Result<i64> {
+    commit_run(pool, key, graph, completion, vectors).await
 }
 
 async fn commit_run(
@@ -173,9 +190,10 @@ async fn commit_run(
     key: GraphKey,
     graph: &Graph,
     completion: &Completion<'_>,
+    vectors: Option<&EntityVectors>,
 ) -> Result<i64> {
     let mut transaction = pool.begin().await?;
-    let revision = write_graph(&mut transaction, key, graph).await?;
+    let written = write_graph(&mut transaction, key, graph, vectors).await?;
     sqlx::query(
         "DELETE FROM inventory_graph.documents
           WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
@@ -227,7 +245,8 @@ async fn commit_run(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    Ok(revision)
+    written.sweep(key, vectors).await;
+    Ok(written.revision)
 }
 
 /// Commit a source's removal in ONE transaction: the graph without it, and
@@ -243,8 +262,24 @@ pub async fn remove(
     toolkit_id: &str,
     source_name: &str,
 ) -> Result<i64> {
+    remove_with(pool, key, graph, toolkit_id, source_name, None).await
+}
+
+/// [`remove`], publishing the graph's entity vectors through `vectors`.
+///
+/// # Errors
+///
+/// See [`super::save_with`].
+pub async fn remove_with(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    toolkit_id: &str,
+    source_name: &str,
+    vectors: Option<&EntityVectors>,
+) -> Result<i64> {
     let mut transaction = pool.begin().await?;
-    let revision = write_graph(&mut transaction, key, graph).await?;
+    let written = write_graph(&mut transaction, key, graph, vectors).await?;
     sqlx::query(
         "DELETE FROM inventory_graph.documents
           WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
@@ -264,7 +299,8 @@ pub async fn remove(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    Ok(revision)
+    written.sweep(key, vectors).await;
+    Ok(written.revision)
 }
 
 /// The `sources_status.json` document of a graph:
