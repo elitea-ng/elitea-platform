@@ -134,7 +134,11 @@ class PackagingTests(unittest.TestCase):
                 target = target[name]
             target[path[-1]] = value
             cases.append({"main": {"runtime": config}})
-        altered(["enabled"], False)
+        # The runtime off: the features that ride on it go off too, or the
+        # switch check refuses first and never reaches the Code consumers.
+        off = {"enabled": False}
+        cases.append({"main": {"runtime": {**copy.deepcopy(CODE), "enabled": False}},
+                      "worker": off, "vector": off, "qdrant": off, "deepwiki": off, "inventory": off})
         altered(["codeOwnerRecovery", "enabled"], False)
         altered(["codeOwnerRecovery", "enabled"], "true")
         altered(["codeOwnerRecovery", "supervisors", 0, "httpsOrigin"], "http://elitea-sandbox-deno:9446")
@@ -164,9 +168,11 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn("code", result.stderr.lower())
 
     def test_debug_receipt_pool_has_one_explicit_four_connection_budget(self):
-        # Standalone uses four Main replicas, each with 42 product/runtime connections.
-        # Debug adds four independent receipt connections per replica.
-        for budget, allowed in ((208, False), (209, True)):
+        # Standalone uses four Main replicas, each with 44 product/runtime
+        # connections (2 of them the vector introspection pool, on by default).
+        # Debug adds four independent receipt connections per replica:
+        # 4 x 48 = 192, plus 25 reserved.
+        for budget, allowed in ((216, False), (217, True)):
             with self.subTest(budget=budget):
                 result = render({"main": {"runtime": CODE},
                                  "postgresql": {"maxConnections": budget}})
@@ -174,7 +180,7 @@ class PackagingTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                 else:
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("184 PostgreSQL connections", result.stderr)
+                    self.assertIn("192 PostgreSQL connections", result.stderr)
 
     def test_debug_and_compiled_receipts_share_one_budget(self):
         runtime = copy.deepcopy(CODE)
@@ -184,7 +190,7 @@ class PackagingTests(unittest.TestCase):
             "tenantEntries": 10, "tenantBytes": 268435456,
             "publishingTtlSeconds": 60, "readyTtlSeconds": 3600}
         result = render({"main": {"runtime": runtime},
-                         "postgresql": {"maxConnections": 209},
+                         "postgresql": {"maxConnections": 217},
                          "worker": {"enabled": False},
                          "sandboxKubernetes": {"supervisor": {"enabled": False}}})
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -28,8 +28,12 @@ bash "${chart}/build-deps.sh" >/dev/null
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 # The platform's own refusals run on every render, so state the two fields the
-# chart has no default for; neither reaches nats.conf.
+# chart has no default for, and turn off the features whose operator values
+# (auth document, allowlists, worker identity) only they need; none of it
+# reaches nats.conf, whose permission table is the same either way.
 "$HELM" template elitea "$chart" --namespace elitea ${extra[@]+"${extra[@]}"} \
+  --set main.runtime.enabled=false --set worker.enabled=false --set vector.enabled=false \
+  --set qdrant.enabled=false --set deepwiki.enabled=false --set inventory.enabled=false \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted \
   --set networkPolicies.main.noExternalIngress=true \
