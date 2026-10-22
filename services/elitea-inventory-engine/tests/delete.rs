@@ -1123,6 +1123,61 @@ async fn a_source_ingested_after_the_list_guards_its_graph() {
     assert_eq!(rows(&pool, key(4, 40)).await, [1, 3, 2, 1, 2]);
 }
 
+/// An orphan of a live project whose entity vectors are in elitea-vector is
+/// kept: the command cannot delete the vectors, and deleting the rows would
+/// lose the record of them. A deleted project's graph goes whatever it
+/// holds (its vectors go with `DropProject`).
+#[tokio::test]
+async fn an_orphan_holding_vectors_is_left_to_the_platform() {
+    let Some(pool) = common::database("delete_orphan_vectors").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    commit(&graphs, key(5, 50), &graph("toolkit gone")).await;
+    commit(&graphs, key(6, 60), &graph("project gone")).await;
+    sqlx::query(
+        "UPDATE inventory_graph.graphs SET vector_generation = gen_random_uuid()::text
+          WHERE project_id IN (5, 6)",
+    )
+    .execute(&pool)
+    .await
+    .expect("record generations");
+    let orphan = |project, toolkit, reason| delete::OrphanGraph {
+        key: key(project, toolkit),
+        reason,
+        entities: 0,
+        updated_at: String::new(),
+    };
+    let kept = delete::delete_orphan(&pool, &orphan(5, 50, "toolkit"), None)
+        .await
+        .expect("guarded");
+    assert!(
+        matches!(&kept, delete::GuardedDeletion::VectorsHeld(reason) if reason.contains("elitea-vector")),
+        "{kept:?}"
+    );
+    assert_eq!(rows(&pool, key(5, 50)).await[0], 1, "the graph row stays");
+    assert!(matches!(
+        delete::delete_orphan(&pool, &orphan(6, 60, "project"), None)
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Deleted { .. }
+    ));
+    // Without vectors a live project's orphan goes too.
+    sqlx::query(
+        "UPDATE inventory_graph.graphs SET vector_generation = NULL
+          WHERE project_id = 5",
+    )
+    .execute(&pool)
+    .await
+    .expect("clear");
+    assert!(matches!(
+        delete::delete_orphan(&pool, &orphan(5, 50, "toolkit"), None)
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Deleted { .. }
+    ));
+}
+
 #[tokio::test]
 async fn the_orphans_command_refuses_a_stale_or_future_list_and_skips_newer_graphs() {
     let Some(pool) = common::database("delete_cli_listed").await else {

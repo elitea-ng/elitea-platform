@@ -33,16 +33,24 @@
 //!
 //! # A write
 //!
-//! `publish` runs inside the write's transaction, under the graph's write
-//! lock: it upserts the graph's points under a new generation, then records
-//! that generation and the space in the graph row. The upsert finishes before
-//! the commit, so a committed generation is always complete in Qdrant; a
-//! failed upsert fails the write (nothing is committed). After the commit the
-//! caller removes every other generation of the namespace
-//! ([`EntityVectors::sweep`]); a sweep that fails is logged and repeated by
-//! the next write's. A write made WITHOUT vector access (the `import-graph`
-//! command, which has no invocation bearer) records no generation, and its
-//! graph is backfilled by the first ranking.
+//! [`stage`] runs BEFORE the write's transaction opens, so no transaction is
+//! open and no lock held across the call to elitea-vector: it upserts the
+//! graph's points under a new generation. A failed upsert fails the write
+//! before anything is written. Inside the transaction, under the graph's
+//! write lock, [`record`] makes that generation the graph row's and appends
+//! the one it replaces to `vector_stale_generations`. A committed generation
+//! is therefore always complete in Qdrant, and a generation nobody committed
+//! is never searched. After the transaction [`settle`] deletes the staged
+//! generation when the write did not commit it, then sweeps: it deletes
+//! exactly the stale generations the row lists ([`EntityVectors::sweep`]),
+//! never "every generation but the current one", which would delete a
+//! concurrent writer's staged points before that writer commits. A sweep
+//! that fails is logged and repeated by the next write's. A staged
+//! generation outlives its write only if the process dies between the
+//! upsert and the clean-up; it is never searched, and the toolkit's
+//! deletion removes it with the namespace. A write made WITHOUT vector
+//! access (the `import-graph` command, which has no invocation bearer)
+//! records no generation, and its graph is backfilled by the first ranking.
 //!
 //! # A ranking
 //!
@@ -61,13 +69,15 @@
 //!
 //! A graph without a recorded generation (a database upgraded from pgvector,
 //! or a write without vector access) is published from `entities.embedding`
-//! by the first ranking, which has the invocation's bearer: under the graph's
-//! write lock (`store::lock`, the lock every writer and every deletion takes)
-//! the row is read again, and only when it still has no generation are its
-//! vectors upserted and the generation recorded. Two rankings racing for it
-//! serialise on the lock and the second finds the first one's generation; a
-//! deletion either precedes it (no row: nothing to backfill) or follows it.
-//! The revision does not move: the graph did not change.
+//! by the first ranking, which has the invocation's bearer. It reads the
+//! vectors and the graph's revision in one snapshot, stages them like a
+//! write, then, under the graph's write lock (`store::lock`, the lock every
+//! writer and every deletion takes), records the generation only when the
+//! row still has none at the same revision. Otherwise (another ranking
+//! published first, or the graph was rewritten meanwhile) its staged points
+//! are deleted and the row is read again. A deletion either precedes it (no
+//! row: nothing to backfill) or follows it. The revision does not move: the
+//! graph did not change.
 
 use super::{GraphKey, Result, StoreError, lock};
 use elitea_vector_index::client::{
@@ -309,21 +319,27 @@ impl EntityVectors {
             .map_err(|error| vectors_failed("upsert", &error))
     }
 
-    /// Remove every generation of `key`'s namespace but `keep`: the clean-up
-    /// after a write committed `keep`. A failure is logged, not returned: the
-    /// write is committed, and the next write's sweep removes what this one
-    /// left (a ranking never searches another generation).
-    pub async fn sweep(&self, key: GraphKey, keep: &str) {
-        if let Err(error) = self
-            .client
+    /// Delete the points of `generations` of `key`'s namespace.
+    async fn delete_generations(&self, key: GraphKey, generations: Vec<String>) -> Result<()> {
+        self.client
             .delete(
                 &*self.bearer,
                 None,
                 inventory_namespace(&namespace_id(key)),
-                DeleteSelector::GenerationsExcept(keep.to_owned()),
+                DeleteSelector::Generations(generations),
             )
             .await
-        {
+            .map(|_| ())
+            .map_err(|error| vectors_failed("delete", &error))
+    }
+
+    /// Delete the stale generations the graph row of `key` lists (those a
+    /// commit superseded), and remove them from the list. A failure is
+    /// logged, not returned: the write is committed, and the next write's
+    /// sweep removes what this one left (a ranking never searches a stale
+    /// generation).
+    pub async fn sweep(&self, pool: &PgPool, key: GraphKey) {
+        if let Err(error) = self.sweep_stale(pool, key).await {
             tracing::warn!(
                 project_id = key.project_id,
                 application_id = key.application_id,
@@ -331,6 +347,33 @@ impl EntityVectors {
                 "the graph's superseded entity vectors were not removed; the next write removes them"
             );
         }
+    }
+
+    async fn sweep_stale(&self, pool: &PgPool, key: GraphKey) -> Result<()> {
+        let stale: Option<Vec<String>> = sqlx::query_scalar(
+            "SELECT vector_stale_generations FROM inventory_graph.graphs
+              WHERE project_id = $1 AND application_id = $2",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .fetch_optional(pool)
+        .await?;
+        for batch in stale.unwrap_or_default().chunks(SWEEP_BATCH) {
+            self.delete_generations(key, batch.to_vec()).await?;
+            sqlx::query(
+                "UPDATE inventory_graph.graphs
+                    SET vector_stale_generations = ARRAY(
+                            SELECT generation FROM unnest(vector_stale_generations) AS generation
+                             WHERE NOT generation = ANY($3))
+                  WHERE project_id = $1 AND application_id = $2",
+            )
+            .bind(key.project_id)
+            .bind(key.application_id)
+            .bind(batch)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
     }
 
     /// Remove every vector of `key`'s namespace (a deleted graph).
@@ -432,48 +475,120 @@ impl EntityVectors {
     }
 }
 
-/// Publish the graph `key`'s vectors inside a write's transaction (the
-/// graph's write lock is held): with `vectors`, upsert them under a new
-/// generation and record it; without, record no generation (the first
-/// ranking backfills). The space is recorded either way. Returns the
-/// generation to keep when the caller sweeps after its commit.
+/// How many stale generations one delete names (elitea-vector takes up to
+/// 1024).
+const SWEEP_BATCH: usize = 256;
+
+/// A graph's vectors upserted ahead of its write ([`stage`]).
+#[derive(Debug)]
+pub struct Staged {
+    /// The new generation; `None` for a write without vector access.
+    generation: Option<String>,
+    space: VectorSpace,
+}
+
+/// Upsert the graph `key`'s vectors under a new generation, before the
+/// write's transaction opens (see the module documentation). Without
+/// `vectors` nothing is upserted and the write records no generation (the
+/// first ranking backfills).
 ///
 /// # Errors
 ///
-/// [`StoreError::Vectors`] for a failed upsert (the write must then roll
-/// back), [`StoreError::Database`].
-pub(super) async fn publish(
-    transaction: &mut sqlx::PgTransaction<'_>,
+/// [`StoreError::Vectors`] for a failed upsert (the write must not go on),
+/// [`StoreError::Database`].
+pub(super) async fn stage(
+    pool: &PgPool,
     key: GraphKey,
-    space: &VectorSpace,
+    space: VectorSpace,
     entities: &[EntityVector<'_>],
     vectors: Option<&EntityVectors>,
-) -> Result<Option<String>> {
+) -> Result<Staged> {
     let generation = match vectors {
         Some(vectors) => {
             let generation: String = sqlx::query_scalar("SELECT gen_random_uuid()::text")
-                .fetch_one(&mut **transaction)
+                .fetch_one(pool)
                 .await?;
-            vectors.upsert(key, space, &generation, entities).await?;
+            vectors.upsert(key, &space, &generation, entities).await?;
             Some(generation)
         }
         None => None,
     };
+    Ok(Staged { generation, space })
+}
+
+/// Make `staged` the graph row's generation, inside the write's transaction
+/// (the graph's write lock is held), and list the one it replaces as stale.
+/// The space is recorded either way.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub(super) async fn record(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    key: GraphKey,
+    staged: &Staged,
+) -> Result<()> {
+    // Every right-hand side reads the row as it was.
     sqlx::query(
         "UPDATE inventory_graph.graphs
-            SET vector_generation = $3, vector_model_slug = $4,
+            SET vector_stale_generations = CASE
+                    WHEN vector_generation IS NULL OR vector_generation = $3
+                        THEN vector_stale_generations
+                    ELSE array_append(vector_stale_generations, vector_generation)
+                END,
+                vector_generation = $3, vector_model_slug = $4,
                 vector_dimension = $5, vector_other_dimension = $6
           WHERE project_id = $1 AND application_id = $2",
     )
     .bind(key.project_id)
     .bind(key.application_id)
-    .bind(&generation)
-    .bind(&space.model_slug)
-    .bind(space.dimension)
-    .bind(space.other_dimension)
+    .bind(&staged.generation)
+    .bind(&staged.space.model_slug)
+    .bind(staged.space.dimension)
+    .bind(staged.space.other_dimension)
     .execute(&mut **transaction)
     .await?;
-    Ok(generation)
+    Ok(())
+}
+
+/// After a write's transaction ended: delete the staged generation unless
+/// the graph row holds it, then sweep the stale ones. `committed` is the
+/// transaction's outcome as the caller saw it; a commit reported as failed
+/// may still have committed, so the row decides before anything is
+/// deleted. Never fails: what it cannot delete is logged, never searched,
+/// and removed with the toolkit's namespace.
+pub(super) async fn settle(
+    pool: &PgPool,
+    key: GraphKey,
+    staged: &Staged,
+    vectors: Option<&EntityVectors>,
+    committed: bool,
+) {
+    let Some(vectors) = vectors else {
+        return;
+    };
+    if let Some(generation) = &staged.generation
+        && !committed
+    {
+        let held = match vector_row(pool, key).await {
+            Ok(row) => row.and_then(|row| row.0).as_deref() == Some(generation.as_str()),
+            // Unknown: keep the points rather than delete a live generation.
+            Err(_) => true,
+        };
+        if !held
+            && let Err(error) = vectors
+                .delete_generations(key, vec![generation.clone()])
+                .await
+        {
+            tracing::warn!(
+                project_id = key.project_id,
+                application_id = key.application_id,
+                %error,
+                "the entity vectors of a write that did not commit were not removed; they are never searched, and the toolkit's deletion removes them"
+            );
+        }
+    }
+    vectors.sweep(pool, key).await;
 }
 
 /// The graph row's vector columns.
@@ -575,7 +690,8 @@ async fn vector_row(pool: &PgPool, key: GraphKey) -> Result<Option<VectorRow>> {
 
 /// Publish the stored vectors of a graph that has no generation (see the
 /// module documentation), and return its vector row; `None` when the graph
-/// is gone.
+/// is gone. A graph rewritten while its backfill ran is backfilled again,
+/// a bounded number of times.
 ///
 /// # Errors
 ///
@@ -585,24 +701,43 @@ pub async fn backfill(
     key: GraphKey,
     vectors: &EntityVectors,
 ) -> Result<Option<VectorRow>> {
-    let mut transaction = pool.begin().await?;
-    lock(&mut transaction, key).await?;
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT vector_generation, metadata ->> 'embeddings_model'
+    for _ in 0..RANK_ATTEMPTS {
+        match backfill_once(pool, key, vectors).await? {
+            Backfill::Done(row) => return Ok(row),
+            Backfill::Rewritten => {}
+        }
+    }
+    vector_row(pool, key).await
+}
+
+enum Backfill {
+    Done(Option<VectorRow>),
+    /// The graph was rewritten without vector access while the backfill ran.
+    Rewritten,
+}
+
+async fn backfill_once(pool: &PgPool, key: GraphKey, vectors: &EntityVectors) -> Result<Backfill> {
+    // The vectors and the revision they belong to, in one snapshot.
+    let mut read = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *read)
+        .await?;
+    let row: Option<(Option<String>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT vector_generation, metadata ->> 'embeddings_model', revision
            FROM inventory_graph.graphs
           WHERE project_id = $1 AND application_id = $2",
     )
     .bind(key.project_id)
     .bind(key.application_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut *read)
     .await?;
-    let Some((generation, model)) = row else {
-        return Ok(None);
+    let Some((generation, model, revision)) = row else {
+        return Ok(Backfill::Done(None));
     };
     if generation.is_some() {
         // Published meanwhile (another ranking, or a write).
-        transaction.commit().await?;
-        return vector_row(pool, key).await;
+        read.commit().await?;
+        return Ok(Backfill::Done(vector_row(pool, key).await?));
     }
     let stored: Vec<(String, Vec<f64>)> = sqlx::query_as(
         "SELECT entity_id, embedding FROM inventory_graph.entities
@@ -612,30 +747,61 @@ pub async fn backfill(
     )
     .bind(key.project_id)
     .bind(key.application_id)
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut *read)
     .await?;
+    read.commit().await?;
     let space = VectorSpace::of(model.as_deref(), stored.iter().map(|(_, v)| v.len()));
     let entities: Vec<EntityVector<'_>> = stored
         .iter()
         .map(|(id, vector)| EntityVector { id, vector })
         .collect();
-    let published = publish(&mut transaction, key, &space, &entities, Some(vectors)).await?;
-    transaction.commit().await?;
-    tracing::info!(
-        project_id = key.project_id,
-        application_id = key.application_id,
-        entities = entities.len(),
-        "the graph's entity vectors were published to elitea-vector (backfill)"
-    );
-    if let Some(generation) = &published {
-        vectors.sweep(key, generation).await;
+    let staged = stage(pool, key, space, &entities, Some(vectors)).await?;
+    let recorded = async {
+        let mut transaction = pool.begin().await?;
+        lock(&mut transaction, key).await?;
+        let now: Option<(Option<String>, i64)> = sqlx::query_as(
+            "SELECT vector_generation, revision FROM inventory_graph.graphs
+              WHERE project_id = $1 AND application_id = $2",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let unchanged = matches!(now, Some((None, now)) if now == revision);
+        if unchanged {
+            record(&mut transaction, key, &staged).await?;
+        }
+        transaction.commit().await?;
+        Ok::<_, StoreError>((unchanged, now))
     }
-    Ok(Some((
-        published,
-        Some(space.model_slug),
-        space.dimension,
-        space.other_dimension,
-    )))
+    .await;
+    settle(
+        pool,
+        key,
+        &staged,
+        Some(vectors),
+        matches!(recorded, Ok((true, _))),
+    )
+    .await;
+    match recorded? {
+        (true, _) => {
+            tracing::info!(
+                project_id = key.project_id,
+                application_id = key.application_id,
+                entities = entities.len(),
+                "the graph's entity vectors were published to elitea-vector (backfill)"
+            );
+            Ok(Backfill::Done(Some((
+                staged.generation,
+                Some(staged.space.model_slug),
+                staged.space.dimension,
+                staged.space.other_dimension,
+            ))))
+        }
+        // Deleted, or published by someone else: their row is the answer.
+        (false, None | Some((Some(_), _))) => Ok(Backfill::Done(vector_row(pool, key).await?)),
+        (false, Some((None, _))) => Ok(Backfill::Rewritten),
+    }
 }
 
 #[cfg(test)]

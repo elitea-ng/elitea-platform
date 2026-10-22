@@ -389,6 +389,75 @@ async fn the_postgresql_store_passes_the_graph_store_conformance_suite() {
 /// says otherwise).
 const BEARER: &str = "inventory-callback";
 
+/// The upsert runs before the write's transaction (#1359), so two writers
+/// of one graph can stage at once. The one that commits second supersedes
+/// the first, and neither's sweep deletes the other's staged points: the
+/// sweep deletes only the generations the row lists as stale. A write that
+/// never commits leaves no points behind.
+#[tokio::test]
+async fn interleaved_writers_keep_the_committed_generation_whole() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("interleaved").await else {
+        return;
+    };
+    let key = key(1, 7);
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let vectors = common::entity_vectors(&origin, BEARER);
+    let graph = |hot: f64| {
+        let mut graph = replay();
+        let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+        for id in ids.iter().take(2) {
+            assert!(graph.set_embedding(id, &[1.0, hot, 0.0, 0.0]));
+        }
+        graph
+            .metadata
+            .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+        graph
+    };
+    let (first, second) = (graph(0.0), graph(1.0));
+    // Both stage before either commits.
+    let a = store::prepare(&pool, key, &first, Some(&vectors))
+        .await
+        .expect("stage a");
+    let b = store::prepare(&pool, key, &second, Some(&vectors))
+        .await
+        .expect("stage b");
+    assert_eq!(fake.point_count(), 4, "two staged generations");
+    for (prepared, graph) in [(b, &second), (a, &first)] {
+        let mut transaction = pool.begin().await.expect("begin");
+        store::write_graph(&mut transaction, key, graph, &prepared)
+            .await
+            .expect("write");
+        transaction.commit().await.expect("commit");
+        prepared.settle(&pool, key, Some(&vectors), true).await;
+    }
+    // `a` committed last: its points are whole, `b`'s were swept.
+    assert_eq!(fake.point_count(), 2, "only the committed generation");
+    let stale: Vec<String> = sqlx::query_scalar(
+        "SELECT vector_stale_generations FROM inventory_graph.graphs
+          WHERE project_id = 1 AND application_id = 7",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("row");
+    assert!(stale.is_empty(), "{stale:?}");
+    let ranked = store::PgGraphStore::new(pool.clone())
+        .with_vectors(Some(vectors.clone()))
+        .rank(key, &[1.0, 0.0, 0.0, 0.0], 0.99)
+        .await
+        .expect("rank")
+        .expect("same width");
+    assert_eq!(ranked.len(), 2, "the committed generation answers");
+
+    // A write staged and then abandoned (its transaction rolled back).
+    let c = store::prepare(&pool, key, &second, Some(&vectors))
+        .await
+        .expect("stage c");
+    assert_eq!(fake.point_count(), 4);
+    c.settle(&pool, key, Some(&vectors), false).await;
+    assert_eq!(fake.point_count(), 2, "the uncommitted generation is gone");
+}
+
 /// The view cache over the PostgreSQL store: no graph, no view; a view is
 /// reused while the revision stands and reloaded once it moves.
 #[tokio::test]
@@ -671,6 +740,7 @@ async fn a_fresh_install_needs_no_pgvector() {
         "vector_model_slug",
         "vector_dimension",
         "vector_other_dimension",
+        "vector_stale_generations",
     ] {
         assert!(has_column(&pool, "graphs", column).await, "{column}");
     }

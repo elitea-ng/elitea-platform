@@ -86,6 +86,9 @@ pub(super) enum Removal {
     },
     /// Written after the list the deletion went by; nothing was deleted.
     Newer(String),
+    /// Holds entity vectors the deletion was told to leave to the platform;
+    /// nothing was deleted.
+    VectorsHeld(String),
 }
 
 /// Whether `remove` leaves the toolkit's tombstone (migration 0007).
@@ -119,6 +122,18 @@ pub(super) async fn remove(
     listed_at: Option<&str>,
     tombstone: Tombstone,
 ) -> Result<Removal> {
+    remove_checked(pool, key, listed_at, false, tombstone).await
+}
+
+/// [`remove`], refusing (with `refuse_vectors`) a graph whose row records a
+/// vector generation or stale ones.
+async fn remove_checked(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: Option<&str>,
+    refuse_vectors: bool,
+    tombstone: Tombstone,
+) -> Result<Removal> {
     let mut transaction = pool.begin().await?;
     lock(&mut transaction, key).await?;
     if let Some(listed_at) = listed_at
@@ -126,6 +141,23 @@ pub(super) async fn remove(
     {
         // Dropped, so rolled back: nothing was changed.
         return Ok(Removal::Newer(reason));
+    }
+    if refuse_vectors {
+        let held: Option<bool> = sqlx::query_scalar(
+            "SELECT vector_generation IS NOT NULL OR cardinality(vector_stale_generations) > 0
+               FROM inventory_graph.graphs
+              WHERE project_id = $1 AND application_id = $2",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if held == Some(true) {
+            return Ok(Removal::VectorsHeld(format!(
+                "its entity vectors are in elitea-vector (source inventory, namespace {}), which this command cannot delete; elitea-main's toolkit cleanup deletes the graph and them",
+                super::vectors::namespace_id(key)
+            )));
+        }
     }
     // Relations before entities before the graph row, each explicitly, so
     // every table's count is its own DELETE's (the cascades from graphs to
@@ -218,7 +250,9 @@ pub async fn delete_graph(pool: &PgPool, key: GraphKey) -> Result<GraphDeletion>
     match delete_graph_guarded(pool, key, None).await? {
         GuardedDeletion::Deleted { removed } => Ok(GraphDeletion::Deleted { removed }),
         // Without `listed_at` nothing can be newer than it.
-        GuardedDeletion::Busy | GuardedDeletion::Newer(_) => Ok(GraphDeletion::Busy),
+        GuardedDeletion::Busy | GuardedDeletion::Newer(_) | GuardedDeletion::VectorsHeld(_) => {
+            Ok(GraphDeletion::Busy)
+        }
     }
 }
 
@@ -233,6 +267,9 @@ pub enum GuardedDeletion {
     /// The graph was written after the list the deletion went by (the
     /// reason says what and when); nothing was deleted.
     Newer(String),
+    /// An orphan of a live project whose entity vectors are in elitea-vector
+    /// ([`delete_orphan`]); nothing was deleted.
+    VectorsHeld(String),
 }
 
 /// [`delete_graph`], optionally guarded by the time a list of existing
@@ -252,14 +289,47 @@ pub async fn delete_graph_guarded(
     key: GraphKey,
     listed_at: Option<&str>,
 ) -> Result<GuardedDeletion> {
+    guarded(pool, key, listed_at, false).await
+}
+
+/// Delete one graph `orphans --delete` found: [`delete_graph_guarded`],
+/// and, for a graph of a project that still exists (`reason` `toolkit`),
+/// only when it holds no entity vectors in elitea-vector (a recorded or a
+/// stale generation, migration 0008). The command has no bearer for
+/// elitea-vector, so it cannot delete them, and deleting the rows would
+/// leave them there for good. Such a graph is the platform's to delete:
+/// elitea-main's toolkit cleanup deletes the rows through the engine, then
+/// the namespace as elitea-vector's administrator. A deleted project's
+/// vectors go with its `DropProject`, so its graphs are deleted whatever
+/// they hold. Checked inside the deletion's transaction, under the graph's
+/// lock.
+///
+/// # Errors
+///
+/// See [`delete_graph_guarded`].
+pub async fn delete_orphan(
+    pool: &PgPool,
+    orphan: &OrphanGraph,
+    listed_at: Option<&str>,
+) -> Result<GuardedDeletion> {
+    guarded(pool, orphan.key, listed_at, orphan.reason == "toolkit").await
+}
+
+async fn guarded(
+    pool: &PgPool,
+    key: GraphKey,
+    listed_at: Option<&str>,
+    refuse_vectors: bool,
+) -> Result<GuardedDeletion> {
     purge_tombstones(pool).await?;
     let Some(_lease) = sources::lease_unfenced(pool, key).await? else {
         return Ok(GuardedDeletion::Busy);
     };
     Ok(
-        match remove(pool, key, listed_at, Tombstone::Write).await? {
+        match remove_checked(pool, key, listed_at, refuse_vectors, Tombstone::Write).await? {
             Removal::Done { removed } => GuardedDeletion::Deleted { removed },
             Removal::Newer(reason) => GuardedDeletion::Newer(reason),
+            Removal::VectorsHeld(reason) => GuardedDeletion::VectorsHeld(reason),
         },
     )
 }

@@ -12,8 +12,8 @@
 --
 -- WHAT THE GRAPH ROW RECORDS NOW. Every write of a graph upserts its
 -- non-zero vectors into its namespace (`store::vectors::namespace_id`) under
--- a NEW generation before its transaction commits, and records here, in that
--- same transaction:
+-- a NEW generation BEFORE its transaction opens (no lock is held across the
+-- call to elitea-vector), and records here, in its transaction:
 --
 --   vector_generation      the generation a ranking searches; NULL means the
 --                          graph's vectors are not in Qdrant (a database
@@ -31,6 +31,13 @@
 --   vector_other_dimension another width some entity has, when they differ;
 --                          every ranking of such a graph is numpy's
 --                          "shapes ... not aligned" refusal, as it was
+--   vector_stale_generations the generations a commit superseded and that
+--                          are not deleted from elitea-vector yet. Each
+--                          commit appends the one it replaced; the sweep
+--                          after a commit deletes exactly these (never
+--                          "every generation but the current one", which
+--                          would delete a concurrent writer's points before
+--                          it commits) and removes them from the list
 --
 -- 0001 to 0007 are applied and checksummed; 0004 was rewritten (see it).
 
@@ -55,4 +62,5 @@ ALTER TABLE inventory_graph.graphs
     ADD COLUMN vector_generation      text,
     ADD COLUMN vector_model_slug      text,
     ADD COLUMN vector_dimension       integer,
-    ADD COLUMN vector_other_dimension integer;
+    ADD COLUMN vector_other_dimension integer,
+    ADD COLUMN vector_stale_generations text[] NOT NULL DEFAULT '{}';

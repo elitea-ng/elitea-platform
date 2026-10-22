@@ -3,7 +3,7 @@
 //! lease that keeps two ingestions of one graph apart.
 
 use super::vectors::EntityVectors;
-use super::{GraphKey, Result, StoreError, write_graph};
+use super::{GraphKey, Prepared, Result, StoreError, prepare, write_graph};
 use crate::graph::Graph;
 use elitea_content_source::Acl;
 use serde_json::{Map, Value, json};
@@ -170,7 +170,7 @@ pub async fn complete(
 }
 
 /// [`complete`], publishing the graph's entity vectors through `vectors`
-/// (`super::vectors::publish`).
+/// (`super::vectors::stage`, before the transaction).
 ///
 /// # Errors
 ///
@@ -192,8 +192,21 @@ async fn commit_run(
     completion: &Completion<'_>,
     vectors: Option<&EntityVectors>,
 ) -> Result<i64> {
+    let prepared = prepare(pool, key, graph, vectors).await?;
+    let written = commit_prepared(pool, key, graph, completion, &prepared).await;
+    prepared.settle(pool, key, vectors, written.is_ok()).await;
+    written
+}
+
+async fn commit_prepared(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    completion: &Completion<'_>,
+    prepared: &Prepared,
+) -> Result<i64> {
     let mut transaction = pool.begin().await?;
-    let written = write_graph(&mut transaction, key, graph, vectors).await?;
+    let revision = write_graph(&mut transaction, key, graph, prepared).await?;
     sqlx::query(
         "DELETE FROM inventory_graph.documents
           WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
@@ -245,8 +258,7 @@ async fn commit_run(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    written.sweep(key, vectors).await;
-    Ok(written.revision)
+    Ok(revision)
 }
 
 /// Commit a source's removal in ONE transaction: the graph without it, and
@@ -278,8 +290,22 @@ pub async fn remove_with(
     source_name: &str,
     vectors: Option<&EntityVectors>,
 ) -> Result<i64> {
+    let prepared = prepare(pool, key, graph, vectors).await?;
+    let written = remove_prepared(pool, key, graph, toolkit_id, source_name, &prepared).await;
+    prepared.settle(pool, key, vectors, written.is_ok()).await;
+    written
+}
+
+async fn remove_prepared(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    toolkit_id: &str,
+    source_name: &str,
+    prepared: &Prepared,
+) -> Result<i64> {
     let mut transaction = pool.begin().await?;
-    let written = write_graph(&mut transaction, key, graph, vectors).await?;
+    let revision = write_graph(&mut transaction, key, graph, prepared).await?;
     sqlx::query(
         "DELETE FROM inventory_graph.documents
           WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
@@ -299,8 +325,7 @@ pub async fn remove_with(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    written.sweep(key, vectors).await;
-    Ok(written.revision)
+    Ok(revision)
 }
 
 /// The `sources_status.json` document of a graph:

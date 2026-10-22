@@ -331,7 +331,8 @@ pub async fn save(pool: &PgPool, key: GraphKey, graph: &Graph) -> Result<i64> {
 }
 
 /// [`save`], publishing the graph's entity vectors through `vectors`
-/// (`vectors::publish`; without it the first ranking backfills them).
+/// (`vectors::stage`, before the transaction; without it the first ranking
+/// backfills them).
 ///
 /// # Errors
 ///
@@ -343,37 +344,89 @@ pub async fn save_with(
     graph: &Graph,
     vectors: Option<&vectors::EntityVectors>,
 ) -> Result<i64> {
-    let mut transaction = pool.begin().await?;
-    let written = write_graph(&mut transaction, key, graph, vectors).await?;
-    transaction.commit().await?;
-    written.sweep(key, vectors).await;
-    Ok(written.revision)
+    let prepared = prepare(pool, key, graph, vectors).await?;
+    let written = async {
+        let mut transaction = pool.begin().await?;
+        let revision = write_graph(&mut transaction, key, graph, &prepared).await?;
+        transaction.commit().await?;
+        Ok(revision)
+    }
+    .await;
+    prepared.settle(pool, key, vectors, written.is_ok()).await;
+    written
 }
 
-/// What [`write_graph`] wrote: the graph's new revision, and the vector
-/// generation it published (with vector access), which every other
-/// generation is swept for once the caller's transaction commits.
-#[derive(Debug)]
-#[must_use = "sweep the superseded vector generations after the commit"]
-pub struct Written {
-    pub revision: i64,
-    pub generation: Option<String>,
+/// A graph write prepared BEFORE its transaction opens: its rows, and its
+/// entity vectors already upserted under a new generation
+/// (`vectors::stage`), so no transaction is open and no lock held across
+/// the call to elitea-vector. Write it with [`write_graph`] inside the
+/// transaction, then [`Prepared::settle`] it whatever the outcome.
+#[must_use = "write it with write_graph, then settle it"]
+pub struct Prepared {
+    entities: Vec<EntityRow>,
+    relations: Vec<RelationRow>,
+    staged: vectors::Staged,
 }
 
-impl Written {
-    /// Remove the superseded vector generations, after the commit.
-    pub async fn sweep(&self, key: GraphKey, vectors: Option<&vectors::EntityVectors>) {
-        if let (Some(vectors), Some(generation)) = (vectors, &self.generation) {
-            vectors.sweep(key, generation).await;
-        }
+/// Prepare the write of `graph` (see [`Prepared`]).
+///
+/// # Errors
+///
+/// See [`save`]; [`StoreError::Vectors`] when the upsert fails (the write
+/// must not go on).
+pub async fn prepare(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<Prepared> {
+    let (entities, relations) = rows(graph)?;
+    let space = vectors::VectorSpace::of(
+        graph
+            .metadata
+            .get(elitea_inventory_core::embed::MODEL_KEY)
+            .and_then(Value::as_str),
+        entities
+            .iter()
+            .map(|entity| entity.4.as_ref().map_or(0, Vec::len)),
+    );
+    let embedded: Vec<vectors::EntityVector<'_>> = entities
+        .iter()
+        .filter_map(|entity| {
+            entity.4.as_deref().map(|vector| vectors::EntityVector {
+                id: &entity.0,
+                vector,
+            })
+        })
+        .collect();
+    let staged = vectors::stage(pool, key, space, &embedded, vectors).await?;
+    drop(embedded);
+    Ok(Prepared {
+        entities,
+        relations,
+        staged,
+    })
+}
+
+impl Prepared {
+    /// After the write's transaction ended (`committed`: as the caller saw
+    /// it): delete the staged vectors the graph row does not hold, and sweep
+    /// the generations the commit superseded (`vectors::settle`).
+    pub async fn settle(
+        self,
+        pool: &PgPool,
+        key: GraphKey,
+        vectors: Option<&vectors::EntityVectors>,
+        committed: bool,
+    ) {
+        vectors::settle(pool, key, &self.staged, vectors, committed).await;
     }
 }
 
-/// [`save`] inside a caller's transaction (which commits it, then calls
-/// [`Written::sweep`]): takes the graph's write lock, replaces its rows,
-/// publishes its entity vectors (`vectors::publish`: upserted under a new
-/// generation BEFORE the commit, recorded in the graph row), and returns
-/// what it wrote.
+/// [`save`] inside a caller's transaction (which commits it, then settles
+/// `prepared`): takes the graph's write lock, replaces its rows, records the
+/// staged vector generation in the graph row (`vectors::record`), and
+/// returns the graph's new revision.
 ///
 /// # Errors
 ///
@@ -382,9 +435,9 @@ pub async fn write_graph(
     transaction: &mut sqlx::PgTransaction<'_>,
     key: GraphKey,
     graph: &Graph,
-    vectors: Option<&vectors::EntityVectors>,
-) -> Result<Written> {
-    let (entities, relations) = rows(graph)?;
+    prepared: &Prepared,
+) -> Result<i64> {
+    let (entities, relations) = (&prepared.entities, &prepared.relations);
     let mut metadata = graph.metadata.clone();
     for stamped in STAMPED_METADATA {
         metadata.shift_remove(stamped);
@@ -418,31 +471,10 @@ pub async fn write_graph(
     .bind(key.application_id)
     .execute(&mut **transaction)
     .await?;
-    insert_entities(transaction, key, &entities).await?;
-    insert_relations(transaction, key, &relations).await?;
-    let space = vectors::VectorSpace::of(
-        graph
-            .metadata
-            .get(elitea_inventory_core::embed::MODEL_KEY)
-            .and_then(Value::as_str),
-        entities
-            .iter()
-            .map(|entity| entity.4.as_ref().map_or(0, Vec::len)),
-    );
-    let embedded: Vec<vectors::EntityVector<'_>> = entities
-        .iter()
-        .filter_map(|entity| {
-            entity.4.as_deref().map(|vector| vectors::EntityVector {
-                id: &entity.0,
-                vector,
-            })
-        })
-        .collect();
-    let generation = vectors::publish(transaction, key, &space, &embedded, vectors).await?;
-    Ok(Written {
-        revision,
-        generation,
-    })
+    insert_entities(transaction, key, entities).await?;
+    insert_relations(transaction, key, relations).await?;
+    vectors::record(transaction, key, &prepared.staged).await?;
+    Ok(revision)
 }
 
 async fn insert_entities(
@@ -700,7 +732,7 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     match delete::remove(pool, key, None, delete::Tombstone::No).await? {
         delete::Removal::Done { removed } => Ok(!removed.is_empty()),
         // Without a list time nothing can be newer than it.
-        delete::Removal::Newer(_) => Ok(false),
+        delete::Removal::Newer(_) | delete::Removal::VectorsHeld(_) => Ok(false),
     }
 }
 
@@ -738,6 +770,26 @@ pub async fn import_with(
     replace_state: bool,
     vectors: Option<&vectors::EntityVectors>,
 ) -> Result<Imported> {
+    let prepared = prepare(pool, key, graph, vectors).await?;
+    let imported = import_prepared(pool, key, graph, replace_state, &prepared).await;
+    prepared
+        .settle(
+            pool,
+            key,
+            vectors,
+            matches!(imported, Ok(Imported::Saved { .. })),
+        )
+        .await;
+    imported
+}
+
+async fn import_prepared(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    replace_state: bool,
+    prepared: &Prepared,
+) -> Result<Imported> {
     let mut transaction = pool.begin().await?;
     lock(&mut transaction, key).await?;
     let mut counts = [0i64; 2];
@@ -768,12 +820,9 @@ pub async fn import_with(
             documents: counts[1],
         });
     }
-    let written = write_graph(&mut transaction, key, graph, vectors).await?;
+    let revision = write_graph(&mut transaction, key, graph, prepared).await?;
     transaction.commit().await?;
-    written.sweep(key, vectors).await;
-    Ok(Imported::Saved {
-        revision: written.revision,
-    })
+    Ok(Imported::Saved { revision })
 }
 
 fn object(value: Value) -> Map<String, Value> {
