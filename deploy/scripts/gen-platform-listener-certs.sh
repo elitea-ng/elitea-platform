@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Generate the local mTLS material for elitea-main's platform gRPC listener
-# (:9446, #1359) on a stack WITHOUT the runtime plane — the E2E stack.
+# (:9446, #1359) on a stack WITHOUT the runtime plane: the E2E stack, and the
+# dev stack's `deepwiki` profile (deploy/docker-compose.yml).
 #
 # The sub-application hosts store their artifacts through
 # elitea.runtime.v1.ArtifactObjectService on that listener (#1359 U5). On the
-# runtime stacks the runtime CA (gen-runtime-certs.sh) signs both ends; the E2E
-# stack has no runtime CA, so this issues the two certificates off the shared
+# runtime stacks the runtime CA (gen-runtime-certs.sh) signs both ends; these
+# stacks have no runtime CA, so this issues the two certificates off the shared
 # provider CA (deploy/certs/ca.{crt,key}, created by gen-deepwiki-certs.sh or
 # gen-inventory-certs.sh — run one of them first):
 #
