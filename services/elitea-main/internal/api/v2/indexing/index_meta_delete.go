@@ -28,8 +28,6 @@ type CurrentIndexMetaDeleter interface {
 	Delete(context.Context, indexmetaapp.DeleteRequest) error
 }
 
-var _ CurrentIndexMetaDeleter = (*indexmetaapp.DeleteService)(nil)
-
 // CurrentIndexMetaDeleteRoute remains source-only until independent review
 // composes it. Auth and project RBAC always run before the application service.
 type CurrentIndexMetaDeleteRoute struct {

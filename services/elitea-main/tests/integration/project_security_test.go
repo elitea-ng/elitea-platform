@@ -29,9 +29,6 @@ func integrationPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("open integration database: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(t.Context(), "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
-		t.Fatalf("enable pgvector: %v", err)
-	}
 	if err := db.RunMigrations(t.Context(), pool); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}

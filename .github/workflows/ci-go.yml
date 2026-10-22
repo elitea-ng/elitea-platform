@@ -282,24 +282,7 @@ jobs:
     # server instance, so a single service container is enough.
     services:
       postgres:
-        # pgvector, not plain postgres: the projectprovisioning tests run
-        # CREATE EXTENSION vector, and four other tests skip themselves on a
-        # server without it. Same PG major and same credentials, so the DSN
-        # below is unchanged. The four projectprovisioning tests DO carry a
-        # skip guard now — without one they reported the missing extension as
-        # a code defect on every developer's stock postgres — but this job
-        # sets ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST below, which turns that
-        # guard into a t.Fatal. Losing the image here fails the job; it can
-        # never turn it green with zero execution.
-        #
-        # The LAST pgvector image in CI (#1359 moved every deployment to plain
-        # postgres:18): elitea-main still carries the legacy per-project
-        # pgvector path (internal/infra/pgvector, the projectprovisioning
-        # project_pgvector step, cmd/pgvector-orphans) and the integration
-        # tests that CREATE EXTENSION vector. It goes, with the `integration`
-        # job's image below and ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST, when
-        # that code does.
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -478,13 +461,6 @@ jobs:
           ELITEA_REQUIRE_LEGACY_RBAC_POSTGRES_TEST: "true"
           ELITEA_REQUIRE_PROMPT_CONTEXT_POSTGRES_TEST: "true"
 
-          # Same shape, for the four projectprovisioning tests that run
-          # CREATE EXTENSION vector. They t.Skip on a server without pgvector
-          # so a local stock postgres does not read as a code defect; this
-          # service HAS pgvector, so a skip here would mean the image changed
-          # under us. That must read as a failure, not as silence (#423).
-          ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST: "true"
-
           # The NATS (JetStream) container started above.
           ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
@@ -600,13 +576,11 @@ jobs:
           if-no-files-found: error
 
   integration:
-    name: Integration (Postgres + pgvector)
+    name: Integration (Postgres)
     runs-on: ubuntu-latest
     services:
       postgres:
-        # pgvector: tests/integration enables the extension before it
-        # migrates (see the `test` job's note on the last pgvector users).
-        image: pgvector/pgvector:0.8.5-pg18-trixie
+        image: postgres:18
         env:
           POSTGRES_USER: elitea
           POSTGRES_PASSWORD: elitea

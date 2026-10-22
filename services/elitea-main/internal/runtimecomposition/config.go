@@ -71,9 +71,9 @@ const (
 
 // checkIndexingRuntimeEnv reads ELITEA_INDEXING_RUNTIME. Unset, empty and
 // "rust" are accepted. Anything else, in particular the retired "python"
-// (whose per-project pgvector index_meta store no worker reads any more), is
-// refused at startup: Rust-written indexes are invisible to that store, so a
-// deployment still pinned to it must be told rather than switched silently.
+// (whose per-project index_meta store is gone with #1359), is refused at
+// startup: a deployment still pinned to it must be told rather than switched
+// silently.
 func checkIndexingRuntimeEnv(lookup LookupEnv) error {
 	if lookup == nil {
 		return errors.New("runtime environment lookup is required")
@@ -485,21 +485,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 
 // RustIndexing reports that the deployment indexes at all, which since the
 // Python worker's removal always means natively: index ingest dispatch is on,
-// the index registry holds the metadata, elitea-vector holds the vectors, and
-// the project pgvector database is never provisioned or read.
+// the index registry holds the metadata and elitea-vector holds the vectors.
 func (c Config) RustIndexing() bool {
 	return c.IndexIngestDispatchEnabled
-}
-
-// ProjectVectorStoreProvisioned reports whether a created project gets a
-// pgvector role, database and `pgvector_configuration` (the provisioner's
-// project_pgvector step). Under the Rust indexing runtime it does not
-// (ADR-0031 decision 5): there is nothing to provision for, and requiring a
-// pgvector bootstrap would keep the per-project database the runtime retires.
-// The composition root then hands the provisioner no vector store, and the step
-// is skipped.
-func (c Config) ProjectVectorStoreProvisioned() bool {
-	return !c.RustIndexing()
 }
 
 func (c Config) Validate() error {

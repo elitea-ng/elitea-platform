@@ -1047,23 +1047,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// no vault — and the facade then mounts without source expansion rather
 	// than failing to boot.
 	var inventorySourceSettings *configurationapp.CurrentToolkitSettingsResolver
-	// The project vector-store collaborator the project-create route provisions
-	// with (#371). It is composed from the Configurations runtime, so it exists
-	// only where that runtime does; without it a created project cannot index.
-	//
-	// DECLARED AS THE INTERFACE, never as the concrete pointer (#377). A nil
-	// `*runtimecomposition.ProjectVectorStore` assigned into an interface field
-	// is a TYPED NIL: `cfg.ProjectVectorStore != nil` in internal/api/router.go
-	// is then true, the provisioner takes the collaborator, and every step of
-	// the create pipeline runs until `project_pgvector` answers "project vector
-	// store is not configured" — so a deployment that composes no Configurations
-	// runtime could not create a project at all. It answered 500 and rolled the
-	// whole tenant back. Measured on the end-to-end stack by J31g.
-	//
-	// Same rule as toolkitSettingsValidator below: the concrete value is
-	// assigned inside the branch that composes it, and the variable is a nil
-	// INTERFACE everywhere else.
-	var projectVectorStore projectprovisioning.ProjectVectorStore
 	// The platform default model (#6826). Declared as the interface the router
 	// takes and assigned only from a non-nil service, so no typed nil reaches
 	// the router's nil checks.
@@ -1114,39 +1097,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose current Configurations services: %w", err)
 		}
 		defer currentConfigurationsRoot.Destroy()
-		// The vault material goes through the secrets handler, which holds the
-		// one master key a deployment sets (SECRETS_MASTER_KEY). That handler
-		// is also the one vault creator, through the project_secrets
-		// provisioning step, so the creator and the material writer now share a
-		// key source (#399). The Configurations runtime's own vault writer is
-		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
-		// which no file under deploy/ sets, so it could not open the vault the
-		// handler had just created.
-		//
-		// NOT UNDER THE RUST INDEXING RUNTIME (ADR-0031 decision 5). A
-		// deployment that indexes natively keeps index metadata in the
-		// registry and vectors in elitea-vector; a created project needs no
-		// pgvector role, database or `pgvector_configuration`, and requiring
-		// a pgvector bootstrap would keep alive the per-project database the
-		// runtime retires. The provisioner then takes no vector store and
-		// skips its project_pgvector step.
-		if runtimeConfig.ProjectVectorStoreProvisioned() {
-			vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
-				pool,
-				v2secrets.NewHandler(pool),
-				logger,
-			)
-			if err != nil {
-				return fmt.Errorf("compose project vector-store provisioning: %w", err)
-			}
-			// Through the concrete value, and only when there IS one. See the
-			// declaration above for what a typed nil costs here.
-			if vectorStore != nil {
-				projectVectorStore = vectorStore
-			}
-		} else {
-			logger.Info("project vector store not provisioned: the Rust indexing runtime needs no per-project pgvector database (ADR-0031 decision 5)")
-		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
 			return fmt.Errorf("compose toolkit settings validation: %w", err)
@@ -2724,7 +2674,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ConfigProviderAdmission:        configProviderAdmission,
 		ConfigStoredResolver:           configStoredResolver,
 		ObjectStore:                    objectStore,
-		ProjectVectorStore:             projectVectorStore,
 		PlatformModelDefaults:          platformModelDefaults,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*

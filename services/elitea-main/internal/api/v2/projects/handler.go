@@ -29,7 +29,7 @@ type Handler struct {
 
 // DefaultDeleteBudget is how long a project DELETE waits, after the project row
 // and its credentials are gone, for the slow cleanup (artifact bytes, the tenant
-// schema, the PgVector database) before it answers 202 and leaves the rest to
+// schema, application data) before it answers 202 and leaves the rest to
 // the cleanup journal.
 const DefaultDeleteBudget = 20 * time.Second
 

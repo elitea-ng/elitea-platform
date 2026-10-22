@@ -43,8 +43,6 @@ type CurrentIndexConfigurationSaver interface {
 	SaveConfiguration(context.Context, indexmetaapp.ConfigurationRequest) error
 }
 
-var _ CurrentIndexConfigurationSaver = (*indexmetaapp.ConfigurationService)(nil)
-
 // CurrentIndexConfigurationRoute binds the exact path and method to trusted
 // authentication and project RBAC, which always run before the application
 // service sees the request.

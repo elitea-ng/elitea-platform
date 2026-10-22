@@ -6,8 +6,9 @@ package projectprovisioning_test
 //       an id that comes back is never destroyed by the cleanup of its earlier life
 //   TestDeleteAdoptsTheLeftoversOfAProjectWithNoJournal
 //       a project row already gone, with leftovers and no journal row
-//   TestQuietDropGivesUpAfterTheLimit
-//       a drop for a store nothing recorded is retried a bounded number of times
+//   TestAJournalRowFromBeforeThePgvectorRetirementCompletes
+//       a row that still owes the retired PgVector drop (#1359) neither crashes
+//       nor waits on it
 //   TestBudgetedDeleteContinuesInTheBackgroundWithoutTheReconciler
 //       the 202 is true: the detached run finishes by itself
 //   TestBlockedCascadeFailsTheDecisionCleanly
@@ -21,7 +22,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -33,7 +33,6 @@ import (
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -63,7 +62,7 @@ func (h *hookBuckets) TeardownProjectBuckets(ctx context.Context, _ string) erro
 
 func newReview2Provisioner(
 	t *testing.T, pool *pgxpool.Pool, logger *slog.Logger,
-	buckets projectprovisioning.ArtifactBootstrapper, store projectprovisioning.ProjectVectorStore,
+	buckets projectprovisioning.ArtifactBootstrapper, remover projectprovisioning.ApplicationDataRemover,
 	extra ...projectprovisioning.Option,
 ) *projectprovisioning.Provisioner {
 	t.Helper()
@@ -71,8 +70,8 @@ func newReview2Provisioner(
 	if buckets != nil {
 		options = append(options, projectprovisioning.WithArtifactBuckets(buckets))
 	}
-	if store != nil {
-		options = append(options, projectprovisioning.WithVectorStore(store))
+	if remover != nil {
+		options = append(options, projectprovisioning.WithApplicationData("inventory", remover))
 	}
 	options = append(options, extra...)
 	return projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), logger, options...)
@@ -122,15 +121,15 @@ func TestReusedIdIsNeverCleanedUnderALiveProject(t *testing.T) {
 
 	t.Run("journal open, project live: no step runs", func(t *testing.T) {
 		var drops atomic.Int32
-		store := &scriptedVectorStore{has: true, dropFn: func(context.Context, int64, bool) (string, error) {
+		store := scriptedRemoverFunc(func(context.Context, int64) (string, error) {
 			drops.Add(1)
 			return "", nil
-		}}
+		})
 		buckets := &hookBuckets{}
 		var logs bytes.Buffer
 		provisioner := newReview2Provisioner(t, pool, slog.New(slog.NewTextHandler(&logs, nil)), buckets, store)
 		projectID := provisionPlain(ctx, t, provisioner, "Live Under An Old Journal")
-		openJournalRow(ctx, t, pool, projectID, `{"had_vector_store":true,"done":{}}`)
+		openJournalRow(ctx, t, pool, projectID, `{"apps":["inventory"],"done":{}}`)
 
 		completed, err := provisioner.ResumeDeletion(ctx, projectID)
 		if err != nil || !completed {
@@ -146,23 +145,6 @@ func TestReusedIdIsNeverCleanedUnderALiveProject(t *testing.T) {
 		if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "superseded") {
 			t.Fatalf("the supersede was not logged at warn:\n%s", logs.String())
 		}
-	})
-
-	t.Run("a real PgVector database is left alone", func(t *testing.T) {
-		skipWithoutVectorExtension(t)
-		provisioner, projectID := provisionIndexableProject(ctx, t, pool, "Live Vector Under An Old Journal")
-		openJournalRow(ctx, t, pool, projectID, fmt.Sprintf(`{"had_vector_store":true,"vector_database":"project_%d","done":{}}`, projectID))
-
-		if completed, err := provisioner.ResumeDeletion(ctx, projectID); err != nil || !completed {
-			t.Fatalf("resume = %v, %v", completed, err)
-		}
-		if database, role := vectorStoreResidue(ctx, t, pool, projectID); !database || !role {
-			t.Fatalf("the live project's vector store was dropped: database=%v role=%v", database, role)
-		}
-		if !schemaExists(ctx, t, pool, projectID) {
-			t.Fatal("the live project's schema was dropped")
-		}
-		assertSuperseded(ctx, t, pool, projectID)
 	})
 
 	t.Run("the project appears between two steps", func(t *testing.T) {
@@ -242,20 +224,6 @@ func TestProvisionRefusesAnIdTheJournalStillOwns(t *testing.T) {
 	}
 }
 
-// vectorProbeStore forwards to the real store, including its database probe,
-// with a drop that fails while failing is set.
-type vectorProbeStore struct {
-	*runtimecomposition.ProjectVectorStore
-	failing atomic.Bool
-}
-
-func (s *vectorProbeStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
-	if s.failing.Load() {
-		return fmt.Sprintf("project_%d", projectID), errors.New("pg unreachable")
-	}
-	return s.ProjectVectorStore.DropProjectVectorStore(ctx, projectID, hadStore)
-}
-
 // A DELETE that finds no project row still cleans up what the id left behind,
 // when no journal row says it was already handled.
 func TestDeleteAdoptsTheLeftoversOfAProjectWithNoJournal(t *testing.T) {
@@ -292,7 +260,7 @@ func TestDeleteAdoptsTheLeftoversOfAProjectWithNoJournal(t *testing.T) {
 			t.Fatal("the leftover schema survived")
 		}
 		entry := readJournal(ctx, t, pool, id)
-		if !entry.Completed || entry.Cleanup["had_vector_store"] == true {
+		if !entry.Completed {
 			t.Fatalf("journal = %+v, want an adopted, completed row", entry)
 		}
 		// A second delete is the ordinary 404: the journal row is the record.
@@ -327,37 +295,6 @@ func TestDeleteAdoptsTheLeftoversOfAProjectWithNoJournal(t *testing.T) {
 		}
 	})
 
-	t.Run("a PgVector database", func(t *testing.T) {
-		skipWithoutVectorExtension(t)
-		seedPublicPgvectorBootstrap(ctx, t, pool)
-		store := &vectorProbeStore{ProjectVectorStore: newProjectVectorStoreForTest(t, pool)}
-		store.failing.Store(true)
-		provisioner := newReview2Provisioner(t, pool, nil, nil, store)
-		id := provisionPlain(ctx, t, provisioner, "Database Leftover")
-		dropProvisionedVectorStore(t, id)
-		if _, err := provisioner.Deprovision(ctx, id); !errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) {
-			t.Fatalf("premise delete = %v, want the drop to fail", err)
-		}
-		if _, err := pool.Exec(ctx, `DELETE FROM centry.project_deletions WHERE project_id = $1`, id); err != nil {
-			t.Fatal(err)
-		}
-		if database, _ := vectorStoreResidue(ctx, t, pool, id); !database {
-			t.Fatal("premise: the database is gone")
-		}
-		store.failing.Store(false)
-
-		if result, err := provisioner.Deprovision(ctx, id); err != nil || len(result.Pending) != 0 {
-			t.Fatalf("delete = %v (pending %v), want the database adopted and dropped", err, result.Pending)
-		}
-		if database, role := vectorStoreResidue(ctx, t, pool, id); database || role {
-			t.Fatalf("database=%v role=%v, want both dropped", database, role)
-		}
-		entry := readJournal(ctx, t, pool, id)
-		if !entry.Completed || entry.Cleanup["had_vector_store"] != true {
-			t.Fatalf("journal = %+v, want had_vector_store recorded from the probe", entry)
-		}
-	})
-
 	t.Run("nothing left: 404 and no journal row", func(t *testing.T) {
 		provisioner := newReview2Provisioner(t, pool, nil, nil, nil)
 		if _, err := provisioner.Deprovision(ctx, 777001); !errors.Is(err, projectprovisioning.ErrProjectNotFound) {
@@ -369,77 +306,52 @@ func TestDeleteAdoptsTheLeftoversOfAProjectWithNoJournal(t *testing.T) {
 	})
 }
 
-// A drop that fails for a store nothing recorded is retried at most the limit
-// and then given up, with a note and a warning. The reconciler counts the
-// retries as unfinished and only the last run as finished.
-func TestQuietDropGivesUpAfterTheLimit(t *testing.T) {
+// A journal row written before #1359 still owes the per-project PgVector drop
+// (project_pgvector_drop) and carries had_vector_store. The drop is no step any
+// more: such a row neither fails to decode nor waits on it. A row whose only
+// undone step was the drop completes on its next run; one with another step
+// undone runs that step and completes.
+func TestAJournalRowFromBeforeThePgvectorRetirementCompletes(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
+	provisioner := newReview2Provisioner(t, pool, nil, nil, nil)
 
-	var drops atomic.Int32
-	store := &scriptedVectorStore{has: false, dropFn: func(context.Context, int64, bool) (string, error) {
-		drops.Add(1)
-		return "project_x", errors.New("pgvector server unreachable")
-	}}
-	var logs bytes.Buffer
-	provisioner := newReview2Provisioner(t, pool, slog.New(slog.NewTextHandler(&logs, nil)), nil, store,
-		projectprovisioning.WithQuietDropLimit(3))
-	projectID := provisionPlain(ctx, t, provisioner, "Quiet Give Up")
+	t.Run("only the drop was left", func(t *testing.T) {
+		const id = 9400
+		openJournalRow(ctx, t, pool, id, `{"had_vector_store":true,"vector_database":"project_9400",`+
+			`"quiet_drop_failures":2,"done":{"artifact_buckets":true,"project_schema":true}}`)
+		completed, err := provisioner.ResumeDeletion(ctx, id)
+		if err != nil || !completed {
+			t.Fatalf("resume = completed %v, err %v; want the row closed", completed, err)
+		}
+		entry := readJournal(ctx, t, pool, id)
+		if !entry.Completed || entry.LastError != nil || entry.Leased {
+			t.Fatalf("journal = %+v, want completed, no error, unleased", entry)
+		}
+		if entry.done("project_pgvector_drop") {
+			t.Fatal("the retired drop was recorded as run")
+		}
+	})
 
-	if _, err := provisioner.Deprovision(ctx, projectID); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	if entry := readJournal(ctx, t, pool, projectID); entry.Completed || entry.Attempts != 1 {
-		t.Fatalf("journal after one failure = %+v, want an open row", entry)
-	}
-
-	reconciler, err := runtimecomposition.NewProjectDeletionReconciler(provisioner,
-		runtimecomposition.ProjectDeletionReconcilerConfig{GracePeriod: time.Millisecond, BatchSize: 5},
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	due := func() {
-		if _, err := pool.Exec(ctx, `UPDATE centry.project_deletions
-SET created_at = now() - interval '1 hour', next_attempt_at = now() - interval '1 second' WHERE project_id = $1`, projectID); err != nil {
+	t.Run("the schema and the drop were left", func(t *testing.T) {
+		const id = 9401
+		if _, err := pool.Exec(ctx, `SELECT create_tenant_schema($1)`, fmt.Sprintf("p_%d", id)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	due()
-	if worked, err := reconciler.RunOnce(ctx); err != nil || worked != 1 {
-		t.Fatalf("second run: worked=%d err=%v", worked, err)
-	}
-	// Two quiet failures: not finished, counted as unfinished.
-	if reconciler.Finished() != 0 || reconciler.Failed() != 1 {
-		t.Fatalf("finished=%d failed=%d after a quiet retry, want 0 and 1", reconciler.Finished(), reconciler.Failed())
-	}
-	due()
-	if worked, err := reconciler.RunOnce(ctx); err != nil || worked != 1 {
-		t.Fatalf("third run: worked=%d err=%v", worked, err)
-	}
-	if got := drops.Load(); got != 3 {
-		t.Fatalf("drops = %d, want exactly the limit of 3", got)
-	}
-	if reconciler.Finished() != 1 || reconciler.Failed() != 1 {
-		t.Fatalf("finished=%d failed=%d after the give-up, want 1 and 1", reconciler.Finished(), reconciler.Failed())
-	}
-	entry := readJournal(ctx, t, pool, projectID)
-	if !entry.Completed || !entry.done(projectprovisioning.StepProjectPgvectorDrop) || entry.Attempts != 3 {
-		t.Fatalf("journal = %+v, want the drop marked done on the third attempt", entry)
-	}
-	notes, _ := entry.Cleanup["notes"].(map[string]any)
-	if notes[projectprovisioning.StepProjectPgvectorDrop] != "gave up: no vector store recorded" {
-		t.Fatalf("notes = %v, want the give-up note", notes)
-	}
-	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "gave up") {
-		t.Fatalf("the give-up was not logged at warn:\n%s", logs.String())
-	}
-	// Nothing left to claim, and no further drop.
-	due()
-	if worked, err := reconciler.RunOnce(ctx); err != nil || worked != 0 || drops.Load() != 3 {
-		t.Fatalf("after completion: worked=%d err=%v drops=%d", worked, err, drops.Load())
-	}
+		openJournalRow(ctx, t, pool, id, `{"had_vector_store":true,"vector_database":"project_9401",`+
+			`"done":{"artifact_buckets":true}}`)
+		completed, err := provisioner.ResumeDeletion(ctx, id)
+		if err != nil || !completed {
+			t.Fatalf("resume = completed %v, err %v; want the row closed", completed, err)
+		}
+		if schemaExists(ctx, t, pool, id) {
+			t.Fatal("the leftover schema survived")
+		}
+		if entry := readJournal(ctx, t, pool, id); !entry.Completed || !entry.done(projectprovisioning.StepProjectSchema) {
+			t.Fatalf("journal = %+v, want the schema done and the row complete", entry)
+		}
+	})
 }
 
 // The budget bounds the WAIT and not the work: a step longer than the budget
@@ -467,8 +379,8 @@ func TestBudgetedDeleteContinuesInTheBackgroundWithoutTheReconciler(t *testing.T
 			if name == "budget" && time.Since(started) < 150*time.Millisecond {
 				t.Fatalf("returned after %v, before the budget", time.Since(started))
 			}
-			if len(result.Pending) != 3 {
-				t.Fatalf("pending = %v, want all three steps (the first is still running)", result.Pending)
+			if len(result.Pending) != 2 {
+				t.Fatalf("pending = %v, want both steps (the first is still running)", result.Pending)
 			}
 			if entry := readJournal(ctx, t, pool, projectID); entry.Completed || !entry.Leased {
 				t.Fatalf("journal = %+v, want an open row leased to the background run", entry)

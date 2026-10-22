@@ -69,10 +69,7 @@ func TestTheDecisionRecordsTheWiredApplicationsOnTheRow(t *testing.T) {
 		WithApplicationData("inventory", &fakeRemover{}),
 		WithApplicationData("deepwiki", &fakeRemover{}),
 	)
-	cleanup, err := p.recordCleanup(context.Background(), nil, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cleanup := p.recordCleanup()
 	if !slices.Equal(cleanup.Apps, []string{"deepwiki", "inventory"}) {
 		t.Fatalf("Apps = %v", cleanup.Apps)
 	}
@@ -97,7 +94,7 @@ func TestTheStepListComesFromTheRowNotTheReplica(t *testing.T) {
 	}
 	// The base list is untouched: the code and tests that address its steps by
 	// index keep working.
-	if got := stepNames(cleanupSteps()); len(got) != 3 || got[2] != StepProjectPgvectorDrop {
+	if got := stepNames(cleanupSteps()); len(got) != 2 || got[1] != StepProjectSchema {
 		t.Fatalf("the base list changed: %v", got)
 	}
 }
@@ -227,7 +224,7 @@ func TestARetryLaterKeepsThePartialSummaryAndIsRetried(t *testing.T) {
 	if !strings.Contains(err.Error(), "inventory") {
 		t.Errorf("the error does not name the application: %v", err)
 	}
-	joined := step.failure(row, err)
+	joined := step.failure(err)
 	if !errors.Is(joined, ErrApplicationDataNotRemoved) || !errors.Is(joined, cause) {
 		t.Fatalf("failure = %v, want ErrApplicationDataNotRemoved wrapping the cause", joined)
 	}
@@ -312,10 +309,10 @@ func TestASecondOptionForTheSameApplicationReplacesTheFirst(t *testing.T) {
 	)
 	row := rowWithApps("deepwiki")
 	steps := p.cleanupSteps(row)
-	if len(steps) != 4 {
-		t.Fatalf("steps = %v, want the base three plus one", stepNames(steps))
+	if len(steps) != 3 {
+		t.Fatalf("steps = %v, want the base two plus one", stepNames(steps))
 	}
-	if _, err := steps[3].run(context.Background(), p, 7, row); err != nil {
+	if _, err := steps[2].run(context.Background(), p, 7, row); err != nil {
 		t.Fatal(err)
 	}
 	if len(first.calls) != 0 || len(second.calls) != 1 {

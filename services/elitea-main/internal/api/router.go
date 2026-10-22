@@ -416,13 +416,6 @@ type RouterConfig struct {
 	// invisibly absent. The run START route reports the row it wrote either
 	// way, so a queued run is never claimed to be running.
 	EvalOrchestrator v2evaluation.Enqueuer
-	// ProjectVectorStore provisions a new project's PgVector credentials and
-	// its `vectorstorage` configuration row (#371). It is injected because the
-	// composition needs the Configurations runtime's finder, unsecreter and
-	// vault writer, and that runtime is owned by internal/runtimecomposition,
-	// which imports this layer. Unassigned, a created project has no vector
-	// store and cannot index — see createProjectVectorStore.
-	ProjectVectorStore projectprovisioning.ProjectVectorStore
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
 	// project-deletion reconciler (#1211) over the same provisioner the routes
@@ -837,11 +830,6 @@ type PlatformModelDefaults interface {
 // optional: a deployment with no object store still creates projects, it just
 // creates them without artifact buckets — which is the state EVERY project is
 // in today, so its absence cannot be a regression.
-//
-// The vector store is optional in the same way and for the same reason (#371),
-// with one difference worth stating: a project created without it CAN be
-// created and CANNOT index. Its absence is not a regression either, because no
-// Go-created project could index before, but it is not a working project.
 func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, bool) {
 	if cfg.Pool == nil {
 		return nil, false
@@ -858,10 +846,6 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	}
 	if cfg.ProjectCleanupContext != nil {
 		options = append(options, projectprovisioning.WithLifecycleContext(cfg.ProjectCleanupContext))
-	}
-	// The vector store (#371) IS conditional — see this function's doc comment.
-	if cfg.ProjectVectorStore != nil {
-		options = append(options, projectprovisioning.WithVectorStore(cfg.ProjectVectorStore))
 	}
 	// The platform default model seed (#6826) is optional too: a project
 	// created without it reads the platform default at request time.
@@ -1369,8 +1353,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// are on" — and an option added at one site and not the others would give
 	// them three different behaviours for no visible reason.
 	//
-	// BELOW the defaulting above, not before it. It reads cfg.Pool,
-	// cfg.ObjectStore and cfg.ProjectVectorStore, none of which that block
+	// BELOW the defaulting above, not before it. It reads cfg.Pool and
+	// cfg.ObjectStore, neither of which that block
 	// fills in today — but the block is where such a line WOULD go, and a
 	// provisioner built from an unresolved field answers `ok = false`, which
 	// switches project creation, the support assistant and personal-project

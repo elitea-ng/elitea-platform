@@ -104,8 +104,6 @@ func newFreshInstallFirstLoginPool(t *testing.T) *pgxpool.Pool {
 		adminPool.Close()
 	})
 
-	_, err = pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`)
-	require.NoError(t, err)
 	applied, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial)
 	require.NoError(t, err)
 	require.True(t, applied, "Bootstrap reported nothing to do on an empty database")

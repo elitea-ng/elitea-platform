@@ -27,8 +27,6 @@ type CurrentIndexMetaReader interface {
 	List(context.Context, indexmetaapp.Request) ([]indexmetaapp.Item, error)
 }
 
-var _ CurrentIndexMetaReader = (*indexmetaapp.Service)(nil)
-
 // CurrentIndexMetaRoute preserves the current UI path and raw-array response,
 // with trusted authentication and project RBAC applied before storage lookup.
 type CurrentIndexMetaRoute struct {

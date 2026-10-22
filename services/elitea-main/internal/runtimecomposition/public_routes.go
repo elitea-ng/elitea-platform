@@ -54,8 +54,8 @@ type PublicRoutes struct {
 	// IndexCancel preserves the current UI DELETE contract while selecting only
 	// Go-owned execution IDs at the compatibility edge.
 	IndexCancel indexingapi.CurrentIndexCanceller
-	// IndexMeta reads the current raw-array UI contract from the project-owned
-	// PgVector target resolved through the saved toolkit and Configurations.
+	// IndexMeta reads the current raw-array UI contract from the index
+	// registry.
 	IndexMeta indexingapi.CurrentIndexMetaReader
 	// IndexMetaDelete preserves the current synchronous two-commit contract. It
 	// is exposed only with the coordinated Go index owner and receives

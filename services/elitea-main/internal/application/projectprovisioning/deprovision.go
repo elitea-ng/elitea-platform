@@ -17,9 +17,9 @@ package projectprovisioning
 //     it fails the project is unchanged and fully usable, and the delete answers
 //     ErrProjectNotRemoved.
 //  2. THE SLOW AND EXTERNAL CLEANUP RUNS FROM THE JOURNAL (runCleanup), after
-//     the commit: the artifact bytes (object store), the tenant schema, the
-//     PgVector database (another server), and the project's data in every wired
-//     application engine (DeepWiki wiki indexes, Inventory graphs, over gRPC;
+//     the commit: the artifact bytes (object store), the tenant schema, and the
+//     project's data in every wired application engine (DeepWiki wiki indexes,
+//     Inventory graphs, elitea-vector namespaces, over gRPC;
 //     application_data.go). Every step is idempotent and marks
 //     itself done in the journal row. The run is DETACHED from the request: it
 //     starts in a goroutine of its own, under its own deadline (cleanupTimeout)
@@ -43,7 +43,7 @@ package projectprovisioning
 //
 // LEFTOVERS WITH NO JOURNAL ROW. A project deleted by an older build, or by a
 // delete that died before the journal existed, can have no row and still have its
-// tenant schema, live buckets or PgVector database. A DELETE that finds no
+// tenant schema or live buckets. A DELETE that finds no
 // project row looks for those leftovers; if any exist and no journal row does, it
 // adopts them (inserts the journal row) and cleans up as usual. Nothing left and
 // no journal row is the 404.
@@ -52,7 +52,7 @@ package projectprovisioning
 // project whose row is gone can no longer get new work: execution_jobs carries
 // foreign keys to centry.project(id) on both resource_project_id and
 // projection_project_id, so an admission for a deleted project fails. Every
-// irreversible step (the schema, the bytes, the vector database) therefore runs
+// irreversible step (the schema, the bytes, the vectors) therefore runs
 // on a project that nothing can use any more, and a failure in the transaction
 // that decides is a delete that did not happen. There is no in-between state for
 // a resolver or a worker to see.
@@ -91,7 +91,6 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
 )
 
 // ErrProjectNotFound reports a delete for a project id that has no row.
@@ -129,32 +128,23 @@ var ErrProjectIDInCleanup = errors.New("projectprovisioning: project id still ha
 // ErrProjectWorkActive reports a delete refused because the project still has
 // work that is not terminal (#1211): an index run, an agent execution or a
 // toolkit call, on either side of the job (the project whose resources it uses,
-// or the project it projects into). All of it uses the project's PgVector
-// database and rows the delete removes, so deleting under running work would
+// or the project it projects into). All of it uses rows the delete removes, so deleting under running work would
 // kill that work mid-write. The delete waits: stop or let the work finish, then
 // retry. It is returned only by the deciding transaction, which then rolls
 // back, so a refused delete leaves the project exactly as it was and the 409
 // the route answers is true.
 var ErrProjectWorkActive = errors.New("projectprovisioning: project has active runs; stop them or wait for them to finish, then retry the delete")
 
-// ErrVectorStoreNotDropped reports a delete that removed the project and has
-// not dropped its PgVector database or role yet. The indexed data is still in
-// Postgres. Result.VectorDatabase names the database; the cleanup journal
-// retries the drop (and cmd/pgvector-orphans leaves it to the journal).
-var ErrVectorStoreNotDropped = errors.New("projectprovisioning: project vector store was not dropped")
-
 // cleanupTimeout bounds one run of a project's cleanup steps. The run is
 // detached from the request (the project row is already gone, so a client that
 // hangs up must not abandon the cleanup half way), so this is its deadline.
-// vectorDropTimeout bounds the drop inside it: the advisory-lock wait plus the
-// drop itself. Each journal write a run makes is on a context of its own
+// Each journal write a run makes is on a context of its own
 // (cleanupjournal.BookkeepingContext), so a run that hit its deadline still
 // records what it did. leaseMargin is added to a run's bound to make its lease.
 // Variables so a test can shrink them.
 var (
-	cleanupTimeout    = 5 * time.Minute
-	vectorDropTimeout = 2 * time.Minute
-	leaseMargin       = time.Minute
+	cleanupTimeout = 5 * time.Minute
+	leaseMargin    = time.Minute
 )
 
 // cleanupLease is how long a run bounded by bound owns a journal row: the bound
@@ -162,13 +152,8 @@ var (
 // picks the row up again after it.
 func cleanupLease(bound time.Duration) time.Duration { return bound + leaseMargin }
 
-// Defaults of the options that tune a delete (WithQuietDropLimit,
-// WithDecisionTimeouts).
+// Defaults of the options that tune a delete (WithDecisionTimeouts).
 const (
-	// DefaultQuietDropLimit is how many times a drop that fails for a store the
-	// project was never recorded as having is attempted before the journal gives
-	// up on it.
-	DefaultQuietDropLimit = 5
 	// DefaultDecisionLockTimeout bounds a lock wait inside the deciding
 	// transaction once it holds the project row (the tenant cascade).
 	DefaultDecisionLockTimeout = 5 * time.Second
@@ -246,13 +231,17 @@ func HandOffCleanup() DeprovisionOption {
 // It holds only what a step reads. The tenant schema name derives from the
 // project id; the identity rows are gone with the decision; the bucket rows are
 // the artifact step's own handle and it lists them itself.
+//
+// ROWS WRITTEN BEFORE #1359 also carry had_vector_store, vector_database,
+// quiet_drop_failures and a done/notes entry for project_pgvector_drop: the
+// per-project PgVector database and its drop step. Decoding ignores those
+// keys, and no step of the list below is named project_pgvector_drop, so an
+// open row whose only undone step was the drop completes on its next run, and
+// one with other steps undone runs those and completes. Nothing drops the old
+// PgVector databases any more: retiring the PgVector server they live on is
+// the operator's (UPGRADING).
 type deletionCleanup struct {
-	HadVectorStore bool            `json:"had_vector_store"`
-	VectorDatabase string          `json:"vector_database,omitempty"`
-	Done           map[string]bool `json:"done"`
-	// QuietDropFailures counts the drops that failed for a store the project was
-	// not recorded as having; at the limit the journal gives up (Notes).
-	QuietDropFailures int `json:"quiet_drop_failures,omitempty"`
+	Done map[string]bool `json:"done"`
 	// Notes holds a message per step: what a step that was marked done without
 	// doing its work recorded ("gave up: ...", "skipped: ...", "engine does not
 	// support deletion", "failed permanently: ..."), the engine's summary of an
@@ -289,12 +278,11 @@ type cleanupStep struct {
 
 // cleanupSteps is the journal's base step list, in the order a run takes it.
 // The bytes go first (the bucket rows are their only handle), the tenant schema
-// and the PgVector database after.
+// after.
 //
 // The identity steps (the vault, the system token and user, the project roles
 // and the memberships that cascade from them, the token bindings) are not here:
-// they ran in the deciding transaction. The PgVector configuration row lives in
-// the tenant schema and goes with it.
+// they ran in the deciding transaction.
 //
 // A run takes the provisioner's list (Provisioner.cleanupSteps), which is this
 // plus one step per wired application (application_data.go).
@@ -302,14 +290,13 @@ func cleanupSteps() []cleanupStep {
 	return []cleanupStep{
 		{name: StepArtifactBuckets, notDone: ErrArtifactsNotRemoved, run: cleanupArtifactBuckets},
 		{name: StepProjectSchema, notDone: ErrTenantSchemaNotRemoved, run: withState(removeProjectSchema)},
-		{name: StepProjectPgvectorDrop, notDone: ErrVectorStoreNotDropped, run: cleanupVectorStore},
 	}
 }
 
 // cleanupSteps is the step list a run of a journal ROW takes: the base steps,
 // then the data of every application the row recorded (#1243, #1244;
 // application_data.go). The application steps come last so a failing engine
-// never delays the schema or the database drop, and so the base list's indices
+// never delays the schema, and so the base list's indices
 // are stable for the code and tests that address them.
 func (p *Provisioner) cleanupSteps(cleanup *deletionCleanup) []cleanupStep {
 	if cleanup == nil {
@@ -361,61 +348,9 @@ func cleanupArtifactBuckets(ctx context.Context, p *Provisioner, projectID int64
 	return "", nil
 }
 
-// quietRetry marks a step failure the journal retries and the client is not
-// told about: the leftover of a database the project was never recorded as
-// having. It is logged, not reported (see cleanupVectorStore).
-type quietRetry struct{ err error }
-
-func (q quietRetry) Error() string { return q.err.Error() }
-func (q quietRetry) Unwrap() error { return q.err }
-
-// cleanupVectorStore drops the project's PgVector database and role, under its
-// own bound inside the run's.
-//
-// With a vector store configured on the provisioner the drop is ALWAYS
-// attempted, whatever the configuration-row probe recorded: it is idempotent,
-// and a database can exist without the row (a provisioning run that died
-// between the two). What the probe decides is how a failure is told:
-//
-//   - recorded store, drop failed: reported (ErrVectorStoreNotDropped, the
-//     database named), the journal retries it.
-//   - no recorded store, drop failed (the server is unreachable, say): the
-//     journal retries it, and it is logged, not reported. The client is not told
-//     a database was left that nothing says existed. The retries are bounded
-//     (WithQuietDropLimit, five by default): after that the step is marked done
-//     with the note "gave up: no vector store recorded" and a warning is logged,
-//     so a store that was never there cannot keep a journal row open for ever.
-//   - no vector store configured: a skip when none was recorded, and a leak,
-//     reported, when one was.
-func cleanupVectorStore(ctx context.Context, p *Provisioner, projectID int64, cleanup *deletionCleanup) (string, error) {
-	if p.vectorStore == nil {
-		if !cleanup.HadVectorStore {
-			return "skipped: no vector store configured", nil
-		}
-		return "", errors.New("this provisioner has no vector store configured")
-	}
-	dropCtx, cancel := context.WithTimeout(ctx, vectorDropTimeout)
-	defer cancel()
-	database, err := p.vectorStore.DropProjectVectorStore(dropCtx, projectID, cleanup.HadVectorStore)
-	if cleanup.HadVectorStore && database != "" {
-		cleanup.VectorDatabase = database
-	}
-	if err != nil && !cleanup.HadVectorStore {
-		return "", quietRetry{err: err}
-	}
-	if err == nil && database == "" {
-		return "skipped: no vector store", nil
-	}
-	return "", err
-}
-
 // failure is the joined error a failed step contributes: the sentinel a caller
-// maps, and for the drop the database name.
-func (step cleanupStep) failure(cleanup *deletionCleanup, err error) error {
-	if step.name == StepProjectPgvectorDrop {
-		return fmt.Errorf("%w: database %q remains, the cleanup journal retries it: %w",
-			step.notDone, cleanup.VectorDatabase, err)
-	}
+// maps, and the cause.
+func (step cleanupStep) failure(err error) error {
 	return fmt.Errorf("%w: %w", step.notDone, err)
 }
 
@@ -436,11 +371,11 @@ func (step cleanupStep) failure(cleanup *deletionCleanup, err error) error {
 //     steps are being run in the background.
 //   - otherwise: the project is gone, and the joined error names every cleanup
 //     step that ran and failed (ErrArtifactsNotRemoved, ErrTenantSchemaNotRemoved,
-//     ErrVectorStoreNotDropped). They are in Result.Pending too, and the journal
-//     retries them.
+//     or an application step's). They are in Result.Pending too, and the
+//     journal retries them.
 //
-// A project row that is already gone but whose tenant schema, live buckets or
-// PgVector database remain, with no journal row, is ADOPTED: a journal row is
+// A project row that is already gone but whose tenant schema or live buckets
+// remain, with no journal row, is ADOPTED: a journal row is
 // written for the leftovers and they are cleaned as for any delete.
 //
 // Result.RollbackSteps reports project_model (the deciding transaction), the
@@ -619,9 +554,8 @@ func (p *Provisioner) pendingFromJournal(runCtx context.Context, projectID int64
 //     delete of the same project waits here and then finds the row gone.
 //  3. Unless skipActiveWork, count the project's non-terminal execution_jobs. Any
 //     is ErrProjectWorkActive: roll back, nothing has changed.
-//  4. Record whether the project has a vector store. A probe that fails fails
-//     the whole decision (ErrProjectNotRemoved, safe to retry): guessing would
-//     either leak a database or report a drop that was never needed.
+//  4. Record which application engines must be asked to delete the project's
+//     data (recordCleanup).
 //  5. Insert the journal row, leased to the run that follows.
 //  6. Revoke the identity: the vault, the system token and user, the project
 //     roles (and the memberships that cascade from them) and the token
@@ -680,10 +614,7 @@ func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipA
 		return nil, ErrProjectWorkActive
 	}
 
-	cleanup, err := p.recordCleanup(ctx, transaction, projectID)
-	if err != nil {
-		return nil, notRemoved("record cleanup", err)
-	}
+	cleanup := p.recordCleanup()
 	cleanup.ActiveRuns = active
 	cleanup.DecidedAt = time.Now().UTC()
 	encoded, err := json.Marshal(cleanup)
@@ -762,12 +693,10 @@ func timeoutSetting(timeout time.Duration) string {
 }
 
 // adoptLeftovers handles a DELETE that found no project row. It looks for what a
-// delete would still have to clean up for that id: the tenant schema, live
-// artifact buckets and, when the vector store can be asked, the PgVector
-// database. A journal row for the id (complete or not) means the delete already
-// happened and the cleanup is the journal's: not adopted. With leftovers and no
-// journal row it inserts one, recording whether the database exists, and returns
-// the record for the cleanup run. It returns nil when there is nothing to adopt.
+// delete would still have to clean up for that id: the tenant schema and live
+// artifact buckets. A journal row for the id (complete or not) means the delete
+// already happened and the cleanup is the journal's: not adopted. With leftovers
+// and no journal row it inserts one and returns the record for the cleanup run. It returns nil when there is nothing to adopt.
 //
 // The insert is conditional on the project row still being absent and on no
 // journal row existing, so it cannot cross a concurrent Provision or delete: a
@@ -795,28 +724,11 @@ func (p *Provisioner) adoptLeftovers(ctx context.Context, projectID int64) (*del
 	if err != nil {
 		return nil, err
 	}
-	database := false
-	if probe, ok := p.vectorStore.(VectorDatabaseProbe); ok {
-		exists, checkable, probeErr := probe.ProjectVectorDatabaseExists(ctx, projectID)
-		switch {
-		case probeErr != nil:
-			// An unreachable vector server must not turn every delete of an id
-			// that never existed into an error; the schema and the buckets
-			// still decide. A database found later is the orphan command's.
-			p.logger.WarnContext(ctx, "could not look for the vector database of a project with no row",
-				"project_id", projectID, "err", probeErr)
-		case checkable:
-			database = exists
-		}
-	}
-	if !schema && live == 0 && !database {
+	if !schema && live == 0 {
 		return nil, nil
 	}
 
-	cleanup := &deletionCleanup{Done: map[string]bool{}, HadVectorStore: database, Apps: p.ApplicationsWired()}
-	if database {
-		cleanup.VectorDatabase = pgvector.ProjectDatabaseName(projectID)
-	}
+	cleanup := &deletionCleanup{Done: map[string]bool{}, Apps: p.ApplicationsWired()}
 	encoded, err := json.Marshal(cleanup)
 	if err != nil {
 		return nil, fmt.Errorf("encode cleanup: %w", err)
@@ -838,7 +750,7 @@ RETURNING project_id`,
 		return nil, fmt.Errorf("adopt leftovers: %w", err)
 	}
 	p.logger.WarnContext(ctx, "adopted the leftovers of a project that has no row and no cleanup journal",
-		"project_id", projectID, "tenant_schema", schema, "live_buckets", live, "vector_database", database)
+		"project_id", projectID, "tenant_schema", schema, "live_buckets", live)
 	return cleanup, nil
 }
 
@@ -887,21 +799,10 @@ func (p *Provisioner) revokeIdentity(ctx context.Context, transaction pgx.Tx, pr
 }
 
 // recordCleanup reads, through the deciding transaction, what the cleanup
-// journal has to remember: whether the project has a vector store, and which
-// application engines (this replica's) must be asked to delete its data.
-func (p *Provisioner) recordCleanup(ctx context.Context, transaction pgx.Tx, projectID int64) (*deletionCleanup, error) {
-	cleanup := &deletionCleanup{Done: map[string]bool{}, Apps: p.ApplicationsWired()}
-	if p.vectorStore != nil {
-		had, err := p.vectorStore.ProjectHasVectorStore(ctx, transaction, projectID)
-		if err != nil {
-			return nil, fmt.Errorf("probe vector store: %w", err)
-		}
-		if had {
-			cleanup.HadVectorStore = true
-			cleanup.VectorDatabase = pgvector.ProjectDatabaseName(projectID)
-		}
-	}
-	return cleanup, nil
+// journal has to remember: which application engines (this replica's) must be
+// asked to delete its data.
+func (p *Provisioner) recordCleanup() *deletionCleanup {
+	return &deletionCleanup{Done: map[string]bool{}, Apps: p.ApplicationsWired()}
 }
 
 // runCleanup runs every journal step not yet done, records each one that
@@ -985,7 +886,6 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 		}
 
 		var (
-			quiet    quietRetry
 			closed   closedWithNote
 			notWired notWiredError
 			waiting  waitingForRuns
@@ -1026,7 +926,7 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			status = StepStatus{Step: step.name}
 			result.Pending = append(result.Pending, step.name)
 			closing.fail(step.name, 0)
-			failures = append(failures, step.failure(cleanup, err))
+			failures = append(failures, step.failure(err))
 		case errors.As(err, &closed):
 			// Done without the work, for a reason a retry cannot change; the
 			// note says which (application_data.go). Logged by the step.
@@ -1034,26 +934,6 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 			status.Msg = closed.note
 			cleanup.Done[step.name] = true
 			p.markCleanupStep(ctx, projectID, step.name, closed.note)
-		case errors.As(err, &quiet):
-			// Retried by the journal, not reported (see cleanupVectorStore), and
-			// not for ever: a store nothing says existed is not worth an endless
-			// retry.
-			cleanup.QuietDropFailures++
-			status.setOK()
-			if cleanup.QuietDropFailures >= p.quietDropLimit {
-				p.logger.WarnContext(ctx, "project delete cleanup gave up on a vector store the project was not recorded as having",
-					"step", step.name, "project_id", projectID, "attempts", cleanup.QuietDropFailures, "err", err)
-				status.Msg = quietGaveUpNote
-				cleanup.Done[step.name] = true
-				p.markCleanupStep(ctx, projectID, step.name, quietGaveUpNote)
-				break
-			}
-			p.logger.ErrorContext(ctx, "project delete cleanup step failed for a store the project was not recorded as having; the cleanup journal retries it",
-				"step", step.name, "project_id", projectID, "attempt", cleanup.QuietDropFailures,
-				"limit", p.quietDropLimit, "err", err)
-			p.recordQuietFailures(ctx, projectID, cleanup.QuietDropFailures)
-			status.Msg = "skipped: no vector store recorded"
-			closing.fail(step.name, 0)
 		default:
 			// A failed step. The vector store refusing this process's identity
 			// (identityRefused, logged by the step at Error) is one too, except
@@ -1069,12 +949,9 @@ func (p *Provisioner) runCleanup(parent context.Context, projectID int64, cleanu
 					"step", step.name, "project_id", projectID, "err", err)
 			}
 			status.setFailed(safeStepMessage(step.name))
-			failures = append(failures, step.failure(cleanup, err))
+			failures = append(failures, step.failure(err))
 			closing.fail(step.name, retryAfter)
 			result.Pending = append(result.Pending, step.name)
-			if step.name == StepProjectPgvectorDrop {
-				result.VectorDatabase = cleanup.VectorDatabase
-			}
 			if note != "" {
 				// A failed step that still reports what it did (an engine that
 				// deleted part of the project's data): kept on the row.
@@ -1142,10 +1019,6 @@ func (c *runClose) ask(retryAfter time.Duration) {
 // complete reports whether the run left nothing undone.
 func (c runClose) complete() bool { return len(c.failed) == 0 && len(c.waiting) == 0 }
 
-// quietGaveUpNote is the note of a step the journal marked done after the
-// retries of a quiet failure ran out.
-const quietGaveUpNote = "gave up: no vector store recorded"
-
 // projectRowExists reports whether a project with the id exists, on a connection
 // of the run's own.
 func (p *Provisioner) projectRowExists(ctx context.Context, projectID int64) (bool, error) {
@@ -1204,20 +1077,6 @@ SET cleanup = jsonb_set(cleanup, '{notes}', COALESCE(cleanup->'notes', '{}'::jso
 WHERE project_id = $1`, projectID, step, note); err != nil {
 		p.logger.WarnContext(ctx, "could not record a cleanup step's note",
 			"project_id", projectID, "step", step, "err", err)
-	}
-}
-
-// recordQuietFailures stores how many quiet drop failures the journal has seen,
-// so the limit holds across runs and restarts.
-func (p *Provisioner) recordQuietFailures(runCtx context.Context, projectID int64, count int) {
-	ctx, cancel := cleanupjournal.BookkeepingContext(runCtx)
-	defer cancel()
-	if _, err := p.pool.Exec(ctx, `
-UPDATE centry.project_deletions
-SET cleanup = jsonb_set(cleanup, '{quiet_drop_failures}', to_jsonb($2::int), true)
-WHERE project_id = $1`, projectID, count); err != nil {
-		p.logger.WarnContext(ctx, "could not record a quiet drop failure; the limit counts from the next run",
-			"project_id", projectID, "err", err)
 	}
 }
 
