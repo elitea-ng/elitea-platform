@@ -44,7 +44,7 @@ func TestCurrentAvailableRoutePreservesCurrentPathsAndSectionFilters(t *testing.
 			Type string `json:"type"`
 		}
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &entries) != nil ||
-			len(entries) != 2 || entries[0].Type != "s3" || entries[1].Type != "pgvector" {
+			len(entries) != 1 || entries[0].Type != "s3" {
 			t.Fatalf("GET %s status=%d body=%s", target, response.Code, response.Body.String())
 		}
 	}

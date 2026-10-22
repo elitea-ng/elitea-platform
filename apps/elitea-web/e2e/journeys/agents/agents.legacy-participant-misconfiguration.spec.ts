@@ -9,7 +9,8 @@
  *    credentials.
  *  - #2159 — "show correct notifications and highlight the errors" for a
  *    misconfigured credential/PgVector/Embedding configuration on a Toolkit,
- *    an Agent, or a Chat participant.
+ *    an Agent, or a Chat participant. (The PgVector configuration has since
+ *    been removed; credential and embedding remain.)
  *
  * ROOT CAUSE (code read, this pass): the Chat Participants panel's
  * misconfiguration flag (`hasMisconfigurationErrors`, rendered by

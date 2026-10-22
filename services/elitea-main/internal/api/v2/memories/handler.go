@@ -10,7 +10,7 @@
 //
 // THIS IS NOT THE "memory" TOOLKIT. integrations/toolkits/memory_toolkit is
 // an agent-scoped key/value store the LLM calls as a TOOL mid-turn, backed by
-// pgvector, attached like any other toolkit. The store here is never a tool
+// elitea-vector, attached like any other toolkit. The store here is never a tool
 // call target: it is read passively, before a turn starts, by the runtime
 // context-injection path (internal/application/agentexecution's
 // CurrentMemoryRecallResolver) and merged into the same `instructions` text

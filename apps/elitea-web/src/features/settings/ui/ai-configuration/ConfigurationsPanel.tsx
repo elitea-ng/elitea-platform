@@ -1,6 +1,6 @@
 /**
  * ConfigurationsPanel — displays the header with AddModelButton and all
- * configuration sections (LLM, Embedding, Vector Storage, Image, ASR, TTS,
+ * configuration sections (LLM, Embedding, Image, ASR, TTS,
  * AI Credentials).
  * Ported from `apps/elitea-ui/src/[fsd]/features/settings/ui/ai-configuration/Configuration/ConfigurationsPanel.jsx`.
  */
@@ -62,7 +62,6 @@ export default memo(function ConfigurationsPanel({
   /* Extract sections safely (TS doesn't know the key types) */
   const llmConfigs = configurationsBySection['llm'] ?? [];
   const embeddingConfigs = configurationsBySection['embedding'] ?? [];
-  const vectorStorageConfigs = configurationsBySection['vectorstorage'] ?? [];
   const imageConfigs = configurationsBySection['image_generation'] ?? [];
   const asrConfigs = configurationsBySection['asr'] ?? [];
   const ttsConfigs = configurationsBySection['tts'] ?? [];
@@ -84,13 +83,12 @@ export default memo(function ConfigurationsPanel({
    * `${default_model_name}<<>>${default_model_project_id}` — a model name. No
    * option ever equalled the select's value, so the Default select could not
    * show the model that was the default, and a section with no configuration
-   * rows (production project 1 has none for embedding or vector storage) had
+   * rows (production project 1 has none for embedding) had
    * no options at all. See `useModelOptions` for the measurements.
    */
   const models = useModelOptions({ projectId, includeShared });
   const llmDefaults = models.sectionData.llm;
   const embeddingDefaults = models.sectionData.embedding;
-  const vectorStorageDefaults = models.sectionData.vectorstorage;
   const imageDefaults = models.sectionData.image_generation;
   const asrDefaults = models.sectionData.asr;
   const ttsDefaults = models.sectionData.tts;
@@ -250,27 +248,6 @@ export default memo(function ConfigurationsPanel({
           defaultSettingOptions={models.embeddingModelOptions}
           onChangeDefaultSetting={handleDefaultChange('embedding')}
           defaultSettingError={saveErrors['embedding']}
-        />
-
-        {/* Vector Storage */}
-        <ConfigurationSection
-          title={t('ai-configuration.section.vectorStorage', 'Vector Storage')}
-          display={{ testId: 'ai-providers-section-vector-storage', defaultExpanded: sectionHoldsRevealedRow(vectorStorageConfigs, revealConfigurationId) }}
-          configurations={vectorStorageConfigs}
-          projectId={projectId}
-          isLoading={isLoading}
-          hasDefaultSetting
-          defaultSettingLabel={renderInfoLabel(
-            t('ai-configuration.section.default', 'Default'),
-            t(
-              'ai-configuration.section.vectorStorageTooltip',
-              'Default vector storage used to store embeddings for indexing, search, and retrieval.',
-            ),
-          )}
-          defaultSettingValue={defaultValueOf(vectorStorageDefaults)}
-          defaultSettingOptions={models.vectorStorageOptions}
-          onChangeDefaultSetting={handleDefaultChange('vectorstorage')}
-          defaultSettingError={saveErrors['vectorstorage']}
         />
 
         {/* Image Generation */}

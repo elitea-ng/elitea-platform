@@ -47,6 +47,11 @@ SNAPSHOT = (
 RULES_OUT = WORKER / "src/validation/configuration_rules.json"
 CASES_OUT = HERE / "configuration_validation_cases.json"
 
+# Configuration types the pinned SDK still registers but the platform retired.
+# They are left out of Main's catalog, this table and the corpus alike
+# (pgvector: retired 2026-10-21, indexes live in elitea-vector, ADR-0031).
+RETIRED = {"pgvector"}
+
 # model_validator(mode="before") hooks the table cannot express as field rules.
 HOOKS = {"github": "github_auth", "openapi": "openapi_auth"}
 
@@ -221,6 +226,7 @@ def main() -> None:
     registry = sdk.get_class_configurations()
     if sdk.FAILED_IMPORTS:
         sys.exit(f"failed SDK imports: {sorted(sdk.FAILED_IMPORTS)}")
+    registry = {kind: model for kind, model in registry.items() if kind not in RETIRED}
     snapshot = json.loads(SNAPSHOT.read_text())
     pinned = {e["configuration_type"]: e for e in snapshot["entries"]}
     if set(registry) != set(pinned):

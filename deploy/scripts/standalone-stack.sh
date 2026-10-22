@@ -34,7 +34,7 @@
 #                An operator normally does this from the admin UI instead
 #                (Configurations → add an LLM provider), once logged in
 #   seed-index   LOCAL-MODEL CONVENIENCE, not required for a working stack:
-#                vector store + an indexable toolkit, so the index-start route
+#                embedding model + an indexable toolkit, so the index-start route
 #                and its SSE stream can be driven (#93). It creates the
 #                embedding model row only when no row exists yet, so it can
 #                never overwrite the name seed-llm wrote (#468)
@@ -1252,30 +1252,7 @@ SQL
       psql -v ON_ERROR_STOP=1 -U elitea -d elitea \
         -v toolkit="$TOOLKIT_ID" -v embedding="$EMBEDDING_MODEL" \
         -v pid="$TARGET" -v schema="p_${TARGET}" <<'SQL'
--- 1. The vector store the run writes into.
---
--- `postgresql+psycopg://` is NOT interchangeable with `postgresql://` here even
--- though internal/infra/pgvector/index_meta.go accepts both. The SDK's
--- runtime/langchain/store_manager.py:_parse_connection_string only assigns its
--- `url` variable inside `if conn_str.startswith("postgresql+psycopg://")`, so
--- any other scheme reaches urlparse with the variable unbound and the toolkit
--- dies with `UnboundLocalError: cannot access local variable 'url'` — measured,
--- and it surfaces only as a generic "Indexing reported an error." node event.
---
--- It points at this stack's own postgres, which is why that service runs a
--- pgvector image: the start request creates `… embedding vector …` in this
--- database before it answers.
-INSERT INTO :"schema".configuration
-    (project_id, elitea_title, label, type, section, data, meta, shared, status_ok, source, created_at, updated_at)
-VALUES
-    (:pid, 'elitea-pgvector', 'elitea-pgvector', 'pgvector', 'vectorstorage',
-     jsonb_build_object('connection_string','postgresql+psycopg://elitea:elitea@postgres:5432/elitea'),
-     '{}', false, true, 'system', NOW(), NOW())
-ON CONFLICT (elitea_title) DO UPDATE
-    SET data = EXCLUDED.data, type = EXCLUDED.type, section = EXCLUDED.section,
-        status_ok = true, updated_at = NOW();
-
--- 2. The embedding model the resolver binds.
+-- 1. The embedding model the resolver binds.
 --
 -- `seed-llm` OWNS the model NAME in this row (#468). This statement is a
 -- BOOTSTRAP: it creates the row when no row exists, so `seed-index` still
@@ -1310,7 +1287,7 @@ ON CONFLICT (elitea_title) DO UPDATE
     SET type = EXCLUDED.type, section = EXCLUDED.section,
         label = EXCLUDED.label, shared = true, status_ok = true, updated_at = NOW();
 
--- 3. An indexable toolkit.
+-- 2. An indexable toolkit.
 --
 -- `artifact` is the one indexable type in the pinned toolkit schema snapshot
 -- that needs no third-party credential and no egress — it indexes this stack's
@@ -1334,9 +1311,7 @@ INSERT INTO :"schema".elitea_tools (id, name, type, description, owner_id, autho
 SELECT :toolkit, 'standalone-artifact-index', 'artifact', 'index plane (#93)', :pid, 1, '{}'::jsonb,
        jsonb_build_object(
            'bucket', 'elitea-artifacts',
-           'embedding_model', c.data->>'name',
-           'pgvector_configuration',
-               jsonb_build_object('elitea_title', 'elitea-pgvector', 'private', false))
+           'embedding_model', c.data->>'name')
   FROM :"schema".configuration AS c
  WHERE c.elitea_title = 'standalone-embedding'
 ON CONFLICT (id) DO UPDATE

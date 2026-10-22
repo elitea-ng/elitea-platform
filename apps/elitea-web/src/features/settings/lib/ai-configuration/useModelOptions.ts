@@ -1,10 +1,12 @@
 /**
- * The nine option lists the AI-providers page's default-model selects need
+ * The eight option lists the AI-providers page's default-model selects need
  * (issue #80, item 2).
  *
  * Port of `apps/elitea-ui/src/[fsd]/features/settings/lib/hooks/
  * useModelConfiguration.hooks.jsx:147-224`'s `useModelOptions`, driven by the
- * same six per-section model queries `AIProvidersContent.jsx:25-72` makes.
+ * per-section model queries `AIProvidersContent.jsx:25-72` makes (less the
+ * baseline's `vectorstorage` one: the pgvector configuration type is removed,
+ * toolkit indexes live in the platform vector store and need no configuration).
  *
  * WHY IT MATTERS, MEASURED — not a tidy-up. `ConfigurationsPanel` built its
  * own options from the CONFIGURATION rows
@@ -36,13 +38,13 @@
  * NOT a defect this fixes: a section with no configuration rows renders
  * nothing at all (`ConfigurationSection.tsx`'s own early return, and the
  * baseline's `ConfigurationSection.jsx:106` does the same). Production project
- * 1 has no `embedding` and no `vectorstorage` row, so those two sections are
- * absent from the page in both apps. That is the baseline's behaviour, and
+ * 1 has no `embedding` row, so that section is absent from the page in both
+ * apps. That is the baseline's behaviour, and
  * changing it is not this hook's business.
  *
  * NO EXTRA REQUESTS. Every list here comes from `useModelsQuery`, keyed by
  * `(projectId, section, includeShared)`. `ConfigurationsPanel` already asks
- * for the same six keys to read the defaults, so react-query serves both from
+ * for the same five keys to read the defaults, so react-query serves both from
  * one cache entry per section.
  */
 import { useMemo } from 'react';
@@ -60,7 +62,7 @@ interface ModelOption {
 }
 
 /**
- * The six sections the page shows a default for. `ai_credentials` is absent on
+ * The five sections the page shows a default for. `ai_credentials` is absent on
  * purpose: it has no default model, and the panel renders no select for it.
  */
 export interface ModelOptionsResult {
@@ -70,7 +72,6 @@ export interface ModelOptionsResult {
   readonly lowTierModelOptions: ModelOption[];
   readonly highTierModelOptions: ModelOption[];
   readonly embeddingModelOptions: ModelOption[];
-  readonly vectorStorageOptions: ModelOption[];
   readonly imageGenerationOptions: ModelOption[];
   readonly asrOptions: ModelOption[];
   readonly ttsOptions: ModelOption[];
@@ -78,7 +79,7 @@ export interface ModelOptionsResult {
   readonly sectionData: Readonly<Record<ModelSection, ModelsApiResponse>>;
 }
 
-type ModelSection = 'llm' | 'embedding' | 'vectorstorage' | 'image_generation' | 'asr' | 'tts';
+type ModelSection = 'llm' | 'embedding' | 'image_generation' | 'asr' | 'tts';
 
 /**
  * `${name}<<>>${project_id}` — the value shape `useDefaultModelSaving` splits
@@ -108,7 +109,6 @@ export interface ModelOptionsInput {
 export function useModelOptions({ projectId, includeShared }: ModelOptionsInput): ModelOptionsResult {
   const llm = useModelsQuery(projectId, 'llm', includeShared).data;
   const embedding = useModelsQuery(projectId, 'embedding', includeShared).data;
-  const vectorstorage = useModelsQuery(projectId, 'vectorstorage', includeShared).data;
   const imageGeneration = useModelsQuery(projectId, 'image_generation', includeShared).data;
   const asr = useModelsQuery(projectId, 'asr', includeShared).data;
   const tts = useModelsQuery(projectId, 'tts', includeShared).data;
@@ -128,26 +128,24 @@ export function useModelOptions({ projectId, includeShared }: ModelOptionsInput)
       lowTierModelOptions: createOptions(uniqueConfigurations.filter((model) => model.low_tier === true)),
       highTierModelOptions: createOptions(uniqueConfigurations.filter((model) => model.high_tier === true)),
       embeddingModelOptions: createOptions(embedding?.items),
-      vectorStorageOptions: createOptions(vectorstorage?.items),
       imageGenerationOptions: createOptions(imageGeneration?.items),
       asrOptions: createOptions(asr?.items),
       ttsOptions: createOptions(tts?.items),
       sectionData: {
         llm: withDefaults(llm),
         embedding: withDefaults(embedding),
-        vectorstorage: withDefaults(vectorstorage),
         image_generation: withDefaults(imageGeneration),
         asr: withDefaults(asr),
         tts: withDefaults(tts),
       },
     }),
-    [uniqueConfigurations, embedding, vectorstorage, imageGeneration, asr, tts, llm],
+    [uniqueConfigurations, embedding, imageGeneration, asr, tts, llm],
   );
 }
 
 /**
  * `useModelsQuery` resolves to `undefined` before the fetch settles. A
- * top-level helper rather than a `??` at each of the six call sites, for the
+ * top-level helper rather than a `??` at each of the five call sites, for the
  * §3.5 complexity budget.
  */
 function withDefaults(data: ModelsApiResponse | undefined): ModelsApiResponse {

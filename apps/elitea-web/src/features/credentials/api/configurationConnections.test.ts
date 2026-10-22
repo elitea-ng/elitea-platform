@@ -104,9 +104,9 @@ describe('API-157 listModels', () => {
         return HttpResponse.json({ items: [], total: 0 });
       }),
     );
-    await listModels(7, { include_shared: true, section: 'vectorstorage' });
+    await listModels(7, { include_shared: true, section: 'embedding' });
     expect(url).toContain('include_shared=true');
-    expect(url).toContain('section=vectorstorage');
+    expect(url).toContain('section=embedding');
   });
 });
 

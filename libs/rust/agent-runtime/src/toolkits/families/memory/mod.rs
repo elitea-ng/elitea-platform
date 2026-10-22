@@ -5,8 +5,9 @@
 //! Names, argument schemas, descriptions, the `selected_tools` rule (empty
 //! selects all four) and the result sentences keep the SDK's. The settings
 //! are the SDK's: `namespace` (`default` when absent) and
-//! `selected_tools`; `pgvector_configuration` is read by nothing here, because
-//! memories live in `elitea-vector`, not in a database the toolkit names.
+//! `selected_tools`. The SDK's `pgvector_configuration` is retired (Main
+//! neither serves nor sends it): memories live in `elitea-vector`, not in a
+//! database the toolkit names.
 //!
 //! Like the index tools, the family has no credential and no model of its
 //! own. It acts under the authority the host lends for the run (the claim's
@@ -30,8 +31,8 @@
 //!   string (two toolkits with the same string saw one another's memories); here
 //!   the store is keyed by the toolkit id and `namespace` is only a label inside
 //!   it, so toolkits never share and deleting a toolkit deletes its memories.
-//! * Memories written under the Python worker are not carried over: they sit
-//!   in the toolkit's pgvector database, which nothing here reads.
+//! * Memories written under the Python worker are not carried over: they sat
+//!   in the toolkit's pgvector database, a store the platform has retired.
 //! * Memory has an owner, set by the toolkit's `memory_scope` setting (an
 //!   extension; the SDK's memory belongs to the namespace, shared by everyone
 //!   who runs it). `personal` (the default) belongs to the one authenticated

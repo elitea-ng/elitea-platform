@@ -250,11 +250,11 @@ func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {
 		},
 		"no pgvector": {
 			err: indexmetaapp.ErrCurrentIndexMetaTargetMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "PGVector configuration is missing for toolkit 9",
+			wantBody: "Index storage is not available for toolkit 9",
 		},
 		"no connection string": {
 			err: indexmetaapp.ErrCurrentIndexMetaConnectionMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "Connection string is missing in PGVector configuration for toolkit 9",
+			wantBody: "Index storage is not available for toolkit 9",
 		},
 		"index missing": {
 			err: indexmetaapp.ErrCurrentIndexMetaNotFound, wantStatus: http.StatusNotFound,

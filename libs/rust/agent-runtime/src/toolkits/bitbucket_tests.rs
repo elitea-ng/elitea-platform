@@ -37,8 +37,7 @@ fn settings(url: &str, cloud: &Value) -> Map<String, Value> {
         "repository": "app",
         "branch": "main",
         "cloud": cloud,
-        "selected_tools": [],
-        "pgvector_configuration": null
+        "selected_tools": []
     })
     .as_object()
     .cloned()

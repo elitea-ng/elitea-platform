@@ -279,7 +279,6 @@ async fn a_call_reaches_the_host_with_its_namespace_and_a_failure_is_the_result_
 async fn materialization_serves_memory_only_under_an_authority_that_serves_it() {
     let tool = memory_tool(&json!({
         "namespace": "n",
-        "pgvector_configuration": {"connection_string": "postgresql+psycopg://x"},
         "selected_tools": ["manage_memory", "search_memory"]
     }));
 

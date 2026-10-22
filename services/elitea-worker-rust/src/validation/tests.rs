@@ -85,10 +85,13 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn every_catalog_type_is_covered_and_listed() {
     let names: Vec<&str> = catalog().type_names().collect();
-    assert_eq!(names.len(), 32);
-    for expected in ["jira", "confluence", "github", "pgvector", "openapi", "sql"] {
+    assert_eq!(names.len(), 31);
+    for expected in ["jira", "confluence", "github", "openapi", "sql"] {
         assert!(names.contains(&expected), "{expected}");
     }
+    // The pgvector configuration type is retired (2026-10-21): Main neither
+    // admits nor routes it, so the table does not carry it.
+    assert!(!names.contains(&"pgvector"));
     let mut sorted = names.clone();
     sorted.sort_unstable();
     assert_eq!(names, sorted, "the table keeps Main's ordering");

@@ -35,9 +35,9 @@
  * stray `aha`-with-a-probe here would confound the gate under test with
  * `unreachable` blocking Save outright), so a type with no probe in that map
  * is used instead of relying on `aha` staying gapped forever. `figma` was
- * tried first and rejected too: its OWN settings schema requires a
- * `pgvector_configuration` (a second, indexing-storage credential) and a
- * `global_limit` this fixture never seeds, so the FORM itself loads invalid
+ * tried first and rejected too: its OWN settings schema required a
+ * `pgvector_configuration` (an indexing-storage credential, since removed)
+ * and a `global_limit` this fixture never seeds, so the FORM itself loads invalid
  * ("Field is required") and Save never even reaches `checkBeforeSave` at
  * all — confounding the gate under test a second, different way. Testing
  * types (`report_portal`, `testio`) have no such baggage: `selected_tools` +

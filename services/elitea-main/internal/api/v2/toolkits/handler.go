@@ -116,7 +116,7 @@ type Handler struct {
 	// workerCapability decides whether a catalogued type is offered as
 	// creatable. Nil offers every catalogued type.
 	workerCapability ToolkitCapabilitySource
-	// memoryOnVectorStore serves the memory type without pgvector_configuration
+	// memoryOnVectorStore serves the memory type with its memory_scope setting
 	// (WithMemoryOnVectorStore).
 	memoryOnVectorStore bool
 	// workerImplementation is the plain "python"/"rust" name of the worker
@@ -401,9 +401,8 @@ var toolkitTypeSchemas = map[string]map[string]any{
 		// asks for it instead of saving into a 400.
 		"required": []any{"bucket"},
 		"properties": map[string]any{
-			"bucket":                 map[string]any{"type": "string"},
-			"pgvector_configuration": map[string]any{"type": "object"},
-			"embedding_model":        map[string]any{"type": "string"},
+			"bucket":          map[string]any{"type": "string"},
+			"embedding_model": map[string]any{"type": "string"},
 			"selected_tools": map[string]any{
 				"type": "object",
 				"args_schemas": map[string]any{
@@ -753,9 +752,9 @@ func (h *Handler) toolkitSettingsDefinitions(
 //
 // A configuration property REPLACES the hand-written entry of the same name.
 // The pinned SDK snapshot is authoritative about which settings field is a
-// configuration reference, and the hand-written stubs predate that: artifact's
-// pgvector_configuration was a bare {"type":"object"}, which the client sorts
-// into the ordinary-property bucket and renders as a plain object field.
+// configuration reference, and the hand-written stubs predate that: a bare
+// {"type":"object"} stub is sorted by the client into the ordinary-property
+// bucket and rendered as a plain object field.
 // Settings that no configuration property names are carried over untouched.
 func withSettingsDefinitions(
 	settingsSchema map[string]any,
@@ -1244,6 +1243,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	dropRetiredToolkitSettings(body)
 
 	createdType, _ := body["type"].(string)
 	if h.refuseBlockedToolkitType(w, r, "create_toolkit", createdType) {
@@ -1343,6 +1343,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		h.updateToolRelation(w, r, projectID, toolkitID, body)
 		return
 	}
+	dropRetiredToolkitSettings(body)
 
 	// A body that names a blocked type is refused. A body that omits `type` is
 	// not: an update that does not restate the type cannot be used to introduce
@@ -1854,15 +1855,27 @@ func (r *pgRepo) ListToolkitInstances(ctx context.Context, projectID string, fil
 	return items, total, nil
 }
 
+// dropRetiredToolkitSettings removes the retired `pgvector_configuration`
+// key from a save body's settings (application/configurations/retired.go).
+// The key is accepted and discarded rather than refused, so an older client
+// that still sends it, usually as null, keeps saving.
+func dropRetiredToolkitSettings(body map[string]any) {
+	if settings, ok := body["settings"].(map[string]any); ok {
+		body["settings"] = configurationapp.WithoutRetiredToolkitSettings(settings)
+	}
+}
+
 // redactSettings returns a deep copy of settings with credential-like values
 // removed. Toolkit configuration is not a secret transport; execution code
 // reads the stored JSON directly and must never depend on this API response.
+// The retired `pgvector_configuration` key, which a toolkit saved before its
+// retirement may still hold, is never served either.
 func redactSettings(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, nested := range v {
-			if isSensitiveSettingKey(key) {
+			if isSensitiveSettingKey(key) || key == configurationapp.RetiredPgvectorToolkitSetting {
 				continue
 			}
 			out[key] = redactSettings(nested)

@@ -111,7 +111,6 @@ fn github_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
             "active_branch": "main",
             "base_branch": "main",
             "selected_tools": selected,
-            "pgvector_configuration": null,
             "embedding_model": null
         }
     });
@@ -608,8 +607,7 @@ fn gitlab_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
             },
             "repository": "team/project",
             "branch": "main",
-            "selected_tools": selected,
-            "pgvector_configuration": null
+            "selected_tools": selected
         }
     });
     if let Some(indexes) = indexes {
@@ -633,8 +631,7 @@ fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
             "repository": "app",
             "branch": "main",
             "cloud": null,
-            "selected_tools": selected,
-            "pgvector_configuration": null
+            "selected_tools": selected
         }
     });
     if let Some(indexes) = indexes {

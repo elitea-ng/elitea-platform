@@ -124,7 +124,7 @@ describe('CredentialTypeSelector', () => {
     const onSelectType = vi.fn();
     const malformed = [
       { type: 'openai', display_name: 'OpenAI', section: 'llm' },
-      { type: 'chroma', display_name: 'Chroma', section: 'vectorstorage' },
+      { type: 'ollama', display_name: 'Ollama', section: 'embedding' },
     ] as unknown as ConfigurationTypeDescriptor[];
 
     renderWithTheme(
@@ -136,7 +136,7 @@ describe('CredentialTypeSelector', () => {
     );
 
     expect(screen.getByText('openai')).toBeInTheDocument();
-    expect(screen.getByText('chroma')).toBeInTheDocument();
+    expect(screen.getByText('ollama')).toBeInTheDocument();
     fireEvent.click(screen.getByText('openai'));
     expect(onSelectType).toHaveBeenCalledWith('openai');
   });

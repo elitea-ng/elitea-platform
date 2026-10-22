@@ -56,11 +56,11 @@ func TestCreateRefusesABodyMissingASchemaRequiredField(t *testing.T) {
 			field: "data.api_base",
 		},
 		{
-			name:  "a vector store with no label and no data",
-			title: "autotest_pgvector_incomplete",
+			name:  "a Figma credential with no label and no data",
+			title: "autotest_figma_incomplete",
 			body: map[string]any{
-				"elitea_title": "autotest_pgvector_incomplete",
-				"type":         "pgvector",
+				"elitea_title": "autotest_figma_incomplete",
+				"type":         "figma",
 			},
 			field: "label",
 		},
@@ -179,14 +179,14 @@ func TestCreateAcceptsTheSmallestLegalBodyOfEachSection(t *testing.T) {
 			section: "ai_credentials",
 		},
 		{
-			name: "a vector store with no connection string",
+			name: "a Figma credential with no token",
 			body: map[string]any{
-				"elitea_title": "autotest_pgvector_minimal",
-				"label":        "autotest pgvector",
-				"type":         "pgvector",
+				"elitea_title": "autotest_figma_minimal",
+				"label":        "autotest figma",
+				"type":         "figma",
 				"data":         map[string]any{},
 			},
-			section: "vectorstorage",
+			section: "credentials",
 		},
 		{
 			name: "an embedding model naming a model and a credential",

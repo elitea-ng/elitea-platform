@@ -346,3 +346,19 @@ func fixedCurrentIndexSchedulePatchQueries(
 func boolPointer(value bool) *bool {
 	return &value
 }
+
+// The registry runtime never reads the retired pgvector_configuration: a
+// toolkit saved before the retirement with a private one keeps the requested
+// schedule bucket instead of being resolved to the actor.
+func TestRegistryScheduleEffectiveUserIgnoresTheRetiredPgvectorConfiguration(t *testing.T) {
+	for name, settings := range map[string]map[string]any{
+		"private reference":   {"pgvector_configuration": map[string]any{"private": true}},
+		"malformed reference": {"pgvector_configuration": map[string]any{"private": "yes"}},
+		"no reference":        {},
+	} {
+		got, err := currentScheduleEffectiveUser(settings, -1, 42, true)
+		if err != nil || got != -1 {
+			t.Fatalf("%s: user=%d err=%v, want the requested -1", name, got, err)
+		}
+	}
+}

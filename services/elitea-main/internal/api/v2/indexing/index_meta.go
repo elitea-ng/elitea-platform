@@ -21,9 +21,8 @@ const (
 var ErrInvalidCurrentIndexMetaRoute = errors.New("invalid current index-meta route dependencies")
 
 // CurrentIndexMetaReader is the provider-neutral application boundary for the
-// current index list. The implementation resolves the saved toolkit and its
-// Configurations-owned PgVector reference; HTTP input cannot select a DSN or a
-// PostgreSQL schema.
+// current index list. The implementation (the index registry) resolves the
+// saved toolkit; HTTP input cannot select a DSN or a PostgreSQL schema.
 type CurrentIndexMetaReader interface {
 	List(context.Context, indexmetaapp.Request) ([]indexmetaapp.Item, error)
 }
@@ -131,7 +130,7 @@ func writeCurrentIndexMetaError(writer http.ResponseWriter, err error, toolkitID
 		// validation error rather than exposing tenant lookup details.
 		writeError(writer, http.StatusBadRequest, "Toolkit id is missing for toolkit "+strconv.FormatInt(toolkitID, 10))
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaTargetMissing):
-		writeError(writer, http.StatusBadRequest, "PGVector configuration is missing for toolkit "+strconv.FormatInt(toolkitID, 10))
+		writeError(writer, http.StatusBadRequest, "Index storage is not available for toolkit "+strconv.FormatInt(toolkitID, 10))
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaLimitExceeded):
 		writeError(writer, http.StatusRequestEntityTooLarge, "Index metadata exceeds the approved response limit")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

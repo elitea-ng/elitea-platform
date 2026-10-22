@@ -20,12 +20,12 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE INDEX ROW IS INJECTED, AND WHY THAT IS NOT A WEAKER TEST
  * ─────────────────────────────────────────────────────────────────────────────
- * An index metadata row lives in the PROJECT'S OWN PgVector store, written by
+ * An index metadata row lives in the index registry, written by
  * a real indexing run through the index-ingest plane. This stack composes
  * neither: `deploy/docker-compose.e2e-standalone.yml` sets no index-ingest
  * flag, so `GET .../index_meta/...` is answered by the compatibility handler
  * over `p_<project>.index_meta` (measured: `200 []`), and the reviewed
- * PgVector-backed routes — the list, the delete, the schedule writes and this
+ * registry-backed routes — the list, the delete, the schedule writes and this
  * change's configuration PUT — are not mounted at all. Enabling that plane on
  * the shared journeys stack would change what every other indexes journey
  * reads, mid-wave.

@@ -11,9 +11,9 @@ import (
 const settingsDefinitionsTestSDKRevision = "b5113a129329b85d23c2d5c2bf55f18e307414ec"
 
 // The pinned pair is the contract this catalogue exists to join, so the first
-// test reads it rather than a fixture: github is the type that carries both a
-// credential reference and a vector-storage one.
-func TestPinnedSettingsDefinitionsResolveBothSections(t *testing.T) {
+// test reads it rather than a fixture: github carries a credential reference,
+// and no longer the retired vector-storage (pgvector) one.
+func TestPinnedSettingsDefinitionsResolveTheCredentialSectionOnly(t *testing.T) {
 	t.Parallel()
 
 	catalog := pinnedSettingsDefinitionCatalog(t)
@@ -22,9 +22,14 @@ func TestPinnedSettingsDefinitionsResolveBothSections(t *testing.T) {
 		t.Fatalf("github definitions: found=%v err=%v", found, err)
 	}
 
+	if _, present := definitions["pgvector"]; present {
+		t.Errorf("the retired pgvector definition is still emitted; have %v", sortedKeys(definitions))
+	}
+	if _, present := properties["pgvector_configuration"]; present {
+		t.Error("the retired pgvector_configuration property is still emitted")
+	}
 	for _, expected := range []struct{ key, section string }{
 		{"github", "credentials"},
-		{"pgvector", "vectorstorage"},
 	} {
 		definition, ok := definitions[expected.key].(map[string]any)
 		if !ok {

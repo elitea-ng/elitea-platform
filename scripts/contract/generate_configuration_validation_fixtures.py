@@ -40,7 +40,7 @@ SCHEMA_DIGEST = bytes.fromhex(
     "1c43c41a5304c6f73c68deebd37ba70f8c2266a59dfd4f9d4fa20b819e7ab3f1"
 )
 CATALOG_DIGEST = bytes.fromhex(
-    "4a96e3ab8e3842ebf2645a851aeb12e3e2343f28e7d024c1a2960eb4ec254351"
+    "211e972b482804f8734345c261f4cca3273d12a2a9e62f654379bae781379b27"
 )
 TEST_KEY_ID = "elitea-runtime-v1-conformance-hmac"
 TEST_KEY = b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"

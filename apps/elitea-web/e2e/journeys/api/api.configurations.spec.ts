@@ -5,10 +5,11 @@
  * WHAT THIS PORTS
  * ─────────────────────────────────────────────────────────────────────────────
  * The legacy API suite's configuration cases: the AI-credential shapes (Azure
- * OpenAI and Amazon Bedrock), the vector store, the embedding model, and the
- * refusals each of them owes — including the one refusal that is common to all
- * four sections and to the toolkit credentials next door, "a configuration
- * with no label and no data is refused".
+ * OpenAI and Amazon Bedrock), the embedding model, and the refusals each of
+ * them owes — including the one refusal that is common to every section and
+ * to the toolkit credentials next door, "a configuration with no label and no
+ * data is refused". The legacy vector-store (PgVector) cases are replaced by
+ * one refusal: that configuration type has been removed.
  *
  * The three legacy cases that WAIT for a configuration to report a healthy
  * status are not ported. That wait runs a real Azure or AWS provider check, so
@@ -16,7 +17,7 @@
  * left behind as a skip that reads as coverage.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * ONE ROUTE, FOUR KINDS OF ROW — AND THE `section` IS DERIVED, NOT SENT
+ * ONE ROUTE, MANY KINDS OF ROW — AND THE `section` IS DERIVED, NOT SENT
  * ─────────────────────────────────────────────────────────────────────────────
  * `POST /configurations/configurations/{project}` serves every kind of
  * configuration, and the body decides which one it makes. The `section` column
@@ -46,7 +47,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * The legacy platform validates a create body against the type's own schema
  * before it stores anything. This one stored the body as sent, so
- * `{"elitea_title": "x", "type": "pgvector"}` was a 201 and a row with no
+ * a body of nothing but `elitea_title` and `type` was a 201 and a row with no
  * label and no data. That row is unusable in a way nothing reports: the model
  * catalogue treats an unlabelled row as an error rather than skipping it, so
  * ONE of them empties the whole catalogue for the project. The refusals below
@@ -91,7 +92,6 @@ const SEALED = /^\{\{secret\.[0-9a-f]{32}\}\}$/;
 
 /** The endpoints the fixtures name. Deliberately unroutable (RFC 2606). */
 const AZURE_ENDPOINT = 'https://autotest.invalid/openai';
-const PGVECTOR_CONNECTION = 'postgresql://autotest:autotest@autotest.invalid:5432/autotest';
 
 interface StoredConfiguration {
   readonly id?: number | string;
@@ -350,49 +350,43 @@ test('editing a Bedrock credential replaces the sealed secret rather than keepin
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
- * The vector store
+ * The removed vector-store type
  * ═════════════════════════════════════════════════════════════════════════ */
 
-test('a PgVector configuration is filed under vectorstorage with its connection string sealed', async ({
+/**
+ * The exact sentence the create route answers for the removed type. Toolkit
+ * indexes are kept in the platform vector store (elitea-vector, ADR-0031), so
+ * a per-project PgVector configuration is no longer a thing a person makes.
+ */
+const PGVECTOR_REMOVED =
+  'The pgvector configuration type has been removed: indexes are kept in the platform vector store and need no configuration.';
+
+test('the pgvector configuration type is refused on create and absent from the type catalogue', async ({
   request,
 }) => {
-  const title = autotestName('pgvector_full');
-  const created: string[] = [];
-  try {
-    const row = await postConfiguration(request, {
-      type: 'pgvector',
-      elitea_title: title,
-      label: `${title} label`,
-      shared: true,
-      data: { connection_string: PGVECTOR_CONNECTION },
-    });
-    created.push(row.id);
-    expect(row.stored.section, 'a vector store is not a credential').toBe('vectorstorage');
-    expect(row.stored.shared, 'a vector store can be shared at creation').toBe(true);
-    expect(String((row.stored.data ?? {})['connection_string'] ?? '')).toMatch(SEALED);
-    expect(row.raw, 'the connection string carries a password and must not be echoed').not.toContain(
-      PGVECTOR_CONNECTION,
-    );
+  const title = autotestName('pgvector_removed');
+  const body = {
+    type: 'pgvector',
+    elitea_title: title,
+    label: title,
+    shared: false,
+    data: { connection_string: 'postgresql://autotest:autotest@autotest.invalid:5432/autotest' },
+  };
+  const response = await request.post(CONFIGURATIONS, { data: body });
+  const raw = await response.text();
+  expect(response.status(), raw).toBe(400);
+  const refusal = JSON.parse(raw) as { error?: string; field?: string };
+  expect(refusal.error).toBe(PGVECTOR_REMOVED);
+  expect(refusal.field, 'the refusal names the type field').toBe('type');
+  // …and nothing was written: the same three-part check every refusal makes.
+  await expectRefused(request, body, 'type');
 
-    const read = await readConfiguration(request, row.id);
-    expect(read.stored.section).toBe('vectorstorage');
-    expect(read.raw).not.toContain(PGVECTOR_CONNECTION);
-
-    // The connection string is OPTIONAL: the type declares no required data
-    // field, so a row that names none is a legal one.
-    const bare = autotestName('pgvector_bare');
-    const minimal = await postConfiguration(request, {
-      type: 'pgvector',
-      elitea_title: bare,
-      label: bare,
-      shared: false,
-      data: {},
-    });
-    created.push(minimal.id);
-    expect(minimal.stored.section).toBe('vectorstorage');
-  } finally {
-    for (const id of created) await deleteConfiguration(request, id);
-  }
+  // The create screen is built from the catalogue, so a type it lists is a
+  // type a person can try to make.
+  const available = await request.get(`${API_BASE}/configurations/available/`);
+  expect(available.status()).toBe(200);
+  const types = ((await available.json()) as { type?: string }[]).map((entry) => entry.type);
+  expect(types, 'the type catalogue must not offer pgvector').not.toContain('pgvector');
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -456,10 +450,9 @@ test('a configuration with no label and no data is refused, in every section', a
 }) => {
   // One rule, stated once per section, because the route is one route and the
   // legacy platform refuses this body for each of them. Asserting it for a
-  // single type would leave three sections free to accept it.
+  // single type would leave the other sections free to accept it.
   const sections: { section: ConfigurationSection; type: string }[] = [
     { section: 'ai_credentials', type: 'azure_open_ai' },
-    { section: 'vectorstorage', type: 'pgvector' },
     { section: 'embedding', type: 'embedding_model' },
     // The toolkit credentials section. The same refusal, which is why it is
     // here rather than beside the GitHub authentication shapes: it is not a
@@ -597,7 +590,6 @@ test('every section fixture stores the type its section is filed under', async (
   const expected: Record<ConfigurationSection, string> = {
     ai_credentials: 'ai_credentials',
     embedding: 'embedding',
-    vectorstorage: 'vectorstorage',
     credentials: 'credentials',
   };
   for (const [section, wanted] of Object.entries(expected) as [ConfigurationSection, string][]) {
@@ -608,12 +600,12 @@ test('every section fixture stores the type its section is filed under', async (
     expect(wanted, `${section}: the expectation is stated`).not.toBe('');
   }
 
-  // …and the server agrees, for the three sections whose fixture needs no
+  // …and the server agrees, for the two sections whose fixture needs no
   // second row. The embedding section is proved by its own journey above,
   // which has to create the credential its model links.
   const created: string[] = [];
   try {
-    for (const section of ['ai_credentials', 'vectorstorage', 'credentials'] as const) {
+    for (const section of ['ai_credentials', 'credentials'] as const) {
       const row = await createConfiguration(request, section, {
         title: autotestName(`shape_${section}`),
       });

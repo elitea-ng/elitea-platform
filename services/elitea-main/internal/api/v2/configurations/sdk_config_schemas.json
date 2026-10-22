@@ -1,24 +1,4 @@
 {
-  "pgvector": {
-    "metadata": {
-      "icon_url": null,
-      "label": "PgVector",
-      "section": "vectorstorage",
-      "type": "pgvector"
-    },
-    "properties": {
-      "connection_string": {
-        "default": null,
-        "description": "Connection string for PgVector database",
-        "format": "password",
-        "title": "Connection String",
-        "type": "string",
-        "writeOnly": true
-      }
-    },
-    "title": "PgVectorConfiguration",
-    "type": "object"
-  },
   "postman": {
     "metadata": {
       "categories": [

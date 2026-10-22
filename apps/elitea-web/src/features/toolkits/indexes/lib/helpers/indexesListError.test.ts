@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isMissingVectorStoreError, readIndexesListErrorMessage, readIndexesListErrorStatus } from './indexesListError';
+import { readIndexesListErrorMessage, readIndexesListErrorStatus } from './indexesListError';
 
 /**
  * The rejection `useIndexesListQuery` really produces: an `EliteaApiError`
@@ -16,17 +16,17 @@ function httpFailure(status: number, body: unknown): Error & { readonly failure:
 }
 
 /**
- * The EXACT response the 2026-09-06 parity walk recorded for
- * `GET /api/v2/elitea_core/index_meta/prompt_lib/2/1` — the one HTTP failure
- * in the whole session, and the one the rail reported as "Still no indexes
- * created". `writeError` (`services/elitea-main/internal/api/v2/indexing/
- * index_meta.go:135`) puts the sentence at `body.error`.
+ * A 400 `writeError` (`services/elitea-main/internal/api/v2/indexing/
+ * index_meta.go`) really writes for `GET .../index_meta/...`, with the
+ * sentence at `body.error`. (The 2026-09-06 parity walk recorded a different
+ * 400 — a missing per-project PgVector configuration — which no longer
+ * exists: indexes need no vector store configuration.)
  */
-const MEASURED_PGVECTOR_400 = httpFailure(400, { error: 'PGVector configuration is missing for toolkit 1' });
+const INDEX_META_400 = httpFailure(400, { error: 'Toolkit id is missing for toolkit 1' });
 
 describe('readIndexesListErrorMessage', () => {
-  it('returns the server sentence from the measured PGVector 400', () => {
-    expect(readIndexesListErrorMessage(MEASURED_PGVECTOR_400)).toBe('PGVector configuration is missing for toolkit 1');
+  it('returns the server sentence from an index-meta 400', () => {
+    expect(readIndexesListErrorMessage(INDEX_META_400)).toBe('Toolkit id is missing for toolkit 1');
   });
 
   it.each([
@@ -71,7 +71,7 @@ describe('readIndexesListErrorMessage', () => {
 
 describe('readIndexesListErrorStatus', () => {
   it('returns the status of an http failure', () => {
-    expect(readIndexesListErrorStatus(MEASURED_PGVECTOR_400)).toBe(400);
+    expect(readIndexesListErrorStatus(INDEX_META_400)).toBe(400);
   });
 
   it.each([
@@ -81,29 +81,5 @@ describe('readIndexesListErrorStatus', () => {
     ['undefined', undefined],
   ])('returns undefined for %s', (_name, error) => {
     expect(readIndexesListErrorStatus(error)).toBeUndefined();
-  });
-});
-
-describe('isMissingVectorStoreError', () => {
-  it('matches the measured 400 sentence', () => {
-    expect(isMissingVectorStoreError(readIndexesListErrorMessage(MEASURED_PGVECTOR_400))).toBe(true);
-  });
-
-  it('matches the half-configured variant `index_meta_delete.go:163` writes', () => {
-    expect(isMissingVectorStoreError('Connection string is missing in PGVector configuration for toolkit 9')).toBe(true);
-  });
-
-  it('is case-insensitive, so a rewording that keeps the subject still matches', () => {
-    expect(isMissingVectorStoreError('pgvector config MISSING for toolkit 3')).toBe(true);
-  });
-
-  it.each([
-    ['the other index_meta sentence, which names a different prerequisite', 'Toolkit id is missing for toolkit 9'],
-    ['a generic read failure', 'Error occurred while fetching index_meta'],
-    ['a sentence about pgvector that is not about it being absent', 'PGVector connection refused'],
-    ['no message at all', undefined],
-    ['an empty message', ''],
-  ])('does not match %s', (_name, message) => {
-    expect(isMissingVectorStoreError(message)).toBe(false);
   });
 });

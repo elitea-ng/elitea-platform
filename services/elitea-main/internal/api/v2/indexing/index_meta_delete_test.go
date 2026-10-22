@@ -272,12 +272,12 @@ func TestCurrentIndexMetaDeleteRouteCurrentErrorsAndSafeCleanupDivergence(
 		"pgvector validation": {
 			err:       indexmetaapp.ErrCurrentIndexMetaTargetMissing,
 			want:      http.StatusBadRequest,
-			wantError: "PGVector configuration is missing for toolkit 9",
+			wantError: "Index storage is not available for toolkit 9",
 		},
 		"connection validation": {
 			err:       indexmetaapp.ErrCurrentIndexMetaConnectionMissing,
 			want:      http.StatusBadRequest,
-			wantError: "Connection string is missing in PGVector configuration for toolkit 9",
+			wantError: "Index storage is not available for toolkit 9",
 		},
 		"cleanup toolkit disappears": {
 			err: &indexmetaapp.ScheduleToolkitMissingError{

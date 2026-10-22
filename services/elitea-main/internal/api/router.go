@@ -279,8 +279,8 @@ type RouterConfig struct {
 	// when nothing has said which worker image is deployed.
 	ToolkitWorkerCapability v2toolkits.ToolkitCapabilitySource
 	// MemoryOnVectorStore: memory toolkits keep their data in elitea-vector
-	// (the Rust indexing runtime), so their type schema drops the SDK's
-	// pgvector_configuration field.
+	// (the Rust indexing runtime), so their type schema carries the
+	// memory_scope setting.
 	MemoryOnVectorStore bool
 	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
 	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv

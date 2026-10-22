@@ -13,7 +13,7 @@ func TestPinnedCurrentSDKConfigurationCatalogMatchesWorkerRegistry(t *testing.T)
 	}
 	const revision = "a78d3654f99d8ff89ca7233f20a66d676e564f79"
 	if catalog.SDKRevision() != revision || catalog.CatalogRevision() != revision ||
-		catalog.EntryCount() != 32 {
+		catalog.EntryCount() != 31 {
 		t.Fatalf(
 			"sdk=%q catalog=%q entries=%d",
 			catalog.SDKRevision(),
@@ -21,7 +21,7 @@ func TestPinnedCurrentSDKConfigurationCatalogMatchesWorkerRegistry(t *testing.T)
 			catalog.EntryCount(),
 		)
 	}
-	if got := catalog.CatalogDigest(); got != mustCurrentSDKConfigurationDigest(t, "4a96e3ab8e3842ebf2645a851aeb12e3e2343f28e7d024c1a2960eb4ec254351") {
+	if got := catalog.CatalogDigest(); got != mustCurrentSDKConfigurationDigest(t, "211e972b482804f8734345c261f4cca3273d12a2a9e62f654379bae781379b27") {
 		t.Fatalf("catalog digest=%x", got)
 	}
 
@@ -38,6 +38,11 @@ func TestPinnedCurrentSDKConfigurationCatalogMatchesWorkerRegistry(t *testing.T)
 	if !found || aha.Section != "credentials" || !aha.ValidationSupported ||
 		!aha.ConnectionCheckSupported {
 		t.Fatalf("aha binding=%+v found=%t", aha, found)
+	}
+	// The pinned SDK still registers pgvector; the platform retired it, so the
+	// catalog Main admits leaves it out (and its digest is over 31 entries).
+	if _, found := catalog.Binding("pgvector"); found {
+		t.Fatal("the retired pgvector type is still in the admitted catalog")
 	}
 	if _, found := catalog.Binding("embedding"); found {
 		t.Fatal("unregistered SDK embedding model was admitted as a generic configuration")

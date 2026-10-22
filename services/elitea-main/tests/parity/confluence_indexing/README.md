@@ -12,8 +12,6 @@ The harness crosses the following real boundaries:
 - all model calls use the pinned SDK's real `EliteAClient`, including its
   `/llm/v1` paths, bearer/project headers, tokenization, and retry policy;
 - the current SDK source is imported from the exact worker lock revision;
-- the database profile writes through `langchain-postgres` to a real
-  PostgreSQL/PgVector server and inspects the resulting rows directly;
 - real Poppler and Tesseract executables process deterministic PDF, populated
   OCR, and empty-OCR fixtures in the mandatory CI profile;
 - the Go control-plane test serializes the production command-bus envelope
@@ -52,8 +50,7 @@ indexing extras:
 ```bash
 ELITEA_CURRENT_SDK_ROOT=/tmp/elitea-sdk-0.8.30 \
 DYLD_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib:$DYLD_LIBRARY_PATH \
-python -m pytest tests/parity/confluence_indexing \
-  -m "not pgvector"
+python -m pytest tests/parity/confluence_indexing
 ```
 
 The source HTTP fault matrix covers `401`, `403`, `429`, and `5xx`. LiteLLM
@@ -64,43 +61,19 @@ turned into an indexable dependent error document rather than a skipped item.
 That is parity evidence, not an endorsement of the behavior.
 
 The retry fixture returns `503` once and then `200`; the pinned SDK must make
-exactly two page requests and preserve the successful page contract. A separate
-PgVector test freezes the exhausted-source-failure contract: the only persisted
-row is `index_meta`, its history is `created -> failed`, counts remain zero, and
-the emitted status events are `in_progress -> failed`.
+exactly two page requests and preserve the successful page contract.
 
-## Disposable PostgreSQL/PgVector profile
+## Retired PgVector profile
 
-`run_pgvector.sh` starts an isolated `pgvector/pgvector:0.8.1-pg18-trixie` container when
-`ELITEA_CONFLUENCE_PARITY_PGVECTOR_URL` is not already supplied. It removes only
-the uniquely named container it creates.
+The PgVector characterization profile (`run_pgvector.sh` and
+`test_current_sdk_pgvector.py`, which wrote through `langchain-postgres` to a
+disposable PostgreSQL/PgVector server and froze the persisted rows and the
+ordered event contract) was removed with the `pgvector` configuration type
+(2026-10-21). Toolkit indexes are kept by elitea-vector (ADR-0031) and their
+metadata by the index registry (ADR-0030), so that SDK write path is no longer
+a product behaviour to keep parity with.
 
-```bash
-ELITEA_CURRENT_SDK_ROOT=/tmp/elitea-sdk-0.8.30 \
-DYLD_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib:$DYLD_LIBRARY_PATH \
-./tests/parity/confluence_indexing/run_pgvector.sh
-```
-
-The golden successful outcome is:
-
-- one parent Confluence page;
-- two dependent documents (`notes.txt` and `diagram.png`);
-- `parent_id=page-1` on both dependent rows and
-  `dependent_docs=att-text;att-image` on the parent;
-- three persisted non-metadata chunks;
-- one SDK-visible indexed document, because current `docs_count` counts base
-  documents rather than dependent documents;
-- two vision calls for the single image, with the two distinct current prompts;
-- embedding requests for both metadata and content rows;
-- terminal `completed` index metadata with exact counts and history;
-- the exact ordered 15-event contract: 13 `thinking_step` events plus
-  `in_progress` and `completed` status events, including every current
-  `message`, `tool_name`, `toolkit`, count, and status field (only generated
-  UUID/timestamps are normalized);
-- the observed Confluence stats shape (`items_processed=1`,
-  `total_fetched=0`, `total_skipped=0`);
-- no source, image, base64, prompt, credential, or result bytes in the command-bus
-  control envelope.
+## Control-plane envelope
 
 The production command-bus envelope serializer test hashes a deterministic 62 MiB
 data fixture:
@@ -121,10 +94,9 @@ currently mounted as a mandatory repository CI job. A valid execution:
 - checks out revision
   `48c51a16634a9924f6c5d5313c3bacedb0b5b56b` and validates its Git archive
   digest against `current_pylon_sdk_baseline.json`;
-- runs against `pgvector/pgvector:0.8.1-pg18-trixie`;
 - installs and verifies Poppler and Tesseract;
-- runs the complete HTTP, model-client, binary-media, ordered-event, and real
-  PgVector characterization suite.
+- runs the complete HTTP, model-client and binary-media characterization
+  suite.
 
 `pytesseract==0.3.13` is supplied through the standalone worker's
 `indexing-current` profile. A future mandatory job must have no ad hoc OCR
@@ -133,7 +105,7 @@ dependency profile drifts from the current Confluence loader requirements.
 
 ## Baseline transition evidence
 
-The complete HTTP and PgVector golden matrix was rerun when the worker lock
+The complete HTTP and (since removed) PgVector golden matrix was rerun when the worker lock
 moved from the provisional SDK 0.8.26 target to the current Pylon Indexer
 0.8.30 baseline. No covered observable contract drifted. In particular, 0.8.30
 made two vision requests for the one image because parent augmentation and
@@ -164,5 +136,3 @@ worker claim/consumption, and streamed output with an in-process fake.
 
 The fake services, fixed fixtures, request recorder, and database assertions are
 deterministic. They do not use production credentials or external networks.
-The PgVector test skips with the exact missing environment prerequisite rather
-than replacing the database with an in-memory fake.

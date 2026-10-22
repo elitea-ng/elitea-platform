@@ -25,7 +25,7 @@ package eliteacore
 //   _extract_toolkits_for_md         (:646)  — agent toolkits
 //   _extract_toolkits_for_md_pipeline(:706)  — pipeline toolkits
 //   _filter_internal_keys            (:620)
-//   _sanitize_pgvector_configuration (:522)
+//   _sanitize_pgvector_configuration (:522), now stricter: see below
 //   create_zip_archive               (:1165)
 // and slugify (export_import_utils.py:28).
 //
@@ -52,11 +52,14 @@ package eliteacore
 //
 // ## One thing this does that the JSON export does not
 //
-// It sanitises. `_sanitize_pgvector_configuration` drops
+// It sanitises. `_sanitize_pgvector_configuration` dropped
 // `pgvector_configuration.connection_string` — a database credential — and
 // `_filter_internal_keys` drops the project-local ids that cannot mean
-// anything in the project a file is imported into. The legacy markdown path
-// did both, so this port does both.
+// anything in the project a file is imported into. The `pgvector`
+// configuration type is retired (application/configurations/retired.go), so
+// this port drops the whole `pgvector_configuration` block that a toolkit
+// saved before the retirement may still hold: a reference to a retired type
+// is useless to an importer, and dropping it cannot leak its credential.
 
 import (
 	"archive/zip"
@@ -80,12 +83,6 @@ var settingsExcludeKeys = map[string]bool{
 	"available_tools":          true,
 	"selected_tools":           true,
 }
-
-// pgvectorKeepKeys is the allow-list of `_sanitize_pgvector_configuration`
-// (:522). An allow-list, not a deny-list: the block is project-level and
-// carries a `connection_string`, so anything unrecognised is dropped rather
-// than exported on the assumption that it is harmless.
-var pgvectorKeepKeys = map[string]bool{"elitea_title": true, "configuration_type": true}
 
 var (
 	// NOT `[^\w\s-]`. Go's RE2 `\w` is ASCII-only, while Python 3's `re` `\w`
@@ -226,25 +223,16 @@ func filterInternalKeys(value any) any {
 	}
 }
 
-// sanitizePgvector is `_sanitize_pgvector_configuration` (:522). `private` is
-// forced false so the file can be imported into any project, and everything
-// outside the allow-list — the connection string above all — is dropped.
+// sanitizePgvector replaces `_sanitize_pgvector_configuration` (:522). The
+// legacy kept the block's title and forced `private` false; the type is
+// retired, so the whole block, and with it the connection string, is dropped.
 func sanitizePgvector(settings map[string]any) map[string]any {
 	out := make(map[string]any, len(settings))
 	for key, value := range settings {
-		out[key] = value
-	}
-	config, isMap := out["pgvector_configuration"].(map[string]any)
-	if !isMap {
-		return out
-	}
-	cleaned := map[string]any{"private": false}
-	for key, value := range config {
-		if pgvectorKeepKeys[key] {
-			cleaned[key] = value
+		if key != "pgvector_configuration" {
+			out[key] = value
 		}
 	}
-	out["pgvector_configuration"] = cleaned
 	return out
 }
 

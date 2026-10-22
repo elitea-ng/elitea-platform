@@ -160,13 +160,13 @@ func writeCurrentIndexMetaDeleteError(
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaConnectionMissing):
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
 			"ok": false,
-			"error": "Connection string is missing in PGVector configuration for toolkit " +
+			"error": "Index storage is not available for toolkit " +
 				strconv.FormatInt(toolkitID, 10),
 		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaTargetMissing):
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
 			"ok": false,
-			"error": "PGVector configuration is missing for toolkit " +
+			"error": "Index storage is not available for toolkit " +
 				strconv.FormatInt(toolkitID, 10),
 		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaNotFound):

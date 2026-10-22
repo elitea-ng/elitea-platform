@@ -31,6 +31,9 @@ const (
 	// CurrentConfigurationMutationPlatformOnly refuses a value that only the
 	// admin platform surface may store (a keyless `auth_mode`).
 	CurrentConfigurationMutationPlatformOnly CurrentConfigurationMutationErrorCode = "platform_only"
+	// CurrentConfigurationMutationRetiredType refuses a create or update of a
+	// retired type (retired.go), stored rows included.
+	CurrentConfigurationMutationRetiredType CurrentConfigurationMutationErrorCode = "retired_type"
 )
 
 // CurrentConfigurationMutationError is safe to return through the API. Field
@@ -483,6 +486,9 @@ func (s *CurrentConfigurationMutationService) Delete(
 func (s *CurrentConfigurationMutationService) currentMutationContract(
 	typeName string,
 ) (CurrentAvailableConfigurationType, map[string]any, error) {
+	if IsRetiredConfigurationType(typeName) {
+		return CurrentAvailableConfigurationType{}, nil, currentMutationFieldError(CurrentConfigurationMutationRetiredType, "type")
+	}
 	entry, ok := s.catalog.EntryByType(typeName)
 	if !ok {
 		return CurrentAvailableConfigurationType{}, nil, currentMutationFieldError(CurrentConfigurationMutationUnknownType, "type")

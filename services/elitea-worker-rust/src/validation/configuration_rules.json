@@ -1,5 +1,5 @@
 {
- "catalog_digest": "4a96e3ab8e3842ebf2645a851aeb12e3e2343f28e7d024c1a2960eb4ec254351",
+ "catalog_digest": "211e972b482804f8734345c261f4cca3273d12a2a9e62f654379bae781379b27",
  "catalog_revision": "a78d3654f99d8ff89ca7233f20a66d676e564f79",
  "schema_version": "elitea.worker-configuration-validation-rules.v1",
  "types": [
@@ -513,22 +513,6 @@
    "schema_id": "elitea.configuration.openapi",
    "section": "credentials",
    "type": "openapi"
-  },
-  {
-   "fields": [
-    {
-     "kind": "string",
-     "name": "connection_string",
-     "nullable": false,
-     "required": false
-    }
-   ],
-   "hook": null,
-   "hook_source_sha256": null,
-   "schema_digest": "bed2b8626511f8a0b65c152ec8bf3d41a5ed61b0f7962da17f4953af1d33b4f9",
-   "schema_id": "elitea.configuration.pgvector",
-   "section": "vectorstorage",
-   "type": "pgvector"
   },
   {
    "fields": [

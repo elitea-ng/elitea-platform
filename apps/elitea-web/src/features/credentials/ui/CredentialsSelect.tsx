@@ -26,11 +26,11 @@
  *    unit's final report) — `selectedProjectId`/`personal_project_id`/the
  *    "open in new tab" URL and "create" navigation are all caller-supplied
  *    instead of read from Redux/`RouteDefinitions`.
- *  - The `vectorstorage`-section auto-select-project-default special case
- *    is out of scope (that behaviour is the settings/AI-configuration
- *    domain, unit A9); only the `credentials`-section auto-select (first
- *    shared row when the value is blank) is ported, and only as the
- *    `autoSelectFirstShared` opt-in flag a caller can set.
+ *  - Only the `credentials`-section auto-select (first shared row when the
+ *    value is blank) is ported, and only as the `autoSelectFirstShared`
+ *    opt-in flag a caller can set. (The baseline's `vectorstorage`-section
+ *    auto-select-project-default case went with the pgvector configuration
+ *    type.)
  *
  * **STATUS: live since #308.** This component had zero call sites for a long
  * time, because the one prospective consumer (`features/toolkits`' toolkit

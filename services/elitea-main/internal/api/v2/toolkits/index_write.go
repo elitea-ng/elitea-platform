@@ -221,8 +221,9 @@ type indexScheduleUpdate struct {
 	Credentials any     `json:"credentials"`
 	Timezone    string  `json:"timezone"`
 	// UserID selects the schedule bucket. The web client never sends it;
-	// legacy defaults it to -1 ("all users") and only resolves it to the
-	// caller for toolkits with a private pgvector configuration.
+	// legacy defaults it to -1 ("all users"); it resolved -1 to the caller
+	// only for a toolkit with a private pgvector configuration, a setting
+	// that is retired, so the registry runtime keeps -1.
 	UserID *int `json:"user_id"`
 }
 

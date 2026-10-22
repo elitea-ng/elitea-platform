@@ -686,10 +686,10 @@ fn configuration_validation_identities(
 /// space as a pair or absent; the index id as a canonical UUID; the embedding
 /// binding, when present, with a SHA-256 content digest.
 ///
-/// A command without an index id was dispatched under the Python indexing
-/// runtime (`ELITEA_INDEXING_RUNTIME=python`), whose index has no registry
-/// row and whose vectors live in a pgvector database this worker never
-/// touches. It is refused as [`ProtocolError::UnsupportedCapability`] before
+/// A command without an index id was dispatched under the retired Python
+/// indexing runtime (`ELITEA_INDEXING_RUNTIME=python`), whose index has no
+/// registry row and whose vectors lived in a per-project pgvector database
+/// this worker never touches. It is refused as [`ProtocolError::UnsupportedCapability`] before
 /// any claim, exactly as this worker refused every index command before it
 /// served the capability: the delivery is dead-lettered as an unsupported
 /// command, never claimed and never failed in the user's name.
