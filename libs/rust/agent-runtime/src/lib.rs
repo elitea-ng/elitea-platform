@@ -67,6 +67,7 @@ pub mod planner;
 pub mod platform;
 pub mod request;
 pub mod step_limit;
+pub mod text;
 pub mod tool_namespacing;
 pub mod toolkits;
 pub mod workspace_archive;

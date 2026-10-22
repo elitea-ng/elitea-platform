@@ -7,7 +7,9 @@
 //! keeps no dependency on local-tools. The workspace runner's contract test
 //! (`libs/rust/workspace-runner/tests/contract.rs`) asserts the two tables
 //! are equal, name for name and schema for schema, so a change to either
-//! fails the build until the other follows.
+//! fails the build until the other follows. `exit_plan_mode` (#1225) is
+//! local-only: the desktop's plan mode offers it outside `TOOLS`, and the
+//! cloud executor has no plan mode, so it is in neither table.
 //!
 //! [`WorkspaceToolProvider`] is a [`ToolProvider`]: one toolset, named like
 //! the local one, whose every call is sent to a [`WorkspaceRunner`] (the

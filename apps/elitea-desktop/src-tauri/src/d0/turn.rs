@@ -39,6 +39,7 @@ use elitea_agent_runtime::host::{
     ModelTransport, RunOutcome, ToolProvider, ToolsetRequest,
 };
 use elitea_agent_runtime::instruction_authority::InstructionPlan;
+use elitea_agent_runtime::planner::{self, Planner};
 use elitea_agent_runtime::request::ModelContextLimits;
 use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
@@ -46,7 +47,7 @@ use elitea_agent_runtime::request::{
 };
 use elitea_agent_runtime::step_limit::{self, StepBudget};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
-use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
+use elitea_local_tools::approvals::{JsonFileChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
@@ -76,7 +77,7 @@ use super::remote_tools::{
 };
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
-use super::tools::{ObservedToolset, ToolObserver};
+use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
 };
@@ -88,6 +89,14 @@ use crate::workspaces::{Workspace, WorkspaceStore};
 const APP_NAME: &str = crate::sessions::APP_NAME;
 const AGENT_NAME: &str = AGENT_AUTHOR;
 const USER_ID: &str = crate::sessions::ADK_USER;
+/// The runtime planner's tools, as the environment section names them.
+const PLANNER_TOOLS: [&str; 5] = [
+    planner::UPDATE_PLAN,
+    planner::START_STEP,
+    planner::COMPLETE_STEP,
+    planner::GET_PLAN_STATUS,
+    planner::DELETE_PLAN,
+];
 /// How long one tool call may take (an approval can keep it waiting).
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// At most this many tool calls of one model step run at once (adk's
@@ -1813,7 +1822,14 @@ impl AgentHost {
             recorder: recorder.clone(),
         }));
         let session = workspace.session.clone();
-        session.set_plan_mode(request.plan_mode);
+        // The turn's permission profile (#1225): plan mode until the person
+        // accepts the plan (`exit_plan_mode`), which switches it to Build
+        // within this run.
+        session.set_profile(if request.plan_mode {
+            PermissionProfile::Plan
+        } else {
+            PermissionProfile::Build
+        });
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));
@@ -1823,7 +1839,7 @@ impl AgentHost {
         session.begin_turn(&checkpoint_label(&request.prompt));
         events.running(&project.paths());
 
-        let sink = Arc::new(TurnSink::default());
+        let sink = Arc::new(TurnSink::with_events(events.clone()));
         let turn_context = TurnContext::default();
         let run = self.run_agent(
             &request,
@@ -2278,11 +2294,16 @@ impl AgentHost {
                 &admitted.version_details,
             ),
         );
+        // The runtime's planner, offered to every workspace turn (a coding
+        // agent needs its checklist), plan mode included: it changes only
+        // the session's plan state (#1225).
+        let planner = Planner::new();
+        let mut extra_tools: Vec<String> = Vec::new();
         if index.is_some() {
-            facts
-                .tools
-                .extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
+            extra_tools.extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
         }
+        extra_tools.extend(PLANNER_TOOLS.iter().map(|name| (*name).to_owned()));
+        facts.tools.extend(extra_tools.iter().cloned());
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -2351,8 +2372,10 @@ impl AgentHost {
             )
         })?;
 
-        // ToolProvider: local tools, then the remote toolkits (none in plan
-        // mode: a remote tool may write, and plan mode is read-only).
+        // ToolProvider: local tools, then the remote toolkits (offered only
+        // outside plan mode: a remote tool may write, and plan mode is
+        // read-only; `PlanGatedToolset` offers them once the plan is
+        // accepted, in the same run).
         let remote = Arc::new(RemoteContext {
             api: api.clone(),
             project_id: request.project_id,
@@ -2363,11 +2386,7 @@ impl AgentHost {
             retry: self.deps.retry,
             authorization_wait: MCP_AUTHORIZATION_WAIT,
         });
-        let remote_specs = if request.plan_mode {
-            Vec::new()
-        } else {
-            admitted.remote_tools.clone()
-        };
+        let remote_specs = admitted.remote_tools.clone();
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
             provider = provider.with(Arc::new(
@@ -2386,6 +2405,7 @@ impl AgentHost {
             events: events.clone(),
             recorder: recorder.clone(),
             session: Some(workspace.session.clone()),
+            planner: Some(planner.clone()),
         };
 
         let mut builder = LlmAgentBuilder::new(AGENT_NAME)
@@ -2400,6 +2420,18 @@ impl AgentHost {
             // adk takes it from the agent: RunConfig has no such field.
             .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
+        // A plan-mode turn whose plan the person accepts goes on in Build:
+        // its later model steps read the build-mode environment (#1225).
+        if request.plan_mode {
+            builder = AcceptedPlanNote {
+                session: workspace.session.clone(),
+                folder: folder.to_owned(),
+                policy: workspace.policy.clone(),
+                mentioned: mentioned.to_vec(),
+                extra_tools: extra_tools.clone(),
+            }
+            .bind_builder(builder);
+        }
         // A long turn's older tool results go to the model as notes once
         // the request passes 60% of the model's window; the session keeps
         // them whole. The window is the model's limits (`context.rs`). The
@@ -2412,12 +2444,27 @@ impl AgentHost {
             // The local tools and the index tools run here; only the
             // toolkits' tools are remote.
             let remote = toolset.name() == REMOTE_TOOLSET;
+            let toolset = if remote {
+                Arc::new(PlanGatedToolset::new(toolset, workspace.session.clone()))
+                    as Arc<dyn Toolset>
+            } else {
+                toolset
+            };
             builder = builder.toolset(Arc::new(ObservedToolset::new(
                 toolset,
                 observer.clone(),
                 remote,
             )) as Arc<dyn Toolset>);
         }
+        builder = builder.toolset(Arc::new(ObservedToolset::new(
+            planner.toolset(),
+            ToolObserver {
+                session: None,
+                planner: None,
+                ..observer.clone()
+            },
+            false,
+        )) as Arc<dyn Toolset>);
         #[cfg(test)]
         for toolset in self.test_toolsets.lock().expect("lock").iter() {
             builder = builder.toolset(Arc::new(ObservedToolset::new(
@@ -2431,6 +2478,7 @@ impl AgentHost {
                 toolset,
                 ToolObserver {
                     session: None,
+                    planner: None,
                     ..observer.clone()
                 },
                 false,
@@ -3503,9 +3551,12 @@ fn execution_request(
 
 /// The runtime's [`EventSink`] on the desktop: the adk events in order
 /// (the UI gets its events from the model adapter and the tool wrapper),
-/// keeping the last model text as the answer of a run that failed late.
+/// keeping the last model text as the answer of a run that failed late,
+/// and sending each plan change the planner's events carry as
+/// `plan_updated` (#1225).
 #[derive(Default)]
 pub struct TurnSink {
+    events: Option<Arc<TurnEvents>>,
     last_text: Mutex<String>,
     /// The model's last text, with tool calls or without (what it said it
     /// was doing): the "Continue?" question shows it.
@@ -3514,6 +3565,13 @@ pub struct TurnSink {
 }
 
 impl TurnSink {
+    fn with_events(events: Arc<TurnEvents>) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::default()
+        }
+    }
+
     fn last_text(&self) -> String {
         self.last_text
             .lock()
@@ -3534,6 +3592,14 @@ impl EventSink for TurnSink {
     async fn emit(&self, event: &Event) -> Result<(), HostError> {
         if event.llm_response.partial {
             return Ok(());
+        }
+        // The planner's state rides its tool-result events: the todo pane's
+        // feed, stored in the thread history like every event.
+        if let (Some(events), Some(plan)) = (
+            &self.events,
+            planner::plan_update(&event.actions.state_delta),
+        ) {
+            events.send("plan_updated", json!({ "plan": plan }));
         }
         if let Some(content) = &event.llm_response.content {
             let has_calls = content

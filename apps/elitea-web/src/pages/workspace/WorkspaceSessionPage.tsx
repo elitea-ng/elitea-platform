@@ -24,7 +24,7 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { ApprovalDialog, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
 import { useHasIndexHost } from '@/features/workspace-index';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -50,7 +50,8 @@ import { useThreadSession, type ThreadSession, type ThreadSessionInput } from '.
 const LIST_KEY = ['workspace', 'list'] as const;
 
 /** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
-const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
+const attentionOf = (session: ThreadSession): number =>
+  session.turn.view.approvals.length + (session.turn.view.planProposal === undefined ? 0 : 1) + (session.undoTurnId === null ? 0 : 1);
 
 /**
  * What the thread's inspector tabs show: the thread's title, or its folder's
@@ -128,7 +129,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               <ForkNotices fork={forking} />
               <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
               <Exchanges turn={turn} prompts={session.prompts} onFork={forking.onFork} />
-              <ApprovalDialog request={continueRequest} queued={0} onRespond={session.answer} />
+              <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
+              <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
               </>
             )}
           </Box>
@@ -148,9 +150,11 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         undoRequest={commands.undoRequest}
         waiting={turn.view.approvals}
         decided={session.decided}
+        plan={session.plan}
+        planMode={commands.planMode}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
-      <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
+      <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>
   );
 }

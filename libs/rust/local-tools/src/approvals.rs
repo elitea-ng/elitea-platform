@@ -8,8 +8,11 @@
 //!    policy denies it, a `command_deny` match in any segment, a command
 //!    outside a non-empty `command_allow`, or a `path_deny` path: denied,
 //!    and nothing below can change that.
-//! 2. **Plan mode**: only read-only tools, until the person accepts the
-//!    plan.
+//! 2. **Permission profile** ([`PermissionProfile`], #1225): `Build`
+//!    changes nothing here; `Plan` allows only read-only tools and
+//!    `exit_plan_mode`, until the person accepts the plan (no commands, no
+//!    writes). `exit_plan_mode` is the only way out and is asked every time:
+//!    no rule or remembered choice answers it, and "always" is never offered.
 //! 3. **Workspace settings**: the person's rules: command prefix rules
 //!    ([`crate::execpolicy`]) from the workspace's rules file, then the
 //!    person's own rules file (every workspace), and the file tools'
@@ -45,6 +48,7 @@
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 //! | `run_command` that is destructive, asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; [`ToolCall::unconfined`], decided per command, from the sandbox chosen for it) | asked |
 //! | `run_tests` | as `run_command` (the test command it runs): no network, allowed; `network: true` asked, until "always allow" for that runner kind in this workspace |
+//! | `exit_plan_mode` (offered in the `Plan` profile only) | asked every time, as `accept` / `decline`; decided before layers 3–4, which never apply to it; denied outside `Plan` |
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -86,6 +90,29 @@ pub const PAYLOAD_KEY: &str = "local_tool_call";
 /// Approve, and remember the choice for this workspace.
 pub const APPROVE_ALWAYS: &str = "approve_always";
 
+/// The payload key the plan an `exit_plan_mode` call proposes travels under
+/// (`{plan}`, Markdown), beside [`PAYLOAD_KEY`].
+pub const PLAN_PAYLOAD_KEY: &str = "plan_proposal";
+
+/// The answer that accepts a proposed plan (the only one that does).
+pub const ACCEPT: &str = "accept";
+
+/// The answer that declines a proposed plan.
+pub const DECLINE: &str = "decline";
+
+/// The permission profile a session runs under (#1225): opencode's
+/// plan/build split as a profile on one loop, not a second agent.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionProfile {
+    /// Every tool the policy and the rules allow.
+    #[default]
+    Build,
+    /// Read-only tools and `exit_plan_mode` only, until the person accepts
+    /// the plan.
+    Plan,
+}
+
 /// The local tools, as the rules name them.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +137,10 @@ pub enum ToolKind {
     /// A commit through the host's hardened git: allowed by default (a
     /// workspace rule may ask or deny); never remembered.
     GitCommit,
+    /// `exit_plan_mode`: the plan goes to the person, who accepts (the
+    /// session leaves [`PermissionProfile::Plan`]) or declines it. Offered
+    /// in plan mode only; never remembered, never answered by a rule.
+    ExitPlanMode,
 }
 
 impl ToolKind {
@@ -133,6 +164,13 @@ impl ToolKind {
     #[must_use]
     pub const fn runs_commands(self) -> bool {
         matches!(self, Self::RunCommand | Self::RunTests)
+    }
+
+    /// Whether [`PermissionProfile::Plan`] offers the tool: the read-only
+    /// ones and `exit_plan_mode`.
+    #[must_use]
+    pub const fn plan_allows(self) -> bool {
+        self.is_read_only() || matches!(self, Self::ExitPlanMode)
     }
 }
 
@@ -449,7 +487,8 @@ pub struct RulesEngine {
     commands: RwLock<Arc<CommandRules>>,
     sink: RwLock<Option<Arc<dyn RuleSink>>>,
     choices: Arc<dyn ChoiceStore>,
-    plan_mode: AtomicBool,
+    /// The [`PermissionProfile`]: `true` is [`PermissionProfile::Plan`].
+    plan: AtomicBool,
     /// Whether every command runs in an enforced sandbox (off when the
     /// host lets commands run unenforced): routine commands are allowed
     /// only then.
@@ -553,7 +592,7 @@ impl RulesEngine {
             commands: RwLock::new(Arc::default()),
             sink: RwLock::new(None),
             choices,
-            plan_mode: AtomicBool::new(false),
+            plan: AtomicBool::new(false),
             confined: true,
         })
     }
@@ -612,14 +651,26 @@ impl RulesEngine {
         &self.policy
     }
 
-    /// Enter or leave plan mode (read-only tools only).
-    pub fn set_plan_mode(&self, on: bool) {
-        self.plan_mode.store(on, Ordering::SeqCst);
+    /// Switch the permission profile (a turn's start, or the person
+    /// accepting the plan).
+    pub fn set_profile(&self, profile: PermissionProfile) {
+        self.plan
+            .store(profile == PermissionProfile::Plan, Ordering::SeqCst);
     }
 
     #[must_use]
+    pub fn profile(&self) -> PermissionProfile {
+        if self.plan.load(Ordering::SeqCst) {
+            PermissionProfile::Plan
+        } else {
+            PermissionProfile::Build
+        }
+    }
+
+    /// Whether the session is in [`PermissionProfile::Plan`].
+    #[must_use]
     pub fn plan_mode(&self) -> bool {
-        self.plan_mode.load(Ordering::SeqCst)
+        self.profile() == PermissionProfile::Plan
     }
 
     /// Decide one call.
@@ -628,7 +679,24 @@ impl RulesEngine {
         if let Some(decision) = self.policy_ceiling(call) {
             return decision;
         }
-        if self.plan_mode() && !call.tool.is_read_only() {
+        if call.tool == ToolKind::ExitPlanMode {
+            // The person's every time: no workspace rule and no remembered
+            // choice may accept a plan.
+            return if self.plan_mode() {
+                Decision::new(
+                    Verdict::Ask,
+                    Source::PlanMode,
+                    "the person accepts or declines the plan",
+                )
+            } else {
+                Decision::new(
+                    Verdict::Deny,
+                    Source::PlanMode,
+                    "the session is not in plan mode",
+                )
+            };
+        }
+        if self.plan_mode() && !call.tool.plan_allows() {
             return Decision::new(
                 Verdict::Deny,
                 Source::PlanMode,
@@ -1190,6 +1258,12 @@ impl RulesEngine {
     /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool == ToolKind::ExitPlanMode {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "a plan is accepted by the person every time",
+            ));
+        }
         if call.tool == ToolKind::GitCommit {
             return Some(ToolError::new(
                 ErrorCode::Denied,
@@ -1297,6 +1371,18 @@ impl ApprovalChannel for RuleApprovals {
         match decision.verdict {
             Verdict::Allow => Ok(decided("approve", &decision)),
             Verdict::Deny => Ok(decided("reject", &decision)),
+            Verdict::Ask if call.tool == ToolKind::ExitPlanMode => {
+                // Accept or decline, never "always"; whatever else comes
+                // back is a decline.
+                request.available_actions = vec![ACCEPT.to_owned(), DECLINE.to_owned()];
+                match self.prompt.request(request).await? {
+                    ApprovalOutcome::Decided { action, value } => Ok(ApprovalOutcome::Decided {
+                        action: if action == ACCEPT { ACCEPT } else { DECLINE }.to_owned(),
+                        value,
+                    }),
+                    ApprovalOutcome::Deferred => Ok(ApprovalOutcome::Deferred),
+                }
+            }
             Verdict::Ask => {
                 let rememberable = self.engine.can_remember(&call);
                 request.available_actions = if rememberable {
@@ -1365,8 +1451,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ChoiceStore, JsonFileChoices, MemoryChoices, PAYLOAD_KEY, RuleApprovals, RulesEngine,
-        Source, ToolCall, ToolKind, Verdict, WorkspaceRule, WorkspaceSettings,
+        ChoiceStore, JsonFileChoices, MemoryChoices, PAYLOAD_KEY, PermissionProfile, RuleApprovals,
+        RulesEngine, Source, ToolCall, ToolKind, Verdict, WorkspaceRule, WorkspaceSettings,
     };
     use crate::policy::{LocalWorkPolicy, SandboxMode};
     use crate::workspace::Workspace;
@@ -2001,7 +2087,7 @@ mod tests {
             verdict(&engine, &file(ToolKind::WriteFile, "keys/id.pem")),
             (Verdict::Deny, Source::Policy)
         );
-        engine.set_plan_mode(true);
+        engine.set_profile(PermissionProfile::Plan);
         assert_eq!(
             verdict(&engine, &file(ToolKind::WriteFile, "src/x.rs")),
             (Verdict::Deny, Source::PlanMode)
@@ -2019,7 +2105,7 @@ mod tests {
                 verdict: Verdict::Allow,
             }],
         );
-        engine.set_plan_mode(true);
+        engine.set_profile(PermissionProfile::Plan);
         assert_eq!(
             verdict(&engine, &file(ToolKind::WriteFile, "a")),
             (Verdict::Deny, Source::PlanMode)
@@ -2032,11 +2118,122 @@ mod tests {
             verdict(&engine, &file(ToolKind::ReadFile, "a")).0,
             Verdict::Allow
         );
-        engine.set_plan_mode(false);
+        engine.set_profile(PermissionProfile::Build);
         assert_eq!(
             verdict(&engine, &file(ToolKind::WriteFile, "a")),
             (Verdict::Allow, Source::Workspace)
         );
+    }
+
+    /// #1225: the `Plan` profile keeps the read-only tools and
+    /// `exit_plan_mode` and nothing else, whatever a workspace rule allows;
+    /// `exit_plan_mode` is asked in `Plan` and denied in `Build`.
+    #[test]
+    fn plan_profile_allows_only_read_tools_and_exit_plan_mode() {
+        let (_dir, engine) = engine_with(
+            policy(),
+            vec![WorkspaceRule {
+                tools: Vec::new(),
+                command: None,
+                path: None,
+                verdict: Verdict::Allow,
+            }],
+        );
+        assert_eq!(engine.profile(), PermissionProfile::Build);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ExitPlanMode)),
+            (Verdict::Deny, Source::PlanMode),
+            "not offered, and refused, outside plan mode"
+        );
+        engine.set_profile(PermissionProfile::Plan);
+        assert!(engine.plan_mode());
+        for kind in [
+            ToolKind::ReadFile,
+            ToolKind::ListTree,
+            ToolKind::SearchFiles,
+            ToolKind::FindFiles,
+            ToolKind::ReadOutput,
+            ToolKind::ReadDocument,
+            ToolKind::GitRead,
+        ] {
+            assert!(kind.plan_allows());
+            assert_eq!(
+                verdict(&engine, &file(kind, "a")).0,
+                Verdict::Allow,
+                "{kind:?}"
+            );
+        }
+        for kind in [
+            ToolKind::WriteFile,
+            ToolKind::EditFile,
+            ToolKind::ApplyPatch,
+            ToolKind::GitCommit,
+        ] {
+            assert!(!kind.plan_allows());
+            assert_eq!(
+                verdict(&engine, &file(kind, "a")),
+                (Verdict::Deny, Source::PlanMode),
+                "{kind:?}"
+            );
+        }
+        // No commands in plan mode, not even read-only ones.
+        assert!(!ToolKind::RunCommand.plan_allows());
+        assert_eq!(
+            verdict(&engine, &shell("ls")),
+            (Verdict::Deny, Source::PlanMode)
+        );
+        // The allow-everything rule does not answer the plan: the person does.
+        assert!(ToolKind::ExitPlanMode.plan_allows());
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ExitPlanMode)),
+            (Verdict::Ask, Source::PlanMode)
+        );
+        engine.set_profile(PermissionProfile::Build);
+        assert_eq!(
+            verdict(&engine, &shell("ls")).0,
+            Verdict::Allow,
+            "Build is the default table again"
+        );
+    }
+
+    /// Regression (#1225): "always" is never offered for a plan, a
+    /// remembered choice cannot be stored for one, and an "always" answer
+    /// that came back anyway is a decline, never an accept.
+    #[tokio::test]
+    async fn exit_plan_mode_is_never_remembered() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine);
+        engine.set_profile(PermissionProfile::Plan);
+        let call = ToolCall::new(ToolKind::ExitPlanMode);
+        assert!(!engine.can_remember(&call));
+        assert!(engine.remember(&call, None).is_err());
+        for (answer, expected) in [
+            (super::APPROVE_ALWAYS, super::DECLINE),
+            ("approve", super::DECLINE),
+            (super::DECLINE, super::DECLINE),
+            (super::ACCEPT, super::ACCEPT),
+        ] {
+            let prompt = Arc::new(ScriptedPrompt {
+                answer: ApprovalOutcome::Decided {
+                    action: answer.to_owned(),
+                    value: json!({}),
+                },
+                seen: Mutex::new(Vec::new()),
+            });
+            let channel = RuleApprovals::new(engine.clone(), prompt.clone());
+            let outcome = channel.request(request(&call)).await.expect("asked");
+            assert!(
+                matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == expected),
+                "{answer} -> {outcome:?}"
+            );
+            let seen = prompt.seen.lock().expect("lock");
+            assert_eq!(
+                seen[0].available_actions,
+                [super::ACCEPT, super::DECLINE],
+                "never approve_always"
+            );
+        }
+        assert!(engine.choices.list().is_empty(), "nothing remembered");
     }
 
     #[test]
@@ -2249,10 +2446,27 @@ mod tests {
             verdict(&no_shell, &offline),
             (Verdict::Deny, Source::Policy)
         );
-        engine.set_plan_mode(true);
+        // Plan mode (#1225): no test runs, offline or not, and the
+        // remembered runner-kind choice above never applies in `Plan`.
+        assert!(!ToolKind::RunTests.plan_allows());
+        engine.set_profile(PermissionProfile::Plan);
         assert_eq!(
             verdict(&engine, &offline),
             (Verdict::Deny, Source::PlanMode)
+        );
+        assert_eq!(
+            verdict(
+                &engine,
+                &tests("cargo", "cargo test --message-format=json parser::", true)
+            ),
+            (Verdict::Deny, Source::PlanMode),
+            "a remembered runner choice is not a plan-mode allow"
+        );
+        engine.set_profile(PermissionProfile::Build);
+        assert_eq!(
+            verdict(&engine, &online),
+            (Verdict::Allow, Source::Remembered),
+            "Build keeps the choice"
         );
     }
 
@@ -2631,7 +2845,7 @@ mod tests {
             verdict(&engine, &shell("cargo test")),
             (Verdict::Deny, Source::Policy)
         );
-        engine.set_plan_mode(true);
+        engine.set_profile(PermissionProfile::Plan);
         assert_eq!(
             verdict(&engine, &shell("git status")),
             (Verdict::Deny, Source::PlanMode)

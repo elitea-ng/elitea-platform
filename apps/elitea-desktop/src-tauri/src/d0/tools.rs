@@ -1,14 +1,28 @@
 //! Every tool of the turn, wrapped once: `tool_call`/`tool_result` events,
 //! the recorded tool steps, the commands run, and the before-images of the
 //! files a local file tool is about to change.
+//!
+//! Plan mode (#1225): [`PlanGatedToolset`] offers a toolset's tools only
+//! once the session has left plan mode (the remote toolkits),
+//! [`AcceptedPlanNote`] gives the model the build-mode environment once
+//! it has, and an accepted `exit_plan_mode` copies the plan into the
+//! runtime's planner (one host-side call, `Planner::seed_from_markdown`)
+//! and tells the UI (`plan_accepted`).
 
 use std::sync::Arc;
 
-use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_agent::LlmAgentBuilder;
+use adk_core::callbacks::BeforeModelResult;
+use adk_core::{Content, ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
-use elitea_local_tools::session::LocalSession;
+use elitea_agent_runtime::planner::Planner;
+use elitea_local_tools::approvals::PermissionProfile;
+use elitea_local_tools::policy::LocalWorkPolicy;
+use elitea_local_tools::session::{EXIT_PLAN_MODE, LocalSession};
 use serde_json::{Value, json};
+use tokio::sync::OnceCell;
 
+use super::environment;
 use super::events::TurnEvents;
 use super::recorder::Recorder;
 
@@ -21,6 +35,97 @@ pub struct ToolObserver {
     pub recorder: Arc<Recorder>,
     /// The workspace session, for local tools' before-images.
     pub session: Option<Arc<LocalSession>>,
+    /// The turn's planner: an accepted `exit_plan_mode` seeds it.
+    pub planner: Option<Planner>,
+}
+
+/// A toolset offered only outside plan mode (the remote toolkits: a remote
+/// tool may write). adk resolves the toolsets again after every tool batch,
+/// so once the person accepts the plan the next model step of the same run
+/// is offered these tools too.
+pub struct PlanGatedToolset {
+    inner: Arc<dyn Toolset>,
+    session: Arc<LocalSession>,
+}
+
+impl PlanGatedToolset {
+    #[must_use]
+    pub fn new(inner: Arc<dyn Toolset>, session: Arc<LocalSession>) -> Self {
+        Self { inner, session }
+    }
+}
+
+#[async_trait]
+impl Toolset for PlanGatedToolset {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
+        if self.session.profile() == PermissionProfile::Plan {
+            return Ok(Vec::new());
+        }
+        self.inner.tools(ctx).await
+    }
+}
+
+/// The build-mode environment for a plan-mode turn's model steps after the
+/// person accepted the plan. The system prompt is fixed for the run and
+/// says "plan (read-only)"; from the first model step outside plan mode on,
+/// a system part ([`environment::accepted_plan`]) replaces that section:
+/// the facts gathered again with the tools offered now (the write and
+/// command guidance, the sandbox line), once per run.
+pub struct AcceptedPlanNote {
+    pub session: Arc<LocalSession>,
+    /// The folder's name, as [`environment::gather`] takes it.
+    pub folder: String,
+    pub policy: LocalWorkPolicy,
+    pub mentioned: Vec<String>,
+    /// Tools offered beside the session's own (the index's, the planner's).
+    pub extra_tools: Vec<String>,
+}
+
+impl AcceptedPlanNote {
+    /// `builder` with the note as a callback before every model step.
+    #[must_use]
+    pub fn bind_builder(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
+        let note = Arc::new(self);
+        let text: Arc<OnceCell<String>> = Arc::new(OnceCell::new());
+        builder.before_model_callback(Box::new(move |_ctx, mut request| {
+            let note = note.clone();
+            let text = text.clone();
+            Box::pin(async move {
+                if note.session.profile() == PermissionProfile::Plan {
+                    return Ok(BeforeModelResult::Continue(request));
+                }
+                let section = text.get_or_init(|| note.section()).await;
+                request
+                    .contents
+                    .insert(0, Content::new("system").with_text(section.clone()));
+                Ok(BeforeModelResult::Continue(request))
+            })
+        }))
+    }
+
+    async fn section(&self) -> String {
+        let mut tools: Vec<String> = self
+            .session
+            .available_tools()
+            .iter()
+            .map(|tool| tool.name.to_owned())
+            .collect();
+        tools.extend(self.extra_tools.iter().cloned());
+        let facts = environment::gather(
+            &self.session,
+            self.folder.clone(),
+            &self.policy,
+            false,
+            tools,
+            &self.mentioned,
+        )
+        .await;
+        environment::accepted_plan(&facts)
+    }
 }
 
 /// A toolset whose tools report to the turn.
@@ -68,6 +173,23 @@ struct ObservedTool {
     inner: Arc<dyn Tool>,
     observer: ToolObserver,
     remote: bool,
+}
+
+impl ObservedTool {
+    /// The person accepted the plan: the planner gets its steps when the
+    /// model wrote none (the state rides this call's result event), and the
+    /// UI turns plan mode off.
+    fn plan_accepted(&self, ctx: &dyn ToolContext, plan: &str) {
+        if let Some(planner) = &self.observer.planner
+            && let Err(error) = planner.seed_from_markdown(ctx, plan)
+        {
+            log::warn!("the accepted plan was not copied to the planner: {error}");
+        }
+        self.observer.events.send(
+            "plan_accepted",
+            json!({ "call_id": ctx.function_call_id() }),
+        );
+    }
 }
 
 fn shorten(text: &str) -> (String, bool) {
@@ -223,9 +345,17 @@ impl Tool for ObservedTool {
                     .map(str::to_owned)
             })
             .flatten();
+        let plan = (tool == EXIT_PLAN_MODE.name && !self.remote)
+            .then(|| args.get("plan").and_then(Value::as_str).map(str::to_owned))
+            .flatten();
         let running = ToolTimer::begin(&observer.events);
-        let result = self.inner.execute(ctx, args).await;
+        let result = self.inner.execute(ctx.clone(), args).await;
         drop(running);
+        if let (Some(plan), Ok(value)) = (&plan, &result)
+            && value.get("accepted") == Some(&Value::Bool(true))
+        {
+            self.plan_accepted(ctx.as_ref(), plan);
+        }
         let (ok, summary, truncated, error) = match &result {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("error");

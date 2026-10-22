@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::api::{ApiError, Bearer, Credentials, PlatformApi};
 use super::approvals::UiDecision;
 use super::definition::RemoteToolSpec;
+use super::environment;
 use super::events::{AgentEvent, VecEmitter};
 use super::remote_tools::{self, RemoteContext, RetryPolicy};
 use super::turn::{AgentHost, HostDeps, PolicySource, TURNS_KEPT_PER_WORKSPACE, TurnRequest};
@@ -301,7 +302,7 @@ fn build_host(
         .lock()
         .unwrap()
         .replace(Box::new(move |event: &AgentEvent| {
-            if event.kind == "approval_request" {
+            if event.kind == "approval_request" || event.kind == "plan_proposed" {
                 let id = event.payload["request_id"].as_str().unwrap().to_owned();
                 let _ = answers.send(id);
             }
@@ -310,7 +311,7 @@ fn build_host(
         let host = host.clone();
         async move {
             while let Some(id) = questions.recv().await {
-                assert!(host.respond(&id, decision));
+                assert!(host.respond(&id, decision.clone()));
             }
         }
     });
@@ -345,7 +346,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         &policy,
         &emitter,
         &index,
-        decision,
+        decision.clone(),
     );
     Harness {
         server,
@@ -3217,7 +3218,7 @@ impl Harness {
             &policy,
             &emitter,
             &index,
-            decision,
+            decision.clone(),
         );
         Self {
             server,
@@ -5540,7 +5541,10 @@ async fn long_session_compacts_under_small_window() {
 async fn compaction_marker_reused_next_turn() {
     let convo = Arc::new(Mutex::new(Convo::default()));
     let summaries = Arc::new(AtomicUsize::new(0));
-    let server = small_window_platform(8_192, convo, reading_script(summaries.clone())).await;
+    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
+    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
+    // leaves room for the next turn's prompt and it would compact again.
+    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     write_big(&h);
     run_turn(&h, "read big.txt 8 times").await;
@@ -5792,4 +5796,338 @@ async fn run_tests_is_offered_only_with_shell() {
             "{system}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// #1225: plan mode as a profile, `exit_plan_mode`, and the planner.
+// ---------------------------------------------------------------------------
+
+const PLAN_MARKDOWN: &str = "# Notes\n\n1. Write notes.txt\n2. Say done";
+
+/// A model that proposes a plan, then (after the answer) writes a file, then
+/// answers; every request is seen by `seen`.
+async fn planning_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "exit_plan_mode",
+                    &json!({ "plan": PLAN_MARKDOWN }),
+                ),
+                1 => tool_call(
+                    "call-write",
+                    "write_file",
+                    &json!({"path": "notes.txt", "content": "hello\n"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn tool_names_of(request: &Req) -> Vec<String> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The tool messages of a model request, as the model reads them.
+fn tool_messages(request: &Req) -> Vec<Value> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| {
+            let content = m["content"].as_str().unwrap_or_default();
+            serde_json::from_str(content).unwrap_or(Value::String(content.to_owned()))
+        })
+        .collect()
+}
+
+/// Accept continues the SAME run on the SAME session in Build: the next
+/// model step is offered the write tools and the remote toolkits (adk
+/// resolves the toolsets again after the tool batch), the write lands, one
+/// turn is committed, and the UI hears `plan_proposed` then `plan_accepted`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepting_the_plan_continues_the_same_session_in_build_mode() {
+    let h = harness(planning_platform().await, allowed(), UiDecision::Accept).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(llm.len(), 3, "one run: plan, write, answer");
+    let planning = tool_names_of(&llm[0]);
+    for name in [
+        "exit_plan_mode",
+        "update_plan",
+        "complete_step",
+        "read_file",
+    ] {
+        assert!(planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    for name in ["write_file", "run_command", "Jira_create_issue"] {
+        assert!(!planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    let building = tool_names_of(&llm[1]);
+    for name in [
+        "write_file",
+        "run_command",
+        "Jira_create_issue",
+        "update_plan",
+    ] {
+        assert!(building.iter().any(|t| t == name), "{name}: {building:?}");
+    }
+    assert!(!building.iter().any(|t| t == "exit_plan_mode"));
+    assert_eq!(tool_messages(&llm[1])[0]["accepted"], true);
+    // The model's instructions follow the mode: the planning step reads the
+    // plan-mode environment only; every step after the accept also reads
+    // the build-mode one, with the write tools' rules.
+    let system = |request: &Req| -> String {
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        body["messages"][0]["content"].as_str().unwrap().to_owned()
+    };
+    let planning_system = system(&llm[0]);
+    assert!(planning_system.contains("- Mode: plan (read-only)"));
+    assert!(!planning_system.contains(environment::ACCEPTED_PLAN_HEADING));
+    for step in &llm[1..] {
+        let text = system(step);
+        assert_eq!(
+            text.matches(environment::ACCEPTED_PLAN_HEADING).count(),
+            1,
+            "{text}"
+        );
+        let accepted = &text[text.find(environment::ACCEPTED_PLAN_HEADING).unwrap()..];
+        for present in [
+            "plan mode is over",
+            "denied paths and .git are not writable",
+            "never use sudo",
+            "edit_file",
+        ] {
+            assert!(accepted.contains(present), "{present}: {accepted}");
+        }
+        assert!(!accepted.contains("- Mode: plan"), "{accepted}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("notes.txt")).unwrap(),
+        "hello\n"
+    );
+
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let proposed = events.iter().find(|e| e.kind == "plan_proposed").unwrap();
+    assert_eq!(proposed.payload["plan"], PLAN_MARKDOWN);
+    assert_eq!(proposed.payload["call_id"], "call-plan");
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("plan_proposed") < at("plan_accepted"));
+    // The model wrote no plan: the host copied the accepted one in, once.
+    let seeded: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(seeded.len(), 1);
+    assert_eq!(seeded[0].payload["plan"]["title"], "Notes");
+    assert_eq!(
+        seeded[0].payload["plan"]["steps"],
+        json!([
+            {"n": 1, "step": "Write notes.txt", "status": "pending"},
+            {"n": 2, "step": "Say done", "status": "pending"}
+        ])
+    );
+    assert_eq!(kinds.iter().filter(|k| **k == "done").count(), 1);
+    assert!(
+        !events.iter().any(|e| e.kind == "approval_request"),
+        "the plan is a plan card, never a tool approval"
+    );
+    // One local turn started, one committed, the plan's exchange in it.
+    assert_eq!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["kind"], "plan_approval");
+    assert_eq!(exchange["decision"], "accept");
+    assert_eq!(exchange["tool_run_id"], "call-plan");
+}
+
+/// Decline with feedback: the model reads the person's text as the tool's
+/// answer, stays in plan mode (no write tool on the next step), and nothing
+/// is changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declining_the_plan_returns_the_feedback_and_stays_in_plan_mode() {
+    let h = harness(
+        planning_platform().await,
+        allowed(),
+        UiDecision::Decline(Some("Keep the old file too.".into())),
+    )
+    .await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answer = &tool_messages(&llm[1])[0];
+    assert_eq!(answer["accepted"], false, "{answer}");
+    assert_eq!(answer["feedback"], "Keep the old file too.");
+    assert!(!tool_names_of(&llm[1]).iter().any(|t| t == "write_file"));
+    assert!(tool_names_of(&llm[1]).iter().any(|t| t == "exit_plan_mode"));
+    assert!(!h.folder.path().join("notes.txt").exists());
+    assert!(!events.iter().any(|e| e.kind == "plan_accepted"));
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["decision"], "decline");
+    assert_eq!(exchange["value"], "Keep the old file too.");
+}
+
+/// #1225: denying a call with feedback returns `declined_by_person` and the
+/// person's text as the call's result, the model's next request carries
+/// it, and the HITL exchange records the denial with the feedback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deny_with_feedback_reaches_the_model() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(
+        server,
+        allowed(),
+        UiDecision::DenyWithFeedback("File it tomorrow, not now.".into()),
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answers = tool_messages(&llm[2]);
+    let declined = &answers[1];
+    assert_eq!(declined["ok"], false, "{declined}");
+    assert_eq!(declined["error"]["code"], "declined_by_person");
+    assert_eq!(declined["error"]["feedback"], "File it tomorrow, not now.");
+    // The remote call was never confirmed.
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
+    assert_eq!(
+        body["hitl_exchanges"][0]["value"],
+        "File it tomorrow, not now."
+    );
+}
+
+#[test]
+fn feedback_travels_only_with_a_denial_and_is_bounded_and_clean() {
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", None),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("  ")),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("no\u{0}pe")),
+        Some(UiDecision::DenyWithFeedback("nope".into()))
+    );
+    assert_eq!(
+        UiDecision::parse("allow_once", Some("ignored")),
+        Some(UiDecision::AllowOnce)
+    );
+    let long = "é".repeat(3000);
+    let Some(UiDecision::DenyWithFeedback(cut)) =
+        UiDecision::parse("deny_with_feedback", Some(&long))
+    else {
+        panic!("a denial");
+    };
+    assert!(cut.len() <= 2048 && cut.chars().all(|c| c == 'é'));
+    assert_eq!(UiDecision::parse("approve_with_feedback", Some("x")), None);
+}
+
+/// #1225 conformance (ADR-0029 Verification): the same Codex-shaped
+/// `update_plan` call as the worker's
+/// `ordinary_tests::internal_tools_graph::a_codex_shaped_update_plan_answers_as_on_the_desktop`
+/// gets the same answer here; the todo pane gets `plan_updated`, live and
+/// from the thread history after a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_plan_conforms_to_the_cloud_and_the_pane_replays_it() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "update_plan",
+                    &json!({
+                        "title": "Rename X",
+                        "steps": [
+                            {"step": "Find the callers", "status": "in_progress"},
+                            "Rename it"
+                        ]
+                    }),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Planned."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(
+        tool_messages(&llm[1])[0],
+        "Plan created:\n\n📋 Rename X\n   Progress: 0/2 completed, 1 in progress\n\n   ▶ 1. Find the callers (in progress)\n   ☐ 2. Rename it"
+    );
+    let expected = json!({"plan": {
+        "title": "Rename X",
+        "status": "in_progress",
+        "steps": [
+            {"n": 1, "step": "Find the callers", "status": "in_progress"},
+            {"n": 2, "step": "Rename it", "status": "pending"}
+        ]
+    }});
+    let updated: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].payload, expected);
+
+    let h = h.restarted(false).await;
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let replayed: Vec<_> = turns[0]
+        .events
+        .iter()
+        .filter(|e| e.kind == "plan_updated")
+        .collect();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].payload, expected);
 }

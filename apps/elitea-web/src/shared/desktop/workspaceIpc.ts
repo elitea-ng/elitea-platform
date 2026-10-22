@@ -8,6 +8,7 @@
  * place for the two halves to drift apart.
  */
 import type { HostInvoke } from './hostBridge';
+import type { PlanProposalPayload, PlanView } from './planIpc';
 
 export interface Workspace {
   id: string;
@@ -74,8 +75,11 @@ export interface TurnStarted {
   execution_id: string;
 }
 
-/** `continue` / `cancel` answer an `mcp_authorization` request; the rest answer a tool's approval (`continue` takes `allow_once` too). */
-export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'continue' | 'cancel';
+/**
+ * `continue` / `cancel` answer an `mcp_authorization` request; `accept` / `decline` a `plan_proposed` card; the rest a tool's
+ * approval (`continue` takes `allow_once` too). `deny_with_feedback` denies any card with the person's text (IPC.md "Decline with feedback").
+ */
+export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'deny_with_feedback' | 'continue' | 'cancel' | 'accept' | 'decline';
 type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface ChangedFile {
@@ -192,6 +196,11 @@ export type AgentEvent =
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   /** The host closed an open request nobody answered within its wait (an MCP sign-in): it no longer waits. */
   | (EventBase & { kind: 'approval_closed'; payload: { request_id: string; reason: string } })
+  /** The agent's checklist changed: the whole plan, `null` once deleted. */
+  | (EventBase & { kind: 'plan_updated'; payload: { plan: PlanView | null } })
+  | (EventBase & { kind: 'plan_proposed'; payload: PlanProposalPayload })
+  /** The person accepted the plan: the session left plan mode and the turn goes on with every tool. */
+  | (EventBase & { kind: 'plan_accepted'; payload: { call_id: string } })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
@@ -277,7 +286,8 @@ export interface WorkspaceIpc {
   cancelTurn(turnId: string): Promise<void>;
   /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
   turnStatus(turnId: string): Promise<TurnStatus>;
-  respondApproval(requestId: string, decision: ApprovalDecision): Promise<void>;
+  /** `feedback` (the person's text for the agent) goes only with `decline` / `deny_with_feedback`. */
+  respondApproval(requestId: string, decision: ApprovalDecision, feedback?: string): Promise<void>;
   turnChanges(turnId: string): Promise<TurnChanges>;
   /** Undo the newest turn (or one file of a turn), or with `confirmOlder` restore the folder to before an older turn. */
   restore(turnId: string, path?: string, options?: RestoreOptions): Promise<{ restored: string[] }>;
@@ -326,7 +336,8 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
-    respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
+    respondApproval: (requestId, decision, feedback) =>
+      invoke<void>('approval_respond', feedback === undefined ? { request_id: requestId, decision } : { request_id: requestId, decision, feedback }),
     turnChanges: (turnId) => invoke<TurnChanges>('turn_changes', { turn_id: turnId }),
     restore: (turnId, path, options) =>
       invoke<{ restored: string[] }>('checkpoint_restore', {

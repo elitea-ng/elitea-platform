@@ -5240,6 +5240,46 @@ mod internal_tools_graph {
         }
     }
 
+    /// #1225 conformance (ADR-0029 Verification): one turn calling
+    /// `update_plan` in Codex's shape. The desktop's
+    /// `d0::tests::update_plan_conforms_to_the_cloud` sends the same call and
+    /// asserts the same tool result text, so both hosts give the model the
+    /// same answer from the one runtime planner.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_codex_shaped_update_plan_answers_as_on_the_desktop() {
+        let (runtime_context, _) = runtime_context_client();
+        let (assembler, captured) = assembler_with(
+            vec![
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_plan",
+                    "update_plan",
+                    &serde_json::json!({
+                        "title": "Rename X",
+                        "steps": [
+                            {"step": "Find the callers", "status": "in_progress"},
+                            "Rename it"
+                        ]
+                    }),
+                )),
+                TestModelGatewayOutcome::Response(text_response("Planned.")),
+            ],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        run(
+            &assembler,
+            &with_toggles(AgentExecutionKind::Application, &["planner"]),
+        )
+        .await;
+        let seen = requests(&captured);
+        assert_eq!(
+            tool_results(&seen[1]),
+            [
+                "Plan created:\n\n📋 Rename X\n   Progress: 0/2 completed, 1 in progress\n\n   ▶ 1. Find the callers (in progress)\n   ☐ 2. Rename it"
+            ]
+        );
+    }
+
     struct RecordedTool {
         name: String,
         calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,

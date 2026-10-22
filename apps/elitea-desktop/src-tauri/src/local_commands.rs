@@ -743,11 +743,12 @@ pub fn approval_respond(
     state: State<'_, LocalState>,
     request_id: String,
     decision: String,
+    feedback: Option<String>,
 ) -> Result<(), IpcError> {
-    let decision = UiDecision::parse(&decision).ok_or_else(|| {
+    let decision = UiDecision::parse(&decision, feedback.as_deref()).ok_or_else(|| {
         IpcError::new(
             "invalid_request",
-            "decision must be allow_once, allow_always, deny, continue or cancel",
+            "decision must be allow_once, allow_always, deny, continue, cancel, accept or decline",
         )
     })?;
     if state.agents.respond(&request_id, decision) {

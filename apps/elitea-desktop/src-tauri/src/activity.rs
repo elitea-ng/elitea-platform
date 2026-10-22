@@ -149,9 +149,12 @@ impl ActivityState {
                     self.end(turn);
                 }
             }
-            "approval_request" => {
+            // A plan card (#1225) waits for the person like an approval.
+            "approval_request" | "plan_proposed" => {
                 if let Some(id) = event.payload["request_id"].as_str() {
-                    let tool = if event.payload["kind"] == "continue" {
+                    let tool = if event.kind == "plan_proposed" {
+                        "plan".to_owned()
+                    } else if event.payload["kind"] == "continue" {
                         "continue".to_owned()
                     } else {
                         shown(event.payload["tool"].as_str().unwrap_or("a tool"), 40)

@@ -3,10 +3,11 @@
  * the thread's turns changed, newest first: diff, Reveal in Finder / Open,
  * and for a turn the host still keeps per-file revert and undo; Approvals —
  * the approvals of this thread (the one being asked is a modal dialog; the
- * tab shows the queue behind it and what was decided); Index — the folder's
+ * tab shows the queue behind it and what was decided); Plan — the agent's
+ * checklist (offered once it keeps one, or in plan mode); Index — the folder's
  * local code index.
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import LaunchOutlinedIcon from '@mui/icons-material/LaunchOutlined';
@@ -16,9 +17,10 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { ChangedFilesCard } from '@/features/workspace';
+import { ChangedFilesCard, plan } from '@/features/workspace';
 import type { AppIpc } from '@/shared/desktop/appEvents';
 import { InspectorTab } from '@/shared/desktop/inspectorSlot';
+import type { PlanView } from '@/shared/desktop/planIpc';
 import type { ApprovalDecision, ApprovalRequestPayload, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexPanelHost } from '@/features/workspace-index';
@@ -41,6 +43,10 @@ export interface SessionPanelProps {
   undoRequest: number;
   waiting: readonly ApprovalRequestPayload[];
   decided: readonly DecidedApproval[];
+  /** The agent's checklist (the Plan tab); `null` when it keeps none. */
+  plan: PlanView | null;
+  /** The thread is in plan mode: the Plan tab is offered even before a plan exists. */
+  planMode: boolean;
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
@@ -51,6 +57,12 @@ function decisionLabel(decision: ApprovalDecision): string {
       return t('workspace.panel.allowedAlways', 'Always allowed');
     case 'deny':
       return t('workspace.panel.denied', 'Denied');
+    case 'deny_with_feedback':
+      return t('workspace.panel.deniedWithFeedback', 'Denied, with a reason');
+    case 'accept':
+      return t('workspace.panel.accepted', 'Accepted');
+    case 'decline':
+      return t('workspace.panel.declined', 'Declined');
     case 'continue':
       return t('workspace.panel.continued', 'Continued');
     case 'cancel':
@@ -206,6 +218,15 @@ export function SessionInspector(props: SessionPanelProps): React.JSX.Element {
           <ApprovalsPane waiting={props.waiting} decided={props.decided} />
         </TabBody>
       </InspectorTab>
+      {(props.plan !== null || props.planMode) && (
+        <InspectorTab id="plan" title={t('workspace.panel.plan', 'Plan')} subject={subject}>
+          <TabBody>
+            <Suspense fallback={null}>
+              <plan.TodoPane plan={props.plan} />
+            </Suspense>
+          </TabBody>
+        </InspectorTab>
+      )}
       {props.hasIndex && (
         <InspectorTab id="index" title={t('workspace.panel.index', 'Index')} subject={subject}>
           <TabBody>
