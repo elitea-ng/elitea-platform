@@ -19,8 +19,11 @@
 #     branch renders no NATS StatefulSet itself (the values block is the
 #     integration contract; once the chart renders the StatefulSet, it is
 #     summed like any other and this fallback stops applying).
-# The worker's rolling-update surge (one extra worker pod) is printed, not
-# asserted: it is the headroom on top of the budget.
+#   * the PEAK during a rollout: the steady state plus the largest surge one
+#     Deployment adds while it rolls (maxSurge pods of it; Deployments roll
+#     one at a time under Argo CD's waves and Helm alike). The peak must fit
+#     the budget too: a surge pod with no room is Pending, and the rollout
+#     stalls on it.
 #
 # Also asserted: the ExternalSecrets render, gcs is keyless (no storage key
 # ExternalSecret, the elitea-main KSA carries its Google service account), and
@@ -47,7 +50,7 @@ echo "  rendered"
 
 echo "== steady-state requests"
 python3 - "$work/gke.yaml" "$values" <<'PY'
-import sys, yaml
+import math, sys, yaml
 
 CPU_BUDGET_M, MEM_BUDGET_MI = 4000, 10 * 1024
 
@@ -76,7 +79,7 @@ problems = []
 
 hpa_min = {(d["spec"]["scaleTargetRef"]["kind"], d["spec"]["scaleTargetRef"]["name"]): d["spec"].get("minReplicas", 1)
            for d in docs if d["kind"] == "HorizontalPodAutoscaler"}
-rows, worker = [], None
+rows, worker, surges = [], None, []
 for d in docs:
     if d["kind"] not in ("Deployment", "StatefulSet"):
         continue
@@ -86,6 +89,12 @@ for d in docs:
     rows.append((name, replicas, c, m))
     if name.endswith("-worker"):
         worker = (c, m)
+    strat = d["spec"].get("strategy") or {}
+    if d["kind"] == "Deployment" and strat.get("type", "RollingUpdate") == "RollingUpdate":
+        ms = (strat.get("rollingUpdate") or {}).get("maxSurge", "25%")
+        n = math.ceil(replicas * int(ms[:-1]) / 100) if isinstance(ms, str) and ms.endswith("%") else int(ms)
+        if n:
+            surges.append((name, n * c, n * m))
 
 if not any("nats" in r[0] for r in rows):
     res = (((values.get("nats") or {}).get("container") or {}).get("merge") or {}).get("resources") or {}
@@ -100,10 +109,16 @@ total_m = sum(r * m for _, r, _, m in rows)
 for name, r, c, m in sorted(rows):
     print(f"  {name:48} x{r}  {c * r:7.0f}m  {m * r:7.0f}Mi")
 print(f"  {'STEADY STATE':48}     {total_c:7.0f}m  {total_m:7.0f}Mi")
-if worker:
-    print(f"  {'+ worker rollout surge (headroom)':48}     {total_c + worker[0]:7.0f}m  {total_m + worker[1]:7.0f}Mi")
-else:
+if not worker:
     problems.append("no worker Deployment rendered")
+peak = max(surges, key=lambda x: (x[1] / CPU_BUDGET_M + x[2] / MEM_BUDGET_MI), default=("none", 0, 0))
+peak_c = total_c + max((x[1] for x in surges), default=0)
+peak_m = total_m + max((x[2] for x in surges), default=0)
+print(f"  {'PEAK DURING A ROLLOUT (largest surge: ' + peak[0] + ')':48}     {peak_c:7.0f}m  {peak_m:7.0f}Mi")
+if peak_c > CPU_BUDGET_M:
+    problems.append(f"rollout peak CPU requests {peak_c:.0f}m exceed {CPU_BUDGET_M}m; give the largest surger maxSurge 0 / maxUnavailable 1")
+if peak_m > MEM_BUDGET_MI:
+    problems.append(f"rollout peak memory requests {peak_m:.0f}Mi exceed {MEM_BUDGET_MI}Mi; give the largest surger maxSurge 0 / maxUnavailable 1")
 
 if total_c > CPU_BUDGET_M:
     problems.append(f"steady-state CPU requests {total_c:.0f}m exceed {CPU_BUDGET_M}m")

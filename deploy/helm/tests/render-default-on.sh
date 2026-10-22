@@ -131,6 +131,16 @@ if (qc.get("readinessProbe") or {}).get("httpGet", {}).get("scheme") != "HTTPS":
 qconf = yaml.safe_load(need("ConfigMap", "elitea-vectordb").get("data", {}).get("production.yaml", "{}") or "{}")
 if not (qconf.get("service") or {}).get("enable_tls") or (qconf.get("tls") or {}).get("cert") != "/qdrant/tls/tls.crt":
     bad.append(f"default: Qdrant's config is not TLS: {qconf}")
+# Qdrant runs as our token-less ServiceAccount (the subchart's has no
+# automount setting), and the subchart's `helm test` Pod stays a test hook:
+# Helm creates it only on `helm test`, Argo CD skips Helm test hooks.
+if sts.get("serviceAccountName") != "elitea-vectordb":
+    bad.append(f"default: Qdrant's serviceAccountName is {sts.get('serviceAccountName')!r}, want elitea-vectordb")
+if need("ServiceAccount", "elitea-vectordb").get("automountServiceAccountToken") is not False:
+    bad.append("default: ServiceAccount/elitea-vectordb does not set automountServiceAccountToken: false")
+for d in docs:
+    if d["kind"] == "Pod" and (d["metadata"].get("annotations") or {}).get("helm.sh/hook") != "test":
+        bad.append(f"default: Pod/{d['metadata']['name']} renders outside a helm test hook")
 vec = need("Deployment", "elitea-vector").get("spec", {}).get("template", {}).get("spec", {})
 venv = {e["name"]: e.get("value") for e in (vec.get("containers") or [{}])[0].get("env", [])}
 if venv.get("ELITEA_VECTOR_QDRANT_URL") != "https://elitea-vectordb.elitea.svc:6334":

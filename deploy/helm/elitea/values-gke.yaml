@@ -24,8 +24,8 @@
 #
 # ── THE BUDGET ───────────────────────────────────────────────────────────────
 #
-# Sized for about 4 vCPU / 10 GiB of REQUESTS reserved for the release, plus
-# headroom for the worker's rolling update. Requests, steady state:
+# Sized for 4 vCPU / 10 GiB of REQUESTS reserved for the release, INCLUDING
+# the peak of any one rollout. Requests, steady state:
 #
 #   component                    replicas   cpu each   mem each      cpu    mem
 #   elitea-main                         2     400m      768Mi       800m   1536Mi
@@ -35,18 +35,21 @@
 #   agent worker                        1    1500m        3Gi      1500m   3072Mi
 #   elitea-vector                       2     100m      128Mi       200m    256Mi
 #   Qdrant                              1     250m        1Gi       250m   1024Mi
-#   DeepWiki (host + engine)            1     300m     1152Mi       300m   1152Mi
+#   DeepWiki (host + engine)            1     200m     1152Mi       200m   1152Mi
 #   Inventory (host + engine)           1     150m      384Mi       150m    384Mi
 #   OTel collector                      1      50m      128Mi        50m    128Mi
 #   NATS server (JetStream)             1     200m      512Mi       200m    512Mi
 #   ─────────────────────────────────────────────────────────────────────────
-#   STEADY STATE                                                   3770m   8704Mi
-#                                                               (3.77 vCPU, 8.5 GiB)
+#   STEADY STATE                                                   3670m   8704Mi
+#                                                               (3.67 vCPU, 8.5 GiB)
 #
-#   + worker rolling update (maxSurge 1: a second worker
-#     overlaps until the first drains)                          +1500m  +3072Mi
-#   = DURING A WORKER ROLLOUT                                      5270m  11776Mi
-#                                                               (5.27 vCPU, 11.5 GiB)
+#   + the largest rollout surge. elitea-main and the worker do NOT surge
+#     here (rollingUpdate maxSurge 0 / maxUnavailable 1): a surge worker
+#     alone (+1500m/+3Gi) would take the peak to 5.2 vCPU / 11.5 GiB.
+#     The largest remaining surges are the gateway (+250m) and DeepWiki
+#     (+1152Mi), one Deployment at a time:
+#   = PEAK DURING A ROLLOUT, at most                               3920m   9856Mi
+#                                                               (3.92 vCPU, 9.6 GiB)
 #
 # Not counted, and why:
 #   * the hook Jobs (migrations, workload-session, nats-bootstrap at 50m/64Mi)
@@ -56,13 +59,14 @@
 #     the app containers, never the sum, and every init here is at or below
 #     its pod's app request;
 #   * elitea-main's autoscaler above minReplicas: at its maxReplicas of 3 the
-#     steady state is 4170m / 9472Mi, just past the CPU budget; a main rollout
-#     surges one 400m/768Mi pod the same way;
+#     steady state is 4070m / 9472Mi, just past the CPU budget: scaling out
+#     under load is what the headroom above the reservation is for;
 #   * PgBouncer (off: three main replicas fit Cloud SQL's connections, see
 #     postgresql below) — on, it adds 10m/32Mi.
-# deploy/helm/tests/render-gke-budget.sh renders this file and sums the
-# requests of every Deployment and StatefulSet at their replica counts, so a
-# change here that breaks 4 vCPU / 10 GiB fails CI.
+# deploy/helm/tests/render-gke-budget.sh renders this file, sums the requests
+# of every Deployment and StatefulSet at their replica counts and adds the
+# largest rendered surge, so a change here that breaks 4 vCPU / 10 GiB, at
+# steady state or during a rollout, fails CI.
 
 platform:
   aiProjectId: "1"
@@ -141,6 +145,10 @@ main:
     enabled: true
     minReplicas: 2
     maxReplicas: 3
+  # Replace a replica rather than surge a third: one of the two keeps serving.
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
   resources:
     requests:
       cpu: 400m
@@ -323,6 +331,12 @@ llmGateway:
 worker:
   replicaCount: 1
   materialSecretName: elitea-worker-material
+  # Stop the old worker before the new one starts: a surge worker (1500m/3Gi)
+  # does not fit the budget. Commands wait in JetStream and PostgreSQL's
+  # outbox for the minute the new one takes to start (see the header).
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
   resources:
     requests:
       cpu: 1500m
@@ -387,9 +401,12 @@ deepwiki:
       memory: 128Mi
   engine:
     native:
+      # 150m, not 250m: the request is what the scheduler reserves, and the
+      # engine bursts to its limit while it indexes. Its rollout surge has to
+      # fit the budget beside the steady state (see the header).
       resources:
         requests:
-          cpu: 250m
+          cpu: 150m
           memory: 1Gi
 
 inventory:

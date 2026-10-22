@@ -201,13 +201,14 @@ postgresql:
   # states it and elitea-main.validateConnectionBudget refuses to render a
   # topology that would exceed it.
   #
-  # 200 by default (S10), because the runtime plane is now on by default and
-  # the default elitea-main ceiling (autoscaling.maxReplicas 3) costs about
-  # 3 x 44 connections. That is NOT a stock PostgreSQL's 100: SET THIS TO
+  # 500 by default, because the runtime plane is on by default and the
+  # default elitea-main ceiling (main.autoscaling.maxReplicas 10) costs about
+  # 10 x 44 connections. That is NOT a stock PostgreSQL's 100: SET THIS TO
   # YOUR SERVER'S max_connections. Below the budget the render names what to
   # lower; a value above the real server is the one mistake this check
-  # cannot catch.
-  maxConnections: 200
+  # cannot catch. values-gke.yaml states a 4 vCPU Cloud SQL's and caps
+  # elitea-main at 3 replicas to fit it.
+  maxConnections: 500
   #
   # A CONNECTION POOLER IS NOT THE ANSWER TO THIS TODAY, and the reason is
   # measured rather than assumed (2026-09-01). pgbouncer in front of this
@@ -3634,14 +3635,22 @@ main:
       timeoutSeconds: 3
       failureThreshold: 2
 
-  # maxReplicas 3, not 10 (S10): with the runtime plane on by default every
-  # replica holds about 44 PostgreSQL connections, and the ceiling is what
-  # postgresql.maxConnections is checked against. Raise both together, or
-  # put elitea-main behind pgbouncer.
+  # Surge one new pod before an old one stops (the default), or, where the
+  # cluster has no room for the extra pod, maxSurge 0 / maxUnavailable 1:
+  # with minReplicas 2 one replica keeps serving through the rollout
+  # (values-gke.yaml does this to stay inside its request budget).
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+  # With the runtime plane on by default every replica holds about 44
+  # PostgreSQL connections, and maxReplicas is what postgresql.maxConnections
+  # is checked against: raise both together, or put elitea-main behind
+  # pgbouncer. values-gke.yaml caps it at 3 for a 4 vCPU Cloud SQL.
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 3
+    maxReplicas: 10
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
 
@@ -5702,8 +5711,17 @@ qdrant:
     tag: v1.19.2
     useUnprivilegedImage: true
     pullPolicy: IfNotPresent
-  # The subchart does not read image.pullSecrets; list them here too.
+  # The subchart does not read image.pullSecrets (a subchart sees only its
+  # own values). If Qdrant's image comes through your registry mirror, list
+  # the same Secrets here; NOTES.txt warns when image.pullSecrets is set and
+  # this is empty.
   imagePullSecrets: []
+  # Our ServiceAccount (templates/vector/qdrant-serviceaccount.yaml), with
+  # automountServiceAccountToken: false: the subchart's own has no such
+  # setting and Qdrant never calls the Kubernetes API.
+  serviceAccount:
+    create: false
+    name: elitea-vectordb
   # The whole stack of elitea-vector shares Argo CD sync wave -5
   # (templates/vector/_helpers.tpl, elitea-vector.syncWave).
   additionalAnnotations:
@@ -5803,6 +5821,14 @@ worker:
   # certificate's SPIFFE ID (runtimeSession.expectedIdentity) are the
   # operator's; the render lists them with every other missing value.
   enabled: true
+  # The rollout: by default a new worker starts before the old one drains
+  # (maxSurge 1), so commands keep flowing. maxSurge 0 / maxUnavailable 1
+  # stops the old worker first: no surge pod to fit, and commands wait in the
+  # JetStream stream (and PostgreSQL's outbox) for the minute the new one
+  # takes to start. values-gke.yaml does this to stay inside its budget.
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
   # The agent worker. Without it an admitted execution streams nothing and ends
   # in a terminal failure: Go admits and projects executions but has no
   # agent-token producer of its own.

@@ -59,6 +59,10 @@ scheduler:
   enabled: false
 llmGateway:
   enabled: false
+# No worker, yet the runtime plane (main.runtime, on by default) still creates
+# its JetStream dispatch streams and elitea-main publishes into them: nothing
+# consumes them here, which is fine for an install smoke that never runs an
+# agent. A real install keeps the worker on.
 worker:
   enabled: false
 otelCollector:

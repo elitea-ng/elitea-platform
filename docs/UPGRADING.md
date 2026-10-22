@@ -18,10 +18,15 @@ Qdrant (`vector.qdrant.mode: internal`), and AppProjects that restrict
   agent worker (`worker.enabled`), elitea-vector (`vector.enabled`) with a
   bundled one-node Qdrant (`qdrant.enabled`), DeepWiki (`deepwiki.enabled`)
   and Inventory (`inventory.enabled`). Other default changes:
-  `postgresql.maxConnections` 100 → 200, `main.autoscaling.maxReplicas`
-  10 → 3, `vector.collection.replicationFactor` 2 → 1,
+  `postgresql.maxConnections` 100 → 500 (elitea-main's default ceiling of
+  10 replicas at about 44 connections each; set it to your server's
+  `max_connections`, and lower `main.autoscaling.maxReplicas` to fit, as
+  `values-gke.yaml` does with 3), `vector.collection.replicationFactor` 2 → 1,
   `main.runtime.signingKeyId` `standalone-runtime-v1` (the default key id of
-  `deploy/scripts/gen-runtime-certs.sh`).
+  `deploy/scripts/gen-runtime-certs.sh`). New, with the old behaviour as
+  the default: `main.rollingUpdate` and `worker.rollingUpdate` (`maxSurge:
+  1, maxUnavailable: 0`); `values-gke.yaml` sets both to `maxSurge: 0,
+  maxUnavailable: 1`, so no rollout exceeds its 4 vCPU / 10 GiB budget.
 * **One switch per feature.** The chart derives elitea-main's side from the
   provider's block: `ELITEA_DEEPWIKI_ENABLED` / `ELITEA_INVENTORY_ENABLED`, the
   git allowlists (copied from `deepwiki.env` / `inventory.env`), the client
@@ -71,7 +76,20 @@ Qdrant (`vector.qdrant.mode: internal`), and AppProjects that restrict
   are TLS (the old StatefulSet was plaintext inside the cluster), peer traffic
   too when clustered. `qdrant.enabled: false` is bring-your-own Qdrant at
   `vector.qdrant.external.url` (`vector.qdrant.external.caSecretName` for a
-  private CA). The upstream chart's `helm test` Pod is not supported.
+  private CA). Two things the upstream chart cannot do itself, and how this
+  chart covers them:
+  - Qdrant runs as the chart's own ServiceAccount `elitea-vectordb`, with
+    `automountServiceAccountToken: false`, because the subchart's account has
+    no such setting.
+  - The subchart cannot read `image.pullSecrets`: if Qdrant's image comes
+    through your registry, list the same Secrets under
+    `qdrant.imagePullSecrets` (the install NOTES warn when you set one and
+    not the other).
+
+  The upstream chart's `helm test` Pod is not supported. It is a
+  `helm.sh/hook: test` resource, so `helm install` and `helm upgrade` never
+  create it and Argo CD skips Helm test hooks; do not run `helm test` on
+  this release.
 
   | Before | After |
   |---|---|

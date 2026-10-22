@@ -37,6 +37,8 @@ spec:
   # the three database facts that decide it.
   strategy:
     type: RollingUpdate
+    rollingUpdate:
+      {{- toYaml .Values.worker.rollingUpdate | nindent 6 }}
   selector:
     matchLabels:
       {{- include "elitea-worker.selectorLabels" . | nindent 6 }}

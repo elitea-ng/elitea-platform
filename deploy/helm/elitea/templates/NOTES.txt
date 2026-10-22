@@ -3,3 +3,9 @@ NOTE: this release deploys no agent worker (worker.enabled=false). elitea-main
 assumes the Rust worker (the only one) when it decides which toolkit types and
 built-in tools a user can turn on.
 {{- end }}
+{{- if and .Values.qdrant.enabled .Values.image.pullSecrets (not .Values.qdrant.imagePullSecrets) }}
+NOTE: image.pullSecrets is set but qdrant.imagePullSecrets is empty. The
+bundled Qdrant is an upstream subchart and reads only its own values: if its
+image ({{ .Values.qdrant.image.repository }}) comes through your registry, list
+the same Secrets under qdrant.imagePullSecrets.
+{{- end }}
