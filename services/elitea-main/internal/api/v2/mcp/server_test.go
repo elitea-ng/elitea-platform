@@ -340,7 +340,7 @@ func TestCatalogReceivesTheURLProjectSchema(t *testing.T) {
 // this server does not serve. Answering them with the project's agents instead
 // would hand a legacy client a plausible listing containing none of the tools
 // it asked for.
-func TestPylonAPICategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
+func TestOpenAPISectionCategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
 	source := staticSource(Tool{Name: "some_agent"})
 	router := newTestRouter(newTestHandler(t, source))
 

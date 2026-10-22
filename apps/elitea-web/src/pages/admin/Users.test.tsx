@@ -184,7 +184,7 @@ describe('Admin › Users', () => {
     expect(writes()[0]!.url).toContain('/admin/user_suspend/administration/12');
   });
 
-  it('sends the pylon set_admin_role body when the role select changes', async () => {
+  it('sends the legacy set_admin_role body when the role select changes', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');

@@ -44,7 +44,7 @@ func TestParseAttachmentFilepathRejectsUnsplittableAndUnstorableValues(t *testin
 	}
 }
 
-func TestAttachmentKindIsPylonsTypeNotAMIMEType(t *testing.T) {
+func TestAttachmentKindIsACategoryNotAMIMEType(t *testing.T) {
 	// The column holds "text"/"image"/"document", never a MIME type. .svg is
 	// carved out of "image" on purpose (utils/attachments.py:325), the same
 	// carve-out the upload path's size ceiling uses.

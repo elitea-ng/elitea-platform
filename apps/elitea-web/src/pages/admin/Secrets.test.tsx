@@ -166,7 +166,7 @@ describe('Admin › Secrets', () => {
     expect(reveals[0]?.url).toContain('/secrets/secret/administration/0/shared_marker');
   });
 
-  it('creates a secret with pylon’s {secret} body', async () => {
+  it('creates a secret with the legacy {secret} body', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSecrets />);
     await screen.findByText('shared_marker');
@@ -221,7 +221,7 @@ describe('Admin › Secrets', () => {
     expect(writes()).toHaveLength(0);
   });
 
-  it('updates a value with pylon’s NESTED {secret:{old_name,value}} body', async () => {
+  it('updates a value with the legacy NESTED {secret:{old_name,value}} body', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSecrets />);
     const row = await findUserSecretRow();

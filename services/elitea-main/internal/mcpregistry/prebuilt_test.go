@@ -12,7 +12,7 @@ import (
 // database. If the two sides ever derive different keys the lookup silently
 // finds nothing, and a pre-built toolkit quietly loses its credentials. These
 // cases are transcribed from `normalize_mcp_toolkit_name`'s own docstring.
-func TestNormalizeCatalogueKeyMatchesPylon(t *testing.T) {
+func TestNormalizeCatalogueKeyMatchesTheProducer(t *testing.T) {
 	for _, testCase := range []struct{ input, want string }{
 		{"mcp_epam_presales", "epam_presales"},
 		{"Epam Presales", "epam_presales"},

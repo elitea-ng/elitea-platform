@@ -52,10 +52,10 @@ async function putResourcesInformationVersion(
   return { status: response.status(), body: await response.text() };
 }
 
-// Every Pylon plugin name the ELITEA-0971 manual case pinned. `admin` is
+// Every legacy plugin name the ELITEA-0971 manual case pinned. `admin` is
 // distinct from `elitea-main` (the real component this fix reports) and both
 // must be checked so a partial-name match cannot hide either bug.
-const PYLON_PLUGIN_NAMES = ['elitea_core', 'admin', 'notifications', 'configurations', 'sdk_plugin', 'indexer_worker'];
+const LEGACY_PLUGIN_NAMES = ['elitea_core', 'admin', 'notifications', 'configurations', 'sdk_plugin', 'indexer_worker'];
 
 test('RES07: the (i) icon lists this service’s own real component versions on hover', async ({ page, request }) => {
   // Same lock arithmetic as admin.resources-help-center.spec.ts's ELITEA-0025:
@@ -77,14 +77,14 @@ test('RES07: the (i) icon lists this service’s own real component versions on 
       await icon.hover();
 
       const elitea = await page.getByText(/^elitea-main: /).textContent({ timeout: 5_000 });
-      expect(elitea, 'the tooltip must report this binary’s own version, not a Pylon plugin name').toMatch(
+      expect(elitea, 'the tooltip must report this binary’s own version, not a legacy plugin name').toMatch(
         /^elitea-main: \S+$/,
       );
       const migrations = await page.getByText(/^migrations: /).textContent({ timeout: 5_000 });
       expect(migrations, 'the tooltip must report a real 4-digit migration head').toMatch(/^migrations: \d{4}$/);
 
       // The #219 regression this fix must never reintroduce.
-      for (const name of PYLON_PLUGIN_NAMES) {
+      for (const name of LEGACY_PLUGIN_NAMES) {
         await expect(page.getByText(new RegExp(`^${name}: `)), `must not fake the ${name} plugin (#219)`).toHaveCount(
           0,
         );

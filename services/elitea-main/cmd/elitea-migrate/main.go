@@ -54,7 +54,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	// The pylon-era schema FIRST, and only when the database does not already
+	// The legacy-era schema FIRST, and only when the database does not already
 	// carry it. The histories below cannot run without it — shared/0030 has a
 	// foreign key to centry.project — so an empty database used to need a human
 	// with psql before this binary could do anything at all.
@@ -63,7 +63,7 @@ func main() {
 		exitError(err)
 	}
 	if bootstrapped {
-		slog.Info("applied the pylon-era schema to an empty database")
+		slog.Info("applied the legacy-era schema to an empty database")
 	}
 
 	runner := migrate.New(pool, platformmigrations.Files)

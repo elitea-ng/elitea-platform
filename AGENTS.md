@@ -101,7 +101,7 @@ prototype shortcuts into new code merely to preserve current behavior.
   mounting product, admin, or storage handlers. Do not add a pylon bridge back:
   the shadow comparator, the cutover reverse proxy and endpoint tracker, and the
   Redis remote-call auth client are deleted (issue #383), and
-  `internal/api/TestNoPylonBridgeWiringReturns` fails if one returns.
+  `internal/api/TestNoLegacyBridgeWiringReturns` fails if one returns.
 - Use transaction-local tenant selection and repository-owned versioned
   migrations. Never return a pooled connection after releasing it or use
   session-scoped tenant state across requests.

@@ -138,14 +138,14 @@ func TestCurrentIndexTypesRoutePreservesUnchangedUIContract(t *testing.T) {
 	// The body also carries the published `items`/`total` envelope since #394,
 	// so the whole body is no longer the fixture; decode the three maps back
 	// out and compare those. TestCurrentIndexTypesRouteAnswersPublishedEnvelope
-	// BesidePylonKeys covers the published half and holds the two halves to
+	// BesideLegacyKeys covers the published half and holds the two halves to
 	// the same rows.
-	var pylon handler.CurrentIndexTypes
-	if err := json.Unmarshal(response.Body.Bytes(), &pylon); err != nil {
+	var legacyMaps handler.CurrentIndexTypes
+	if err := json.Unmarshal(response.Body.Bytes(), &legacyMaps); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(pylon, fixture) {
-		t.Fatalf("pylon half drifted from the fixture: %+v", pylon)
+	if !reflect.DeepEqual(legacyMaps, fixture) {
+		t.Fatalf("legacy half drifted from the fixture: %+v", legacyMaps)
 	}
 
 	var topLevel map[string]json.RawMessage

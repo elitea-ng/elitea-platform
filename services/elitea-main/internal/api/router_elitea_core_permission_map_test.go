@@ -130,7 +130,7 @@ func TestEliteaCoreGatesNameOnlyRealLegacyPermissions(t *testing.T) {
 	declared := legacyDeclaredPermissions(t)
 	for _, permission := range gatedPermissions(t) {
 		if _, ok := declared[permission]; !ok {
-			t.Errorf("router.go gates an /elitea_core route on %q, which no pylon handler declares.\n"+
+			t.Errorf("router.go gates an /elitea_core route on %q, which no legacy handler declares.\n"+
 				"  testdata/legacy/legacy-rbac-static-catalog.json is generated from the `check_api`\n"+
 				"  calls themselves, so a string missing from it is a name this platform has never had.\n"+
 				"  Nothing grants it, so the route answers 403 to every caller including the operator.",

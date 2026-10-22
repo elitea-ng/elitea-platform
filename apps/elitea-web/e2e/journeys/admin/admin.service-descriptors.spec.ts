@@ -303,8 +303,8 @@ adminTest('J35d1: a registration missing what admission needs is refused, not st
       return { status: response.status, body: await response.text() };
     };
     return {
-      pylonShaped: await send({
-        name: 'e2e-pylon-shaped',
+      legacyShaped: await send({
+        name: 'e2e-legacy-shaped',
         service_location_url: 'https://provider.example.invalid/e2e',
         configuration: {},
         provided_toolkits: [],
@@ -331,7 +331,7 @@ adminTest('J35d1: a registration missing what admission needs is refused, not st
   // And none of them landed.
   await page.reload({ waitUntil: 'domcontentloaded' });
   await openServiceDescriptors(page);
-  for (const name of ['e2e-pylon-shaped', 'e2e-path-in-origin', 'e2e-no-descriptor']) {
+  for (const name of ['e2e-legacy-shaped', 'e2e-path-in-origin', 'e2e-no-descriptor']) {
     await expect(page.getByText(name, { exact: false })).toHaveCount(0);
   }
 });

@@ -179,7 +179,7 @@ func TestAuthRejectsCredentialWhenAuthoritativePrincipalCheckFails(t *testing.T)
 // the middleware never dialled it. #383 deleted that field and the client
 // behind it, so the property is now structural rather than behavioural: there
 // is no Redis in this package at all, and
-// TestNoPylonBridgeWiringReturns (internal/api) fails if one comes back.
+// TestNoLegacyBridgeWiringReturns (internal/api) fails if one comes back.
 //
 // What a behavioural test can still hold is the other half: a Bearer
 // credential is read exactly once, by the local validator, and its refusal is

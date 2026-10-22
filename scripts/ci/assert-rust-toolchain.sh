@@ -30,12 +30,33 @@ if [ -z "$PIN" ] || [ "$(printf '%s\n' "$PIN" | wc -l | tr -d ' ')" -ne 1 ]; the
   exit 1
 fi
 
-# rustup may install the pinned toolchain on first use; that output is not the
-# version line, so read only the line that starts with `rustc `.
-RUSTC_LINE="$(rustc --version 2>/dev/null | grep -E '^rustc ' || true)"
+# Install the toolchain the current directory resolves to, explicitly and with
+# retries, before asking for its version. Left to rustup's install-on-first-use
+# inside `rustc --version`, one failed download on a macOS runner (PR #1393)
+# surfaced as an empty version line with the reason thrown away. With no
+# argument, `rustup toolchain install` installs the active toolchain from the
+# nearest rust-toolchain.toml, components included.
+if command -v rustup >/dev/null 2>&1; then
+  installed=0
+  for attempt in 1 2 3; do
+    if rustup toolchain install; then
+      installed=1
+      break
+    fi
+    echo "rustup toolchain install failed (attempt ${attempt}/3); retrying" >&2
+    sleep $((attempt * 10))
+  done
+  [ "$installed" -eq 1 ] || { echo "ERROR: could not install the toolchain for $(pwd) after 3 attempts." >&2; exit 1; }
+fi
+
+# Only the line that starts with `rustc ` is the version; stderr is kept so a
+# failure says why.
+RUSTC_OUT="$(rustc --version 2>&1 || true)"
+RUSTC_LINE="$(printf '%s\n' "$RUSTC_OUT" | grep -E '^rustc ' || true)"
 ACTUAL="$(printf '%s' "$RUSTC_LINE" | sed -nE 's/^rustc ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
 if [ -z "$ACTUAL" ]; then
-  echo "ERROR: could not read a version from 'rustc --version' in $(pwd) (got: '${RUSTC_LINE}')." >&2
+  echo "ERROR: could not read a version from 'rustc --version' in $(pwd). Output:" >&2
+  printf '%s\n' "$RUSTC_OUT" >&2
   exit 1
 fi
 

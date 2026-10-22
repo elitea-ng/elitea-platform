@@ -234,7 +234,7 @@ describe('Admin › Roles › role definitions', () => {
     expect(await screen.findByRole('heading', { name: 'Delete role' })).toBeInTheDocument();
   });
 
-  it('renames a role with pylon’s body shape', async () => {
+  it('renames a role with the legacy body shape', async () => {
     const user = userEvent.setup({ delay: null });
     adminRows = ROWS_WITH_NEW_ROLE;
     renderAdminRoute(<AdminRoles />);

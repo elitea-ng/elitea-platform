@@ -178,9 +178,18 @@ func TestAudio_BodyAtTheCeilingIsForwarded(t *testing.T) {
 
 // TestAudio_AProviderThatNeverAnswersTimesOutWith504: the deadline turns a
 // hung upstream into a named refusal instead of an open connection.
+//
+// The connection is warmed first. The 50ms deadline is meant to time the hung
+// provider, not the first dial and mTLS handshake: on a loaded runner the
+// connect phase alone failed inside the window and the request came back 502
+// (gateway unavailable) instead of 504.
 func TestAudio_AProviderThatNeverAnswersTimesOutWith504(t *testing.T) {
 	release := make(chan struct{})
-	backend := llmproxytest.Start(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/llm/v1/audio/speech" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		<-release
 	}))
 	defer backend.Close()
@@ -188,6 +197,11 @@ func TestAudio_AProviderThatNeverAnswersTimesOutWith504(t *testing.T) {
 	withAudioLimit(t, "/llm/v1/audio/speech", audioRouteLimit{maxBody: maxSpeechBody, timeout: 50 * time.Millisecond})
 
 	p := proxyTo(t, backend, "")
+	warm := httptest.NewRecorder()
+	p.ServeHTTP(warm, httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil))
+	if warm.Code != http.StatusOK {
+		t.Fatalf("warm-up status = %d, want 200; body=%s", warm.Code, warm.Body.String())
+	}
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, audioRequest("/llm/v1/audio/speech", strings.NewReader(`{"model":"tts","input":"hi"}`)))
 

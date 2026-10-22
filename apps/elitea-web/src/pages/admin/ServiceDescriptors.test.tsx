@@ -139,7 +139,7 @@ describe('AdminServiceDescriptors', () => {
     expect(screen.queryByTestId('admin-service-descriptors-error')).toBeNull();
   });
 
-  it('asks the endpoint pylon serves, in administration mode, with GET only', async () => {
+  it('asks the legacy endpoint, in administration mode, with GET only', async () => {
     respondWith(501, { error: SERVER_REASON });
 
     renderAdminRoute(<AdminServiceDescriptors />);

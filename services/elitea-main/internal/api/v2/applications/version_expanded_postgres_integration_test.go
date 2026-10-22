@@ -295,7 +295,7 @@ func TestVersionPatchRefusesAWrongSecretHeader(t *testing.T) {
 	}
 	body := decodeBody(t, recorder)
 	if body["error"] != "Invalid secret header" {
-		t.Errorf("expected the pylon error body, got %s", recorder.Body.String())
+		t.Errorf("expected the legacy error body, got %s", recorder.Body.String())
 	}
 	// A refused call must disclose nothing about the version.
 	if _, present := body["llm_settings"]; present {
@@ -332,13 +332,13 @@ func TestVersionPatchIgnoresTheRetiredEnvironmentSecret(t *testing.T) {
 // `secret` is refused on a newly provisioned project". The fixture's vault
 // holds a value that is not the literal, exactly as
 // EnsureProjectSecretsHeaderValue writes one, so the literal is simply the
-// wrong value and gets pylon's 400.
-func TestVersionPatchRefusesThePylonLiteralOnAProvisionedProject(t *testing.T) {
+// wrong value and gets the legacy contract's 400.
+func TestVersionPatchRefusesTheLegacySecretLiteralOnAProvisionedProject(t *testing.T) {
 	fixture := newExpandedFixture(t, "openai")
 
 	recorder := fixture.patchVersion(t, "secret")
 	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("the pylon literal must be refused, got %d: %s",
+		t.Fatalf("the legacy secret literal must be refused, got %d: %s",
 			recorder.Code, recorder.Body.String())
 	}
 	if _, present := decodeBody(t, recorder)["llm_settings"]; present {

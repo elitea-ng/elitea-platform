@@ -320,7 +320,7 @@ nats:
 # platform needs pgvector (#1359) — every dense vector is in Qdrant behind
 # elitea-vector, so plain PostgreSQL is enough.
 #
-# The pylon-era schema is NOT here. elitea-migrate embeds 001_initial.sql and
+# The legacy-era schema is NOT here. elitea-migrate embeds 001_initial.sql and
 # applies it itself when the database does not carry it, so a fresh install
 # migrates from empty with no external step — and the objects end up owned by
 # the migrating role, which is what the histories need in order to ALTER them.

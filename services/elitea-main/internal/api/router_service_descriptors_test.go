@@ -53,7 +53,7 @@ func TestRouterRegistersServiceDescriptorRoutesUnderAdministrationOnly(t *testin
 	// absence: it answered every mode with the same fabricated rows.
 	if _, ok := got["GET /api/v2/elitea_core/admin/{mode}"]; ok {
 		t.Error("GET /api/v2/elitea_core/admin/{mode} is registered again; " +
-			"pylon serves administration and no other mode on this path")
+			"the legacy contract serves administration and no other mode on this path")
 	}
 }
 

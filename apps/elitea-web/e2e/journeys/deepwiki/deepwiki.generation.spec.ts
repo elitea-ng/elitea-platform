@@ -7,14 +7,27 @@
  * mTLS hop, the callback bearer, the upload into the bucket; the provider
  * runs its fixture engine (ELITEA_DEEPWIKI_RUNNER=fixture), which is the
  * real runner with canned tool results.
+ *
+ * DWIKI-005 and 006 act on a run IN FLIGHT (stop it, reload over it), so the
+ * fixture's run must outlast those interactions. scripts/deepwiki-e2e.sh
+ * paces it at 3s a step (~15s a run): at 1s the whole run fit inside one slow
+ * invoke + poll round trip on CI, the first poll drained every step AND the
+ * terminal status, the panel went idle → completed without ever showing
+ * running, and that run's wiki LANDED.
+ *
+ * A RETRY RESTARTS THE FILE, so it must not inherit an earlier attempt's
+ * wiki or run: with the landed wiki above, every retried DWIKI-005 met the
+ * "regenerate?" confirm and failed by construction, hiding the real failure.
+ * beforeAll removes 9002's wiki; afterEach stops a run a failed test left going.
  */
 import { expect, test } from '@playwright/test';
 
-import { STORAGE_STATE } from '../../../playwright.config';
-import { SEEDED, listKeys, openDeepWiki, readObject, replaceEditorText } from './helpers';
+import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
+import { SEEDED, clearWiki, listKeys, openDeepWiki, readObject, replaceEditorText } from './helpers';
 
 const TOOLKIT_PATH = `/app/deepwiki/${SEEDED.mutable.toolkitId}`;
 const GENERATION_TIMEOUT = 90_000;
+const INVOKE_PATH = `/api/v2/deepwiki/tools/${SEEDED.projectId}/wikis/generate_wiki/invoke`;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -24,6 +37,39 @@ test.describe('DeepWiki generation', () => {
   test.setTimeout(120_000);
 
   test.use({ storageState: STORAGE_STATE.member });
+
+  test.beforeAll(async ({ browser }) => {
+    const context = await browser.newContext({ storageState: STORAGE_STATE.member });
+    try {
+      await clearWiki(context.request, SEEDED.mutable.wikiId);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // The generation this test started, read off the invoke response.
+  let startedInvocation: string | null = null;
+  test.beforeEach(({ page }) => {
+    startedInvocation = null;
+    page.on('response', (response) => {
+      if (response.request().method() !== 'POST' || !response.url().endsWith(INVOKE_PATH)) return;
+      void response
+        .json()
+        .then((body: { invocation_id?: string; data?: { invocation_id?: string } }) => {
+          startedInvocation = body.invocation_id ?? body.data?.invocation_id ?? null;
+        })
+        .catch(() => undefined);
+    });
+  });
+  test.afterEach(async ({ page }, testInfo) => {
+    if (startedInvocation === null || testInfo.status === testInfo.expectedStatus) return;
+    // A failed test can leave its run going; finished, it would land a wiki
+    // the next attempt trips over. Stopped, it lands nothing.
+    await page.request.delete(
+      `${BASE_URL}/api/v2/deepwiki/invocations/${SEEDED.projectId}/wikis/generate_wiki/${startedInvocation}`,
+      { failOnStatusCode: false },
+    );
+  });
 
   test('DWIKI-010: toolkit settings are edited and saved, and a bad draft is refused against the field', async ({
     page,
@@ -62,7 +108,7 @@ test.describe('DeepWiki generation', () => {
   test('DWIKI-005: generation streams progress and can be stopped', async ({ page }) => {
     await openDeepWiki(page, TOOLKIT_PATH);
     await page.getByTestId('wiki-generate').click();
-    // No wiki exists for 9002 yet, so there is no "regenerate?" confirm.
+    // No wiki exists for 9002 (beforeAll), so there is no "regenerate?" confirm.
     await expect(page.getByTestId('wiki-generation-status')).toHaveAttribute('data-status', 'running', {
       timeout: 20_000,
     });

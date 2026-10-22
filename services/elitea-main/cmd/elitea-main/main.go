@@ -166,7 +166,7 @@ func developmentFlagsFromEnv(getenv func(string) string) (bootstrapLegacySchema 
 		for _, configured := range []string{"APPLICATION_SECRET_KEY", "OIDC_ISSUER_URL", "ELITEA_AUTH_CONFIG_FILE"} {
 			if getenv(configured) != "" {
 				return false, fmt.Errorf("ELITEA_DEV_BOOTSTRAP_LEGACY_SCHEMA is a local-development flag and must not be set when %s is configured. "+
-					"To build a schema on a deployment, run elitea-migrate: it applies the pylon-era schema to an empty database itself, "+
+					"To build a schema on a deployment, run elitea-migrate: it applies the legacy-era schema to an empty database itself, "+
 					"then the shared and tenant histories. Remove this variable", configured)
 			}
 		}

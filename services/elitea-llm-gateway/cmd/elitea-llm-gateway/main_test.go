@@ -57,7 +57,7 @@ func TestMainWiring(t *testing.T) {
 		{"startupIdentityCheck(", "the identity-secret startup guard is never invoked — the gateway would boot with identity verification disabled while the vault-backed Account resolves per-project credentials from an unauthenticated X-Elitea-Project-Id (issue #11)"},
 		{"shutdownSequence(", "the shutdown sequence is never invoked — stream grace, HTTP drain, billing drain and NATS close would not run in the one order that loses no spend (issue #9)"},
 		{"llmproxy.WithOpsEventPublisher(", "budget.unbilled_stream is never published — a stream the gateway could not bill would be invisible to operators (issue #9)"},
-		{"llmproxy.WithRealtimeDialer(", "the realtime route has no provider side — /llm/v1/realtime answers 501 for every caller, so pylon-indexer keeps the second, unmetered LiteLLM data plane this route exists to delete"},
+		{"llmproxy.WithRealtimeDialer(", "the realtime route has no provider side — /llm/v1/realtime answers 501 for every caller, so the legacy indexer keeps the second, unmetered LiteLLM data plane this route exists to delete"},
 		{"llmproxy.WithRealtimeBudgetRecheck(", "a realtime session is gated ONCE and then runs unbounded — bifrost reports a turn start only for events the only known caller never sends, so the periodic re-check is the ONLY thing that re-asks the budget for a live socket"},
 		{"llmproxy.WithRealtimeSessionLimit(", "concurrent realtime sessions are unbounded — a hijacked connection has its deadlines cleared, so no server timeout can ever reap one"},
 		{"llmproxy.WithRealtimeOrigins(", "the accept-side Origin allowlist is never configured — a WebSocket handshake is not subject to CORS, so this is the only place the operator's browser-origin policy is applied"},

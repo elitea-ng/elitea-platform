@@ -3,7 +3,7 @@
 # The one thing elitea-migrate cannot do for itself, because it needs a right
 # the migrating role does not have.
 #
-# WHAT IS NOT HERE, DELIBERATELY. The pylon-era schema (001_initial.sql) used to
+# WHAT IS NOT HERE, DELIBERATELY. The legacy-era schema (001_initial.sql) used to
 # be applied by this Job from a copy carried in the chart. It is not any more:
 # elitea-migrate embeds it and applies it itself when the database does not
 # carry it. That removed a second source of truth held in step by a CI gate, and

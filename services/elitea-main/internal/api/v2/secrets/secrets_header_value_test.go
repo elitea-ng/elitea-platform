@@ -18,7 +18,7 @@ func TestNewSecretsHeaderValueIsNotTheGuessableDefault(t *testing.T) {
 	// "secret" is what pylon's check_secret_header falls back to, and what the
 	// version-details route still accepts from a project that has no value.
 	if value == "secret" {
-		t.Fatal("the generated value is the literal pylon default")
+		t.Fatal("the generated value is the guessable legacy default")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
@@ -50,13 +50,15 @@ func TestNewSecretsHeaderValueIsRandom(t *testing.T) {
 	}
 }
 
-// TestSecretsHeaderValueNameMatchesPylon pins the name. The value is useless
-// under any other one: pylon reads exactly this key, and so does the
-// version-details route that compares the header against it.
-func TestSecretsHeaderValueNameMatchesPylon(t *testing.T) {
+// TestSecretsHeaderValueNameIsPinnedForExistingVaults pins the name. Every
+// project vault already stores the value under exactly this key, SDK callers
+// read it by this key, and the version-details route compares the header
+// against it. Renaming the constant orphans every stored value; it is not a
+// refactor.
+func TestSecretsHeaderValueNameIsPinnedForExistingVaults(t *testing.T) {
 	t.Parallel()
 
 	if SecretsHeaderValueName != "secrets_header_value" {
-		t.Fatalf("SecretsHeaderValueName = %q, want the name pylon reads", SecretsHeaderValueName)
+		t.Fatalf("SecretsHeaderValueName = %q, want secrets_header_value: existing vaults and SDK callers use that key", SecretsHeaderValueName)
 	}
 }

@@ -431,7 +431,7 @@ test('the asynchronous index start refuses every tool but index_data, and admits
     `an asynchronous non-index_data run must be REFUSED, not accepted or crashed. Body: ${(await searchAttempt.text()).slice(0, 400)}`,
   ).toBe(400);
   const refusal = (await searchAttempt.json()) as ValidationRefusal;
-  expect(refusal.error?.[0], 'the refusal must name the field and the only accepted value, in the pydantic shape pylon clients parse').toEqual({
+  expect(refusal.error?.[0], 'the refusal must name the field and the only accepted value, in the pydantic shape legacy clients parse').toEqual({
     type: 'value_error',
     loc: ['tool_name'],
     msg: "Input should be 'index_data'",
