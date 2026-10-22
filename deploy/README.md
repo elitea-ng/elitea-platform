@@ -354,49 +354,18 @@ both: the facade checks it before opening the vault, the provider before
 building a clone URL, and two values that disagree mean an invocation that
 starts and then fails.
 
-Two images share one chart component. The `worker` component runs either
-`elitea-worker-rust` (the default, matching `deploy/scripts/
-standalone-stack.sh`'s own default) or `elitea-worker-python` while it still
-exists, selected by `worker.implementation`. `worker.indexingRuntime` defaults to
-`python`: the chart never switches to Rust indexing by itself, because Rust
-indexing starts with EMPTY indexes (nothing is migrated). To use it, set
-`worker.indexingRuntime: rust` together with `vector.enabled=true`,
-`main.runtime.enabled=true` and `main.runtime.indexIngestDispatch.enabled=true`;
-anything missing fails the render and is named. The Python-removal change will
-flip this default.
-
-**Upgrade notes.** (1) An install that enables the worker and never set
-`worker.implementation` moves from the Python worker to the Rust worker. With
-the default Python indexing, agents on the Rust worker cannot search the
-indexes created before the upgrade (the Rust tools read a vector store that
-starts empty): until you set `worker.indexingRuntime: rust` and re-create your
-indexes, index search is lost. `helm install` prints this as an UPGRADE
-WARNING. To keep today's behaviour set `worker.implementation: python`. (2) The
-toolkit types memory, vectorstore, sandbox, delta_lake, aws and localgit have
-no Rust implementation yet and are unavailable on the Rust worker. (3) A
-release with `worker.enabled=false` still tells elitea-main
-`ELITEA_WORKER_IMPLEMENTATION=rust` (the toolkit catalogue follows it): a Python
-worker deployed separately needs `worker.implementation: python`. (4) A
+The `worker` component runs `elitea-worker-rust`, the only agent worker: the
+Python worker was removed (#1312), and the chart refuses `worker.implementation`
+set to anything but `rust`. `worker.indexingRuntime` is `rust`, the only indexing runtime (`python` fails
+the render). With index ingest dispatch on and the worker enabled it needs
+`vector.enabled=true` (with `vector.qdrant.apiKeySecret.name`) or
+`worker.runtime.vectorTarget`; anything missing fails the render and is named. A
 `main.env.ELITEA_INDEXING_RUNTIME` that disagrees with `worker.indexingRuntime`
-fails the render. `deploy/scripts/standalone-stack.sh` does not
-switch an existing stack: it records the worker on `up` and keeps it until you
-set `STANDALONE_WORKER`. `worker.runtime.agentModelCheckpointRecovery` and
+fails the render too. `worker.runtime.agentModelCheckpointRecovery` and
 `agentNodeRecovery` stay `false` by default until the pod-replacement proofs in
-`services/elitea-worker-rust/docs/recovery-guarantees.md` (ruling D1) pass. The Rust worker is a smaller, faster
-process but — as of this release — has no adapter for 18 of the 52 catalogued
-toolkit types and no implementation for 6 of the platform's internal chat-agent
-tools (`values.yaml`'s `worker.implementation` comment lists both sets); a
-deployment that chooses it still serves those tiles and toggles, greyed with
-the reason, rather than hiding them. They are not drop-in for each other and
-the chart handles the difference rather than the operator: the Rust worker's
-argument parser matches an exact five-token command line and additionally
-requires `--toolkit-security-config`, so the Python argument list makes it
-exit immediately with `worker_cli.invalid_arguments`.
-`worker.runtime.sensitiveTools` is written once and carried to each as that
-implementation expects — an environment variable for Python, a second JSON
-file for Rust. `runtime.json` itself is byte-identical for both, and
-`deploy/helm/tests/render-worker.sh`
-holds all of that.
+`services/elitea-worker-rust/docs/recovery-guarantees.md` (ruling D1) pass.
+`deploy/helm/tests/render-worker.sh` and `render-indexing-runtime.sh` hold the
+worker's rendered contract.
 
 ## Values an operator supplies, and where each one goes (#475)
 
