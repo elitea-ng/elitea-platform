@@ -217,7 +217,7 @@ function toVersionMetaBody(
        * `internal_tools` is: clearing the box has to reach the wire, and an
        * `undefined`-when-empty guard would make exactly that edit
        * unsaveable. It travels INSIDE `meta` because that is where the field
-       * is stored on both sides (pylon's elitea_issues #5410 decision, and
+       * is stored on both sides (the legacy elitea_issues #5410 decision, and
        * `notesMetaKey` in the Go handler) — there is no `notes` column.
        */
       notes: edits.notes,

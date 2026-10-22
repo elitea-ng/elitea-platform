@@ -128,8 +128,8 @@ export function useWikiToolkit(
  * internal/api/v2/toolkits/handler.go is a hand-written map plus the pinned SDK
  * snapshot, and neither carries a provider-supplied type — that is the provider
  * hub, ADR-0012 phase P3. So today a wiki toolkit exists only where something
- * outside the product put it there (pylon, or this repository's E2E seed), and
- * this constant is what those two and this reader agree on.
+ * outside the product put it there (the legacy runtime, or this repository's
+ * E2E seed), and this constant is what those two and this reader agree on.
  */
 const WIKI_TOOLKIT_TYPE = 'wikis';
 

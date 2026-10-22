@@ -27,7 +27,7 @@
  *     that package is never mounted, so the chi router never reaches it. #130's
  *     original diagnosis was corrected in its own comments.) The three verbs
  *     now have real handlers — services/elitea-main/internal/api/v2/eliteacore/
- *     users_write.go — speaking pylon's contract.
+ *     users_write.go — speaking the legacy API contract.
  *
  * So J22e/J22f/J22g below finally assert the headline acceptance. Note what
  * they do NOT do: assert on the response status. 200 is exactly what the broken

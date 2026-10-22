@@ -107,7 +107,7 @@ export interface ExchangeMcpOAuthTokenParams {
    * added by the real upstream `frontends/EliteaUI` fix, commit `6ebe8ff7`
    * ("fix: [EL-5697] Aha! mcp token issue"), which postdates that pin. See
    * `oauthFlow.ts`'s `exchangeAuthorizationCode` for the full evidence
-   * chain (including confirmation the currently-running legacy pylon
+   * chain (including confirmation the currently-running legacy
    * backend actually reads this field to decide whether to load a
    * DB-configured `client_secret`).
    */

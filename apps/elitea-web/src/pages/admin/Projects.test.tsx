@@ -7,9 +7,9 @@
  *  1. Rows render from the measured `{rows,total,counts}` body, with the three
  *     columns the pre-A14 server did not send (`owner_name`, `admin_names`,
  *     `status`) each coming from the RESPONSE rather than from a constant.
- *  2. Every enabled control REACHES THE SERVER with the body pylon defined.
- *     A control that renders but sends nothing is the class #130/#180 shipped;
- *     asserting only that a button exists would not catch it.
+ *  2. Every enabled control REACHES THE SERVER with the body the legacy API
+ *     defined. A control that renders but sends nothing is the class #130/#180
+ *     shipped; asserting only that a button exists would not catch it.
  *  3. Every control with NO server behind it is disabled with a stated reason —
  *     and the reason is the real one, not a placeholder. Only the Excel export
  *     is in that state now; create and delete left it when the provisioning
@@ -253,7 +253,8 @@ describe('Admin › Projects', () => {
     await waitFor(() => expect(writes()).toHaveLength(1));
     const request = writes()[0]!;
     expect(request.method).toBe('PUT-suspend');
-    // The id is in the PATH, mirroring pylon's `project_suspend/<mode>/<project_id>`.
+    // The id is in the PATH, mirroring the legacy
+    // `project_suspend/<mode>/<project_id>`.
     expect(request.url).toContain('/admin/project_suspend/administration/41');
     expect(request.body).toEqual({ suspended: true });
   });

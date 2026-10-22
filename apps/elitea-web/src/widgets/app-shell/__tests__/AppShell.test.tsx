@@ -48,7 +48,7 @@ function projectRow(id: number, name: string) {
 }
 
 /**
- * The project list with project 2 under pylon's reserved personal-project
+ * The project list with project 2 under the legacy reserved personal-project
  * storage name (`project_user_<uid>`).
  *
  * `orderedProjectOptions` substitutes the user-facing "Private" only for a row
@@ -67,7 +67,7 @@ function reservedNamePersonalProjectHandler() {
  * (`shared/api/generated/mutator.ts`), which is what both hooks read through,
  * so the seeded value has to be that envelope and not the bare body.
  *
- * The personal project (99) is in the list under pylon's reserved storage
+ * The personal project (99) is in the list under the legacy reserved storage
  * name, so `orderedProjectOptions` renames it to the user-facing "Private" —
  * the name the auto-select effect then persists.
  */

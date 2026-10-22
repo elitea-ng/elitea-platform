@@ -40,7 +40,7 @@ import {
  * (`internal/api/router.go`, migrations/shared/0111). They are separate from
  * `configuration.roles.permissions.edit`, which governs the matrix: moving a
  * checkbox and deleting the role the checkbox belongs to are different
- * privileges, and pylon separates them too.
+ * privileges, and the legacy runtime separates them too.
  */
 const PERMISSION_ROLE_CREATE = 'configuration.roles.roles.create';
 const PERMISSION_ROLE_EDIT = 'configuration.roles.roles.edit';

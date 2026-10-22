@@ -1,6 +1,6 @@
 /**
  * SW-sweep: does an "editor" project role let a user delete an ENTITY it did
- * not create? (elitea_issues #3421, checklist #3419 — legacy pylon reports.)
+ * not create? (elitea_issues #3421, checklist #3419 — legacy-runtime reports.)
  *
  * The legacy bug report says the Editor role could delete agents/pipelines/
  * credentials/toolkits/artifacts created by OTHER users, not only its own.

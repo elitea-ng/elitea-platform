@@ -5,7 +5,7 @@
  * 250-254), the response of
  * `GET /api/v2/artifacts/objects/{projectID}/{bucket}`.
  *
- * They previously described the LEGACY Pylon plugin's `S3ObjectListResponse`
+ * They previously described the LEGACY runtime plugin's `S3ObjectListResponse`
  * (`{name, contents:[{key,size,lastModified}]}`), an envelope elitea-main
  * never served — see issue #138.
  *

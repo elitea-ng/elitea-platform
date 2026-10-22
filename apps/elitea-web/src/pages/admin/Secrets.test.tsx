@@ -9,9 +9,10 @@
  *     `{projectID}` segment while admin_ui sends the placeholder `0` — so a
  *     client that fell back to `default` would silently edit project 0's vault.
  *     Every recorded URL is checked for the mode, not just for the path.
- *  2. **The bodies are pylon's.** Create sends `{secret}`; update sends the
- *     NESTED `{secret:{old_name, value}}`. A control that renders but sends the
- *     wrong shape is the #130/#180 class, and a status assertion cannot see it.
+ *  2. **The bodies are the legacy ones.** Create sends `{secret}`; update sends
+ *     the NESTED `{secret:{old_name, value}}`. A control that renders but sends
+ *     the wrong shape is the #130/#180 class, and a status assertion cannot see
+ *     it.
  *  3. **Plaintext appears only after the operator asks.** The listing carries a
  *     mask; the value must not be on screen until the reveal is clicked.
  *  4. **Internal secrets are read-only** — and shown, not hidden.

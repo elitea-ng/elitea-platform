@@ -3,7 +3,7 @@
  *
  * These assertions exist because nothing else in the repo could see the
  * defect they pin. The client had invented `/secrets/{mode}/…` with a mode
- * (`prompt_lib`) the pylon plugin does not define; #137 then read the 404s
+ * (`prompt_lib`) the legacy plugin does not define; #137 then read the 404s
  * as a Go double-mount bug and moved the server to match, which broke every
  * consumer that had always used the real legacy shape — elitea-sdk
  * (`runtime/clients/{client,sandbox_client}.py`), admin_ui

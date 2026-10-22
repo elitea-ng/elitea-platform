@@ -11,9 +11,10 @@
  *
  * The wire contract mirrors the Go handler in
  * `services/elitea-main/internal/api/v2/moderation/requests.go`, which in turn
- * mirrors the pylon originals (`legacy/plugins/admin/api/v2/moderation_statuses.py`
- * and `moderation_status.py`) the existing admin_ui client already speaks to —
- * same paths, same query parameters, same body keys, same row fields.
+ * mirrors the legacy originals
+ * (`legacy/plugins/admin/api/v2/moderation_statuses.py` and `moderation_status.py`)
+ * the existing admin_ui client already speaks to — same paths, same query
+ * parameters, same body keys, same row fields.
  *
  * ## What is reused from the six pages before this one
  *
@@ -35,11 +36,11 @@ import {
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
-/** Only `administration` has a handler, server-side and in pylon before it. */
+/** Only `administration` has a handler, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
 
 const QUEUE_URL = `/admin/moderation_statuses/${ADMIN_MODE}`;
-/** The decision endpoint takes the row id in the BODY. pylon's shape. */
+/** The decision endpoint takes the row id in the BODY. The legacy shape. */
 const DECISION_URL = `/admin/moderation_status/${ADMIN_MODE}`;
 
 /** The three values `status` can hold. The server refuses anything else. */
@@ -50,8 +51,9 @@ export type AppRequestStatus = 'pending' | 'approved' | 'rejected';
  * `centry.moderation_state` row.
  *
  * Every field is a REAL column of that table except `user_email`, which the
- * server resolves by joining `auth_core__user`: pylon attaches it the same way,
- * and the queue's "Requesting User" column is the only place it is read.
+ * server resolves by joining `auth_core__user`: the legacy runtime attached it
+ * the same way, and the queue's "Requesting User" column is the only place it
+ * is read.
  */
 export interface AppRequestRow {
   readonly id: number;
@@ -182,9 +184,9 @@ export function useAdminAppRequests(
  * decision would destroy whatever the requester stored. The Go handler answers
  * 400 to a body carrying any of them.
  *
- * `status` is narrowed to the two DECISIONS. pylon accepts `pending` here too,
- * which silently reopens a decided request with no record that it was ever
- * answered; the server refuses it.
+ * `status` is narrowed to the two DECISIONS. The legacy runtime accepts
+ * `pending` here too, which silently reopens a decided request with no record
+ * that it was ever answered; the server refuses it.
  */
 export interface AppRequestDecision {
   readonly id: number;

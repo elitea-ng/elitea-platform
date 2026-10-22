@@ -4,7 +4,7 @@
  *
  * THE LEGACY HAD NO SUCH SCREEN. The vendored bundle is always entered with a
  * toolkit already in its path (`/app/ui_host/deepwiki/ui/{project}/{toolkit}`,
- * DeepWikiApp.jsx:756-788), because pylon's provider hub linked to it. This
+ * DeepWikiApp.jsx:756-788), because the legacy provider hub linked to it. This
  * app has a nav rail instead, so the route has to resolve its own toolkit —
  * and a project can hold several wiki toolkits pointed at different
  * repositories, so it cannot simply guess.

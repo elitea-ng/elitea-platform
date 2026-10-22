@@ -5,9 +5,9 @@
  *
  * `entities/secret/api/secretApi.ts` addresses `…/secrets/{secrets,secret}/default/{projectID}`:
  * ONE project's vault, row `project-<id>` in `centry.secrets_data`. This module
- * addresses the `administration` mode of the same routes, which pylon maps to a
- * different handler over a different row — `admin` — whose contents are merged
- * into EVERY project's `{{secret.…}}` resolution
+ * addresses the `administration` mode of the same routes, which the legacy
+ * runtime maps to a different handler over a different row — `admin` — whose
+ * contents are merged into EVERY project's `{{secret.…}}` resolution
  * (`EngineBase.get_all_secrets` folds in the global vault as `shared_secrets`).
  *
  * They therefore share no endpoint, no body shape and no query key:
@@ -19,11 +19,11 @@
  * | create | `POST …/secrets/default/{id}` `{name, value}` | `POST …/secret/administration/0/{name}` `{secret}` |
  * | update | `PUT …/secret/default/{id}/{name}` `{name, value}` | `PUT …/secret/administration/0/{name}` `{secret:{old_name, value}}` |
  *
- * The `0` in every administration path is a PLACEHOLDER. Pylon's admin handlers
- * take a `project_id` parameter and ignore it entirely, and admin_ui has always
- * sent `0`; `services/elitea-main/internal/api/v2/secrets/admin.go` ignores it
- * the same way. It is kept because the route shape is pylon's and inventing a
- * different one is what #137 cost.
+ * The `0` in every administration path is a PLACEHOLDER. The legacy admin
+ * handlers take a `project_id` parameter and ignore it entirely, and admin_ui
+ * has always sent `0`; `services/elitea-main/internal/api/v2/secrets/admin.go`
+ * ignores it the same way. It is kept because the route shape is the legacy one
+ * and inventing a different one is what #137 cost.
  *
  * Not generated: `orval` builds from `v2.yaml`, which does not describe the
  * admin-panel routes. Handwritten in the same shape as `./adminUsersApi`.
@@ -47,11 +47,11 @@ import {
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
-/** The pylon mode that selects the global-vault handler. */
+/** The legacy mode that selects the global-vault handler. */
 const ADMIN_MODE = 'administration';
 
 /**
- * The ignored `project_id` segment. See this module's header — it is pylon's
+ * The ignored `project_id` segment. See this module's header — it is the legacy
  * route shape, not a project reference, and the server never keys on it.
  */
 const IGNORED_PROJECT_SEGMENT = '0';
@@ -183,7 +183,7 @@ export function useCreateAdminSecret(): UseMutationResult<void, Error, AdminSecr
 
 /**
  * `PUT /secrets/secret/administration/0/{name}` with the NESTED
- * `{"secret":{"old_name","value"}}` body pylon defined.
+ * `{"secret":{"old_name","value"}}` body the legacy API defined.
  *
  * `old_name` names the entry being replaced and the URL name is what it becomes,
  * so this one call expresses both a value change (`old_name === name`) and a

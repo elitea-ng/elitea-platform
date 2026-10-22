@@ -6,10 +6,10 @@
  * because eight branches in one render put that component past the repo's
  * complexity budget.
  *
- * Every outcome gets its own sentence. pylon joined English prose into one
- * textarea, so an operator could not tell "added" from "was already a member"
- * from "that project has no such role" without reading every line — and the
- * three call for three different next actions, or for none.
+ * Every outcome gets its own sentence. The legacy runtime joined English prose
+ * into one textarea, so an operator could not tell "added" from "was already a
+ * member" from "that project has no such role" without reading every line — and
+ * the three call for three different next actions, or for none.
  */
 import type { ReactNode } from 'react';
 

@@ -9,7 +9,7 @@
  *
  *  1. `backendCapabilities.ts` pinned `pipelineTriggers: false`, so
  *     `chatMessageOnly` was permanently true and the dropdown offered exactly
- *     one option. It had been pinned against pylon's DELETED
+ *     one option. It had been pinned against the legacy runtime's DELETED
  *     `/elitea_core/pipeline_trigger/.../trigger` route — but the Go stack
  *     serves two REPLACEMENT facilities, `/pipeline_schedules/...` and
  *     `/pipeline_triggers/...` (`internal/api/v2/pipelinetriggers`), which

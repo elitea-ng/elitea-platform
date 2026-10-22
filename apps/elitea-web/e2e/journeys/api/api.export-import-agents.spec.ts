@@ -219,8 +219,8 @@ test('EXP-003: the export is YAML frontmatter followed by the instructions', asy
     const exported = await exportMarkdown(request, createdId);
     expect(exported.text.startsWith('---\n'), 'the export must open with the YAML delimiter').toBe(true);
 
-    // The three keys any importer — this platform's, pylon's, or a hand-rolled
-    // one — has to find to reconstruct the agent.
+    // The three keys any importer — this platform's, the legacy app's, or a
+    // hand-rolled one — has to find to reconstruct the agent.
     expect(Object.keys(exported.parsed.frontmatter)).toEqual(
       expect.arrayContaining(['name', 'model', 'agent_type']),
     );

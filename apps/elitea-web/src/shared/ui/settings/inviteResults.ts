@@ -15,13 +15,13 @@
  *
  * ## The four outcomes, and why the server now names them
  *
- * pylon carried the same four states (added, already a member, malformed
- * address, write failed) only in English prose inside `msg`. Matching on prose
- * is a client that breaks when somebody rewords a log line, so elitea-main now
- * sends `outcome` beside `status`. `status` is unchanged, so this reader falls
- * back to it for a server that predates the field: an `ok` row with no
- * `outcome` is an invite, and an `error` row with no `outcome` is a failure
- * this module declines to classify further.
+ * The legacy runtime carried the same four states (added, already a member,
+ * malformed address, write failed) only in English prose inside `msg`. Matching
+ * on prose is a client that breaks when somebody rewords a log line, so
+ * elitea-main now sends `outcome` beside `status`. `status` is unchanged, so
+ * this reader falls back to it for a server that predates the field: an `ok`
+ * row with no `outcome` is an invite, and an `error` row with no `outcome` is a
+ * failure this module declines to classify further.
  */
 
 /** One of the four states an address can end in. */

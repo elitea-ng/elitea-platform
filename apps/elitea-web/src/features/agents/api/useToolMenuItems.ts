@@ -19,7 +19,7 @@ import { useListToolkits } from '@/shared/api/generated/toolkits/toolkits';
  *     `listToolkits`/`useListToolkits` (grepped `ListToolkitsParams` —
  *     there is none; `listToolkits(projectId)` takes no params at all). The
  *     baseline's `useGetCurrentMCPSchemas` issued a SEPARATE fetch with
- *     `params: { mcp: true }` against a richer pylon-era endpoint returning
+ *     `params: { mcp: true }` against a richer legacy-era endpoint returning
  *     a whole prebuilt-MCP-server catalogue distinct from the general
  *     toolkit-type map. That catalogue has no generated-client equivalent
  *     to fetch at all. Rather than inventing a second request this app's
@@ -56,7 +56,7 @@ import { useListToolkits } from '@/shared/api/generated/toolkits/toolkits';
  *     empty
  *     label and are filtered out below — matching the baseline's own
  *     `!!obj.label` guard exactly, just against a much sparser real
- *     catalogue than the baseline's pylon backend ever served. Tracked
+ *     catalogue than the baseline's legacy backend ever served. Tracked
  *     against the same class of gap already flagged for `entities/toolkit`'s
  *     `Toolkit` (not `ToolkitTypeSchemaMap`) shape.
  */

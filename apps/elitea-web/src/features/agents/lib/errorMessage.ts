@@ -13,7 +13,7 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
  * that function's whole dispatch table (`err.status === 403`,
  * `err.data.message`, a FastAPI/Pydantic validation-error array, ...) is
  * shaped for the OLD RTK-Query transport's error object AND the old
- * pylon/FastAPI backend's per-field validation envelope. The real Go
+ * legacy FastAPI backend's per-field validation envelope. The real Go
  * backend's documented error convention (`shared/api/generated/model/
  * applicationRelationList.zod.ts`'s own module doc: "General errors (4xx/5xx):
  * `{"error": "message"}`") carries a flat message, not a `[{loc, msg, ctx}]`

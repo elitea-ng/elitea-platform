@@ -12,9 +12,9 @@
  * ## What this dialog does NOT let the caller choose
  *
  * The OWNER and the granted ROLE. Both are server-side facts: the owner is the
- * authenticated caller (`g.auth.id` in pylon, the session principal here), and
- * the role is hardcoded `admin`. Neither is a body field, and offering either
- * here would be a privilege decision made in a form.
+ * authenticated caller (`g.auth.id` in the legacy runtime, the session
+ * principal here), and the role is hardcoded `admin`. Neither is a body field,
+ * and offering either here would be a privilege decision made in a form.
  *
  * ## Why a failure is rendered as a LIST
  *

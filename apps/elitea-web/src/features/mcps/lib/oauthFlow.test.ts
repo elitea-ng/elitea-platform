@@ -434,7 +434,7 @@ describe('startMcpAuthFlow', () => {
     deliverAuthResult({ code: 'auth-code-used-dcr' }, stateFromPopupUrl(popup));
 
     await flowPromise;
-    // The currently-running legacy pylon backend
+    // The currently-running legacy backend
     // (`mcp_oauth_proxy.py`: `if not client_secret and not data.used_dcr: ...`)
     // reads this field to decide whether to load a DB-configured
     // `client_secret` for the toolkit — omitting it would make the backend

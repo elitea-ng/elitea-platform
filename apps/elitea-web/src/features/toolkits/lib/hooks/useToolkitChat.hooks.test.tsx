@@ -929,8 +929,8 @@ describe('useToolkitChat', () => {
 
     /**
      * The critical one: `task_id` alone does NOT prove the Go runtime
-     * answered — legacy pylon honours `await_response=false` and returns a
-     * `task_id` of its own while serving no `/executions/…/events` stream.
+     * answered — the legacy runtime honours `await_response=false` and returns
+     * a `task_id` of its own while serving no `/executions/…/events` stream.
      * The stream failing to open is the real discriminator.
      */
     it('emits on socket.io after all when the execution stream fails to open (legacy backend returned a task_id)', async () => {

@@ -126,9 +126,9 @@ test.describe('publish validation: code-based rules', () => {
     // `model` with a name and NO `modelProjectId` writes
     // `llm_settings: {model_name: ...}` and nothing else — the exact shape an
     // import between projects leaves behind, and the one the case is about.
-    // (A version with no `model` at all is a DIFFERENT case: pylon raises its
-    // own "No LLM model configured" Critical for that, which this port does
-    // not have — see `incompleteModelSettings` in the Go handler.)
+    // (A version with no `model` at all is a DIFFERENT case: the legacy runtime
+    // raises its own "No LLM model configured" Critical for that, which this
+    // port does not have — see `incompleteModelSettings` in the Go handler.)
     const agent = await createAgentWithVersion(request, name, {
       instructions: PASSABLE_INSTRUCTIONS,
       model: { modelName: 'gpt-4o-mini' },
@@ -330,7 +330,7 @@ test.describe('publish validation: code-based rules', () => {
   });
 
   /* onetest: ELITEA-0173 — a zero-tag agent raises a Critical, not a Recommendation. #913: the only tags rule was
-     a Recommendation when `tagCount < 3`, which said the opposite of pylon's `TagsChecker` — that raises a
+     a Recommendation when `tagCount < 3`, which said the opposite of the legacy `TagsChecker` — that raises a
      Critical for no tags at all, a Warning when every tag is generic, and a Suggestion only ABOVE two tags
      (legacy/plugins/elitea_core/utils/publish_utils.py:2824-2851). All three are ported now. */
   test('an agent with zero tags is flagged as Critical', async ({ request }) => {
@@ -585,7 +585,7 @@ test.describe('publish validation: code-based rules', () => {
    * by nobody: `src/features/agents/index.ts` did not export it, because
    * `version_details.notes` "has no column on `application_versions`, no
    * property on `VersionWriteRequest`, and no branch in `UpdateVersion`".
-   * It never wanted a column — pylon stores the field inside
+   * It never wanted a column — the legacy runtime stores the field inside
    * `application_versions.meta` (elitea_issues #5410) — so all three halves
    * are closed without a migration, and the editor mounts the control
    * between SKILLS and INFORMATION, where the baseline puts it.

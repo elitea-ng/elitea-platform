@@ -9,7 +9,7 @@
  * which row they are rejecting.
  *
  * The reason is REQUIRED, and that is not merely a form nicety here: the server
- * refuses a rejection with an empty comment (pylon's own validator does not fire
+ * refuses a rejection with an empty comment (the legacy validator does not fire
  * when the key is absent, which is how a null-reason rejection got through
  * there), and the comment is what the requester is told. A dialog that let the
  * field through empty would be sending a request it knows will be refused.

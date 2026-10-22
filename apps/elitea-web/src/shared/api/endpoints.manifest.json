@@ -1092,7 +1092,7 @@
       ]
     },
     {
-      "$comment": "Issue #93 — SSE dispatch for an index_data run. Body is the Go `currentStartBody` contract (toolkit_config + tool_name index_data + tool_params), query `await_response=false&execution_contract=index.ingest.v1`; the response's `task_id` names the execution whose stream is `runtime.executionEvents` below. A `task_id` does NOT prove the Go runtime answered (legacy pylon returns one too), so the caller also treats a stream that fails to open as the socket.io fallback signal.",
+      "$comment": "Issue #93 — SSE dispatch for an index_data run. Body is the Go `currentStartBody` contract (toolkit_config + tool_name index_data + tool_params), query `await_response=false&execution_contract=index.ingest.v1`; the response's `task_id` names the execution whose stream is `runtime.executionEvents` below. A `task_id` does NOT prove the Go runtime answered (the legacy runtime returns one too), so the caller also treats a stream that fails to open as the socket.io fallback signal.",
       "id": "toolkits.startIndexExecution",
       "method": "POST",
       "path": "/elitea_core/test_toolkit_tool/prompt_lib/{projectId}",

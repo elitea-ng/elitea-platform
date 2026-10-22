@@ -318,9 +318,9 @@ test('a GitHub credential with no authentication is stored; one with half a pair
   /*
    * No authentication at all is DELIBERATE: `auth` is `required: false` in
    * the type's schema, because a GitHub Enterprise endpoint may be reachable
-   * anonymously. Half a pair is not: pylon refused a username without its
-   * password (and an app id without its private key), and so does the create
-   * route (configurations/required_fields.go), naming the pair, so a
+   * anonymously. Half a pair is not: the legacy runtime refused a username
+   * without its password (and an app id without its private key), and so does
+   * the create route (configurations/required_fields.go), naming the pair, so a
    * credential that can never authenticate is not saved as if it could.
    */
   const created: string[] = [];

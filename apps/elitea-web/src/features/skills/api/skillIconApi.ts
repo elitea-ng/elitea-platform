@@ -148,8 +148,8 @@ export async function bindSkillIcon(
   params: BindSkillIconParams,
 ): Promise<void> {
   // The server requires `name` and `url` to be present strings; a reset sends
-  // them empty rather than omitting them, which is exactly what pylon's
-  // UpdateIcon model accepts.
+  // them empty rather than omitting them, which is exactly what the legacy
+  // runtime's UpdateIcon model accepts.
   const body = params.iconMeta ?? { name: '', url: '' };
   await bindSkillIconRequest(projectId, Number(params.versionId), { ...body });
 }

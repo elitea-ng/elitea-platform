@@ -5,12 +5,13 @@
  * admin-panel routes. Handwritten in the same shape as `./adminUsersApi` and
  * `./adminAuditApi`.
  *
- * The wire contract mirrors pylon (`legacy/plugins/admin/api/v2/permissions.py`)
- * and its existing client (`frontends/admin_ui/frontend/src/api/usersApi.js`)
- * exactly — same paths, same body — because #137 showed what inventing a shape
- * costs. Its first path segment is the pylon MODE and selects which matrix is
- * being edited; this module calls it `scope` to keep it distinct from the target
- * mode in the second segment:
+ * The wire contract mirrors the legacy runtime
+ * (`legacy/plugins/admin/api/v2/permissions.py`) and its existing client
+ * (`frontends/admin_ui/frontend/src/api/usersApi.js`) exactly — same paths, same
+ * body — because #137 showed what inventing a shape costs. Its first path
+ * segment is the legacy MODE and selects which matrix is being edited; this
+ * module calls it `scope` to keep it distinct from the target mode in the second
+ * segment:
  *
  *   GET|PUT  /admin/permissions/administration/{administration|default|developer}
  *   GET|PUT  /admin/permissions/public/{targetMode}     ← the public project
@@ -48,7 +49,7 @@ export interface PermissionMatrixRow {
 
 export interface PermissionMatrixTarget {
   readonly scope: PermissionScope;
-  /** The pylon `target_mode`. Ignored by the server for the project scopes. */
+  /** The legacy `target_mode`. Ignored by the server for the project scopes. */
   readonly targetMode: string;
 }
 
@@ -136,7 +137,7 @@ export function useSavePermissionMatrix(): UseMutationResult<
 /**
  * `POST /admin/permissions/administration/default` — pushes the standard matrix
  * onto every shared project. Defined for that one target only, server-side and
- * in pylon before it.
+ * in the legacy runtime before it.
  */
 export function useSyncPermissionMatrix(): UseMutationResult<void, Error, void> {
   const queryClient = useQueryClient();
@@ -154,15 +155,15 @@ export function useSyncPermissionMatrix(): UseMutationResult<void, Error, void> 
  * `POST | PUT | DELETE /admin/roles/{scope}/{targetMode}`.
  *
  * The matrix above edits the CELLS of a table whose columns already exist.
- * These three change the columns themselves. pylon has had them all along
- * (`legacy/plugins/admin/api/v2/roles.py`); Go had only the two GET listings, so
- * a deployment that wanted a `security_reviewer` role had to INSERT it by hand,
- * and a hand-inserted role reached projects created afterwards and no existing
- * one.
+ * These three change the columns themselves. The legacy runtime had them all
+ * along (`legacy/plugins/admin/api/v2/roles.py`); Go had only the two GET
+ * listings, so a deployment that wanted a `security_reviewer` role had to
+ * INSERT it by hand, and a hand-inserted role reached projects created
+ * afterwards and no existing one.
  *
  * They take the SAME `{scope}/{targetMode}` pair the matrix does, because a role
- * belongs to exactly one of this page's four tabs. The bodies are pylon's:
- * `{name}` for create and delete, `{name, new_name}` for the rename.
+ * belongs to exactly one of this page's four tabs. The bodies are the legacy
+ * ones: `{name}` for create and delete, `{name, new_name}` for the rename.
  *
  * Handwritten, like the matrix calls above and for the same reason: `v2.yaml`
  * describes `GET /admin/roles/default/{project_id}` — the project role LISTING,
@@ -225,11 +226,11 @@ export function useRenameRole(): UseMutationResult<void, Error, RoleRenameVariab
 }
 
 /**
- * The name travels in the BODY, which is what pylon's client sends and what the
- * Go handler reads first, AND in the query string. A DELETE body is legal but is
- * dropped by enough intermediaries that a delete which silently became "no name
- * given" is a real failure mode; the server prefers the body and falls back to
- * `?name=`.
+ * The name travels in the BODY, which is what the legacy client sends and what
+ * the Go handler reads first, AND in the query string. A DELETE body is legal
+ * but is dropped by enough intermediaries that a delete which silently became
+ * "no name given" is a real failure mode; the server prefers the body and falls
+ * back to `?name=`.
  */
 export function useDeleteRole(): UseMutationResult<void, Error, RoleDeleteVariables> {
   const queryClient = useQueryClient();
