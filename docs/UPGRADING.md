@@ -214,8 +214,6 @@ it runs with `--enable-certificate-owner-ref`), so the new Certificates find
 the same CA and server Secrets; where one is gone it is issued again, and
 every client re-reads its certificate on the next handshake.
 
-||||||| parent of d5a46fa59 (feat(helm)!: one edge route — elitea-main serves / and relays /app and /docs to web)
-
 ## pgvector is removed: every vector is in Qdrant behind elitea-vector — BREAKING
 
 **Affects:** every install. PostgreSQL no longer needs (or gets) the `vector`

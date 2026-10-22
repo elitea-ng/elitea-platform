@@ -146,11 +146,14 @@ refuse "nats.service as a string (the old client key)" "nats" \
 # ── packaged ────────────────────────────────────────────────────────────────
 "$HELM" package "$CHART" -d "$TMP/pkg" >/dev/null
 tgz=("$TMP"/pkg/elitea-*.tgz)
-if ! tar -tzf "${tgz[0]}" | grep -q '^elitea/charts/nats/Chart.yaml$'; then
+# The listing goes to a file: under pipefail, `tar -t | grep -q` fails when
+# grep exits at its match and tar dies of SIGPIPE.
+tar -tzf "${tgz[0]}" > "$TMP/pkg-files.txt"
+if ! grep -qx 'elitea/charts/nats/Chart.yaml' "$TMP/pkg-files.txt"; then
   fail "the packaged chart does not carry charts/nats"
 fi
 # charts/elitea-sandbox-runtime is a symlink; the package must hold the files.
-if ! tar -tzf "${tgz[0]}" | grep -q '^elitea/charts/elitea-sandbox-runtime/templates/daemonset.yaml$'; then
+if ! grep -qx 'elitea/charts/elitea-sandbox-runtime/templates/daemonset.yaml' "$TMP/pkg-files.txt"; then
   fail "the packaged chart does not carry the sandboxRuntime subchart's files"
 fi
 "$HELM" template elitea "${tgz[0]}" "${COMMON[@]}" > "$TMP/pkg-on.yaml"
