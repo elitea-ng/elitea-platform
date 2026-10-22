@@ -15,6 +15,7 @@ import type {
   TurnStartRequest,
   TurnStarted,
   TurnStatus,
+  CustomCommand,
   Workspace,
   WorkspaceFile,
   WorkspaceIpc,
@@ -25,6 +26,7 @@ type FailableCommand =
   | 'remove'
   | 'bindProject'
   | 'files'
+  | 'commands'
   | 'startTurn'
   | 'cancelTurn'
   | 'turnStatus'
@@ -69,6 +71,8 @@ export interface FakeOptions {
   nextOpen?: Workspace | null;
   /** Every workspace's files for `workspace_files`; the fake answers the ones whose path contains the query. */
   files?: WorkspaceFile[];
+  /** What `commands_list` answers for every workspace (default: none). */
+  commands?: CustomCommand[];
 }
 
 /** What the host refuses a restore with, given the turn's offer. */
@@ -129,6 +133,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const needle = query.toLowerCase();
       const found = (options.files ?? []).filter((file) => file.path.toLowerCase().includes(needle));
       return Promise.resolve(found.slice(0, limit ?? 50));
+    },
+    commands() {
+      return failure('commands') ?? Promise.resolve([...(options.commands ?? [])]);
     },
     retryCommit(executionId) {
       calls.commitRetries.push(executionId);

@@ -25,6 +25,8 @@
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
 //! * [`skills`] — a skill picked with "/", applied to one turn;
+//! * [`slash_commands`] — a custom command picked with "/", expanded and
+//!   framed as the person's message;
 //! * [`framing`] — framing text the instructions carry but do not author;
 //! * [`environment`] — the host's `## Environment` section of the prompt;
 //! * [`session`] — a turn's session: reopened from `sessions.sqlite`, seeded
@@ -50,6 +52,7 @@ pub mod recorder;
 pub mod remote_tools;
 pub mod session;
 pub mod skills;
+pub mod slash_commands;
 pub mod tools;
 pub mod turn;
 

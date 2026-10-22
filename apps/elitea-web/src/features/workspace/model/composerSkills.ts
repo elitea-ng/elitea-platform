@@ -1,17 +1,21 @@
 /**
- * The selected agent's skills in the composer's "/" menu, as pure text
- * functions: which skills match what follows the "/", and which skill a
- * message invokes (its first word is `/<skill name>`).
+ * The skills in the composer's "/" menu, as pure text functions: which
+ * skills match what follows the "/", and which skill a message invokes
+ * (its first word is `/<skill name>`).
  *
- * Only the agent version's own skills are offered: they are what the
- * runtime holds for the turn (and what the host resolves the pick
- * against), as the web chat's "~" menu offers them.
+ * The agent version's own skills come first: they are what the runtime
+ * holds for the turn (and what the host resolves the pick against), as the
+ * web chat's "~" menu offers them. Then, desktop only, the bound project's
+ * other skills (`project`), which the host reads itself by id and applies
+ * to the one turn.
  */
 
 export interface ComposerSkill {
   id: string;
   name: string;
   description?: string | undefined;
+  /** One of the project's skills, not the agent version's: sent by id. */
+  project?: true | undefined;
 }
 
 /** How many skills the menu lists at most. */

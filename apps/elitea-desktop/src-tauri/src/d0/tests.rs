@@ -292,6 +292,7 @@ fn build_host(
             sandbox_deny,
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: Some(app.join("config")),
+            user_commands_dir: Some(app.join("config/commands")),
         })
         .unwrap(),
     );
@@ -376,6 +377,8 @@ fn request(workspace_id: &str) -> TurnRequest {
         skills: Vec::new(),
         compact: false,
         model: None,
+        project_skills: Vec::new(),
+        command: None,
     }
 }
 
@@ -1949,6 +1952,286 @@ async fn system_prompt_order_env_before_untrusted() {
             assert!(!system.contains(spelling.as_ref()), "{spelling}: {system}");
         }
     }
+}
+
+/// A command file of the workspace.
+fn write_command(h: &Harness, path: &str, text: &str) {
+    let path = h.folder.path().join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn command_pick(name: &str, arguments: &str) -> super::slash_commands::CommandPick {
+    super::slash_commands::CommandPick {
+        name: name.into(),
+        arguments: arguments.into(),
+    }
+}
+
+/// The person's message in the first `/llm` request.
+fn first_user_message(server: &MockServer) -> String {
+    let llm = seen(server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    first["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| message["content"].to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn commands_are_listed_with_their_source_workspace_shadowing_the_persons() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(
+        &h,
+        ".claude/commands/review.md",
+        "---\ndescription: Review the diff\nallowed-tools: Bash(*)\n---\nReview $ARGUMENTS.",
+    );
+    // The person's folder is created (0700) by the first listing.
+    assert_eq!(h.host.commands_list(&h.workspace_id).unwrap().len(), 1);
+    let user = h.app.path().join("config/commands");
+    assert!(user.is_dir());
+    std::fs::write(user.join("review.md"), "my review").unwrap();
+    std::fs::write(user.join("standup.md"), "my standup").unwrap();
+    let listed = h.host.commands_list(&h.workspace_id).unwrap();
+    let rows: Vec<(&str, &str, &str)> = listed
+        .iter()
+        .map(|c| (c.name.as_str(), c.source.as_str(), c.path.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("review", "workspace", ".claude/commands/review.md"),
+            ("standup", "user", "standup.md"),
+        ]
+    );
+    assert_eq!(listed[0].description.as_deref(), Some("Review the diff"));
+    assert_eq!(listed[0].ignored, ["allowed-tools"]);
+    let wire = serde_json::to_value(&listed[0]).unwrap();
+    assert_eq!(wire["source"], "workspace");
+    assert_eq!(wire["argument_hint"], Value::Null);
+    assert_eq!(
+        h.host.commands_list("nope").unwrap_err().code,
+        "workspace_unknown"
+    );
+    // Under the policy: no local work, no listing.
+    h.policy.set(None);
+    assert_eq!(
+        h.host.commands_list(&h.workspace_id).unwrap_err().code,
+        "local_work_disabled"
+    );
+}
+
+#[tokio::test]
+async fn command_turn_sends_framed_expansion_and_records_literal() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(
+        &h,
+        ".claude/commands/review.md",
+        "---\nallowed-tools: Bash(*)\nmodel: other-model\n---\nReview $1 against the checklist ($ARGUMENTS).\n!`rm -rf /`",
+    );
+    std::fs::write(h.folder.path().join("README.md"), "x").unwrap();
+    let mut req = request(&h.workspace_id);
+    // What the UI typed is not trusted: the host spells the literal itself.
+    req.prompt = "anything".into();
+    req.command = Some(command_pick("review", " src/a.rs  carefully "));
+    req.mentions = vec!["README.md".into()];
+    let started = h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let literal = "/review src/a.rs  carefully";
+    let with_mentions = format!("{literal}\n\nFiles the user referenced:\n- README.md");
+    // The model gets the framed expansion, then the arguments as typed.
+    let message = first_user_message(&h.server);
+    assert!(
+        message.contains("## Command /review (from the workspace, .claude/commands/review.md)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Review src/a.rs against the checklist (src/a.rs  carefully).\\n!`rm -rf /`\\n</command_template nonce=\\\""),
+        "{message}"
+    );
+    assert!(
+        message.contains("<command_template nonce=\\\""),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "Arguments: src/a.rs  carefully\\n\\nFiles the user referenced:\\n- README.md"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("allowed-tools"), "{message}");
+    // The front matter's model is not used.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    assert_eq!(first["model"], "gpt-test");
+    // The start, the commit and the history keep what the person typed.
+    let start = &seen(
+        &h.server,
+        "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+    )[0];
+    let start_body: Value = serde_json::from_str(&start.body).unwrap();
+    assert_eq!(start_body["user_input"], with_mentions);
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["user_message"]["content"], with_mentions);
+    assert!(!commit.body.contains("command_template"));
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let turn = turns.iter().find(|t| t.turn_id == started.turn_id).unwrap();
+    assert_eq!(turn.prompt, literal);
+}
+
+#[tokio::test]
+async fn command_changed_after_list_is_reread() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(&h, ".elitea/commands/ship.md", "OLD TEMPLATE");
+    let listed = h.host.commands_list(&h.workspace_id).unwrap();
+    assert_eq!(listed[0].description.as_deref(), Some("OLD TEMPLATE"));
+    write_command(&h, ".elitea/commands/ship.md", "NEW TEMPLATE");
+    let mut req = request(&h.workspace_id);
+    req.command = Some(command_pick("ship", ""));
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let message = first_user_message(&h.server);
+    assert!(message.contains("NEW TEMPLATE"), "{message}");
+    assert!(!message.contains("OLD TEMPLATE"), "{message}");
+    assert!(!message.contains("Arguments:"), "{message}");
+}
+
+#[tokio::test]
+async fn unknown_command_is_refused() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // A symlinked or denied command file is as good as absent.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("evil.md"), "OUTSIDE").unwrap();
+    std::fs::create_dir_all(h.folder.path().join(".claude/commands")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("evil.md"),
+        h.folder.path().join(".claude/commands/evil.md"),
+    )
+    .unwrap();
+    for name in ["deploy", "evil"] {
+        let mut req = request(&h.workspace_id);
+        req.command = Some(command_pick(name, "now"));
+        let error = h.host.start(req).await.unwrap_err();
+        assert_eq!(error.code, "command_unknown", "{name}");
+        assert!(
+            error.message.contains(&format!("/{name}")),
+            "{}",
+            error.message
+        );
+    }
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    let mut req = request(&h.workspace_id);
+    req.command = Some(command_pick("../evil", ""));
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
+    assert!(h.server.seen().is_empty(), "refused before any request");
+}
+
+/// The platform with project skills: 12 "Deploy", 13 large, 14 not the person's.
+fn with_project_skills(
+    inner: impl Fn(&Req) -> Res + Send + Sync + 'static,
+) -> impl Fn(&Req) -> Res + Send + Sync + 'static {
+    move |req: &Req| match req.path.as_str() {
+        "/api/v2/elitea_core/skill/prompt_lib/1/12" => Res::json(
+            200,
+            &json!({"id": "12", "project_id": "1", "name": "Deploy", "type": "skill",
+                "is_default": false, "instructions": "Deploy with care.",
+                "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z"}),
+        ),
+        "/api/v2/elitea_core/skill/prompt_lib/1/13" => Res::json(
+            200,
+            &json!({"id": "13", "name": "Huge", "instructions": "h".repeat(super::skills::MAX_SKILL_BYTES)}),
+        ),
+        "/api/v2/elitea_core/skill/prompt_lib/1/14" => {
+            Res::json(403, &json!({"error": "forbidden", "message": "no"}))
+        }
+        _ => inner(req),
+    }
+}
+
+#[tokio::test]
+async fn project_skill_is_fetched_by_host_not_ui() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.prompt = "/Deploy the release".into();
+    // The UI names the skill by id only; whatever text it might hold is not read.
+    // Picked twice (either spelling of the id), it is read once.
+    req.project_skills = vec![json!("12"), json!(12)];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let fetched = seen(&h.server, "/elitea_core/skill/prompt_lib/1/12");
+    assert_eq!(fetched.len(), 1);
+    assert_eq!(fetched[0].method, "GET");
+    assert_eq!(
+        fetched[0].headers.get("authorization").map(String::as_str),
+        Some("Bearer elnat_test_token")
+    );
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        system.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
+        "{system}"
+    );
+    // Applied to this turn only: the load_skill catalogue stays the version's.
+    assert!(system.contains("Available skill: Style."), "{system}");
+    assert!(!system.contains("Available skill: Deploy"), "{system}");
+    // A skill the person cannot read is refused before the turn starts.
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.project_skills = vec![json!(14)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "skill_unknown");
+    assert!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn project_skill_counts_toward_skill_limits() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // Five picks at most, version and project skills together: refused
+    // before any request.
+    let mut req = request(&h.workspace_id);
+    req.skills = vec!["style".into()];
+    req.project_skills = vec![json!(12), json!(12), json!(12), json!(12), json!(12)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    // 64 KiB of skill text together: the version's "Style" and the project's
+    // "Huge" are over it, refused (not cut) before the turn starts.
+    let mut req = request(&h.workspace_id);
+    req.skills = vec!["style".into()];
+    req.project_skills = vec![json!(13)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "skill_too_large");
+    assert!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty()
+    );
+    // Alone it fits.
+    let mut req = request(&h.workspace_id);
+    req.project_skills = vec![json!(13)];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
 }
 
 #[tokio::test]
@@ -3650,6 +3933,7 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
             sandbox_deny: super::turn::app_dirs_for_sandbox([Some(h.app.path().to_owned())]),
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: None,
+            user_commands_dir: None,
         })
         .unwrap(),
     )

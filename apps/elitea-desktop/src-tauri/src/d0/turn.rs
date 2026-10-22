@@ -78,6 +78,7 @@ use super::remote_tools::{
 };
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
+use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
@@ -178,6 +179,14 @@ pub struct TurnRequest {
     /// thread's model for its next turns. `None`: the thread's kept choice,
     /// else the agent's model.
     pub model: Option<ModelChoice>,
+    /// Project skills the person picked with "/" (their ids, as the UI
+    /// sent them): the host reads each itself and applies it like a
+    /// version skill, within the same limits.
+    pub project_skills: Vec<Value>,
+    /// A custom command the person picked with "/": the host reads and
+    /// expands it itself, and the expansion is what the model gets; the
+    /// prompt becomes the literal `/<name> <arguments>`.
+    pub command: Option<CommandPick>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -245,6 +254,9 @@ pub struct HostDeps {
     /// for every workspace (`rules.json`, src/rules.rs); `None`: no user
     /// rules.
     pub user_rules_dir: Option<PathBuf>,
+    /// The person's own custom commands (`<app config dir>/commands`,
+    /// `slash_commands`); `None`: only the workspace's.
+    pub user_commands_dir: Option<PathBuf>,
 }
 
 /// The app's resolved directories as deny entries, as given (the deny list
@@ -434,6 +446,35 @@ async fn start_turn(
             }),
         )
         .await?)
+}
+
+/// The project skills `request` picks, read by the host (`getSkill`) and
+/// admitted, in request order (an id picked twice is read once, at its
+/// first place), all read at once. A skill the person cannot read (`403`,
+/// `404`) is `skill_unknown`.
+async fn project_skills(
+    api: &PlatformApi,
+    request: &TurnRequest,
+) -> Result<Vec<InvokedSkill>, TurnError> {
+    let mut ids = skills::project_ids(&request.project_skills)?;
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(*id));
+    futures::future::try_join_all(ids.into_iter().map(|id| async move {
+        let skill = api
+            .project_skill(request.project_id, id)
+            .await
+            .map_err(|error| match error.status {
+                Some(403 | 404) => TurnError::new(
+                    "skill_unknown",
+                    format!(
+                        "The project has no skill {id} you can use. Pick one from the / menu, or check the project's skills in the web app."
+                    ),
+                ),
+                _ => TurnError::from(error),
+            })?;
+        skills::from_project(request.project_id, id, &skill)
+    }))
+    .await
 }
 
 /// The platform refused a start for its conversation or participant
@@ -1163,6 +1204,47 @@ impl AgentHost {
         mentions::files(&folder, query, limit)
     }
 
+    /// The workspace's folder as a command file is read from: `path_deny`
+    /// and the session's deny list both apply.
+    fn command_folder(
+        &self,
+        path: &str,
+        policy: &LocalWorkPolicy,
+    ) -> Result<elitea_local_tools::workspace::Workspace, TurnError> {
+        Ok(mentions::open(Path::new(path), &policy.path_deny)?.with_deny_list(self.host_deny()))
+    }
+
+    /// `commands_list`: the custom commands of a workspace and of the
+    /// person's own folder (created `0700` when missing), by name, the
+    /// workspace's shadowing the person's. Not under the workspace's claim:
+    /// it only reads, so it also answers while a turn runs.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`.
+    pub fn commands_list(&self, workspace_id: &str) -> Result<Vec<ListedCommand>, TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let folder = self.command_folder(&workspace.path, &policy)?;
+        if let Some(dir) = &self.deps.user_commands_dir
+            && !dir.exists()
+            && let Err(error) = elitea_local_index::fs::create_private_dir(dir)
+        {
+            log::warn!("the commands folder could not be created: {error}");
+        }
+        Ok(slash_commands::listed(
+            elitea_local_tools::slash_commands::list(
+                Some(&folder),
+                self.deps.user_commands_dir.as_deref(),
+            ),
+        ))
+    }
+
     /// The approval rule files (IPC `rules_*`, src/rules.rs).
     pub fn rule_files(&self) -> &Arc<RuleFiles> {
         &self.rules
@@ -1277,7 +1359,15 @@ impl AgentHost {
     ///
     /// A refusal (`secrets_withheld`, `local_work_disabled`, …) or a failed
     /// platform call.
-    pub async fn start(self: &Arc<Self>, request: TurnRequest) -> Result<TurnStarted, TurnError> {
+    pub async fn start(
+        self: &Arc<Self>,
+        mut request: TurnRequest,
+    ) -> Result<TurnStarted, TurnError> {
+        // A command's turn is recorded everywhere (history, start, commit)
+        // as the person typed it; only the model gets the expansion.
+        if let Some(pick) = &request.command {
+            request.prompt = slash_commands::literal(pick);
+        }
         let turn_id = uuid::Uuid::new_v4().to_string();
         let started_at = chrono::Utc::now().timestamp_millis();
         let tap = TurnTap::new(self.deps.emitter.clone(), self.deps.history.clone());
@@ -1544,6 +1634,8 @@ impl AgentHost {
             skills: Vec::new(),
             compact: false,
             model: None,
+            project_skills: Vec::new(),
+            command: None,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1618,10 +1710,33 @@ impl AgentHost {
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
-        skills::check(&request.skills)?;
+        skills::check(&request.skills, &request.project_skills)?;
+        if let Some(pick) = &request.command {
+            slash_commands::check(pick)?;
+        }
         // Checked first, so a refusal costs no request; again under the claim.
         let bound = self.bound_workspace(request)?;
         let policy = self.policy()?;
+        // A custom command is read again now (it may have changed since the
+        // menu listed it) and expanded here, before any request.
+        // The files are read off the async executor.
+        let command = match &request.command {
+            Some(pick) => {
+                let folder = self.command_folder(&bound.path, &policy)?;
+                let user_dir = self.deps.user_commands_dir.clone();
+                let pick = pick.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        slash_commands::resolve(Some(&folder), user_dir.as_deref(), &pick)
+                    })
+                    .await
+                    .map_err(|_| {
+                        TurnError::new("internal", "the command lookup stopped unexpectedly")
+                    })??,
+                )
+            }
+            None => None,
+        };
         // The "@" references, checked against the folder the way the
         // session sees it (path_deny included), become part of the prompt
         // every later step (start, run, commit) carries.
@@ -1635,6 +1750,10 @@ impl AgentHost {
             index.prioritise(&request.workspace_id, checked.iter().cloned());
         }
         drop(folder);
+        let command = command.map(|command| CommandTurn {
+            mentions: checked.clone(),
+            command,
+        });
         let request = &TurnRequest {
             prompt: mentions::with_mentions(&request.prompt, &checked),
             mentions: Vec::new(),
@@ -1743,6 +1862,13 @@ impl AgentHost {
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
+        // The project skills picked by id: read by the host under the
+        // person's token, checked with the version's picks before the start.
+        // Joined with the version's picks now, so a turn they do not fit is
+        // refused before its start; joined again only when the revalidation
+        // beside the start brings a changed version.
+        let project_skills = project_skills(&api, request).await?;
+        let invoked = skills::with_project(&invoked, &project_skills)?;
         let fresh_participant = match looked_up {
             Some(answer) => {
                 let answering = answer?;
@@ -1891,7 +2017,7 @@ impl AgentHost {
                 let (readmitted, invoked) = readmitted;
                 (
                     self.requested_model(request, readmitted, models.as_deref())?,
-                    invoked,
+                    skills::with_project(&invoked, &project_skills)?,
                 )
             }
             Some(Err(error)) => {
@@ -1910,6 +2036,7 @@ impl AgentHost {
             tap,
             project,
             invoked,
+            command,
             request: request.clone(),
             events: events.clone(),
             workspace: workspace_session,
@@ -1941,6 +2068,7 @@ impl AgentHost {
             tap,
             project,
             invoked,
+            command,
             request,
             events,
             workspace,
@@ -1987,6 +2115,7 @@ impl AgentHost {
             &admitted,
             &project,
             &invoked,
+            command.as_ref(),
             &started,
             &recorder,
             &sink,
@@ -2389,6 +2518,7 @@ impl AgentHost {
         admitted: &Admitted,
         project: &ProjectInstructions,
         invoked: &[InvokedSkill],
+        command: Option<&CommandTurn>,
         started: &LocalTurnStarted,
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
@@ -2681,7 +2811,18 @@ impl AgentHost {
         // approvals); on "continue" the same runner runs again on the same
         // session, within this execution, from the host's own prompt.
         let mut budget = StepBudget::new(admitted.step_limit);
-        let mut content = Content::new("user").with_text(request.prompt.clone());
+        // A command's expansion, framed under this turn's nonce, is the
+        // person's message to the model; anything else goes as typed.
+        let message = command.map_or_else(
+            || request.prompt.clone(),
+            |turn| {
+                mentions::with_mentions(
+                    &slash_commands::model_prompt(&turn.command, &nonce),
+                    &turn.mentions,
+                )
+            },
+        );
+        let mut content = Content::new("user").with_text(message);
         loop {
             match run_once(&runner, &session_id, content, sink, recorder).await? {
                 RunEnd::Answered => {
@@ -3488,6 +3629,12 @@ struct FailedCommit {
     entry: Arc<TurnEntry>,
 }
 
+/// A command's turn: the expansion and the "@" references listed under it.
+struct CommandTurn {
+    command: ExpandedCommand,
+    mentions: Vec<String>,
+}
+
 struct Prepared {
     /// The conversation as the UI named it (its id or UUID).
     conversation: String,
@@ -3499,6 +3646,8 @@ struct Prepared {
     project: ProjectInstructions,
     /// The skills the person picked for this turn, resolved.
     invoked: Vec<InvokedSkill>,
+    /// The custom command the person picked, read and expanded.
+    command: Option<CommandTurn>,
     request: TurnRequest,
     events: Arc<TurnEvents>,
     workspace: Arc<WorkspaceSession>,

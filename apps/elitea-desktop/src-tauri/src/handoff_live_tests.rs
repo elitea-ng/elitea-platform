@@ -210,6 +210,7 @@ async fn live_harness() -> LiveHarness {
             sandbox_deny: crate::d0::turn::app_dirs_for_sandbox([Some(app.path().to_owned())]),
             app_id: None,
             user_rules_dir: None,
+            user_commands_dir: None,
         })
         .unwrap(),
     );

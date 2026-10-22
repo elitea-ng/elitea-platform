@@ -263,6 +263,8 @@ describe('WorkspaceSessionPage', () => {
       http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/9`, () =>
         HttpResponse.json({ items: skills.map((s) => ({ ...s, project_id: '42', type: 'skill' })), total: skills.length, page: 1, page_size: skills.length, total_pages: 1 }),
       ),
+      // The project's own skills (the "/" menu's "Project skills"): none unless a test serves some.
+      http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, () => HttpResponse.json({ items: [], total: 0, page: 1, page_size: 100, total_pages: 0 })),
       http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
         HttpResponse.json({ rows: [{ id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false }], total: 1 }),
       ),
@@ -1250,6 +1252,127 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.prompt).toBe('/style tidy the README');
       expect(ipc.calls.started[0]?.skills).toEqual(['style']);
+    });
+
+    it('lists the custom commands by source after the host commands and sends the picked one as a command', async () => {
+      const ipc = createFakeWorkspaceIpc({
+        workspaces: [{ ...FOLDER, project_id: 42 }],
+        commands: [
+          { name: 'standup', description: 'My standup', argument_hint: null, source: 'user', path: 'standup.md', ignored: [] },
+          { name: 'review', description: 'Review the diff', argument_hint: '[files]', source: 'workspace', path: '.claude/commands/review.md', ignored: ['allowed-tools'] },
+        ],
+      });
+      const user = await ready(ipc, [
+        { id: '7', name: 'style', description: 'The house style' },
+        { id: '8', name: 'review', description: 'Hidden by the command' },
+      ]);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(11));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
+        '/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help', '/review', '/standup', '/style',
+      ]);
+      expect(within(menu).getByText('Commands in this workspace')).toBeInTheDocument();
+      expect(within(menu).getByText('Your commands')).toBeInTheDocument();
+      expect(within(menu).getByText('Review the diff · [files] · ignored: allowed-tools')).toBeInTheDocument();
+
+      await user.type(input, 'rev');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/review '));
+      await user.type(input, 'src/a.rs{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/review src/a.rs');
+      expect(ipc.calls.started[0]?.command).toEqual({ name: 'review', arguments: 'src/a.rs' });
+      expect(ipc.calls.started[0]?.skills).toEqual([]);
+    });
+
+    it('lists the custom commands and skills in /help', async () => {
+      const ipc = createFakeWorkspaceIpc({
+        workspaces: [{ ...FOLDER, project_id: 42 }],
+        commands: [{ name: 'standup', description: 'My standup', argument_hint: null, source: 'user', path: 'standup.md', ignored: [] }],
+      });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, '/');
+      await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(screen.getByTestId('workspace-command-menu')).getAllByRole('option')).toHaveLength(10));
+      await user.type(input, 'help');
+      await user.keyboard('{Enter}');
+      const help = await screen.findByTestId('workspace-help');
+      expect(help).toHaveTextContent('/standup — My standup (yours)');
+      expect(help).toHaveTextContent('/style — The house style');
+      expect(help).toHaveTextContent('/new — Start a new conversation');
+    });
+
+    it('offers the project\'s other skills in their own section and sends a picked one by id', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const listed: URL[] = [];
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, ({ request }) => {
+          listed.push(new URL(request.url));
+          return HttpResponse.json({
+            items: [
+              { id: '21', project_id: '42', name: 'deploy', description: 'Ship it', type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+              // The version carries it already: offered once, as the version's.
+              { id: '22', project_id: '42', name: 'Style', type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+            ],
+            total: 2,
+            page: 1,
+            page_size: 100,
+            total_pages: 1,
+          });
+        }),
+      );
+      const input = screen.getByTestId('chat-message-input');
+      // Read only once the composer is used.
+      expect(listed).toHaveLength(0);
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(10));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label')).slice(8)).toEqual(['/style', '/deploy']);
+      expect(within(menu).getByText('Project skills')).toBeInTheDocument();
+      expect(listed[0]?.searchParams.get('page_size')).toBe('100');
+
+      await user.type(input, 'dep');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/deploy '));
+      await user.type(input, 'the release{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/deploy the release');
+      expect(ipc.calls.started[0]?.skills).toEqual([{ source: 'project', id: '21' }]);
+    });
+
+    it('reads every page of the project\'s skills and labels them in /help', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const pages: string[] = [];
+      const row = (id: number, name: string) => ({ id: String(id), project_id: '42', name, type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' });
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, ({ request }) => {
+          const page = new URL(request.url).searchParams.get('page') ?? '1';
+          pages.push(page);
+          // A full first page, then a short second one holding the skill asked for.
+          // bulk-000 shares its id with the agent's "style": the /help rows are keyed by source too.
+          const items = page === '1' ? Array.from({ length: 100 }, (_, i) => row(i === 0 ? 7 : 100 + i, `bulk-${String(i).padStart(3, '0')}`)) : [row(300, 'last-page')];
+          return HttpResponse.json({ items, total: 101, page: Number(page), page_size: 100, total_pages: 2 });
+        }),
+      );
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, '/last');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/last-page']));
+      expect(pages).toEqual(['1', '2']);
+      // /help labels a project skill as the project's, beside the agent's of the same id.
+      await user.clear(input);
+      await user.type(input, '/help{Enter}');
+      const help = await screen.findByTestId('workspace-help');
+      expect(help).toHaveTextContent('/bulk-000 — A skill of this project');
+      expect(help).not.toHaveTextContent('A skill of this agent');
+      expect(help).toHaveTextContent('/style — The house style');
     });
 
     it('sends no skill when the message does not start with one', async () => {

@@ -527,6 +527,7 @@ async fn harness_full(
             sandbox_deny: crate::d0::turn::app_dirs_for_sandbox([Some(app.path().to_owned())]),
             app_id: None,
             user_rules_dir: None,
+            user_commands_dir: None,
         })
         .unwrap(),
     );
@@ -893,6 +894,8 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         skills: Vec::new(),
         compact: false,
         model: None,
+        project_skills: Vec::new(),
+        command: None,
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -1703,6 +1706,8 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         skills: Vec::new(),
         compact: false,
         model: None,
+        project_skills: Vec::new(),
+        command: None,
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
