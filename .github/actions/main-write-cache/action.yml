@@ -20,9 +20,9 @@ description: >-
 # ── How ─────────────────────────────────────────────────────────────────────
 #
 # A composite action cannot declare a post step of its own, but the actions it
-# uses keep theirs. The writer therefore uses the full `actions/cache@v4`,
+# uses keep theirs. The writer therefore uses the full `actions/cache@v6`,
 # whose save runs as a post step after the job's own steps; the reader uses
-# `actions/cache/restore@v4`, which never saves. Exactly one of the two runs.
+# `actions/cache/restore@v6`, which never saves. Exactly one of the two runs.
 #
 # The write condition is spelled literally on the writer step, not passed in:
 # an input would let a caller turn writing on from a pull request, and
@@ -56,7 +56,7 @@ runs:
     - name: Restore, and save at job end (push to main)
       id: writer
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ inputs.path }}
         key: ${{ inputs.key }}
@@ -64,7 +64,7 @@ runs:
     - name: Restore only (pull requests and every other run)
       id: reader
       if: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: ${{ inputs.path }}
         key: ${{ inputs.key }}

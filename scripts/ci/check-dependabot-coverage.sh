@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Every dependency manifest in this repository is either scanned by
+# Every dependency manifest in this repository (composite actions included) is either scanned by
 # .github/dependabot.yml or exempt here with a reason.
 #
 # WHY A GATE AT ALL. A dependabot configuration is a list of directories, and
@@ -83,8 +83,11 @@ is_exempt() {
   printf '%s\n' "$EXEMPT" | grep -q "^$1[[:space:]]"
 }
 
+# A composite action's action.yml is the github-actions manifest: the `uses:`
+# pins inside it are dependencies like any other, and the `/` entry (which
+# covers .github/workflows) does not reach them.
 manifests=$(git ls-files \
-  | grep -E '(^|/)(go\.mod|Cargo\.toml|package\.json|pyproject\.toml)$' \
+  | grep -E '(^|/)(go\.mod|Cargo\.toml|package\.json|pyproject\.toml)$|^\.github/actions/(.+/)?action\.ya?ml$' \
   | grep -v node_modules || true)
 
 if [ -z "$manifests" ]; then
@@ -128,11 +131,11 @@ done
 # Direction 2: an entry that points nowhere.
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue   # the repository root, for github-actions
-  # ANY one of the four is enough. The first version of this asked `ls` for
+  # ANY one of them is enough. The first version of this asked `ls` for
   # all four at once, and `ls` exits non-zero when ANY operand is missing — so
   # every real directory failed, because no directory holds all four.
   found=0
-  for name in go.mod Cargo.toml package.json pyproject.toml; do
+  for name in go.mod Cargo.toml package.json pyproject.toml action.yml action.yaml; do
     if [ -f "$dir/$name" ]; then
       found=1
       break
