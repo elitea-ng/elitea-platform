@@ -72,7 +72,9 @@ restrict `sourceRepos` in an Argo CD AppProject for a git source.
    server.
 2. Delete `llmGateway.preStop.command` and `llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS`
    from your values (the latter unless you want it above the ceiling).
-3. Check that the cluster runs Kubernetes 1.30 or newer.
+3. Check that the cluster runs Kubernetes 1.30 or newer. On an older one,
+   set `main.preStop.sleepSeconds: 0` and `llmGateway.preStop.sleepSeconds:
+   0` (no preStop hook; the drain still runs after SIGTERM).
 4. With Argo CD and a git source, add the two repositories above to the
    AppProject's `sourceRepos`.
 5. To uninstall a release with `keda.enabled: true`, delete its
