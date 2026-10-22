@@ -5,6 +5,8 @@ on:
     paths:
       - "deploy/helm/**"
       - "deploy/argocd/**"
+      - "deploy/scripts/drain-workers.sh"
+      - "deploy/tests/**"
       - ".github/workflows/helm-lint.yml"
       # The capability gate below reads the required runtime names straight out
       # of runtimecomposition/config.go. Without this path a pull request that
@@ -47,6 +49,8 @@ on:
     paths:
       - "deploy/helm/**"
       - "deploy/argocd/**"
+      - "deploy/scripts/drain-workers.sh"
+      - "deploy/tests/**"
       - "services/elitea-main/internal/runtimecomposition/**"
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
@@ -285,6 +289,19 @@ jobs:
           python3 -c "import yaml" 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-egress-proxy.sh
+
+      # Four suites that passed and that no job ran (the deploy/ audit of the
+      # one-chart PR found them): the default-deny NetworkPolicies, the
+      # elitea-main platform listener, the sandbox image references, and the
+      # worker drain script (a kubectl stub; no cluster).
+      - name: NetworkPolicies, platform listener, sandbox images, worker drain
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-network-policies.sh
+          bash deploy/helm/tests/render-platform-listener.sh
+          bash deploy/helm/tests/render-sandbox-images.sh
+          bash deploy/tests/drain-workers-test.sh
 
       # externalSecrets: one ExternalSecret per Secret the pods read. The test
       # derives the read set from the RENDERED workloads, so a template that

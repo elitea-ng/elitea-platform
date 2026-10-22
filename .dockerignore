@@ -54,9 +54,6 @@
 coverage.out
 **/*.test
 
-# ── Deploy runtime data (not source) ─────────────────────────────────────────
-/deploy/data
-
 # ── Tooling / IDE / OS artefacts ─────────────────────────────────────────────
 .DS_Store
 **/.DS_Store

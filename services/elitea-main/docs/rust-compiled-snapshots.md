@@ -5,6 +5,10 @@ Package bundles remain separate from compiled snapshots.
 The feature stays disabled by default.
 Runtime acceptance and performance measurements remain separate gates.
 
+Operator material: [startup material](../../../deploy/docs/rust-compiled-snapshots-startup.md),
+the [release manifest](../../../deploy/runtime/rust-compiled-release-manifest.md) and the
+[Helm values example](../../../deploy/runtime/rust-compiled-snapshots.values.example.yaml).
+
 ## Operator authority
 
 Set `ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED=true` only after worker and supervisor assembly passes acceptance.

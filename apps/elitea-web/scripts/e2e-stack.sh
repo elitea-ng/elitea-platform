@@ -238,7 +238,6 @@ case "$CMD" in
     echo "  ✓ oidc-mock user: e2e-viewer@autotest.local"
 
     # ── 2. Insert matching DB rows ─────────────────────────────────────────
-    # Adapted from deploy/scripts/seed-staging-oidc-user.sql.
     # DB: elitea (local compose default), user: elitea, host: postgres.
     # Write SQL to a temp file — avoids bash 3.x heredoc-in-subshell limits.
     # The X placeholders must be the LAST characters of the template: BSD mktemp

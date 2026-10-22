@@ -122,8 +122,8 @@ services:
       - <worker-1-spool>:/mnt/index-worker-1/output-spool:ro
 ```
 
-Centry owns the concrete service composition, secret objects, network policy
-and complete replica-specific volume list.
+Your deployment owns the concrete service composition, secret objects,
+network policy and complete replica-specific volume list.
 
 ## Stage B: activate version 2
 
@@ -176,7 +176,7 @@ has no binary rollback to version 1, which was Stage B's rule all along.
 
 | plugin | what now serves it |
 | --- | --- |
-| `indexer_worker` | `services/elitea-worker-python` — the agent worker serves index ingest on the same command stream and consumer group as agent execution |
+| `indexer_worker` | `services/elitea-worker-rust` — the agent worker serves index ingest on the same command stream and consumer group as agent execution (the Python worker that first took it over was retired in #1312) |
 | `worker_core` | the worker's own runtime; replaced with it |
 | `provider_worker` | ADR-0012 P3. The Go successor owns provider descriptors, and no hybrid route reaches this plugin |
 | `runtime_engine_litellm` | **dropped**, and already dropped before this change (#323). It ran a LiteLLM proxy inside the container — a second LLM data plane with no budget and no billing. The LLM data plane is `elitea-llm-gateway`, reached through `elitea-main` at `/llm/v1`. Nothing in the repository configures it any more |
