@@ -443,14 +443,22 @@ cmd_verify() {
   # The migrate Job's pod carries the same name label, so the component is
   # excluded: with it included the selector's first item is whichever pod the
   # API returns first, and a green run would be luck.
+  # The engine is a NATIVE sidecar: an init container with restartPolicy
+  # Always, so the kubelet stops it only after the host has exited. Its
+  # status must say it is running beside the host, not that it completed.
+  local engine_policy engine_running
   containers="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{.items[0].spec.containers[*].name}')"
-  if [ "$containers" != "elitea-deepwiki engine" ]; then
-    fail "the provider pod's containers are '${containers}'; expected 'elitea-deepwiki engine'"
+      -o jsonpath='{.items[0].spec.containers[*].name} {.items[0].spec.initContainers[*].name}')"
+  engine_policy="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
+      -o jsonpath='{.items[0].spec.initContainers[?(@.name=="engine")].restartPolicy}')"
+  engine_running="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
+      -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="engine")].state.running.startedAt}')"
+  if [ "$containers" != "elitea-deepwiki engine" ] || [ "$engine_policy" != "Always" ] || [ -z "$engine_running" ]; then
+    fail "the provider pod's containers are '${containers}' (engine restartPolicy '${engine_policy}', running since '${engine_running}'); expected 'elitea-deepwiki engine' with the engine a running native sidecar"
   else
     kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{range .items[0].spec.containers[*]}   {.name}{"\t"}{.image}{"\n"}{end}'
-    pass "containers: ${containers}"
+      -o jsonpath='{range .items[0].spec.containers[*]}   {.name}{"\t"}{.image}{"\n"}{end}{range .items[0].spec.initContainers[*]}   {.name}{"\t"}{.image} (native sidecar){"\n"}{end}'
+    pass "containers: ${containers} (the engine is a running native sidecar)"
   fi
   local host_runner engine_runner
   host_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
