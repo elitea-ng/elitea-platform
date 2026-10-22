@@ -56,7 +56,6 @@ type PostgresStore struct {
 	claimCheck     time.Duration
 	reconcileEvery time.Duration
 	ownerGrace     time.Duration
-	legacyGrace    time.Duration
 
 	// claimMu guards claim, the dedicated connection that holds this
 	// owner's liveness lock; held mirrors whether it does.
@@ -66,11 +65,9 @@ type PostgresStore struct {
 
 	// reconcileMu serialises Reconcile; freeSince is when this process first
 	// saw each claimed owner's lock free, in a run of free sightings with no
-	// held one between; legacySeen is when it first saw each legacy owner
-	// with rows in flight.
+	// held one between.
 	reconcileMu sync.Mutex
 	freeSince   map[string]time.Time
-	legacySeen  map[string]time.Time
 
 	stop      chan struct{}
 	done      chan struct{}
@@ -91,9 +88,9 @@ const ownerLockSeed = 0x53_41_48_31 // "SAH1"
 // claimedOwnerPrefix marks the owner of a row written by a process that holds
 // a liveness lock. A row without it was written by an image from before
 // #1359, which takes no lock: an absent lock says nothing about whether that
-// process is alive, so Reconcile does not read one as death. Those rows fall
-// back to legacyOwnerGrace instead, which keeps a rolling deploy from
-// terminating what the old replicas are still running.
+// process is alive, so Reconcile does not read one as death. Those rows keep
+// the rule that image applied itself: terminated by the startup pass of a
+// process starting, never by the periodic one.
 const claimedOwnerPrefix = "claim1:"
 
 const (
@@ -104,11 +101,6 @@ const (
 	// and re-takes the lock within that check's timeout (up to one more), so
 	// a sibling waits longer than both before it reads a free lock as death.
 	ownerGraceChecks = 3
-	// legacyOwnerGrace is how long this process must have seen a legacy
-	// owner's rows in flight before it terminates them. It covers a rolling
-	// deploy: the old replicas are gone well within it, and their rows are
-	// orphans after it.
-	legacyOwnerGrace = 15 * time.Minute
 )
 
 // StoreOption tunes a PostgresStore.
@@ -130,12 +122,6 @@ func WithReconcileInterval(d time.Duration) StoreOption {
 // The default is ownerGraceChecks claim-check intervals.
 func WithOwnerGrace(d time.Duration) StoreOption {
 	return func(s *PostgresStore) { s.ownerGrace = d }
-}
-
-// WithLegacyOwnerGrace sets how long a legacy (pre-#1359) owner's in-flight
-// rows are left alone after this process first sees them.
-func WithLegacyOwnerGrace(d time.Duration) StoreOption {
-	return func(s *PostgresStore) { s.legacyGrace = d }
 }
 
 // OwnerID is hostname plus pid: in Kubernetes the hostname is the pod name,
@@ -169,9 +155,9 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	}
 	store := &PostgresStore{
 		pool: pool, dsn: dsn, owner: claimedOwnerPrefix + owner, logger: logger,
-		claimCheck: claimCheckInterval, reconcileEvery: reconcileInterval, legacyGrace: legacyOwnerGrace,
-		freeSince: map[string]time.Time{}, legacySeen: map[string]time.Time{},
-		stop: make(chan struct{}), done: make(chan struct{}),
+		claimCheck: claimCheckInterval, reconcileEvery: reconcileInterval,
+		freeSince: map[string]time.Time{},
+		stop:      make(chan struct{}), done: make(chan struct{}),
 	}
 	for _, option := range options {
 		option(store)
@@ -235,7 +221,7 @@ func (s *PostgresStore) supervise() {
 			s.checkClaim()
 		case <-reconcile.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.reconcileEvery)
-			if _, err := s.Reconcile(ctx); err != nil {
+			if _, err := s.reconcile(ctx, false); err != nil {
 				s.logger.Warn("could not reconcile orphaned invocations", "error", err)
 			}
 			cancel()
@@ -424,9 +410,10 @@ func (s *PostgresStore) Prune(ctx context.Context, olderThan time.Duration) (int
 	return int(tag.RowsAffected()), nil
 }
 
-// Reconcile terminates in-flight rows left behind by an owner that is gone.
-// Called at startup and every reconcileEvery after: a row still
-// pending/running whose owner is gone is work no live process is doing;
+// Reconcile is the startup pass: it terminates in-flight rows left behind
+// by an owner that is gone. The store runs the same pass every
+// reconcileEvery itself (reconcile), except for legacy rows (below). A row
+// still pending/running whose owner is gone is work no live process is doing;
 // leaving it would make a poll return InProgress forever. It becomes a
 // terminal error whose message says what happened, which is an answer the
 // caller can act on.
@@ -439,11 +426,22 @@ func (s *PostgresStore) Prune(ctx context.Context, olderThan time.Duration) (int
 //     second replica starting killed the first one's work — and so is the
 //     row of an owner whose session dropped a moment ago and is re-taking
 //     the lock (checkClaim).
-//   - no prefix (an image from before #1359, which takes no lock): gone once
-//     this process has seen its rows in flight for legacyGrace, so a rolling
-//     deploy does not kill what the old replicas are still running.
+//   - no prefix (an image from before #1359, which takes no lock and leaves
+//     no other sign of life): gone at the startup pass, never at the
+//     periodic one. That is the rule the old image itself applied — its only
+//     reconcile ran when a process started, and it terminated every row
+//     another owner had in flight — so an old-image owner is treated
+//     exactly as it was before the upgrade, with no time guess. A rolling
+//     deploy therefore ends what an old replica is running when a new one
+//     starts, as before; a row an old replica accepted after the last new
+//     replica started is ended at the next process start.
 //   - no owner at all: gone.
 func (s *PostgresStore) Reconcile(ctx context.Context) (int, error) {
+	return s.reconcile(ctx, true)
+}
+
+// reconcile is one pass; startup says whether legacy rows are terminated.
+func (s *PostgresStore) reconcile(ctx context.Context, startup bool) (int, error) {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 	conn, err := s.pool.Acquire(ctx)
@@ -482,22 +480,12 @@ func (s *PostgresStore) Reconcile(ctx context.Context) (int, error) {
 				delete(s.freeSince, owner)
 			}
 		}
-		for owner := range s.legacySeen {
-			if !inFlight[owner] {
-				delete(s.legacySeen, owner)
-			}
-		}
 	}()
 	for _, owner := range owners {
 		switch {
 		case owner == nil:
 		case !strings.HasPrefix(*owner, claimedOwnerPrefix):
-			seen, ok := s.legacySeen[*owner]
-			if !ok {
-				s.legacySeen[*owner] = now
-				continue
-			}
-			if now.Sub(seen) < s.legacyGrace {
+			if !startup {
 				continue
 			}
 		default:

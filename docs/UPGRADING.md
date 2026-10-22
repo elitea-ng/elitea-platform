@@ -38,14 +38,24 @@ newest entry is first.
   renders the variable itself and refuses it in `<app>.env`.
 * Rows written by this release carry an owner prefixed `claim1:`. Rows from
   an older image carry no prefix, and that image takes no lock, so a free
-  lock means nothing for them: a new replica leaves them alone for 15
-  minutes after it first sees them in flight, then terminates them. A
-  rolling deploy therefore no longer cuts off what the old replicas are
-  still running.
+  lock means nothing for them. They keep the rule the older image applied
+  itself: a process that **starts** terminates every such row in flight
+  (its startup reconcile), and the periodic pass never touches them. So
+  during a rolling deploy from an older image, a new replica starting ends
+  what the old replicas are running at that moment — exactly what an
+  old replica starting did before.
 
 **What to do.**
 
-* Nothing. A pooler in front of the database must keep a client's session
+* To keep in-flight DeepWiki/Inventory runs across the upgrade from an
+  older image, let them finish before rolling; otherwise they end with "The service restarted while this
+  invocation was running", as on any restart before.
+* A run an old replica accepted after the last new replica started is not
+  ended until some host process starts again. If one still reports in
+  progress once the rollout is done, restart the hosts once
+  (`kubectl rollout restart deployment/elitea-deepwiki` /
+  `deployment/elitea-inventory`).
+* A pooler in front of the database must keep a client's session
   (session pooling, not transaction pooling) for the lock to mean anything;
   point `<PREFIX>DATABASE_URL` at PostgreSQL or at a session-mode pool.
 

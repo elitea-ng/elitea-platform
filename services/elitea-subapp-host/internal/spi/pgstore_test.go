@@ -324,24 +324,32 @@ func TestPostgresStoreUpdateLeavesARowAnotherOwnerTerminated(t *testing.T) {
 }
 
 // A row from an image before #1359 names an owner that takes no lock, so a
-// free lock says nothing about it. During a rolling deploy that owner is
-// alive; the new replica leaves its rows for legacyGrace after first seeing
-// them, then treats them as orphans.
-func TestPostgresStoreGivesALegacyOwnerAGraceBeforeReconcilingIt(t *testing.T) {
-	store, assertions := testStore(t, "pod-new/1", spi.WithLegacyOwnerGrace(300*time.Millisecond))
+// free lock says nothing about it, and nothing else tells whether it is
+// alive. It keeps the rule the old image applied itself: a process STARTING
+// terminates it (its startup reconcile), the periodic pass never does, however
+// long it has been in flight.
+func TestPostgresStoreEndsALegacyOwnersRowsAtStartupOnly(t *testing.T) {
+	store, assertions := testStore(t, "pod-new/1")
 	ctx := context.Background()
-	if _, err := assertions.Exec(ctx, `INSERT INTO invocations (invocation_id, toolkit_name, tool_name, status, owner) VALUES ('invocation_legacy', 'Wikis', 'generate_wiki', 'running', 'pod-old/7')`); err != nil {
+	if _, err := assertions.Exec(ctx, `INSERT INTO invocations (invocation_id, toolkit_name, tool_name, status, owner, created_at) VALUES ('invocation_legacy', 'Wikis', 'generate_wiki', 'running', 'pod-old/7', now() - interval '1 day')`); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.Reconcile(ctx); err != nil || n != 0 {
-		t.Fatalf("a legacy owner's row was reconciled on first sight: %d %v", n, err)
+	for range 3 {
+		if n, err := store.ReconcilePeriodic(ctx); err != nil || n != 0 {
+			t.Fatalf("the periodic pass reconciled a legacy owner's row: %d %v", n, err)
+		}
 	}
-	if n, err := store.Reconcile(ctx); err != nil || n != 0 {
-		t.Fatalf("a legacy owner's row was reconciled inside its grace: %d %v", n, err)
+	if live, _ := store.Get(ctx, "Wikis", "generate_wiki", "invocation_legacy"); live.Status != "running" {
+		t.Fatalf("a legacy owner's row was touched by the periodic pass: %+v", live)
 	}
-	time.Sleep(350 * time.Millisecond)
-	if n, err := store.Reconcile(ctx); err != nil || n != 1 {
-		t.Fatalf("a legacy owner's row past its grace: reconciled %d %v, want 1", n, err)
+	// A process starts: its startup pass ends the row at once.
+	restarted, err := spi.NewPostgresStore(ctx, dsnOf(t, store), "pod-new/2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if n, err := restarted.Reconcile(ctx); err != nil || n != 1 {
+		t.Fatalf("the startup pass: reconciled %d %v, want the legacy row", n, err)
 	}
 	if orphan, _ := store.Get(ctx, "Wikis", "generate_wiki", "invocation_legacy"); orphan.Status != "stopped" || orphan.Result["status"] != "Error" {
 		t.Fatalf("legacy orphan %+v", orphan)
