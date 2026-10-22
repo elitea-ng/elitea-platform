@@ -102,7 +102,7 @@ test("actions cache gated on ref only is refused", () => {
 });
 
 test("actions cache save without condition is refused", () => {
-  assertWrites("- uses: actions/cache/save@v4\n  with: {path: x, key: k}\n", "actions/cache/save saves the cache");
+  assertWrites("- uses: actions/cache/save@v6\n  with: {path: x, key: k}\n", "actions/cache/save saves the cache");
 });
 
 test("actions cache gated on main push passes", () => {
