@@ -16,7 +16,9 @@
 #      http port only, the BackendConfig (timeout 3600, draining, HTTP
 #      /healthz on 8080, optional Cloud Armor), the FrontendConfig (redirect,
 #      optional SSL policy) and the binding annotation on the Ingress;
-#   3. className gce turns it on too, and sets no second class annotation;
+#   3. className gce / gce-internal turns it on too, and is rendered as the
+#      class ANNOTATION with no spec.ingressClassName (GKE has no IngressClass
+#      of that name, so ingressClassName: gce would be ignored: no LB);
 #   4. create=false renders neither object and binds the operator's names;
 #   5. TLS secretName and the cert-manager annotations (issuer, kind, group);
 #   6. the refusals: gke with gatewayApi, issuer with clusterIssuer.
@@ -109,8 +111,16 @@ fi
 if render classname "${INGRESS[@]}" --set main.ingress.className=gce; then
   f="$WORK/classname.yaml"
   expect "className gce turns the BackendConfig on" "$(count BackendConfig "$f")" "1"
-  expect "className gce: no second class annotation" "$(ing_ann kubernetes.io/ingress.class "$f")" ""
-  expect "className gce: ingressClassName kept" "$(q 'select(.kind == "Ingress") | .spec.ingressClassName' "$f")" "gce"
+  expect "className gce becomes the class annotation" "$(ing_ann kubernetes.io/ingress.class "$f")" "gce"
+  expect "className gce: no spec.ingressClassName" "$(q 'select(.kind == "Ingress") | .spec.ingressClassName // "none"' "$f")" "none"
+fi
+if render classname-internal "${INGRESS[@]}" --set main.ingress.className=gce-internal; then
+  f="$WORK/classname-internal.yaml"
+  expect "className gce-internal becomes the class annotation" "$(ing_ann kubernetes.io/ingress.class "$f")" "gce-internal"
+  expect "className gce-internal: no spec.ingressClassName" "$(q 'select(.kind == "Ingress") | .spec.ingressClassName // "none"' "$f")" "none"
+fi
+if render classname-nginx "${INGRESS[@]}" --set main.ingress.className=nginx; then
+  expect "a non-GKE className stays spec.ingressClassName" "$(q 'select(.kind == "Ingress") | .spec.ingressClassName' "$WORK/classname-nginx.yaml")" "nginx"
 fi
 if render annotation "${INGRESS[@]}" --set-string 'main.ingress.annotations.kubernetes\.io/ingress\.class=gce-internal'; then
   expect "the gce-internal annotation turns it on" "$(count FrontendConfig "$WORK/annotation.yaml")" "1"

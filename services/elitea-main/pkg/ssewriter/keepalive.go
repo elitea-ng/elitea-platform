@@ -68,7 +68,8 @@ func StartKeepalive(w http.ResponseWriter, interval time.Duration) *Keepalive {
 }
 
 // Write writes p to the response and flushes it, so a relayed stream is not
-// re-buffered on this hop.
+// re-buffered on this hop. Only a failed WRITE ends the stream: the flush is
+// best effort (k.flush).
 func (k *Keepalive) Write(p []byte) (int, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -79,11 +80,17 @@ func (k *Keepalive) Write(p []byte) (int, error) {
 		return n, err
 	}
 	k.last = time.Now()
-	if err := k.controller.Flush(); err != nil {
-		k.failed = true
-		return n, err
-	}
+	k.flush()
 	return n, nil
+}
+
+// flush pushes what was written to the client, best effort. A writer that
+// cannot flush (http.ErrNotSupported: a wrapper without Flush or Unwrap) still
+// delivers the bytes when its buffer fills or the handler returns, and a
+// connection that is really gone fails the next Write; so a flush error is
+// never treated as a dead stream, as the relay did before keepalives.
+func (k *Keepalive) flush() {
+	_ = k.controller.Flush()
 }
 
 // Stop ends the ticker and waits for it, so no comment is written after Stop
@@ -127,10 +134,7 @@ func (k *Keepalive) beat() bool {
 		k.failed = true
 		return false
 	}
-	if err := k.controller.Flush(); err != nil {
-		k.failed = true
-		return false
-	}
+	k.flush()
 	k.last = time.Now()
 	return true
 }

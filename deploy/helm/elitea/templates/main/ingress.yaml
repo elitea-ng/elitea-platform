@@ -69,8 +69,8 @@ metadata:
     {{- . | nindent 4 }}
   {{- end }}
 spec:
-  {{- if .Values.main.ingress.className }}
-  ingressClassName: {{ .Values.main.ingress.className }}
+  {{- with include "elitea-main.ingressClassName" . }}
+  ingressClassName: {{ . }}
   {{- end }}
   {{- with .Values.main.ingress.tls }}
   tls:

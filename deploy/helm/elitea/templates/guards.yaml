@@ -84,8 +84,10 @@
   networking.k8s.io Ingress while Form sign-in was on unless the operator
   stated that the controller removed the X-Auth-* identity headers, because
   elitea-main once trusted them from a proxy address. It reads none of them now
-  and deletes every one itself (apimw.StripClientIdentityHeaders), so a plain
-  Ingress is as safe as the HTTPRoute.
+  and deletes every one itself (apimw.StripClientIdentityHeaders, mounted
+  first in internal/api/router.go, ahead of the relay to elitea-web, so neither
+  elitea-main's routes nor /app and /docs see them), so a plain Ingress is as
+  safe as the HTTPRoute.
 
   The browser edge's exec probes (templates/main/deployment.yaml) run
   `elitea-main -healthcheck <path>`, which reads only the three probe paths;

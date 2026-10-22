@@ -1,6 +1,7 @@
 package ssewriter
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -80,5 +81,35 @@ func TestKeepaliveWritesNothingAfterStop(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("body after Stop = %q", recorder.Body.String())
+	}
+}
+
+// noFlushWriter is a ResponseWriter wrapper with no Flush and no Unwrap, so
+// http.ResponseController.Flush answers http.ErrNotSupported.
+type noFlushWriter struct{ inner *httptest.ResponseRecorder }
+
+func (w noFlushWriter) Header() http.Header         { return w.inner.Header() }
+func (w noFlushWriter) WriteHeader(code int)        { w.inner.WriteHeader(code) }
+func (w noFlushWriter) Write(p []byte) (int, error) { return w.inner.Write(p) }
+
+// A writer that cannot flush still carries the stream: the flush is best
+// effort, as the relay's was before keepalives, and only a failed write ends
+// the stream.
+func TestKeepaliveSurvivesAWriterThatCannotFlush(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	keepalive := StartKeepalive(noFlushWriter{recorder}, 20*time.Millisecond)
+	if _, err := keepalive.Write([]byte("data: one\n\n")); err != nil {
+		keepalive.Stop()
+		t.Fatalf("first write = %v; a missing Flush is not a dead stream", err)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if _, err := keepalive.Write([]byte("data: two\n\n")); err != nil {
+		keepalive.Stop()
+		t.Fatalf("second write = %v", err)
+	}
+	keepalive.Stop()
+	body := recorder.Body.String()
+	if !strings.HasPrefix(body, "data: one\n\n: keepalive\n\n") || !strings.HasSuffix(body, "data: two\n\n") {
+		t.Fatalf("body = %q; want both events and a keepalive between them", body)
 	}
 }

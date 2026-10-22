@@ -82,6 +82,13 @@ if render edge-on "${HTTPROUTE[@]}"; then
   expect "startup probe is the loopback -healthcheck" "$(main_container "$f" '.startupProbe.exec.command | join(" ")')" "/elitea-main -healthcheck /startupz"
   expect "readiness probe is the loopback -healthcheck" "$(main_container "$f" '.readinessProbe.exec.command | join(" ")')" "/elitea-main -healthcheck /readyz"
   expect "liveness stays an httpGet on /healthz" "$(main_container "$f" '.livenessProbe.httpGet.path')" "/healthz"
+  expect "the exec probes' timeout is the values default" "$(main_container "$f" '[.startupProbe.timeoutSeconds, .readinessProbe.timeoutSeconds] | join(",")')" "3,3"
+fi
+if render edge-tuned "${HTTPROUTE[@]}" --set main.probes.startup.timeoutSeconds=7 --set main.probes.readiness.timeoutSeconds=9 \
+    --set main.probes.liveness.timeoutSeconds=4 --set-string main.probes.execCommand=/usr/local/bin/elitea-main; then
+  f="$WORK/edge-tuned.yaml"
+  expect "probe timeouts come from values" "$(main_container "$f" '[.startupProbe.timeoutSeconds, .readinessProbe.timeoutSeconds, .livenessProbe.timeoutSeconds] | join(",")')" "7,9,4"
+  expect "the exec probes run main.probes.execCommand" "$(main_container "$f" '.readinessProbe.exec.command | join(" ")')" "/usr/local/bin/elitea-main -healthcheck /readyz"
 fi
 if render edge-port "${HTTPROUTE[@]}" --set web.service.port=8081; then
   expect "the upstream follows web.service.port" "$(main_container "$WORK/edge-port.yaml" '.env[] | select(.name == "ELITEA_WEB_UPSTREAM") | .value')" "http://elitea-web:8081"

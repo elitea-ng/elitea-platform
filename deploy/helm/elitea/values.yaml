@@ -1975,8 +1975,11 @@ main:
     #
     # It is ON when enabled is true, or when the Ingress is a GKE one already:
     # className `gce` / `gce-internal`, or the same value in the
-    # kubernetes.io/ingress.class annotation. With enabled: true and neither
-    # set, the chart sets the annotation to `gce`.
+    # kubernetes.io/ingress.class annotation. GKE selects its controller by
+    # that ANNOTATION and ships no IngressClass named gce, so a className of
+    # gce / gce-internal is rendered as the annotation, never as
+    # spec.ingressClassName (which GKE would ignore: no load balancer). With
+    # enabled: true and no class, the annotation is `gce`.
     #
     # What the chart then renders:
     #   * `cloud.google.com/neg: '{"ingress": true}'` on the Service, so the load
@@ -3567,19 +3570,34 @@ main:
   # httpGet: elitea-main refuses /readyz and /startupz to every non-loopback
   # caller, the kubelet included. Their paths must then be /readyz,
   # /startupz or /healthz, the only ones -healthcheck reads.
+  #
+  # `-healthcheck <path>` NEEDS AN IMAGE THAT READS THE PATH (the release that
+  # made elitea-main the browser edge, or later; docs/UPGRADING.md "One edge
+  # route"). An older binary ignores the argument and always reads /readyz, so
+  # a startup probe on it fails until the database answers and a slow
+  # database crash-loops the pod. Keep main.image.tag at that release or
+  # later while web.enabled is true.
+  #
+  # timeoutSeconds is the probe's own, httpGet or exec; an exec probe starts
+  # the binary, so it gets more than the kubelet's 1-second default.
+  # execCommand is the binary the exec probes run (the image's entrypoint).
   probes:
+    execCommand: /elitea-main
     startup:
       path: /startupz
       initialDelaySeconds: 2
       periodSeconds: 3
+      timeoutSeconds: 3
       failureThreshold: 10
     liveness:
       path: /healthz
       periodSeconds: 10
+      timeoutSeconds: 1
       failureThreshold: 3
     readiness:
       path: /readyz
       periodSeconds: 5
+      timeoutSeconds: 3
       failureThreshold: 2
 
   autoscaling:

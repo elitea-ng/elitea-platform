@@ -254,3 +254,32 @@ func TestBrowserEdgesStripClientIdentity(t *testing.T) {
 		}
 	}
 }
+
+// TestWebRelayCarriesNoClientIdentity: the relay to elitea-web (/app, /docs)
+// is a route like any other, so the identity strip must run before it. It was
+// mounted after the relay once, and every /app and /docs request reached the
+// web container with the caller's X-Auth-* and X-Elitea-* names intact.
+func TestWebRelayCarriesNoClientIdentity(t *testing.T) {
+	if len(requiredStrippedHeaders) == 0 {
+		t.Fatal("requiredStrippedHeaders is empty, so this gate checked nothing.")
+	}
+	edge, _ := startIdentityProbeEdge(t)
+	header := http.Header{}
+	for _, name := range requiredStrippedHeaders {
+		header.Set(name, "client-chosen")
+	}
+	for _, path := range []string{"/app/", "/app/assets/index.js", "/docs/", "/docs/deployment/argocd"} {
+		answer := edge.do(t, http.MethodGet, path, header)
+		if !answer.reachedWeb {
+			t.Fatalf("%s did not reach the web container (status %d), so this gate proved nothing", path, answer.status)
+		}
+		for _, name := range requiredStrippedHeaders {
+			if strings.EqualFold(name, executionHeader) {
+				continue // kept on purpose by the strip itself; see the constant
+			}
+			if got := answer.web.header.Get(name); got != "" {
+				t.Errorf("%s reached elitea-web on %s as %q: mount apimw.StripClientIdentityHeaders ahead of webedge.Middleware", name, path, got)
+			}
+		}
+	}
+}

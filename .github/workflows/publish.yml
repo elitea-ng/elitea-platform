@@ -856,12 +856,9 @@ jobs:
       # it. Fail instead if charts/ does not satisfy Chart.yaml.
       - name: Vendored chart dependencies satisfy Chart.yaml
         run: |
-          CHART_DIR="deploy/helm/${{ matrix.chart }}"
-          helm dependency list "$CHART_DIR" | tee /tmp/deps.txt
-          if grep -E '\s(missing|wrong version|misplaced)\s*$' /tmp/deps.txt; then
-            echo "::error::${CHART_DIR}: a dependency in Chart.yaml is not satisfied by charts/"
-            exit 1
-          fi
+          # Every row's STATUS must be ok or unpacked; an unknown status fails
+          # too (scripts/ci/check-chart-deps.mjs, tested in no-binaries.yml).
+          node scripts/ci/check-chart-deps.mjs "deploy/helm/${{ matrix.chart }}"
 
       - name: Package chart
         run: |

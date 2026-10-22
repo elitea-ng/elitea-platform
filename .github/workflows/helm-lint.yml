@@ -7,6 +7,7 @@ on:
       - "deploy/argocd/**"
       - "deploy/scripts/drain-workers.sh"
       - "deploy/tests/**"
+      - "scripts/ci/check-chart-deps.mjs"
       - ".github/workflows/helm-lint.yml"
       # The capability gate below reads the required runtime names straight out
       # of runtimecomposition/config.go. Without this path a pull request that
@@ -51,6 +52,7 @@ on:
       - "deploy/argocd/**"
       - "deploy/scripts/drain-workers.sh"
       - "deploy/tests/**"
+      - "scripts/ci/check-chart-deps.mjs"
       - "services/elitea-main/internal/runtimecomposition/**"
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
@@ -659,12 +661,9 @@ jobs:
       # without network.
       - name: Vendored chart dependencies satisfy Chart.yaml
         run: |
-          CHART_DIR="deploy/helm/${{ matrix.chart }}"
-          helm dependency list "$CHART_DIR" | tee /tmp/deps.txt
-          if grep -E '\s(missing|wrong version|misplaced)\s*$' /tmp/deps.txt; then
-            echo "::error::${CHART_DIR}: a dependency in Chart.yaml is not satisfied by charts/ (run the chart's vendor script)"
-            exit 1
-          fi
+          # Every row's STATUS must be ok or unpacked; an unknown status fails
+          # too (scripts/ci/check-chart-deps.mjs, tested in no-binaries.yml).
+          node scripts/ci/check-chart-deps.mjs "deploy/helm/${{ matrix.chart }}"
 
       - name: helm template (default values)
         run: |

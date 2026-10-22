@@ -180,14 +180,16 @@ func (h *Handler) resumeToolStream(w http.ResponseWriter, r *http.Request, schem
 	if startResumeStream(w, r.Header.Get("Last-Event-ID")) != nil {
 		return
 	}
-	keepalive := keepStreamAlive(w)
-	var result map[string]any
-	if cursor.ToolkitResult != nil {
-		result = observeToolkitResult(r.Context(), service, *cursor.ToolkitResult, target.Name)
-	} else {
-		result = h.awaitRunResultWithMode(r.Context(), schema, agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: cursor.ExecutionID, ResponseMessageID: cursor.ResponseMessageID}, target, true)
-	}
-	keepalive.Stop()
+	// As in streamToolCall: the keepalive lives exactly as long as the wait,
+	// and the deferred Stop ends it on every way out of the wait (a panic
+	// included) before finishResumeStream writes the result.
+	result := func() map[string]any {
+		defer keepStreamAlive(w).Stop()
+		if cursor.ToolkitResult != nil {
+			return observeToolkitResult(r.Context(), service, *cursor.ToolkitResult, target.Name)
+		}
+		return h.awaitRunResultWithMode(r.Context(), schema, agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: cursor.ExecutionID, ResponseMessageID: cursor.ResponseMessageID}, target, true)
+	}()
 	if r.Context().Err() != nil {
 		return
 	}

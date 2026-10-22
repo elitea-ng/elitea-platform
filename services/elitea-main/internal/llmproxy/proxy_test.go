@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -373,4 +375,46 @@ func TestProxy_KeepsAnIdleEventStreamAlive(t *testing.T) {
 	if body := strings.Join(rec.chunks, ""); body != `{"data":[]}` {
 		t.Fatalf("a JSON body was altered: %q", body)
 	}
+}
+
+// An event stream whose length the gateway declared (a unary answer) is copied
+// byte for byte: a keepalive comment would overrun the Content-Length the
+// client was given. The body pauses longer than the keepalive interval.
+func TestProxy_NoKeepaliveInADeclaredLengthEventStream(t *testing.T) {
+	const body = "data: first\n\ndata: [DONE]\n\n"
+	p := &Proxy{logger: slog.Default(), streamKeepalive: 20 * time.Millisecond}
+	resp := &Response{
+		StatusCode:    http.StatusOK,
+		Header:        http.Header{"Content-Type": {"text/event-stream"}},
+		Body:          io.NopCloser(&pausingReader{parts: []string{body[:13], body[13:]}, pause: 150 * time.Millisecond}),
+		ContentLength: int64(len(body)),
+	}
+	rec := newFlushRecorder()
+	p.writeResponse(rec, httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", nil), resp)
+	if got := strings.Join(rec.chunks, ""); got != body {
+		t.Fatalf("relayed body = %q; want exactly the %d declared bytes %q", got, len(body), body)
+	}
+	if cl := rec.Header().Get("Content-Length"); cl != strconv.Itoa(len(body)) {
+		t.Fatalf("Content-Length = %q; want %d", cl, len(body))
+	}
+}
+
+// pausingReader returns one part per Read, sleeping before every part but the
+// first.
+type pausingReader struct {
+	parts []string
+	pause time.Duration
+	n     int
+}
+
+func (r *pausingReader) Read(b []byte) (int, error) {
+	if r.n >= len(r.parts) {
+		return 0, io.EOF
+	}
+	if r.n > 0 {
+		time.Sleep(r.pause)
+	}
+	n := copy(b, r.parts[r.n])
+	r.n++
+	return n, nil
 }

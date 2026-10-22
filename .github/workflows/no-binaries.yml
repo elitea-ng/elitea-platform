@@ -59,15 +59,19 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/ci/check-helm-version.mjs
-          expected="$(grep -c '^test(' scripts/ci/check-helm-version.test.mjs)"
-          status=0
-          output="$(node --test --test-reporter=tap scripts/ci/check-helm-version.test.mjs 2>&1)" || status=$?
-          printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
-          if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::check-helm-version.test.mjs holds ${expected} scenario(s); node --test passed ${ran:-none} (exit ${status})"
-            exit 1
-          fi
+          # check-chart-deps.mjs is the vendored-dependency gate helm-lint.yml
+          # and publish.yml run; its parser is tested here, where no Helm is.
+          for t in check-helm-version check-chart-deps; do
+            expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
+            status=0
+            output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
+            printf '%s\n' "${output}"
+            ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+            if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+              echo "::error::${t}.test.mjs holds ${expected} scenario(s); node --test passed ${ran:-none} (exit ${status})"
+              exit 1
+            fi
+          done
       # Every tracked shell file must at least parse. That is worth little on
       # its own, and it is worth having for EVERY tracked shell file: launchers
       # used to get this check one at a time, and the set they belong to grew

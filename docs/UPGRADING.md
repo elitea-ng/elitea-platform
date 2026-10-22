@@ -89,7 +89,12 @@ Helm 3.8 or newer where Argo CD (or another Helm 3 tool) renders the chart.
   `/elitea-main -healthcheck <path>` inside the container. `-healthcheck`
   takes an optional path (`/readyz`, the default, `/startupz` or `/healthz`).
   The chart refuses any other `main.probes.{startup,readiness}.path` while
-  the edge is on. Liveness stays an httpGet on `/healthz`.
+  the edge is on. Liveness stays an httpGet on `/healthz`. An older
+  elitea-main ignores the path argument and reports `/healthz`, so a probe
+  passes before the replica is ready: with `web.enabled` (the default),
+  `main.image.tag` must be this release or later. Leave it unset to follow
+  the chart's appVersion. `main.probes.execCommand` names the binary and
+  `main.probes.*.timeoutSeconds` the probe timeouts.
 * **NetworkPolicy.** elitea-web gets `elitea-web-netpol`: its port admits
   elitea-main, `networkPolicies.web.extraIngressFrom` and
   `networkPolicies.probeFrom` only.
@@ -1284,8 +1289,9 @@ migrated (greenfield, by decision). After the switch:
    (`security.approverPolicy`).
 2. Restrict `create` on cert-manager `Certificate`/`CertificateRequest` and
    read on `Secret` in the NATS namespace to the deployer and operators: those
-   rights can mint any NATS identity (`deploy/helm/nats/README.md`, "Who can
-   mint a NATS identity").
+   rights can mint any NATS identity (`deploy/helm/elitea/NATS.md`, "Who can
+   mint a NATS identity"; the `deploy/helm/nats` chart this entry names is now
+   bundled into `deploy/helm/elitea`).
 3. Install NATS, `nats-bootstrap` and the platform into one namespace (or use
    a `ClusterIssuer`; the platform chart refuses a different `nats.namespace`
    with the namespaced Issuer). With Argo CD, sync the updated

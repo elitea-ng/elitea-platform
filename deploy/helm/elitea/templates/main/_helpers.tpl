@@ -42,6 +42,17 @@ root redirect — are made in Go. The hop is browser traffic relayed, not a
 service-to-service call, so it is plain HTTP to the web Service, the same
 Service a browser-facing route once named directly.
 */}}
+{{/*
+elitea-main.healthcheckExec — the exec probe that reads one probe path over
+loopback inside the container: `<main.probes.execCommand> -healthcheck <path>`.
+The one place the binary path and the flag are spelled. Takes (list $ path).
+*/}}
+{{- define "elitea-main.healthcheckExec" -}}
+{{- $root := index . 0 -}}
+exec:
+  command: [{{ $root.Values.main.probes.execCommand | default "/elitea-main" | quote }}, "-healthcheck", {{ index . 1 | quote }}]
+{{- end }}
+
 {{- define "elitea-main.webUpstream" -}}
 {{- if .Values.web.enabled -}}
 {{- printf "http://%s:%v" (include "elitea-web.fullname" .) .Values.web.service.port -}}
@@ -98,16 +109,22 @@ which wins on a clash.
 
 {{/*
 elitea-main.ingressAnnotations — the Ingress's annotations as a YAML map:
-the GKE class (when gke.enabled names no class itself), the FrontendConfig
-binding and the cert-manager issuer, then main.ingress.annotations, which wins
-on a clash.
+the GKE class, the FrontendConfig binding and the cert-manager issuer, then
+main.ingress.annotations, which wins on a clash.
+
+GKE's ingress controller is selected by the kubernetes.io/ingress.class
+ANNOTATION. GKE ships no IngressClass object named gce or gce-internal, so an
+Ingress with spec.ingressClassName: gce is ignored: no load balancer, and the
+BackendConfig and FrontendConfig never apply. A className of gce or
+gce-internal is therefore rendered as the annotation (elitea-main.ingressClassName
+drops it from spec); gke.enabled with no class at all means gce.
 */}}
 {{- define "elitea-main.ingressAnnotations" -}}
 {{- $i := .Values.main.ingress -}}
 {{- $out := dict -}}
 {{- if include "elitea-main.gkeIngress" . -}}
-{{- if and (not $i.className) (not (hasKey ($i.annotations | default dict) "kubernetes.io/ingress.class")) -}}
-{{- $_ := set $out "kubernetes.io/ingress.class" "gce" -}}
+{{- if not (hasKey ($i.annotations | default dict) "kubernetes.io/ingress.class") -}}
+{{- $_ := set $out "kubernetes.io/ingress.class" (has $i.className (list "gce" "gce-internal") | ternary $i.className "gce") -}}
 {{- end -}}
 {{- with include "elitea-main.gkeFrontendConfigName" . -}}
 {{- $_ := set $out "networking.gke.io/v1beta1.FrontendConfig" . -}}
@@ -121,6 +138,16 @@ on a clash.
 {{- end -}}
 {{- $out = merge (deepCopy ($i.annotations | default dict)) $out -}}
 {{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
+{{/*
+elitea-main.ingressClassName — spec.ingressClassName, or empty: a GKE class
+(gce, gce-internal) is an annotation, never an IngressClass name
+(elitea-main.ingressAnnotations).
+*/}}
+{{- define "elitea-main.ingressClassName" -}}
+{{- $c := .Values.main.ingress.className | default "" -}}
+{{- if not (has $c (list "gce" "gce-internal")) }}{{ $c }}{{ end -}}
 {{- end }}
 
 {{- define "elitea-main.serviceAccountName" -}}

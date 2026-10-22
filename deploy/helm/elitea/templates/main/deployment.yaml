@@ -246,9 +246,7 @@ spec:
           {{- $edge := include "elitea-main.webUpstream" . }}
           startupProbe:
             {{- if $edge }}
-            exec:
-              command: ["/elitea-main", "-healthcheck", {{ .Values.main.probes.startup.path | quote }}]
-            timeoutSeconds: 3
+            {{- include "elitea-main.healthcheckExec" (list . .Values.main.probes.startup.path) | nindent 12 }}
             {{- else }}
             httpGet:
               path: {{ .Values.main.probes.startup.path }}
@@ -256,24 +254,25 @@ spec:
             {{- end }}
             initialDelaySeconds: {{ .Values.main.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.main.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.main.probes.startup.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.main.probes.startup.failureThreshold }}
           livenessProbe:
             httpGet:
               path: {{ .Values.main.probes.liveness.path }}
               port: http
             periodSeconds: {{ .Values.main.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.main.probes.liveness.timeoutSeconds | default 1 }}
             failureThreshold: {{ .Values.main.probes.liveness.failureThreshold }}
           readinessProbe:
             {{- if $edge }}
-            exec:
-              command: ["/elitea-main", "-healthcheck", {{ .Values.main.probes.readiness.path | quote }}]
-            timeoutSeconds: 3
+            {{- include "elitea-main.healthcheckExec" (list . .Values.main.probes.readiness.path) | nindent 12 }}
             {{- else }}
             httpGet:
               path: {{ .Values.main.probes.readiness.path }}
               port: http
             {{- end }}
             periodSeconds: {{ .Values.main.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.main.probes.readiness.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.main.probes.readiness.failureThreshold }}
           resources:
             {{- toYaml .Values.main.resources | nindent 12 }}

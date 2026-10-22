@@ -128,11 +128,12 @@ func (p *Proxy) writeResponse(w http.ResponseWriter, r *http.Request, resp *Resp
 	// proxy idles out at 100 seconds) then drops a call that is still alive.
 	// ssewriter.Keepalive writes an SSE comment into an idle stream, only
 	// between events, which every OpenAI-compatible client ignores. Any other
-	// body is copied as it was.
+	// body is copied as it was, and so is an event stream whose length the
+	// gateway declared: a comment would overrun that Content-Length.
 	var out io.Writer = w
 	flush := http.NewResponseController(w).Flush
-	if isEventStream(resp.Header.Get("Content-Type")) {
-		keepalive := ssewriter.StartKeepalive(w, p.keepaliveInterval())
+	if isEventStream(resp.Header.Get("Content-Type")) && resp.ContentLength < 0 {
+		keepalive := ssewriter.StartKeepalive(w, p.streamKeepalive)
 		defer keepalive.Stop()
 		out = keepalive
 		flush = func() error { return nil } // Keepalive.Write flushes
@@ -164,15 +165,6 @@ func (p *Proxy) writeResponse(w http.ResponseWriter, r *http.Request, resp *Resp
 // isEventStream reports whether a Content-Type names an SSE body.
 func isEventStream(contentType string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/event-stream")
-}
-
-// keepaliveInterval is the idle bound for a relayed event stream; tests
-// shorten it.
-func (p *Proxy) keepaliveInterval() time.Duration {
-	if p.streamKeepalive > 0 {
-		return p.streamKeepalive
-	}
-	return ssewriter.KeepaliveInterval
 }
 
 // writeHopError answers a request whose gateway call failed.
