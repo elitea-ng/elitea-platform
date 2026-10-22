@@ -168,7 +168,8 @@ impl NativeRunner {
             .database_url
             .as_ref()
             .ok_or_else(|| invalid("the native runner needs ELITEA_INVENTORY_DATABASE_URL"))?;
-        let pool = store::lazy_pool(dsn.expose(), 8).map_err(|e| invalid(e.to_string()))?;
+        let pool = store::lazy_pool(dsn.expose(), settings.pool_size)
+            .map_err(|e| invalid(e.to_string()))?;
         let transport = Transport::new(&TransportSettings {
             ca_file: settings.callback_ca_file.clone(),
             ca_file_setting: CA_SETTING,

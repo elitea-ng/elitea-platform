@@ -268,6 +268,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}()
 
+	// Read before anything starts: a bad value refuses the boot instead of
+	// surfacing at the first SIGTERM.
+	shutdownTimeout, err := shutdownTimeoutFromEnv(os.LookupEnv)
+	if err != nil {
+		return err
+	}
+
 	// Database
 	dbDSN := envOr("DATABASE_URL", "postgres://localhost:5432/elitea?sslmode=disable")
 	pool, err := openDatabasePool(ctx, dbDSN, os.LookupEnv)
@@ -2828,7 +2835,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if runtimeRoot != nil {
 		runtimeLifecycleRoot = runtimeRoot
 	}
-	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, 15*time.Second); err != nil {
+	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, shutdownTimeout); err != nil {
 		return err
 	}
 	slog.Info("server stopped")

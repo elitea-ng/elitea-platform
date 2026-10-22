@@ -217,10 +217,24 @@ func platformServeResult(err error) error {
 
 func (servers applicationServers) Shutdown(ctx context.Context) error {
 	if servers.platform == nil {
-		return servers.public.Shutdown(ctx)
+		return shutdownPublic(ctx, servers.public)
 	}
 	errs := make(chan error, 2)
-	go func() { errs <- servers.public.Shutdown(ctx) }()
+	go func() { errs <- shutdownPublic(ctx, servers.public) }()
 	go func() { errs <- servers.platform.Shutdown(ctx) }()
 	return errors.Join(<-errs, <-errs)
+}
+
+// shutdownPublic stops admitting and waits for the open requests, then, at
+// the drain deadline, closes the connections still open. http.Server.Shutdown
+// does not: it returns at the deadline and leaves an SSE stream running, so
+// its handler would still hold a database connection while the pools close
+// and the stream would end only when the process does, with a reset rather
+// than a close.
+func shutdownPublic(ctx context.Context, public *http.Server) error {
+	err := public.Shutdown(ctx)
+	if err != nil && ctx.Err() != nil {
+		return errors.Join(err, public.Close())
+	}
+	return err
 }

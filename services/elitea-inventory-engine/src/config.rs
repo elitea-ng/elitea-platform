@@ -110,10 +110,20 @@ pub struct Settings {
     /// process (default [`DEFAULT_MODEL_CONCURRENCY`]). Set it to the
     /// model server's concurrent slots: past them a call only queues there.
     pub model_concurrency: usize,
+    /// `POOL_SIZE`: the native runner's PostgreSQL connections, shared by
+    /// every invocation this engine process runs (default
+    /// [`DEFAULT_POOL_SIZE`], at most [`MAX_POOL_SIZE`]). One replica uses
+    /// this many, so the fleet uses replicas x this.
+    pub pool_size: u32,
 }
 
 /// `MODEL_CONCURRENCY` when unset: a small model server's slot count.
 pub const DEFAULT_MODEL_CONCURRENCY: usize = 8;
+
+/// `POOL_SIZE` when unset: the size the native runner always had.
+pub const DEFAULT_POOL_SIZE: u32 = 8;
+/// The largest `POOL_SIZE`, the bound elitea-main puts on its own pools.
+pub const MAX_POOL_SIZE: u32 = 64;
 
 /// The callback client certificate's setting, for its errors.
 pub const CALLBACK_CERT_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_CERT_FILE";
@@ -229,6 +239,7 @@ impl Settings {
                 u64::try_from(DEFAULT_MODEL_CONCURRENCY).unwrap_or(u64::MAX),
             )?)
             .unwrap_or(usize::MAX),
+            pool_size: pool_size(&raw)?,
             engine_socket: raw("ENGINE_SOCKET").map_or_else(
                 || PathBuf::from("/run/inventory/engine.sock"),
                 PathBuf::from,
@@ -329,6 +340,19 @@ fn positive_count(
     }
 }
 
+/// `POOL_SIZE`, 1 through [`MAX_POOL_SIZE`].
+fn pool_size(raw: &impl Fn(&str) -> Option<String>) -> Result<u32, ConfigError> {
+    let size = positive_count(raw, "POOL_SIZE", u64::from(DEFAULT_POOL_SIZE))?;
+    u32::try_from(size)
+        .ok()
+        .filter(|size| *size <= MAX_POOL_SIZE)
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "{ENV_PREFIX}POOL_SIZE must be at most {MAX_POOL_SIZE}, got {size}"
+            ))
+        })
+}
+
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
     let defaults = IngestLimits::default();
     let timeout = match raw("CLONE_TIMEOUT_SECONDS") {
@@ -389,6 +413,7 @@ mod tests {
         assert_eq!(defaults.fixtures, None);
         assert_eq!(defaults.source_types, ["github", "ado_repos"]);
         assert_eq!(defaults.model_concurrency, DEFAULT_MODEL_CONCURRENCY);
+        assert_eq!(defaults.pool_size, DEFAULT_POOL_SIZE);
         assert_eq!(defaults.callback_identity, None);
         assert_eq!(
             defaults.ingest.scratch_path,
@@ -514,11 +539,13 @@ mod tests {
             ("ELITEA_INVENTORY_MAX_FILE_COUNT", "10"),
             ("ELITEA_INVENTORY_CLONE_TIMEOUT_SECONDS", "2.5"),
             ("ELITEA_INVENTORY_MODEL_CONCURRENCY", "3"),
+            ("ELITEA_INVENTORY_POOL_SIZE", "64"),
         ]) else {
             panic!("parses");
         };
         assert_eq!(parsed.source_types, ["github"]);
         assert_eq!(parsed.model_concurrency, 3);
+        assert_eq!(parsed.pool_size, 64);
         assert!(parsed.ingest.git_allowlist.permits("github.com"));
         assert_eq!(parsed.ingest.limits.max_file_count, 10);
         assert_eq!(
@@ -531,6 +558,8 @@ mod tests {
             ("ELITEA_INVENTORY_MAX_FILE_COUNT", "0"),
             ("ELITEA_INVENTORY_CLONE_TIMEOUT_SECONDS", "-1"),
             ("ELITEA_INVENTORY_MODEL_CONCURRENCY", "0"),
+            ("ELITEA_INVENTORY_POOL_SIZE", "0"),
+            ("ELITEA_INVENTORY_POOL_SIZE", "65"),
         ] {
             let refused = settings(&[(name, value)]);
             assert!(

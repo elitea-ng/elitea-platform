@@ -447,3 +447,12 @@ func dsnOf(t *testing.T, store *spi.PostgresStore) string {
 	t.Helper()
 	return store.DSN()
 }
+
+// <PREFIX>DATABASE_MAX_CONNS reaches the pool: a replica's share of the
+// server's connections is that number plus the owner claim's one.
+func TestPostgresStoreSizesItsPoolFromTheSetting(t *testing.T) {
+	store, _ := testStore(t, "pod-sized/1", spi.WithMaxConns(3))
+	if got := store.PoolMaxConns(); got != 3 {
+		t.Fatalf("pool MaxConns = %d, want 3", got)
+	}
+}

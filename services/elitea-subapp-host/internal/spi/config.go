@@ -44,6 +44,13 @@ type Settings struct {
 	MaxParallelWorkers         int
 	Namespace                  string
 	InvocationRetentionSeconds int
+	// DrainTimeoutSeconds is how long a terminating replica lets its
+	// in-flight invocations finish before it cancels them
+	// (<PREFIX>DRAIN_TIMEOUT_SECONDS, default 30; 0 cancels at once). An
+	// invocation runs on the replica that accepted it, so a scale-in that
+	// cancels at once ends work nobody else will finish. The pod's
+	// terminationGracePeriodSeconds must cover it plus the gRPC stop (10 s).
+	DrainTimeoutSeconds int
 
 	TLSCertFile string
 	TLSKeyFile  string
@@ -92,11 +99,20 @@ type Settings struct {
 	// DatabaseURL selects the durable invocation store (ADR-0023 H2b); empty
 	// keeps invocations in memory, and /health says so.
 	DatabaseURL string
+	// DatabaseMaxConns sizes the store's pool (<PREFIX>DATABASE_MAX_CONNS,
+	// 1..64). Zero keeps the pgx default, max(4, numCPU), which depends on
+	// the node. The owner claim holds one more connection outside the pool,
+	// so one replica uses DatabaseMaxConns + 1.
+	DatabaseMaxConns int
 	// EngineSocket is the Unix socket a sidecar engine listens on, for an
 	// application whose runner reaches its engine out of process (ADR-0023
 	// H2). Empty when the application has no such engine.
 	EngineSocket string
 }
+
+// DefaultDrainTimeoutSeconds is <PREFIX>DRAIN_TIMEOUT_SECONDS when unset:
+// with the 10 s gRPC stop it fits the chart's 60 s grace period.
+const DefaultDrainTimeoutSeconds = 30
 
 // legacyAliases are the pre-prefix names the Python shell also read.
 var legacyAliases = map[string]string{
@@ -201,6 +217,15 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	}
 	if s.InvocationRetentionSeconds, err = integer("INVOCATION_RETENTION_SECONDS", 3600, 1); err != nil {
 		return Settings{}, err
+	}
+	if s.DrainTimeoutSeconds, err = integer("DRAIN_TIMEOUT_SECONDS", DefaultDrainTimeoutSeconds, 0); err != nil {
+		return Settings{}, err
+	}
+	if s.DatabaseMaxConns, err = integer("DATABASE_MAX_CONNS", 0, 1); err != nil {
+		return Settings{}, err
+	}
+	if s.DatabaseMaxConns > maxDatabaseConns {
+		return Settings{}, fmt.Errorf("%w: %sDATABASE_MAX_CONNS must be <= %d, got %d", ErrConfig, prefix, maxDatabaseConns, s.DatabaseMaxConns)
 	}
 	if (s.TLSCertFile == "") != (s.TLSKeyFile == "") {
 		return Settings{}, fmt.Errorf("%w: %sTLS_CERTFILE and %sTLS_KEYFILE must be set together", ErrConfig, prefix, prefix)

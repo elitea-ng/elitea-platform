@@ -508,6 +508,22 @@ type StopRecorder interface {
 	RequestStop(ctx context.Context, id string) error
 }
 
+// WaitIdle returns once no invocation is in flight, or with ctx's error when
+// ctx ends first. It cancels nothing: it is the drain a terminating replica
+// gives its runs before Stop cancels what is left.
+func (m *Manager) WaitIdle(ctx context.Context) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for m.InFlight() > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
 // InFlight is the number of invocations still running — what Slots reports
 // as active.
 func (m *Manager) InFlight() int {
