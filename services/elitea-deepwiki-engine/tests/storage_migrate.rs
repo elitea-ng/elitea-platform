@@ -292,7 +292,10 @@ async fn a_database_on_the_released_texts_upgrades() {
         assert_eq!(recorded, checksum, "{name}");
     }
     // Current, so a rerun applies nothing.
-    assert!(migrate::apply_all(&pool).await.expect("rerun").is_empty());
+    assert_eq!(
+        migrate::apply_all(&pool).await.expect("rerun"),
+        [] as [std::string::String; 0]
+    );
 }
 
 /// 0008 keeps the `vector` extension when another object still uses it,
@@ -373,11 +376,9 @@ async fn a_tampered_checksum_of_a_rewritten_migration_is_refused() {
             .execute(&pool)
             .await
             .expect("released");
-        assert!(
-            migrate::apply_all(&pool)
-                .await
-                .expect("released")
-                .is_empty()
+        assert_eq!(
+            migrate::apply_all(&pool).await.expect("released"),
+            [] as [std::string::String; 0]
         );
         sqlx::query("UPDATE schema_migrations SET checksum = $1 WHERE version = $2")
             .bind(&original)

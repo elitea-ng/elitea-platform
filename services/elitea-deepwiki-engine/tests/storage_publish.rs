@@ -459,12 +459,18 @@ async fn a_concurrent_build_keeps_its_vectors_through_another_publish() {
         Some(DIM),
         "B's sweep deleted the vectors of A, which is still in flight"
     );
-    assert!(stale_generations(&pool, wiki).await.is_empty());
+    assert_eq!(
+        stale_generations(&pool, wiki).await,
+        [] as [std::string::String; 0]
+    );
     a.publish(&WikiRecord::default())
         .await
         .expect("A publishes");
     assert_eq!(store.generations(&key), vec![(a_id.clone(), 7)]);
-    assert!(stale_generations(&pool, wiki).await.is_empty());
+    assert_eq!(
+        stale_generations(&pool, wiki).await,
+        [] as [std::string::String; 0]
+    );
     let db = UnifiedDb::new(pool.clone(), key.clone()).with_dense(common::dense(&store));
     let hits = db
         .reader()
@@ -494,7 +500,10 @@ async fn a_concurrent_build_keeps_its_vectors_through_another_publish() {
     assert_eq!(listed, expected);
     store.fail_deletes(false);
     publish_version(&space, wiki, "beta", 3).await;
-    assert!(stale_generations(&pool, wiki).await.is_empty());
+    assert_eq!(
+        stale_generations(&pool, wiki).await,
+        [] as [std::string::String; 0]
+    );
     let left: Vec<String> = store
         .generations(&key)
         .into_iter()

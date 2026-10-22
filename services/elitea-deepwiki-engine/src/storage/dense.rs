@@ -1002,7 +1002,10 @@ mod tests {
         assert_eq!(store.generations(&a), [("g2".to_owned(), 1)]);
         assert_eq!(store.generations(&b), [("g1".to_owned(), 2)]);
         index.delete_namespace(&a).await.unwrap();
-        assert!(store.generations(&a).is_empty());
+        assert_eq!(
+            store.generations(&a),
+            [] as [(std::string::String, usize); 0]
+        );
         store.set_unavailable(true);
         let failed = index.search(&b, "g1", &space, &[1.0, 0.0], 1).await;
         assert!(failed.is_err_and(|e| e.unavailable));

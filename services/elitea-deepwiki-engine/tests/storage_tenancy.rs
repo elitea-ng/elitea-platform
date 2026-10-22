@@ -193,7 +193,10 @@ async fn assert_sees_only(
     // The branch searches, each with the other project's word.
     let reader = IndexReader::new(pool.clone(), common::key_in(project, WIKI))
         .with_dense(common::dense(store));
-    assert!(reader.search_fts(other, 10).await.expect("fts").is_empty());
+    assert_eq!(
+        reader.search_fts(other, 10).await.expect("fts"),
+        [] as [elitea_deepwiki_engine::storage::search::Hit; 0]
+    );
     assert_eq!(reader.search_fts(tag, 50).await.expect("fts").len(), count);
     let dense = reader.search_dense(&embedding, 50).await.expect("dense");
     assert_eq!(dense.len(), count, "{project}: dense hits of one project");

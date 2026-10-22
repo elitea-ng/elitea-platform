@@ -563,7 +563,7 @@ async fn the_stored_ranking_matches_the_vector_ranking() {
     let local = store::vectors::rank_stored(&pool, key, &query, 0.1)
         .await
         .expect("rank stored");
-    assert!(!local.is_empty());
+    assert_ne!(local, [] as [(std::string::String, f64); 0]);
     let order =
         |ranking: &[(String, f64)]| ranking.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
     assert_eq!(order(&local), order(&remote));

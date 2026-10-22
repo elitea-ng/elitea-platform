@@ -5089,6 +5089,6 @@ async fn offset_paging_returns_disjoint_ordered_pages() {
             .inventory_search(token, scope.clone(), query, 1000, 9000)
             .await
             .expect("at the bound");
-        assert!(deepest.is_empty());
+        assert_eq!(deepest, [] as [elitea_vector::pb::ScoredPoint; 0]);
     }
 }
