@@ -182,6 +182,9 @@ func run(logger *slog.Logger) error {
 		// First, this replica stops offering its slots to the fleet: from
 		// now on fleet admission and the fleet slots report do not count
 		// them, so no new generation is admitted on a replica that goes away.
+		// This process refuses every new slot holder too, at once: a call
+		// already past the listener must not start a full generation here.
+		server.Manager().SetAdmitting(false)
 		if store != nil {
 			admitCtx, admitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := store.SetAdmitting(admitCtx, false); err != nil {

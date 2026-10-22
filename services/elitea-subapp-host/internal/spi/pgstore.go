@@ -477,27 +477,48 @@ func (s *PostgresStore) liveSeconds() float64 {
 	return (replicaLiveChecks * s.claimCheck).Seconds()
 }
 
-// capacityQuery reads the fleet capacity and the live replica count.
-func (s *PostgresStore) capacityQuery() string {
-	return `SELECT COALESCE(sum(slots), 0)::int, count(*)::int FROM ` + s.replicas +
-		` WHERE admitting AND seen_at > now() - make_interval(secs => $1)`
+// fleetQuery reads the fleet's slot report in ONE statement, so the three
+// numbers come from one snapshot. $1 is liveSeconds.
+//
+//   - capacity: the slots of the live replicas that admit work;
+//   - replicas: how many those are;
+//   - active: the unfinished slot-holding rows, except those of a LIVE
+//     replica that does NOT admit (one that drains). Its slots are not in
+//     the capacity, so its runs must not be in the load either: a replica
+//     that drains a generation for an hour would otherwise keep the rest of
+//     the fleet refusing while it has free slots. The rows of an owner that
+//     is not live (gone, its rows not reconciled yet) stay counted.
+func (s *PostgresStore) fleetQuery() string {
+	live := `seen_at > now() - make_interval(secs => $1)`
+	return `SELECT
+		(SELECT COALESCE(sum(slots), 0)::int FROM ` + s.replicas + ` WHERE admitting AND ` + live + `),
+		(SELECT count(*)::int FROM ` + s.replicas + ` WHERE admitting AND ` + live + `),
+		(SELECT count(*)::int FROM ` + s.invocations + ` i WHERE i.holds_slot AND i.finished_at IS NULL
+		    AND NOT EXISTS (SELECT 1 FROM ` + s.replicas + ` r
+		                     WHERE r.owner = i.owner AND NOT r.admitting AND r.` + live + `))`
 }
 
-// activeQuery counts the unfinished slot-holding invocations.
-func (s *PostgresStore) activeQuery() string {
-	return `SELECT count(*)::int FROM ` + s.invocations + ` WHERE holds_slot AND finished_at IS NULL`
+// fleetSlots runs fleetQuery on q (the pool, or the admission transaction).
+func (s *PostgresStore) fleetSlots(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) (FleetCapacity, error) {
+	var capacity FleetCapacity
+	err := q.QueryRow(ctx, s.fleetQuery(), s.liveSeconds()).Scan(&capacity.Total, &capacity.Replicas, &capacity.Active)
+	return capacity, err
 }
 
 // FleetSlots reads the fleet's slot report (FleetSlotter).
 func (s *PostgresStore) FleetSlots(ctx context.Context) (FleetCapacity, error) {
-	var capacity FleetCapacity
-	if err := s.pool.QueryRow(ctx, s.capacityQuery(), s.liveSeconds()).Scan(&capacity.Total, &capacity.Replicas); err != nil {
-		return FleetCapacity{}, err
-	}
-	if err := s.pool.QueryRow(ctx, s.activeQuery()).Scan(&capacity.Active); err != nil {
-		return FleetCapacity{}, err
-	}
-	return capacity, nil
+	return s.fleetSlots(ctx, s.pool)
+}
+
+// CountUnfinished counts the rows among ids that have not ended (FleetLister),
+// in one statement: what a deletion's wait reads at each tick.
+func (s *PostgresStore) CountUnfinished(ctx context.Context, ids []string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*)::int FROM `+s.invocations+` WHERE invocation_id = ANY($1) AND finished_at IS NULL`, ids).Scan(&n)
+	return n, err
 }
 
 // RunningInvocations lists every unfinished invocation of the fleet with its
@@ -610,15 +631,12 @@ func (s *PostgresStore) Create(ctx context.Context, invocation *Invocation) erro
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, s.fleetKey); err != nil {
 		return err
 	}
-	var capacity, replicas, active int
-	if err := tx.QueryRow(ctx, s.capacityQuery(), s.liveSeconds()).Scan(&capacity, &replicas); err != nil {
+	fleet, err := s.fleetSlots(ctx, tx)
+	if err != nil {
 		return err
 	}
-	if err := tx.QueryRow(ctx, s.activeQuery()).Scan(&active); err != nil {
-		return err
-	}
-	if active >= capacity {
-		return &NoSlotError{Total: capacity}
+	if fleet.Active >= fleet.Total {
+		return &NoSlotError{Total: fleet.Total}
 	}
 	if _, err := tx.Exec(ctx, insert, arguments...); err != nil {
 		return err

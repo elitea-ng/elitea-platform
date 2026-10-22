@@ -43,7 +43,7 @@ An invocation runs on the replica that accepted it, from start to end. Its row i
 - A cancel goes to the owner replica over NATS. The owner also reads the stop requests on its own rows at each claim check (10 s), so a cancel arrives without NATS too.
 - A deletion stops the matching runs on **every** replica, and waits until they end.
 - When a replica stops, another replica marks the runs it left behind as terminal.
-- Generation slots are **fleet-wide**. A replica writes its slot count (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`) in `host_replicas` and renews it at each claim check. A generation is admitted only while the running generations are fewer than the slots of all live replicas. When every slot is busy, the call is accepted and ends at once with `service_busy` ("All N generation slots are busy"), and the UI shows that message. The slots page reports the same fleet numbers.
+- Generation slots are **fleet-wide**. A replica writes its slot count (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`) in `host_replicas` and renews it at each claim check. A generation is admitted only while the replica that takes the call has a free slot of its own, and the running generations are fewer than the slots of all live replicas that admit work. A replica that drains stops admitting, and its running generations leave the count together with its slots. A call is never queued: when no slot is free, the call is accepted and ends at once with `service_busy` ("All N generation slots are busy"), and the UI shows that message. The slots page reports the same fleet numbers.
 
 The refused generations are part of the scaling signal (`elitea_subapp_slot_refusals_total` on the admin port, or the refused rows in the table). Without them the running count could never be above the slots, and the fleet could not grow.
 
@@ -197,7 +197,7 @@ Kubernetes starts `terminationGracePeriodSeconds` when it runs the preStop hook,
 |---|---|---|---|---|
 | elitea-main | sleep 10 | `ELITEA_SHUTDOWN_TIMEOUT` 30s | 50 | ≥ 10 + drain + 10 |
 | LLM gateway | sleep 10 | `GATEWAY_SHUTDOWN_TIMEOUT` 150s | 190 | ≥ 10 + drain + 30 |
-| DeepWiki, Inventory | sleep 5 | `*_DRAIN_TIMEOUT_SECONDS` 3600 | 3630 | ≥ preStop + 10 + drain + 10 |
+| DeepWiki, Inventory | sleep 5 (the engine sidecar: preStop + 15 = 20) | `*_DRAIN_TIMEOUT_SECONDS` 3600 | 3630 | ≥ preStop + 10 + drain + 10 |
 | elitea-vector | sleep 5 | the calls it holds, up to 20 s | 30 | ≥ preStop + 20 |
 | OTel collector | sleep 5 | the batch flush, up to 10 s | 30 | ≥ preStop + 10 |
 | Egress proxy | | `drainDelaySeconds` 5 + `shutdownTimeoutSeconds` 60 | 80 | ≥ delay + timeout + 5 |
@@ -211,7 +211,7 @@ A wiki generation or an ingestion runs for minutes, and sometimes for most of an
 
 1. On SIGTERM the host stops admitting. Its slots leave the fleet's total at once, so a new generation goes to another replica or is refused busy.
 2. The host waits up to the drain timeout for its running invocations. Polls and cancels for them reach any replica through the shared store.
-3. The engine sidecar keeps serving until it is idle or the same deadline passes.
+3. The engine sidecar gets SIGTERM at the same moment, so it first sleeps through the host's preStop and gRPC stop (20 s), and a call the host admitted in that window still finds it. Then it keeps serving until it is idle or the same deadline passes.
 4. At the deadline, what is left is cancelled and recorded as terminal.
 
 The other option, to make a build resumable on another replica, needs the request and its git credentials kept in the store, and the work done so far is not reusable: a generation is staged and published in one step, so a cut-off build leaves no partial wiki. A drain long enough to finish is simpler, and loses nothing.

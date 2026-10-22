@@ -199,6 +199,7 @@ impl ProductionTransportBundle {
             agentstate_options,
             deployment.limits.agentstate_max_connections(),
             Duration::from_millis(deployment.limits.agentstate_acquire_timeout_millis),
+            profiles.grpc_connect_timeout,
         );
         let (control, output, input, runtime_context, model_facade, agentstate, command_bus) = tokio::try_join!(
             control,
@@ -594,15 +595,23 @@ async fn connect_agentstate(
     options: PgConnectOptions,
     max_connections: usize,
     acquire_timeout: Duration,
+    connect_deadline: Duration,
 ) -> Result<PgPool, ProductionBootstrapError> {
     let max_connections = u32::try_from(max_connections)
         .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
-    PgPoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(acquire_timeout)
-        .connect_with(options)
-        .await
-        .map_err(|_| ProductionBootstrapError::DependencyUnavailable)
+    // The first connection at boot keeps the short connect deadline, as the
+    // other dependencies do: `connect_with` would otherwise wait up to the
+    // (longer) acquire timeout before an unreachable database is reported.
+    tokio::time::timeout(
+        connect_deadline,
+        PgPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(acquire_timeout)
+            .connect_with(options),
+    )
+    .await
+    .map_err(|_| ProductionBootstrapError::DependencyUnavailable)?
+    .map_err(|_| ProductionBootstrapError::DependencyUnavailable)
 }
 
 const fn map_config_error(error: &RuntimeConfigError) -> ProductionBootstrapError {

@@ -137,10 +137,10 @@ type Labeler interface {
 // SlotHolder is a runner some of whose invocations take one of the limited
 // slots (<PREFIX>MAX_PARALLEL_WORKERS on each replica) while they run: a
 // DeepWiki wiki generation, say. The server asks before Submit, from the
-// call alone. A slot holder is admitted only while the fleet (or, with an
-// in-memory store, this process) has a free slot, and it waits for a local
-// slot before it runs (Manager.SubmitWith). A runner that does not
-// implement it has no slot limit.
+// call alone. A slot holder is admitted only while this process has a free
+// slot and admits work, and (with a durable store) the fleet has a free
+// slot; otherwise it is refused at once, never queued (Manager.SubmitWith).
+// A runner that does not implement it has no slot limit.
 type SlotHolder interface {
 	HoldsSlot(call Invoke) bool
 }

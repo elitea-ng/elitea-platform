@@ -196,6 +196,18 @@ spec:
         - name: engine
           image: "{{ .Values.inventory.engine.image.repository }}:{{ include "elitea-inventory.engineTag" . }}"
           imagePullPolicy: {{ .Values.inventory.engine.image.pullPolicy }}
+          {{- /*
+            The kubelet sends SIGTERM to every container of the pod at once
+            (after each container's own preStop). The engine counts only its
+            own open streams, and the host still admits calls during its
+            preStop sleep and its gRPC stop. So the engine sleeps through
+            both (preStop.sleepSeconds + 15) before its drain starts: a call
+            the host admits in that window finds the engine still serving.
+            The host's grace check (preStop + 10 + drain + 10) covers this
+            one (preStop + 15 + drain). Then the engine drains up to ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS.
+          */}}
+          {{- $enginePreStop := add $preStop 15 }}
+          {{- include "elitea.scaling.preStop" $enginePreStop | nindent 10 }}
           {{- with .Values.inventory.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

@@ -20,7 +20,7 @@
 {{- $name := printf "%s-keda-cleanup" .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- $c := .Values.kedaCleanup | default dict }}
 {{- $timeout := include "elitea.integer" (dict "field" "kedaCleanup.timeoutSeconds" "value" ($c.timeoutSeconds | default 120) "min" 10) | int }}
-{{- $hook := dict "helm.sh/hook" "pre-delete" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+{{- $hook := dict "helm.sh/hook" "pre-delete" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded,hook-failed" }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

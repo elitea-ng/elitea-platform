@@ -220,6 +220,12 @@ all(container(n, n)['lifecycle']['preStop'] == {'sleep': {'seconds': 5}} and
     env(n, n, 'ELITEA_%s_DRAIN_TIMEOUT_SECONDS' % n.split('-')[1].upper()) == '3600' and
     pod(n)['terminationGracePeriodSeconds'] == 3630
     for n in ('elitea-deepwiki', 'elitea-inventory'))"
+# The kubelet sends SIGTERM to both containers at once. The engine sidecar
+# sleeps through the host's preStop and gRPC stop (5 + 15) so a call the host
+# admits in that window does not find the engine gone.
+check default "DeepWiki and Inventory engines: preStop sleep preStop + 15 = 20" "
+all(container(n, 'engine')['lifecycle']['preStop'] == {'sleep': {'seconds': 20}}
+    for n in ('elitea-deepwiki', 'elitea-inventory'))"
 check default "elitea-vector: preStop sleep 5, grace >= 5 + gRPC drain 20" \
   "container('elitea-vector','elitea-vector')['lifecycle']['preStop'] == {'sleep': {'seconds': 5}} and pod('elitea-vector')['terminationGracePeriodSeconds'] >= 25"
 check default "the OTel Collector: preStop sleep 5, grace 30 >= 5 + batch flush 10" \
@@ -271,6 +277,8 @@ echo "== keda"
 expect_refusal "worker.autoscaling.source=keda with no KEDA anywhere" "needs KEDA, and none is available" \
   --set worker.autoscaling.source=keda
 expect_render "worker.autoscaling.source=cpu beside KEDA" worker-cpu --set worker.autoscaling.source=cpu "${KEDA_API[@]}"
+expect_refusal "a CPU HPA for the worker with minReplicas 0 (scale to zero is KEDA's alone)" "worker.autoscaling.minReplicas (0) must be at least 1" \
+  --set worker.autoscaling.minReplicas=0
 check worker-cpu "a CPU HPA, no ScaledObject" \
   "ann(one('HorizontalPodAutoscaler','elitea-worker')).get('elitea.ai/autoscaling-source') == 'cpu' and not has('ScaledObject','elitea-worker')"
 expect_render "keda.enabled: this release installs KEDA" keda-bundled --set keda.enabled=true

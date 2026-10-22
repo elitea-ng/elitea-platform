@@ -1,6 +1,8 @@
 {{- if and .Values.worker.enabled .Values.worker.autoscaling.enabled }}
 {{- if eq (include "elitea.scaling.workerSource" . | trim) "cpu" }}
 {{- $a := .Values.worker.autoscaling }}
+{{- /* An HPA needs minReplicas >= 1 (scale to zero is KEDA's alone): refused by name here, not by the API server. */}}
+{{- include "elitea.scaling.validateRange" (dict "v" .Values.worker "field" "worker") }}
 # CPU, the fallback: no KEDA is available to this release
 # (elitea.scaling.workerSource). An agent execution spends most of its life
 # waiting on a model, so CPU rises later than the backlog does. Install KEDA
