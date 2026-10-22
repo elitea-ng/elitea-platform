@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible with the clients and SDK of the previous (Python) platform.
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -2766,9 +2767,10 @@ export const getListUserModeRolesUrl = () => {
 };
 
 /**
- * Which user holds which CENTRAL role in which permission mode — the registry
- * behind the admin console's Modes table. Each row carries the composite
- * `<user_id>:<mode>:<role>` id the DELETE below consumes.
+ * Which user holds which CENTRAL role in which route mode (URL mode
+ * segment) — the registry behind the admin console's Modes table. Each row
+ * carries the composite `<user_id>:<mode>:<role>` id the DELETE below
+ * consumes.
  *
  * The reference walks its runtime mode registry and asks for every
  * (user, mode) pair over RPC; this is one join over the assignment table,
@@ -3741,18 +3743,18 @@ export const getBulkInviteMembersUrl = () => {
  * added to every listed project with the one named role, and every
  * (user, project) pair reports its own outcome.
  *
- * It replaces two legacy console pages —
+ * It replaces two console pages of the legacy runtime —
  * `legacy/plugins/admin/api/v2/invites_bulkusers.py` ("add every user to
  * one project") and `invites_bulkprojects.py` ("add one user to many
  * projects") — which are the same cross product with one side pinned.
  * Both declare their own permission, and this route accepts either.
  *
- * Four differences from the legacy runtime are deliberate and are recorded in
- * `internal/api/v2/admin/invites_bulk.go`:
+ * Four differences from the legacy runtime are deliberate and are recorded
+ * in `internal/api/v2/admin/invites_bulk.go`:
  *
- * - The role set is ADDED to, never replaced. The legacy runtime's write replaces
- *   every role the account holds in the project, which run over "all
- *   users" demotes every existing project admin.
+ * - The role set is ADDED to, never replaced. The legacy runtime's write
+ *   replaces every role the account holds in the project, which run over
+ *   "all users" demotes every existing project admin.
  * - Per-pair outcomes, not one English log blob.
  * - Ids and one typed role name, not comma-separated free text.
  * - A personal project is refused: it is one account's own space and a

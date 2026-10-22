@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible with the clients and SDK of the previous (Python) platform.
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -5244,8 +5245,8 @@ export const getListPublicApplicationsUrl = (
  * parse gets the same status and the same `{error, error_description}`
  * keys, with `error: invalid_client_version`.
  *
- * Trending (`trend_start_period`/`trend_end_period`) is the one legacy
- * parameter still missing here.
+ * Trending (`trend_start_period`/`trend_end_period`) is the one
+ * legacy-runtime parameter still missing here.
  * @summary List published applications visible without project membership
  */
 export const listPublicApplications = async (
@@ -8187,7 +8188,8 @@ export const getGetApplicationVersionDetailExpandedUrl = (
  * vault's `secrets_header_value`, which is what the legacy runtime's
  * `check_secret_header` compares
  * (legacy/plugins/elitea_core/utils/secrets.py:4-9). A mismatch answers
- * 400 `{"error": "Invalid secret header"}`, the exact legacy body.
+ * 400 `{"error": "Invalid secret header"}`, the exact body the legacy
+ * runtime returns.
  *
  * Implementation: internal/api/v2/applications/handler.go,
  * GetVersionExpanded.

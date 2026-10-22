@@ -534,9 +534,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  */
 /*
  * 231 -> 232, when the admin cross-project bulk membership invite was described
- * (`bulkInviteMembers`, issue 247). It replaces pylon's two console pages,
- * invites_bulkusers and invites_bulkprojects, which are the same cross product
- * with one side pinned, so ONE operation replaces two forms.
+ * (`bulkInviteMembers`, issue 247). It replaces two console pages of the legacy
+ * runtime, invites_bulkusers and invites_bulkprojects, which are the same cross
+ * product with one side pinned, so ONE operation replaces two forms.
  *
  * The budget half of the same package moves NEITHER number by an operation:
  * `warning_active` is a new FIELD on BudgetState, not a new operation, and

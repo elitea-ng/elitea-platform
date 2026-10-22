@@ -1177,8 +1177,8 @@ export interface paths {
          *     parse gets the same status and the same `{error, error_description}`
          *     keys, with `error: invalid_client_version`.
          *
-         *     Trending (`trend_start_period`/`trend_end_period`) is the one legacy
-         *     parameter still missing here.
+         *     Trending (`trend_start_period`/`trend_end_period`) is the one
+         *     legacy-runtime parameter still missing here.
          */
         get: operations["listPublicApplications"];
         put?: never;
@@ -2680,7 +2680,7 @@ export interface components {
             offset: number;
             rows: components["schemas"]["EditorTestRun"][];
         };
-        /** @description NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the legacy `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362). */
+        /** @description NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the compatibility `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362). */
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
@@ -3056,7 +3056,7 @@ export interface components {
             ids: string | number[];
             is_seen: boolean;
         };
-        /** @description NOTE(W2): the notification routes write the legacy `{"ok": false, "error": ...}` envelope on every failure, including "Notification is not found", which answers 400 rather than 404 (internal/api/v2/notifications/api.go:479-491). */
+        /** @description NOTE(W2): the notification routes write the compatibility `{"ok": false, "error": ...}` envelope that shipped clients parse on every failure, including "Notification is not found", which answers 400 rather than 404 (internal/api/v2/notifications/api.go:479-491). */
         NotificationErrorResponse: {
             error: string;
             ok: boolean;
@@ -3238,7 +3238,7 @@ export interface components {
             personal_project_id: string;
             /** @description Arbitrary user-defined personalization payload. */
             personalization?: unknown;
-            /** @description The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a legacy-runtime bare subject). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id. */
+            /** @description The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a bare subject the legacy runtime wrote). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id. */
             provider_refs?: string[];
         };
         StaticPipelineContinuationBody: components["schemas"]["StaticPipelineRootContinuation"] | components["schemas"]["StaticPipelineToolsContinuation"];
