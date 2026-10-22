@@ -23,7 +23,7 @@ package admin
 //
 // # The row shape
 //
-// The four keys legacy's listing carries are kept verbatim — `task_id`,
+// The four keys the legacy runtime's listing carries are kept verbatim — `task_id`,
 // `status`, `started_at`, `user` — so an operator's existing tooling still
 // reads. `kind`, `name`, `finished_at`, `project_id` and `cancellable` are
 // added, because the legacy runtime had one kind of task, one project, no

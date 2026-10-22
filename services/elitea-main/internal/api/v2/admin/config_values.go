@@ -20,7 +20,7 @@ package admin
 // handler on the target runtime upserts the bytes into THAT runtime's own
 // `plugin_config` table and calls `descriptor.load_config()`
 // (legacy/plugins/admin/api/v2/plugin_config_values.py:275-305,
-// the legacy runtime's core/providers/internal/db_config.py:65-88).
+// core/providers/internal/db_config.py:65-88 in the legacy runtime's own package).
 //
 // That is legacy plugin loading over Arbiter transport, which AGENTS.md's
 // architecture boundaries name explicitly as things the target architecture does

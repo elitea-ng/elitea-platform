@@ -19,7 +19,7 @@ package projectprovisioning
 //   project_schema       create_tenant_schema('p_<id>') then the tenant corpus.
 //                        The legacy runtime runs CreateSchema + create_all
 //                        inside its one step; this is the same two halves.
-//   project_permissions  The per-project roles. Legacy writes ROLES ONLY and no
+//   project_permissions  The per-project roles. The legacy runtime writes ROLES ONLY and no
 //                        auth_core__project_role_permission rows, so permission
 //                        resolution falls back to the central default-mode
 //                        grants by role NAME. legacyrbac.projectPermissions()

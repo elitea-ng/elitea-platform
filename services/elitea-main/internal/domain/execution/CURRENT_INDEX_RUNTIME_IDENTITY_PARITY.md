@@ -10,7 +10,7 @@ does not turn a missing actor PAT into a project-system identity at runtime.
 
 | Current condition | Current action | Evidence |
 | --- | --- | --- |
-| The actor owns a non-expired PAT | Encode the first active actor PAT and do not send a user-session reference. | `legacy/plugins/elitea_core/utils/predict_utils.py:get_user_token`, lines 73-80; `get_predict_token_and_session`, lines 99-115. |
+| The actor owns a non-expired PAT | Encode the first active actor PAT and do not send a user-session reference. | `legacy/centry/<main runtime>/plugins/elitea_core/utils/predict_utils.py:get_user_token`, lines 73-80; `get_predict_token_and_session`, lines 99-115. |
 | The actor has no active PAT and the initiating Socket.IO connection is an authenticated `user` context for the same user ID | Read that context's trusted auth-session reference, then encode the project's system-user `api` PAT. Both identities participate: system PAT for the service call and actor session for user/RBAC context. | `predict_utils.py:get_predict_token_and_session`, lines 99-115; payload headers at lines 226-241 and 489-504. |
 | The actor has no active PAT and no matching live authenticated user context | Reject with `PredictPayloadError("User token not found. Please create user_token")`. | `predict_utils.py:get_predict_token_and_session`, lines 103-109. |
 | The project system user exists but no named `api` PAT exists | Create an `api` PAT on demand and encode it. Project creation normally provisions this user, assigns its project `system` role, and creates a token. | `predict_utils.py:get_system_user_token`, lines 59-70; `projects/utils/project_steps.py:SystemUser` and `SystemToken`, lines 118-158. |

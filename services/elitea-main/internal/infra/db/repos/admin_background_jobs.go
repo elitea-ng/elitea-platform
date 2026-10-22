@@ -2,7 +2,7 @@ package repos
 
 // The admin Tasks page's read and its cancel.
 //
-// # What legacy's Tasks page was, and why this is not a copy of it
+// # What the legacy runtime's Tasks page was, and why this is not a copy of it
 //
 // legacy/plugins/admin's Tasks page (module.py:392-421, api/v2/tasks.py) lists
 // an in-process `arbiter.TaskNode`'s `global_task_state` — one-off maintenance

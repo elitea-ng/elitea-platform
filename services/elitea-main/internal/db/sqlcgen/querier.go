@@ -153,7 +153,7 @@ type Querier interface {
 	// final chunk arrived (browser tab closed, connection lost) — the only
 	// other path that deletes these rows is the completed-merge path
 	// (DeleteAttachmentChunks above), which an abandoned upload never reaches.
-	// Legacy's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
+	// The legacy runtime's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
 	// 12-hour local-disk TTL swept by the elitea_core_cleanup_stale_chunks RPC.
 	DeleteStaleAttachmentChunks(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	// The list and get responses read the binding back through the LEFT JOIN
@@ -425,7 +425,7 @@ type Querier interface {
 	ListArtifactProjectIDsWithBuckets(ctx context.Context) ([]int64, error)
 	// Read by the merge step once CountAttachmentChunks reaches total_chunks —
 	// ORDER BY chunk_index reconstructs the original byte stream regardless of
-	// arrival order, matching legacy's merge_chunks reading 0..total_chunks-1.
+	// arrival order, matching the legacy runtime's merge_chunks reading 0..total_chunks-1.
 	ListAttachmentChunksOrdered(ctx context.Context, arg ListAttachmentChunksOrderedParams) ([]ListAttachmentChunksOrderedRow, error)
 	ListClaimableScheduledOccurrences(ctx context.Context, arg ListClaimableScheduledOccurrencesParams) ([]ListClaimableScheduledOccurrencesRow, error)
 	// This deliberately projects only the six fields exposed by nested
@@ -624,7 +624,7 @@ type Querier interface {
 	// A participant that names the catalogue twin of a PUBLISHED agent therefore
 	// has no row to join here at all, and an inner join answered no rows -- the
 	// 422 a conversation in project A got when it addressed an agent published in
-	// the catalogue, which legacy allowed. The version for that one case is read
+	// the catalogue, which the legacy runtime allowed. The version for that one case is read
 	// afterwards, from the catalogue project's own schema
 	// (CurrentAgentStartRepository.resolveCatalogueApplicationVersion), so this
 	// join is allowed to miss and the projection below is then a document of
@@ -851,7 +851,7 @@ type Querier interface {
 	UpsertArtifactObject(ctx context.Context, arg UpsertArtifactObjectParams) (EliteaStorageObject, error)
 	// ON CONFLICT DO UPDATE, not DO NOTHING: a retried chunk_index (client
 	// timeout, network retry) must overwrite the previous bytes for that index,
-	// matching legacy's own local-disk behavior (writing to the same filename
+	// matching the legacy runtime's own local-disk behavior (writing to the same filename
 	// twice replaces it) — never double-counted, since the primary key already
 	// de-duplicates by chunk_index.
 	UpsertAttachmentChunk(ctx context.Context, arg UpsertAttachmentChunkParams) error

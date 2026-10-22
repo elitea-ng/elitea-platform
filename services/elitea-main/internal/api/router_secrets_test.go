@@ -36,7 +36,7 @@ var secretsRoutes = []struct {
 	{http.MethodPut, "/api/v2/secrets/secret/{mode}/{projectID}/{name}"},
 	{http.MethodDelete, "/api/v2/secrets/secret/{mode}/{projectID}/{name}"},
 	{http.MethodPost, "/api/v2/secrets/hide/{mode}/{projectID}/{name}"},
-	// The mode-less show route legacy also serves and elitea-sdk is the sole
+	// The mode-less show route the legacy runtime also serves and elitea-sdk is the sole
 	// caller of (elitea_sdk/runtime/clients/client.py:108 builds
 	// {api_v2}/secrets/secret/{project_id} and appends /{name}).
 	{http.MethodGet, "/api/v2/secrets/secret/{projectID}/{name}"},

@@ -36,7 +36,7 @@ type DBPersonalProjectResolver struct {
 	// the SPA's path. A PAT-only caller — the SDK, a scheduled job, a scripted
 	// client — never requests `/social/author`, so hooking that endpoint alone
 	// left those callers with no personal project and `/llm` answering
-	// `project_not_resolved` forever. The legacy runtime triggered the same
+	// `project_not_resolved` forever. The legacy runtime triggers the same
 	// work for every authenticated request.
 	ensurer personalproject.AsyncEnsurer
 }

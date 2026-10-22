@@ -241,7 +241,7 @@ func (h *Handler) Routes() chi.Router {
 	// request with no mode segment dispatches to `DEFAULT_MODE` →
 	// `ProjectAPI.get`, which declares
 	// `configuration.secrets.secret.unsecret` (secret.py:26). The runtime is
-	// therefore already passing this exact check against the legacy runtime;
+	// therefore already passing this exact check against the legacy runtime in production;
 	// gating it here is parity, not a new restriction.
 	//
 	// The principal is not a permission-less service identity: both SDK

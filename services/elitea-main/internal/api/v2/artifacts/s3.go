@@ -184,7 +184,7 @@ func (h *Handler) requireS3BucketScoped(w http.ResponseWriter, r *http.Request, 
 	// SDK reaches the same objects through these routes as the native ones, so
 	// an exception that refuses a verb there must refuse it here; an S3
 	// representation that is a softer way in is not a representation, it is a
-	// second policy. AccessDenied is the code legacy's own S3 routes answer
+	// second policy. AccessDenied is the code the legacy runtime's own S3 routes answer
 	// with (routes/s3.py:88-90).
 	//
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the

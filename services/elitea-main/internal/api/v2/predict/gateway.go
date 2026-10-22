@@ -10,7 +10,7 @@
 // #126 deleted the transport rather than repairing it. The capability stayed
 // open as this issue.
 //
-// BLOCKING ONLY, ON PURPOSE. Legacy's predict_sio_llm has two modes: blocking
+// BLOCKING ONLY, ON PURPOSE. The legacy runtime's predict_sio_llm has two modes: blocking
 // (await_task_timeout > 0, the answer comes back in the HTTP response) and
 // async (await_task_timeout == 0, a task id comes back and the tokens arrive
 // over the socket.io `application_predict` event). The async half is NOT

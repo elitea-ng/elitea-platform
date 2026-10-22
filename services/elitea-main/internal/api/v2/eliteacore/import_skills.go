@@ -150,7 +150,7 @@ func (h *Handler) importSkill(
 	description, _ := entry["description"].(string)
 	if description == "" {
 		// `skills.description` is NOT NULL (001_initial.sql:370-381), and the
-		// legacy writes `description or name` into it (utils/skill_utils.py,
+		// the legacy runtime writes `description or name` into it (utils/skill_utils.py,
 		// import_skill). An empty string would satisfy the column and give the
 		// skill list a row with no text at all.
 		description = name

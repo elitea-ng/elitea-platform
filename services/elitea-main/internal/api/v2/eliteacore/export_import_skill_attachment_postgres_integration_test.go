@@ -290,7 +290,7 @@ func TestForkReportsASkillItCannotFork(t *testing.T) {
 		t.Fatalf("errors.skills = %+v, want both refused entries", reported)
 	}
 	// The index space is ONE list: the applications, then the skills — the
-	// legacy's own numbering (fork.py concatenates the two arrays and numbers
+	// the legacy runtime's own numbering (fork.py concatenates the two arrays and numbers
 	// every entry by its position in the result). This body sends one
 	// application, so the two skills are at 1 and 2. An entry that reported 0
 	// would name the AGENT, which forked correctly.

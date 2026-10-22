@@ -909,7 +909,7 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 }
 
 // Permission strings from the existing configuration.artifacts.artifacts
-// catalog (S11). edit is easy to miss — legacy uses it for retention and pin
+// catalog (S11). edit is easy to miss — the legacy runtime uses it for retention and pin
 // changes (PATCH), distinct from create (uploads, bucket/grant creation) and
 // delete (DELETE, :batchDelete).
 const (
@@ -2313,7 +2313,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireModeUsers).Delete("/modes/administration", adminHandler.ModesRemove)
 				r.With(requireModeUsers).Post("/user_invite/administration", adminHandler.UserInvite)
 				// The CROSS-PROJECT bulk membership invite (issue 247,
-				// internal/api/v2/admin/invites_bulk.go). Legacy served this as
+				// internal/api/v2/admin/invites_bulk.go). The legacy runtime served this as
 				// two console pages — legacy/plugins/admin/api/v2/
 				// invites_bulkusers.py and invites_bulkprojects.py — and each
 				// declares its OWN permission rather than the project-membership
@@ -2645,7 +2645,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// {projectID} segment. Its own three writes beside it have been
 				// gated since #130.
 				//
-				// Legacy declares `configuration.users.users.view` on the same
+				// The legacy runtime declares `configuration.users.users.view` on the same
 				// handler (legacy/plugins/admin/api/v2/users.py, API.get), which
 				// is the string the /elitea_core fallback copy of this route
 				// already carries.
@@ -2949,7 +2949,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// short-circuited on the `projectID=0` the admin page sends. See
 			// internal/api/v2/scheduling/schedules.go.
 			//
-			// Gated on the permissions legacy declares for the same handlers
+			// Gated on the permissions the legacy runtime declares for the same handlers
 			// (legacy/plugins/scheduling/api/v2/schedules.py):
 			// `configuration.scheduling.schedules.view` and `…edit`.
 			//
@@ -3088,7 +3088,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// so `projectPermission` below can be used at all. The two land
 				// together on purpose; either alone is a defect.
 				//
-				// `projectScoped` therefore survives only where legacy has NO
+				// `projectScoped` therefore survives only where the legacy runtime has NO
 				// permission to copy — see each remaining use for which one and
 				// why. Everywhere else the named permission REPLACES it, which
 				// is strictly stronger: legacyrbac's projectPermissions() joins
@@ -3133,7 +3133,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// module and verb; router_elitea_core_permission_map_test.go
 				// re-derives both directions from
 				// testdata/legacy/legacy-rbac-static-catalog.json and from 0068,
-				// so a name that legacy never declared — or one that nothing
+				// so a name that the legacy runtime never declared — or one that nothing
 				// grants — fails the build instead of shipping as a 403 nobody
 				// can clear.
 
@@ -3165,7 +3165,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// a body-less PATCH and expects the expanded, secret-resolved
 					// version details.
 					//
-					// Legacy declares the READ permission
+					// The legacy runtime declares the READ permission
 					// `models.applications.version.details` on its own handler
 					// (legacy/plugins/elitea_core/api/v2/version.py:100-106), so
 					// this route takes the same permission as the GET above it —
@@ -3370,7 +3370,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/toolkit_validator/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.ValidateToolkit)
 				r.With(toolkitGate("models.applications.fork.post")).
 					Post("/fork_toolkit/prompt_lib/{projectID}", toolkitHandler.ForkToolkit)
-				// Legacy has test_toolkit_tool.py and no test_tool.py; both
+				// The legacy runtime has test_toolkit_tool.py and no test_tool.py; both
 				// verbs here run one toolkit tool, so both take the string that
 				// module declares.
 				//
@@ -3874,7 +3874,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// distinguishable from a missing route. Gating the registration
 				// on the dependency instead is exactly what produced #126.
 				//
-				// The permission is legacy's own
+				// The permission is the legacy runtime's own
 				// (elitea_core/api/v2/predict_llm.py check_api), and its
 				// default-mode split reaches VIEWER — see
 				// migrations/shared/0105_predict_llm_permission.sql, which is
@@ -3911,14 +3911,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// route. Gating the registration on the dependency is exactly
 				// what produced #126.
 				//
-				// The permissions are legacy's own check_api declarations, with
+				// The permissions are the legacy runtime's own check_api declarations, with
 				// ONE deliberate substitution. generate_project_context_draft
 				// declares `models.project_context.generate`, a string this
-				// repository's migration history does not grant and legacy's
+				// repository's migration history does not grant and the legacy runtime's
 				// own catalogue reaches only through that one module; gating on
 				// it would ship a permanent 403 nobody can clear (#313).
 				// `models.project_context.edit` is granted by 0068 to exactly
-				// the roles legacy's recommended_roles gives .generate — admin
+				// the roles the legacy runtime's recommended_roles gives .generate — admin
 				// and editor, never viewer — and it is the permission the
 				// caller needs anyway, since the only thing to do with a
 				// generated Project Background is save it.
@@ -4059,7 +4059,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/trending_authors/prompt_lib/{projectID}", coreHandler.TrendingAuthors)
 
 				// Moderation used to be registered here as well, on
-				// `/elitea_core/moderation_status/…`. Legacy serves that
+				// `/elitea_core/moderation_status/…`. The legacy runtime serves that
 				// resource under `admin` only and no client has ever called this
 				// copy; it is removed with the stub it pointed at rather than
 				// re-pointed at the real handler, which would publish a second
@@ -4339,7 +4339,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// catalogue lists as UNGUARDED, and internal_mcp_pat_status has
 				// no legacy module at all. There is no permission to
 				// transcribe, and #302's acceptance notes forbid tightening
-				// what legacy leaves open — but each still names a project in
+				// what the legacy runtime leaves open — but each still names a project in
 				// its path and then reads that project's toolkit rows or the
 				// caller's own tokens, so the membership check they shipped
 				// with stays.
@@ -4347,7 +4347,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// The modes are the legacy runtime's, not a guess:
 				// tools_list/tools_call register `c.DEFAULT_MODE` only,
 				// internal_mcp_pat_status registers `prompt_lib` only. A mode
-				// legacy does not serve on a path 404s here rather than being
+				// the legacy runtime does not serve on a path 404s here rather than being
 				// answered with something plausible.
 				//
 				// tools_list is registered in BOTH mode shapes. The legacy
@@ -4384,7 +4384,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				// Users / Roles (served under /admin/ for UI compat, registered
 				// here as fallback). elitea_core has no users.py or roles.py;
-				// legacy serves both from the ADMIN plugin, whose ProjectAPI
+				// the legacy runtime serves both from the ADMIN plugin, whose ProjectAPI
 				// variants declare `configuration.users.users.view` and
 				// `configuration.roles.roles.view`. Both handlers here read the
 				// named project's membership — Users returns every member's
@@ -4624,7 +4624,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// architecture decision and the "runtime.plugins" admin-status gate
 			// (reusing the permission system_info.py/plugin_config_*.py/
 			// maintenance.py/runtime_*.py already declare, rather than seeding
-			// legacy's unseeded "models.admin.tracing.view" fresh).
+			// the legacy runtime's unseeded "models.admin.tracing.view" fresh).
 			requireTracingAdminStatus := apimw.RequireCentralPermissions(
 				permissionResolver, platformauth.PermissionModeAdministration,
 				"runtime.plugins",

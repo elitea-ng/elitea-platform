@@ -98,7 +98,7 @@ const (
 // readers treat as "never set", so a project with no vault no longer 500s and
 // this test is no longer what stands between a new project and an empty model
 // picker. It still pins the vault the route must create: the secrets API reads
-// it, and the legacy runtime provisioned one with every project.
+// it, and the legacy runtime provisions one with every project.
 func TestCreateProjectRouteGivesTheNewProjectAUsableSecretsVault(t *testing.T) {
 	pool := newOnboardingPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

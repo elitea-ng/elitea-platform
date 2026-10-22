@@ -268,7 +268,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 403-for-everyone.
 	//
 	// It is the first grant file here whose default-mode split reaches VIEWER,
-	// and that is not a widening invented for the port: legacy's own
+	// and that is not a widening invented for the port: the legacy runtime's own
 	// predict_llm.py declares recommended_roles viewer=True in DEFAULT_MODE and
 	// viewer=False in ADMINISTRATION_MODE, and testdata/postgres/legacy-rbac-matrix.json
 	// carries the same asymmetry. Only the default mode is delivered, because
@@ -517,7 +517,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// 121: shared/0121_bulk_invite_permissions.sql, the two administration-mode
 	// grants the cross-project bulk membership invite needs
-	// (`invites.bulkusers`, `invites.bulkprojects`, issue 247). Legacy declares
+	// (`invites.bulkusers`, `invites.bulkprojects`, issue 247). The legacy runtime declares
 	// both on the two console pages that route replaces, so the strings are
 	// parity rather than a new policy, and the route would answer 403 on a
 	// clean database without them. A new file for 0120's reason: 0082 is
@@ -811,7 +811,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// one agent's dataset into the whole project's library.
 	//
 	// 133: tenant/0133_pipeline_triggers_and_schedules.sql, the storage for the
-	// two unattended pipeline entry points legacy had and this stack did not —
+	// two unattended pipeline entry points the legacy runtime had and this stack did not —
 	// an inbound signed trigger (issue 192) and a per-pipeline cron (issue
 	// 193). It introduces NO permission, so it has no shared sibling: the read
 	// is `models.applications.version.details` and every write is

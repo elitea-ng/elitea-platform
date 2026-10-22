@@ -14,7 +14,7 @@ import (
 // handler tests in internal/api/v2/eliteacore mount a router of their own.
 //
 //  1. The listing was `GET /api/v2/elitea_core/admin/{mode}`, so a caller could
-//     name any mode and get the same three invented rows back. Legacy registers
+//     name any mode and get the same three invented rows back. The legacy runtime registers
 //     `mode_handlers = {'administration': AdminAPI}` and nothing else, and a
 //     static segment is also what keeps the handler from having to sniff a
 //     `{mode}` param that a static segment does not bind — the trap #207 caught.

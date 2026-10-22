@@ -2576,7 +2576,7 @@ func TestProductionRouterServesThePerMessageRead(t *testing.T) {
 // here. Without this, a gate copied from the DELETE one line below it would
 // look correct in every other test in this file: the route would still answer,
 // still reach the handler, and still return the right message — for a
-// principal legacy does not let read it.
+// principal the legacy runtime would not let read the message.
 func TestPerMessageReadDoesNotAcceptTheDeleteSiblingsPermission(t *testing.T) {
 	repo := &recordingMessageRepo{}
 	router := perMessageReadRouter(repo, "models.chat.messages.delete")

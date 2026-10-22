@@ -2861,7 +2861,7 @@ func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request
 // returned 404, and the picker drew five broken images, because it has no
 // fallback for a url that fails. An empty section is honest.
 //
-// Three items complete the feature. Legacy does all three
+// Three items complete the feature. The legacy runtime does all three
 // (legacy/plugins/elitea_core/routes/application_icon.py:15 and
 // legacy/plugins/elitea_core/module.py:599-616):
 //
@@ -4064,7 +4064,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	// # The index space of every error entry
 	//
 	// ONE space for both arrays: the applications, then the skills. That is the
-	// legacy's own numbering. `fork.py` concatenates
+	// the legacy runtime's own numbering. `fork.py` concatenates
 	// `(applications or []) + (skills or [])` into one entities list and hands
 	// that list to `import_wizard`, which numbers every error and every result by
 	// the position in it (`_wrap_import_error`, `_wrap_import_result`).

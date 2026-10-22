@@ -205,7 +205,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	// The auth_core__user join resolves a DISPLAY NAME for user participants.
 	// The REST attach path stores only `entity_meta.id` (the numeric user id
 	// the resolver's author join needs), and the participant writer records
-	// its own disclosed gap: "Legacy also resolves a user name ... this
+	// its own disclosed gap: "The legacy runtime also resolves a user name ... this
 	// repository does not perform that lookup" (participantDisplayMeta). The
 	// transcript's author captions read `meta.user_name` off THIS payload, so
 	// without the lookup every author renders as "User <n>".
@@ -1129,7 +1129,7 @@ func deleteConversationPin(ctx context.Context, tx pgx.Tx, projectID string, con
 // IS NOT DISTINCT FROM, not `=`: a missing key reads as SQL NULL, and `=`
 // answers NULL for it, which the WHERE clause drops.
 //
-// THE COMPARISON IS TEXTUAL, and legacy's is numeric. legacy casts both sides
+// THE COMPARISON IS TEXTUAL, and the legacy runtime's is numeric. The legacy runtime casts both sides
 // to Integer (`make_query_filter_for_entity`, participant_utils.py:79-94).
 // This query compares the `->>` text on both sides. A caller that sends
 // `"id": "42"` and a caller that sends `"id": 42` therefore get two rows for
@@ -1156,8 +1156,8 @@ const participantIdentityQuery = `SELECT id FROM %s.chat_participants
 // participant this repository created contributed a NULL name there.
 //
 // The name comes from the request, which is what the web client sends
-// (features/chat-participants/lib/helpers.ts). Legacy also resolves an
-// `agent_type` for an application through an entity lookup. Legacy also
+// (features/chat-participants/lib/helpers.ts). The legacy runtime also resolves an
+// `agent_type` for an application through an entity lookup. The legacy runtime also
 // resolves a user name and avatar for a user through that lookup. This
 // repository does not perform that lookup.
 func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte {
@@ -1198,7 +1198,7 @@ func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte
 // rows and two mapping rows in one conversation. A double click does that,
 // and so does a retry after a failed first attempt.
 //
-// The order is now find, then create, which is what legacy's `get_or_create_one`
+// The order is now find, then create, which is what the legacy runtime's `get_or_create_one`
 // does and what predict.go's findOrCreateUserParticipant already did.
 //
 // One transaction covers the lookup, the insert and the mapping. Two
@@ -1212,7 +1212,7 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 
 // AddParticipants preserves the current all-or-nothing batch boundary. It
 // returns the participant id of each body, in request order. An entity that
-// was already a participant returns its existing id; legacy's POST answers
+// was already a participant returns its existing id; the legacy runtime's POST answers
 // with those same rows (get_or_create_one), not the whole conversation.
 func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error) {
 	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {

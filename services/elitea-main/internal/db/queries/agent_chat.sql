@@ -257,7 +257,7 @@ JOIN chat_participants AS target_participant
 -- A participant that names the catalogue twin of a PUBLISHED agent therefore
 -- has no row to join here at all, and an inner join answered no rows -- the
 -- 422 a conversation in project A got when it addressed an agent published in
--- the catalogue, which legacy allowed. The version for that one case is read
+-- the catalogue, which the legacy runtime allowed. The version for that one case is read
 -- afterwards, from the catalogue project's own schema
 -- (CurrentAgentStartRepository.resolveCatalogueApplicationVersion), so this
 -- join is allowed to miss and the projection below is then a document of
@@ -423,7 +423,7 @@ LEFT JOIN LATERAL (
             -- holds backticks, see canvas_fence) and one without is its
             -- content. A canvas past the history budget is a marker instead
             -- (see canvas_budget). The one deviation is `document` (#879, a type
-            -- legacy never had): its content IS the prose of the answer in Markdown,
+            -- the legacy runtime never had): its content IS the prose of the answer in Markdown,
             -- so it goes in as that prose rather than as a code block of a
             -- language no model knows. chr(96) is the backtick, spelled that
             -- way because sqlc embeds this text in a Go raw string.
@@ -1374,7 +1374,7 @@ LEFT JOIN LATERAL (
             -- holds backticks, see canvas_fence) and one without is its
             -- content. A canvas past the history budget is a marker instead
             -- (see canvas_budget). The one deviation is `document` (#879, a type
-            -- legacy never had): its content IS the prose of the answer in Markdown,
+            -- the legacy runtime never had): its content IS the prose of the answer in Markdown,
             -- so it goes in as that prose rather than as a code block of a
             -- language no model knows. chr(96) is the backtick, spelled that
             -- way because sqlc embeds this text in a Go raw string.

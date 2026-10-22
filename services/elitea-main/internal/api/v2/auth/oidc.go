@@ -773,7 +773,7 @@ func reuseLinkedAccount(
 // the guard silently stopped applying to it.
 //
 // The set is CLOSED, and deliberately does not match "any ref containing a
-// colon". The legacy runtime wrote two shapes this service must keep adoptable:
+// colon". The legacy runtime writes two shapes this service must keep adoptable:
 //
 //   - a BARE ref, the raw OIDC subject with no prefix at all
 //     (legacy/plugins/auth_init/rpc/processor.py:55). A namespace-blind guard

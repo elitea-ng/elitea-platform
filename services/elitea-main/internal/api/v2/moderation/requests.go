@@ -59,11 +59,11 @@ package moderation
 // Approving does not itself grant anything, here or in the legacy runtime:
 // nothing in either stack reads an approved row and unlocks a capability, and
 // the catalogue card's real gate is whether a toolkit schema exists. What a
-// decision does is record the operator's answer and TELL the requester — legacy
-// fires a `notifications_stream` event, which lands as a `centry.notifications`
-// row and an SSE push. That row is written here, in the same transaction as the
-// status change, so a decision cannot be recorded without the requester
-// learning of it.
+// decision does is record the operator's answer and TELL the requester — the
+// legacy runtime fires a `notifications_stream` event, which lands as a
+// `centry.notifications` row and an SSE push. That row is written here, in the
+// same transaction as the status change, so a decision cannot be recorded
+// without the requester learning of it.
 //
 // This is stated rather than assumed because it decides what the page may claim.
 // The approve and reject controls say "record a decision and notify the user",
@@ -808,7 +808,7 @@ func createFields(body requestCreateBody) (issueType, description string, err er
 // ## Why this route exists (issue #544)
 //
 // A moderation row could be created and decided, and never removed. The legacy
-// runtime had no delete either, so a deployment accumulated one row per request
+// runtime has no delete either, so a deployment accumulated one row per request
 // for ever, and the queue's first page filled with dead rows. The end-to-end
 // suite made the same fault visible fastest: 20 runs on one stack left 111
 // rows, and the journeys that file a probe row could no longer find their own.

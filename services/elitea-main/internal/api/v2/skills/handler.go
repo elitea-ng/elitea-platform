@@ -189,7 +189,7 @@ const MaxSkillsPerEntityVersion = 5
 // SkillInstructionsMaxLength is the one ceiling, in characters (runes), on a
 // skill version's instructions. elitea-web's editor already allows 50 000
 // (SKILL_INSTRUCTIONS_MAX_LENGTH in features/skills/lib/skillValidation.ts),
-// and issue #6744 asked to lift legacy's 5 000. The MCP skill tools and the
+// and issue #6744 asked to lift the legacy runtime's 5 000. The MCP skill tools and the
 // skill draft generator held 5 000 each, so a skill saved in the editor could
 // not be read back or edited through them. They all use this constant now,
 // and so do the REST writes here (create, version create, update, import)

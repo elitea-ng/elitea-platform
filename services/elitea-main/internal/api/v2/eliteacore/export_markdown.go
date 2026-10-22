@@ -143,7 +143,7 @@ func (m *orderedMap) set(key string, value any) {
 }
 
 // setAlways appends a key whose value is written even when it is a zero — the
-// legacy's `is not None` guards (temperature and top_p, where 0 is a real
+// the legacy runtime's `is not None` guards (temperature and top_p, where 0 is a real
 // setting and dropping it would silently re-default the agent).
 func (m *orderedMap) setAlways(key string, value any) {
 	if value == nil {
@@ -224,7 +224,7 @@ func filterInternalKeys(value any) any {
 }
 
 // sanitizePgvector replaces `_sanitize_pgvector_configuration` (:522). The
-// legacy kept the block's title and forced `private` false; the type is
+// the legacy runtime kept the block's title and forced `private` false; the type is
 // retired, so the whole block, and with it the connection string, is dropped.
 func sanitizePgvector(settings map[string]any) map[string]any {
 	out := make(map[string]any, len(settings))
@@ -301,7 +301,7 @@ func toolkitBlocks(tools []any, toolkits []any, includeApplications bool) []any 
 		}
 
 		// `selected_tools` sits at the top level or inside settings, so the
-		// legacy checks both before deciding there is no selection.
+		// the legacy runtime checks both before deciding there is no selection.
 		selected := full["selected_tools"]
 		if isEmptyValue(selected) && hasSettings {
 			selected = settings["selected_tools"]

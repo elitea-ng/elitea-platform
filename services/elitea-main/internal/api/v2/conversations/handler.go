@@ -1434,14 +1434,14 @@ func (h *Handler) DeleteMessageFeedback(w http.ResponseWriter, r *http.Request) 
 // when the caller left it out. It changes nothing for a model participant,
 // which carries no project id at all.
 //
-// The early return for `llm` and `dummy` matches what legacy STORES. legacy
+// The early return for `llm` and `dummy` matches what the legacy runtime STORES. The legacy runtime
 // writes the project id into every request entry (participants.py:63-65), but
 // pydantic then validates entity_meta against a per-type model.
 // ParticipantEntityLlm keeps `model_name` only, and ParticipantEntityDummy
 // keeps nothing (models/pd/participant.py:21-30). The extra key never reaches
 // the INSERT.
 //
-// One difference remains. legacy validates a `user` entity against
+// One difference remains. The legacy runtime validates a `user` entity against
 // ParticipantEntityUser, which keeps `id` only, so the stored document holds
 // no project id. This helper adds one. The identity key for a user is `id`
 // alone, so the extra key splits no participant row.
@@ -1512,7 +1512,7 @@ func (h *Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Answer with the participants of THIS request only, in request order.
-	// Legacy returns `[serialize(p) for p in result_details]`, the rows it
+	// The legacy runtime returns `[serialize(p) for p in result_details]`, the rows it
 	// added or found. This handler used to return the whole conversation, and
 	// the web callers that treat the answer as "the added rows"
 	// (useAddNewParticipants, the create-from-chat attach, the toolkit
@@ -1847,7 +1847,7 @@ func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request
 }
 
 // AddAttachments serves two different resource types at the one legacy URL,
-// exactly like legacy itself does (legacy/plugins/elitea_core/api/v2/
+// exactly like the legacy runtime itself does (legacy/plugins/elitea_core/api/v2/
 // attachments.py's PromptLibAPI.post handles both a plain multipart upload
 // and a chunked one at the same route, distinguishing by form fields, not a
 // separate path): a JSON body updates chat_conversations.meta (pre-existing,

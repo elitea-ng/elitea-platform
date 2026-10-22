@@ -59,7 +59,7 @@ var reviewedRoutePermissions = []string{
 	// /elitea_core string 0068 left out — the route was deleted by #126 when
 	// 0068 was written, so the name gated nothing and was not seeded. It is
 	// listed here so both invariants above cover it: the catalogue check proves
-	// legacy declares it, and the grant check proves shared/0120 seeds it.
+	// the legacy runtime declares it, and the grant check proves shared/0120 seeds it.
 	agentexecutionapi.CurrentApplicationTaskStatusPermission,
 	// Client contract 1.3 removed the conversations group's stub regenerate
 	// from router.go; the reviewed agent-execution regeneration is the only
