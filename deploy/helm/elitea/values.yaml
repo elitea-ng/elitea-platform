@@ -2344,7 +2344,7 @@ web:
     # "" makes every such check false: the public-project route guard never
     # matches, `include_shared` inverts, public agent listing goes dark — with
     # no error and no failing probe. "1" is what every other reference
-    # deployment uses (deploy/docker-compose.yml's elitea-ui).
+    # deployment uses (deploy/docker-compose.yml's elitea-web).
     #
     # UNSET here rather than "1", so `platform.aiProjectId` can fill it. Stating
     # "1" in the chart's own defaults would make every deployment whose public

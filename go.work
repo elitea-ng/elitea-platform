@@ -13,5 +13,4 @@ use (
 	./services/elitea-main
 	./services/elitea-scheduler
 	./services/elitea-subapp-host
-	./tools/uictl
 )

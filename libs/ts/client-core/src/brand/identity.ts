@@ -1,14 +1,15 @@
 /**
  * The Elitea product identity: the hand-set inputs of the DEFAULT brand pack.
  *
- * `apps/elitea-web/scripts/gen-brand-tokens.mjs` reads these when it writes
- * the default pack (`apps/elitea-web/src/shared/brand/tokens/default.pack.json`,
- * which elitea-main serves as `product_default.pack.json`). The mobile app
+ * The default pack (`apps/elitea-web/src/shared/brand/tokens/default.pack.json`,
+ * which elitea-main serves as `product_default.pack.json`) restates them by
+ * hand, held equal by apps/elitea-web/src/shared/brand/__tests__/
+ * defaultPackSync.test.ts. The mobile app
  * reads them directly. A workspace brand pack (ADR-0024 runtime branding)
  * replaces them at run time: these are the defaults only.
  *
- * Keep this file free of imports: Node runs it as TypeScript (type stripping)
- * from the web generator.
+ * Keep this file free of imports: it is plain data, read from TypeScript
+ * source by the web, desktop and mobile builds alike.
  */
 
 /** The product name and short name of the default pack. */

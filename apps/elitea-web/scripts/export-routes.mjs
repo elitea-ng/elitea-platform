@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 /**
+ * NOTE: `tools/uictl`, the consumer this export was written for, was deleted
+ * with the apps/elitea-ui baseline submodule. parity/new-app-routes.json is
+ * kept (and drift-checked in ci-web.yml) as the record of the mounted routes.
+ *
  * Exports the NEW app's mounted route patterns as the []string JSON P1's
- * `tools/uictl parity-routes --new-routes <file>` expects (spec §9.3 unit
+ * `tools/uictl parity-routes --new-routes <file>` expected (spec §9.3 unit
  * R1; `apps/elitea-web/parity/REPRODUCE.md`'s `LoadNewRoutes`/`DiffNewApp`
  * — exact SET EQUALITY against the OLD app's baseline-extracted mounted
  * patterns, in the OLD app's `:param`/`*` syntax, not TanStack's `$param`).

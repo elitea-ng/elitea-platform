@@ -1,7 +1,6 @@
-# .dockerignore — shared by elitea-main (root context) and elitea-ui (root context) builds.
+# .dockerignore — shared by every root-context build (elitea-main, elitea-web, ...).
 # elitea-main needs: services/elitea-main/**, apps/elitea-web/** (the admin SPA is
 #                    built in-image from src/entries/admin), Go files.
-# elitea-ui needs:   apps/elitea-ui/** source, deploy/docker/**.
 # IMPORTANT: apps/elitea-web SOURCE must NOT be ignored — the image builds the
 #            admin bundle from scratch.
 
@@ -29,8 +28,7 @@
 # ── Rust build output ────────────────────────────────────────────────────────
 **/target
 
-# ── elitea-ui test/story artefacts (not needed at build time) ─────────────────
-/apps/elitea-ui/tests
+# ── Storybook build output (not needed at build time) ────────────────────────
 **/storybook-static
 
 # ── Compiled Go binaries that may linger in the tree ─────────────────────────

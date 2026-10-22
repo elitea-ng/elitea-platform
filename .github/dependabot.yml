@@ -95,7 +95,6 @@ updates:
       - /libs/go/observability
       - /libs/go/rpclib
       - /libs/proto/gen/go
-      - /tools/uictl
       - /conformance/nativeclient
     multi-ecosystem-group: weekly
     patterns: ["*"]
@@ -178,7 +177,6 @@ updates:
     directories:
       - /apps/elitea-web
       - /apps/elitea-desktop
-      - /tools/parity-extract
       - /scripts/ci
     multi-ecosystem-group: weekly
     patterns: ["*"]

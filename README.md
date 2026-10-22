@@ -14,13 +14,12 @@ elitea-platform/
 ├── apps/
 │   ├── elitea-desktop/      # Desktop app (Tauri 2 host around the elitea-web desktop build)
 │   ├── elitea-mobile/       # Mobile app "Elitea AI" (Expo / React Native, iOS + Android)
-│   ├── elitea-ui/           # React SPA (git submodule)
-│   └── elitea-web/          # React SPA rewrite; also builds the admin console
+│   └── elitea-web/          # React SPA (the UI); also builds the admin console
 │                            #   (src/entries/admin) served by elitea-main
 ├── libs/proto/              # Protobuf contracts (buf v2) and their generated Go/Python stubs
 ├── libs/go/                 # Shared Go libraries
 ├── deploy/
-│   ├── docker/              # Containerfiles for UI and helper images
+│   ├── docker/              # Helper scripts and configs for container images
 │   ├── docker-compose.yml   # Local dev environment (legacy shape, Go services)
 │   ├── docker-compose.standalone-full.yml  # Target-architecture stack (Go + Bifrost, no pylon)
 │   └── helm/                # Kubernetes Helm charts
@@ -38,11 +37,10 @@ elitea-platform/
 ## Quick Start
 
 ```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/elitea-ng/elitea-platform.git
+git clone https://github.com/elitea-ng/elitea-platform.git
 cd elitea-platform
 
-# Start everything (postgres, nats, rustfs, elitea-main, elitea-ui)
+# Start everything (postgres, nats, rustfs, elitea-main, elitea-web)
 task up
 
 # Or manually:
@@ -59,7 +57,7 @@ Services will be available at:
 |---------|-----|-------------|
 | Browser origin | http://localhost:8080 | elitea-main: API, plus the SPA relayed |
 | API | http://localhost:8080/api/ | elitea-main API endpoints |
-| UI | http://localhost:8080/app/ | elitea-ui React SPA |
+| UI | http://localhost:8080/app/ | elitea-web React SPA |
 | postgres | localhost:5432 | PostgreSQL 18 (no extensions needed) |
 
 ### DeepWiki on the dev stack (`deepwiki` profile)
@@ -163,14 +161,13 @@ task test            # Run all Go tests
 task lint            # Run golangci-lint
 task vet             # Run go vet
 
-task ui:build        # Build EliteaUI SPA
-task ui:lint         # Lint EliteaUI
+task ui:build        # Build the elitea-web SPA
+task ui:lint         # Lint elitea-web
 
 task images          # Build all container images
 task images:go       # Build elitea-main image only
 task images:scheduler # Build elitea-scheduler image only
 task images:gateway  # Build elitea-llm-gateway image only
-task images:ui       # Build elitea-ui image only
 task images:web      # Build elitea-web image only
 
 task helm:lint       # Lint all Helm charts
@@ -220,12 +217,13 @@ billing. The LLM data plane is `elitea-llm-gateway`, reached through
 
 `deploy/INDEX_V2_CUTOVER.md` holds the cutover procedure and the rollback.
 
-### elitea-ui (React)
+### elitea-web (React)
 
-React SPA served by nginx. Connected as a git submodule from [EliteaUI](https://github.com/EliteaAI/EliteaUI).
+React SPA served by nginx (`apps/elitea-web/Containerfile`); the same app also
+builds the admin console, the maintenance page and the embedded docs.
 
 ```bash
-cd apps/elitea-ui
+cd apps/elitea-web
 npm ci
 npm run dev          # Local dev server
 npm run build        # Production build
@@ -238,7 +236,7 @@ All workflows are in `.github/workflows/`:
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci-go.yml` | PR/push to Go paths | Lint, test, build validation |
-| `ci-ui.yml` | PR/push to UI paths | Lint, build SPA |
+| `ci-web.yml` | PR/push to UI paths | Typecheck, lint, unit tests, static gates, build SPA |
 | `helm-lint.yml` | PR/push to helm paths | Lint charts, template dry-run |
 | `publish.yml` | Push to main/next | Semantic release → build → publish-image (scan, manifest, sign) → chart |
 

@@ -20,7 +20,7 @@ and each app generates its own client from it.
 | | `ANSWER_DELTA_TYPES`, `TURN_FAILURE_TYPES`, `TOOL_CALL_TYPES`, `PAUSE_FINISH_REASONS`: the frame classes every client applies the same way | web (`chatStreamTurnEnd.ts`), mobile (`turnReducer.ts`, `toolActivity.ts`, `api/queries/messageTraces.ts`) |
 | | `parseEventData`: `JSON.parse` of an SSE `data` field that never throws | web, mobile |
 | `@elitea/client-core/brand` | `ELITEA_MARK_SVG`, `ELITEA_MARK_VIEWBOX`, `ELITEA_MARK_ASPECT`: the Elitea mark | mobile (`components/EliteaMark.tsx`) |
-| | `DEFAULT_PRODUCT`, `DEFAULT_BRAND_HUE`: the default identity | web (`scripts/gen-brand-tokens.mjs`), mobile (`EliteaMark.tsx`) |
+| | `DEFAULT_PRODUCT`, `DEFAULT_BRAND_HUE`: the default identity | web (`defaultPackSync.test.ts`), mobile (`EliteaMark.tsx`) |
 | | `DEFAULT_PACK_ACCENTS`: the default pack's accent inputs | mobile (`theme/brandPack.ts`) |
 
 ## Brand: one source, derived copies
@@ -34,18 +34,20 @@ The canonical identity is `src/brand/identity.ts`. Edit only these files.
 - `apps/elitea-web/public/brand/{logo-mark,favicon,logo-full}.svg`: the files the default pack's `assets.*` name
 - `apps/elitea-web/src/shared/ui/icons/svg/{logo-mark-icon,logo-icon}.svg`: `<LogoMarkIcon>` and `<LogoIcon>`
 
-`apps/elitea-web/scripts/gen-brand-tokens.mjs` reads `identity.ts` when it
-writes the default pack (`default.pack.json`), and also writes
-`src/brand/defaultPack.gen.ts` from that pack.
+The default pack (`apps/elitea-web/src/shared/brand/tokens/default.pack.json`)
+and `src/brand/defaultPack.gen.ts` are hand-maintained: the generator that
+wrote them (`gen-brand-tokens.mjs`) read the `apps/elitea-ui` palettes and went
+with that submodule. Edit them alongside `identity.ts`;
+`apps/elitea-web/src/shared/brand/__tests__/defaultPackSync.test.ts` fails when
+the three disagree.
 
-Run both generators after an edit:
+Run the artwork generator after an edit:
 
 ```bash
 node libs/ts/client-core/scripts/gen-brand.mjs
-(cd apps/elitea-web && node scripts/gen-brand-tokens.mjs --baseline ../elitea-ui)
 ```
 
-Both have a `--check` mode, and `ci-web.yml` runs both. These values are the
+It has a `--check` mode, and `ci-web.yml` runs it. These values are the
 product DEFAULT only. ADR-0024 runtime branding is unchanged: a workspace brand
 pack replaces the name, the colours and the artwork at run time on every client.
 

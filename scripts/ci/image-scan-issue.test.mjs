@@ -18,7 +18,7 @@ const TESTDATA = path.join(path.dirname(fileURLToPath(import.meta.url)), "testda
 const VULNERABLE = path.join(TESTDATA, "trivy-alpine310.json");
 const CLEAN = path.join(TESTDATA, "trivy-scheduler.json");
 const REPO = "elitea-ng/elitea-platform";
-const IMAGE = "elitea-ui";
+const IMAGE = "elitea-web";
 const TITLE = tool.titleFor(IMAGE);
 
 /**
@@ -158,14 +158,14 @@ test("findings and no issue opens one with labels and table", async () => {
   assert.equal(code, 0, out);
   assert.deepEqual(gh.verbs(), ["create"]);
   const issue = gh.issues.get(1);
-  assert.equal(issue.title, "Image scan: elitea-ui — vulnerabilities in latest");
+  assert.equal(issue.title, "Image scan: elitea-web — vulnerabilities in latest");
   assert.deepEqual(issue.labels, ["security", "image-scan"]);
   const body = issue.body;
   assert.ok(body.includes("| CVE-2021-36159 | apk-tools | 2.10.6-r0 → 2.10.7-r0 | CRITICAL |"));
-  assert.ok(body.includes("ghcr.io/elitea-ng/elitea-ui@sha256:aaa"));
+  assert.ok(body.includes("ghcr.io/elitea-ng/elitea-web@sha256:aaa"));
   assert.ok(body.includes("4.58.0"));
   assert.ok(body.includes("https://example.invalid/run/1"));
-  assert.ok(out.endsWith(`elitea-ui: 1 finding(s); opened https://github.com/${REPO}/issues/1`), out);
+  assert.ok(out.endsWith(`elitea-web: 1 finding(s); opened https://github.com/${REPO}/issues/1`), out);
 });
 
 test("findings and open issue updates without a duplicate", async () => {
@@ -214,8 +214,8 @@ test("findings and only closed issue reopens it", async () => {
 });
 
 test("a similar title is not taken for this image", async () => {
-  // `elitea-ui-admin` must not update `elitea-ui`'s issue.
-  const gh = new FakeGithub([existing({ title: tool.titleFor("elitea-ui-admin") })]);
+  // `elitea-web-admin` must not update `elitea-web`'s issue.
+  const gh = new FakeGithub([existing({ title: tool.titleFor("elitea-web-admin") })]);
   await run(gh, VULNERABLE);
   assert.deepEqual(gh.verbs(), ["create"]);
 });

@@ -63,7 +63,7 @@ jobs:
       - name: docker-bake.hcl evaluates
         # `--print` resolves every target (contexts, dockerfiles, args, tags)
         # without building. It is the only PR-time evaluation of the bake file
-        # now that no PR job bakes elitea-web, elitea-ui or the workers;
+        # now that no PR job bakes elitea-web or the workers;
         # without it a broken target first fails in publish.yml
         # at release time.
         run: docker buildx bake --print > /dev/null

@@ -103,26 +103,24 @@ tasks:
 
   # ── UI ────────────────────────────────────────────────────────────────────────
   ui:build:
-    desc: Build EliteaUI SPA
+    desc: Build the elitea-web SPA
     cmds:
-      - cd apps/elitea-ui && npm ci && npm run build
+      - cd apps/elitea-web && npm ci && npm run build
 
   ui:lint:
-    desc: Lint EliteaUI
+    desc: Lint elitea-web
     cmds:
-      - cd apps/elitea-ui && npm run lint
+      - cd apps/elitea-web && npm run lint
 
   # ── Local Environment ─────────────────────────────────────────────────────────
   up:
     desc: Start full local environment (postgres, NATS, all services)
     cmds:
-      - git submodule update --init --recursive
       - podman compose -f deploy/docker-compose.yml up --build --remove-orphans
 
   up:detach:
     desc: Start local environment in background
     cmds:
-      - git submodule update --init --recursive
       - podman compose -f deploy/docker-compose.yml up --build -d --remove-orphans
 
   down:
@@ -158,7 +156,6 @@ tasks:
       - task: images:go
       - task: images:scheduler
       - task: images:gateway
-      - task: images:ui
       - task: images:web
       # images:worker is deliberately absent: it is the one target that compiles
       # a Python dependency closure from source, so folding it into `task
@@ -182,11 +179,6 @@ tasks:
       # Repo root, not services/elitea-llm-gateway: the Containerfile COPYs
       # libs/go/egresslib, the module's local `replace` target.
       - podman build -t ghcr.io/elitea-ng/elitea-llm-gateway:dev -f services/elitea-llm-gateway/Containerfile .
-
-  images:ui:
-    desc: Build UI image
-    cmds:
-      - podman build -t ghcr.io/elitea-ng/elitea-ui:dev -f deploy/docker/Containerfile.elitea-ui .
 
   images:web:
     desc: Build elitea-web image

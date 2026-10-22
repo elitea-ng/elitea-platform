@@ -238,10 +238,9 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          # This job lints nine modules now, so the cache key reads every module
-          # that has a go.sum. tools/uictl has none — it declares no external
-          # dependency. The block below is a literal string, so a comment
-          # inside it would become a path.
+          # This job lints every go.work module, so the cache key reads every
+          # module that has a go.sum. The block below is a literal string, so a
+          # comment inside it would become a path.
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum
@@ -618,8 +617,8 @@ jobs:
   # changed — same `target: final` build, same HIGH,CRITICAL threshold, same
   # "a report with no Go binary is a failure" guard.
   #
-  # It moved because path filters are per workflow. elitea-web and elitea-ui are
-  # published images too, and adding apps/elitea-web/** to this workflow's
+  # It moved because path filters are per workflow. elitea-web is a published
+  # image too, and adding apps/elitea-web/** to this workflow's
   # triggers would run the Postgres service, the storage emulators and the whole
   # Go test suite on every front-end change.
 

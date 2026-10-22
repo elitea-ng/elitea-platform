@@ -225,8 +225,8 @@ exceptions (owner decisions, 2026-10-06):
 
 - the short-lived `nats-bootstrap` job keeps `natsio/nats-box`, which NATS
   publishes on Alpine only;
-- the two nginx images, `elitea-web` and `elitea-ui`, stay on
-  `nginx:stable-alpine`. Their image scans are blocking, and every Debian
+- the nginx image, `elitea-web`, stays on
+  `nginx:stable-alpine`. Its image scan is blocking, and every Debian
   userland carries HIGH findings with no fixed version (measured
   2026-10-06: `debian:trixie-slim` 43, `nginx:stable-trixie` 67, none
   fixable), where Alpine scans clean.
@@ -308,9 +308,10 @@ Three charts, and that is all of them: `helm lint`, the template matrix and
 `publish.yml` each read `deploy/helm/*/Chart.yaml`, so a fourth chart fails CI
 until somebody templates and publishes it.
 
-One image has no chart. `ghcr.io/elitea-ng/elitea-ui` is the old UI: it runs
-in compose, and the Kubernetes path is the `web` component. `pylon-indexer`
-used to be the second one, deployed nowhere; issue #339 deleted the service, so
+Every published image has a chart component. `ghcr.io/elitea-ng/elitea-ui`,
+the old UI that ran only in compose, went with the `apps/elitea-ui` submodule;
+`elitea-web` (the `web` component) serves the UI everywhere. `pylon-indexer`
+was the other image deployed nowhere; issue #339 deleted the service, so
 it is no longer built or published either. The Go runtime plane serves index
 ingest through the agent worker, on the same command stream.
 
