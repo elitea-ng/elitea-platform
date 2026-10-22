@@ -744,11 +744,11 @@ func TestPATStatusRecognisesTheInternalEndpointInBothURLForms(t *testing.T) {
 	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
 
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_internal",
-		"http://pylon_main:8080/app/{project_id}/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/{project_id}/mcp/elitea_core/applications")
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_resolved",
-		"http://pylon_main:8080/app/1/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/1/mcp/elitea_core/applications")
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_external", "https://mcp.example.com/sse")
-	seedMCPToolkitWithURL(t, pool, homeSchema, "github", "http://pylon_main:8080/app/{project_id}/mcp/toolkits")
+	seedMCPToolkitWithURL(t, pool, homeSchema, "github", "http://legacy-main:8080/app/{project_id}/mcp/toolkits")
 
 	for toolkitType, wantInternal := range map[string]bool{
 		"mcp_elitea_internal": true,
@@ -822,7 +822,7 @@ func TestPATStatusTreatsANullExpiryAsValid(t *testing.T) {
 	seedUser(t, pool, callerUserID)
 	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_internal",
-		"http://pylon_main:8080/app/{project_id}/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/{project_id}/mcp/elitea_core/applications")
 	seedToken(t, pool, callerUserID, nil)
 
 	body := decode(t, do(t, router, http.MethodGet,
@@ -839,7 +839,7 @@ func TestPATStatusReadsOnlyTheCallersTokens(t *testing.T) {
 	seedUser(t, pool, callerUserID)
 	seedUser(t, pool, callerUserID+1)
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_internal",
-		"http://pylon_main:8080/app/{project_id}/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/{project_id}/mcp/elitea_core/applications")
 
 	future := time.Now().UTC().Add(24 * time.Hour)
 	seedToken(t, pool, callerUserID+1, &future)

@@ -63,7 +63,7 @@ func main() {
 		exitError(err)
 	}
 	if bootstrapped {
-		slog.Info("applied the pylon-era schema to an empty database")
+		slog.Info("applied the legacy-era schema to an empty database")
 	}
 
 	runner := migrate.New(pool, platformmigrations.Files)

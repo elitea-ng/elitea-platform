@@ -175,11 +175,11 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 				// `items`/`total` envelope beside the three Pylon maps. Read
 				// the maps back out and hold them to the pinned SDK fixture,
 				// and require the published half to be present.
-				var pylon handler.CurrentIndexTypes
-				if err := json.Unmarshal(body, &pylon); err != nil {
+				var legacyMaps handler.CurrentIndexTypes
+				if err := json.Unmarshal(body, &legacyMaps); err != nil {
 					t.Fatalf("UI response does not decode: %v", err)
 				}
-				if !reflect.DeepEqual(pylon, fixture) {
+				if !reflect.DeepEqual(legacyMaps, fixture) {
 					t.Fatalf("UI response drifted: %s", body)
 				}
 				var published struct {

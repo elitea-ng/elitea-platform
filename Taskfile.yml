@@ -139,7 +139,7 @@ tasks:
       - podman compose -f deploy/docker-compose.yml logs -f --tail=50
 
   standalone:up:
-    desc: Bring up the standalone full stack (Go + Bifrost gateway, no pylon) — see README's "Standalone full stack"
+    desc: Bring up the standalone full stack (Go + Bifrost gateway, no legacy runtime) — see README's "Standalone full stack"
     cmds:
       - deploy/scripts/standalone-stack.sh certs
       - deploy/scripts/standalone-stack.sh up

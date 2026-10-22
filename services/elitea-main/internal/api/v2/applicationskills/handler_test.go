@@ -681,7 +681,7 @@ func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
 	// The Pylon keys apps/elitea-ui reads must survive beside them.
 	for _, key := range []string{"skills", "max_skills"} {
 		if _, present := body[key]; !present {
-			t.Fatalf("Pylon key %q lost from the parity envelope: %q", key, response.Body.String())
+			t.Fatalf("legacy key %q lost from the parity envelope: %q", key, response.Body.String())
 		}
 	}
 

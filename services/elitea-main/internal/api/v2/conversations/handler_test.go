@@ -1624,7 +1624,7 @@ func TestUpdateContextStrategy_MergesOntoTheStoredStrategy(t *testing.T) {
 	}
 	result := decodeBody(t, w)
 	if result["message"] != "Strategy updated successfully" {
-		t.Errorf("message = %v, want pylon's confirmation string", result["message"])
+		t.Errorf("message = %v, want the legacy confirmation string", result["message"])
 	}
 	if _, ok := result["updated_strategy"]; !ok {
 		t.Error("the response has to carry updated_strategy")

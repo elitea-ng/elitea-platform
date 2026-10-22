@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestNoPylonBridgeWiringReturns is the gate that replaces the bridges #383
+// TestNoLegacyBridgeWiringReturns is the gate that replaces the bridges #383
 // deleted.
 //
 // Four bridges once joined this service to pylon, and every one of them was
@@ -27,7 +27,7 @@ import (
 // It reads SOURCE rather than building a router, because the property is "no
 // file in this service names these things", which no runtime assertion can
 // observe. It scans internal/ and cmd/ and skips its own file.
-func TestNoPylonBridgeWiringReturns(t *testing.T) {
+func TestNoLegacyBridgeWiringReturns(t *testing.T) {
 	t.Parallel()
 
 	// Each pattern names one deleted bridge, with the reason it may not come
@@ -39,14 +39,14 @@ func TestNoPylonBridgeWiringReturns(t *testing.T) {
 	}{
 		{
 			pattern: "internal/api/shadow",
-			why: "the shadow comparator mirrored every sampled request to pylon and " +
-				"diffed the response. There is nothing to compare against: pylon " +
-				"serves no elitea-main route.",
+			why: "the shadow comparator mirrored every sampled request to the legacy runtime and " +
+				"diffed the response. There is nothing to compare against: the legacy " +
+				"runtime serves no elitea-main route.",
 		},
 		{
 			pattern: "cutover.NewRouter",
 			why: "the cutover router was a reverse proxy to LEGACY_URL — the only " +
-				"pylon reverse proxy this service ever had.",
+				"legacy reverse proxy this service ever had.",
 		},
 		{
 			pattern: "cutover.NewTracker",
@@ -60,7 +60,7 @@ func TestNoPylonBridgeWiringReturns(t *testing.T) {
 		{
 			pattern: "authsvc.New(",
 			why: "authsvc.New built the Redis remote-call client that asked " +
-				"pylon_auth to validate a credential. Authentication is local: " +
+				"the legacy auth service to validate a credential. Authentication is local: " +
 				"authsvc.NewLocalValidator and authsvc.NewPrincipalValidator read " +
 				"the database directly.",
 		},
@@ -85,7 +85,7 @@ func TestNoPylonBridgeWiringReturns(t *testing.T) {
 			if entry.IsDir() || !strings.HasSuffix(path, ".go") {
 				return nil
 			}
-			if filepath.Base(path) == "pylon_bridge_absence_test.go" {
+			if filepath.Base(path) == "legacy_bridge_absence_test.go" {
 				return nil
 			}
 			content, readErr := os.ReadFile(path) //nolint:gosec // walk of a fixed, test-local tree
@@ -98,7 +98,7 @@ func TestNoPylonBridgeWiringReturns(t *testing.T) {
 					if !strings.Contains(line.text, ban.pattern) {
 						continue
 					}
-					t.Errorf("%s:%d names the deleted pylon bridge %q.\n"+
+					t.Errorf("%s:%d names the deleted legacy bridge %q.\n"+
 						"  %s\n"+
 						"  #383 deleted it. If a replacement is genuinely needed, it needs an ADR\n"+
 						"  and a composition site in cmd/elitea-main — not a nil-gated field that\n"+
@@ -144,7 +144,7 @@ func TestAuthenticationMiddlewareHoldsNoRedisAuthority(t *testing.T) {
 			t.Errorf("internal/api/middleware/%s:%d imports a Redis client.\n"+
 				"  Authentication in this package reads the database directly. A Redis\n"+
 				"  cache in front of it is an authentication authority that every writer of\n"+
-				"  that cache shares — which is what the pylon RPC validator was (#383).",
+				"  that cache shares — which is what the legacy RPC validator was (#383).",
 				entry.Name(), line.number)
 		}
 	}

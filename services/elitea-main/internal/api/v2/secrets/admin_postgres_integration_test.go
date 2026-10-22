@@ -625,7 +625,7 @@ func TestAdminVaultFirstWriteStoresCentrysKeyFormat(t *testing.T) {
 
 /* ── the routes pylon defines but does not serve ───────────────────────── */
 
-func TestAdminHideIsRefusedTheWayPylonRefusesIt(t *testing.T) {
+func TestAdminHideIsRefusedInAdministrationMode(t *testing.T) {
 	pool := newSecretsPool(t)
 	prepareVaults(t, pool)
 	router := secretsRouter(t, pool, allSecretPermissions())

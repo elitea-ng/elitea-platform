@@ -43,7 +43,7 @@ func newFreshInstallPool(t *testing.T) *pgxpool.Pool {
 
 	applied, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial)
 	if err != nil {
-		t.Fatalf("bootstrap the pylon-era schema: %v", err)
+		t.Fatalf("bootstrap the legacy-era schema: %v", err)
 	}
 	if !applied {
 		t.Fatal("Bootstrap reported nothing to do on an empty database")

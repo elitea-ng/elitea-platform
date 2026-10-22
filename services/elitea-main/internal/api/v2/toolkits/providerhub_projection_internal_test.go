@@ -309,7 +309,7 @@ func TestProviderParameterSchemaTable(t *testing.T) {
 			wantType:  "integer",
 		},
 		{
-			name:      "Float maps to integer, as pylon does",
+			name:      "Float maps to integer, as the legacy projection does",
 			parameter: providerhub.ParameterDescriptor{Type: "Float"},
 			wantType:  "integer",
 		},

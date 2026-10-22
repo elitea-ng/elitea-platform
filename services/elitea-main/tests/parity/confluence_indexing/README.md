@@ -27,7 +27,7 @@ therefore an explicit skip until that prerequisite exists.
 ## Pinned current baseline
 
 The harness accepts only the artifact recorded in
-`current_pylon_sdk_baseline.json`:
+`current_sdk_baseline.json`:
 
 ```text
 version: 0.8.30
@@ -93,7 +93,7 @@ currently mounted as a mandatory repository CI job. A valid execution:
 
 - checks out revision
   `48c51a16634a9924f6c5d5313c3bacedb0b5b56b` and validates its Git archive
-  digest against `current_pylon_sdk_baseline.json`;
+  digest against `current_sdk_baseline.json`;
 - installs and verifies Poppler and Tesseract;
 - runs the complete HTTP, model-client and binary-media characterization
   suite.

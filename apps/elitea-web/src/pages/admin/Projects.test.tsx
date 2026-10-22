@@ -289,7 +289,7 @@ describe('Admin › Projects', () => {
   });
 
   describe('create', () => {
-    it('POSTs the pylon create body, and sends neither an owner nor a role', async () => {
+    it('POSTs the legacy create body, and sends neither an owner nor a role', async () => {
       const user = userEvent.setup();
       renderAdminRoute(<AdminProjects />);
       await screen.findByText('atlas');
@@ -705,7 +705,7 @@ describe('Admin › Projects', () => {
       expect(await screen.findByRole('option', { name: 'editor' })).toBeInTheDocument();
     });
 
-    it('POSTs the pylon invite body for an address that is not yet a member', async () => {
+    it('POSTs the legacy invite body for an address that is not yet a member', async () => {
       const user = userEvent.setup();
       renderAdminRoute(<AdminProjects />);
       await screen.findByText('atlas');

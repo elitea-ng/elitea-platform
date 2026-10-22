@@ -19,7 +19,7 @@ def test_standalone_worker_matches_current_confluence_goldens() -> None:
 @pytest.mark.skip(
     reason=(
         "current SDK index_data is synchronous and exposes no cancellation "
-        "input; baseline Stop is Pylon task cancellation plus index-meta "
+        "input; baseline Stop is legacy task cancellation plus index-meta "
         "reconciliation, so a direct SDK harness cannot claim Stop parity "
         "without exercising the real orchestration boundary"
     )

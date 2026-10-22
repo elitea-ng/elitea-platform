@@ -402,10 +402,10 @@ func TestGetKeysForProvider_SelfReferentialGuardBeforeVault(t *testing.T) {
 	// The vault errors on any Resolve; the guard must fire before Resolve is
 	// reached, so the returned error must be the guard, not the vault.
 	db := &fakeDB{rows: [][]any{
-		{"loop", "", []byte(`{"api_base":"http://pylon_main:8080/llm/v1","api_key":"{{secret.X}}"}`)},
+		{"loop", "", []byte(`{"api_base":"http://legacy-main:8080/llm/v1","api_key":"{{secret.X}}"}`)},
 	}}
 	vault := &fakeVault{err: errors.New("vault must not be called")}
-	a := newTestAccount(t, db, vault, "http://pylon_main:8080/llm/v1")
+	a := newTestAccount(t, db, vault, "http://legacy-main:8080/llm/v1")
 
 	_, err := a.GetKeysForProvider(ctxWithProject("1"), schemas.OpenAI)
 	if !errors.Is(err, ErrSelfReferentialCredential) {

@@ -114,7 +114,7 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// forgotten one when the reason is written by the same hand that
 		// forgot. The fields, the pylon reverse proxy and the shadow
 		// comparator behind them, and the internal-admin token that gated
-		// their routes, are all deleted. TestNoPylonBridgeWiringReturns fails
+		// their routes, are all deleted. TestNoLegacyBridgeWiringReturns fails
 		// if any of it comes back.
 	}
 

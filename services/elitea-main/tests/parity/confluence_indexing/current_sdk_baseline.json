@@ -1,5 +1,5 @@
 {
-  "schema_version": "elitea.current-pylon-sdk-baseline.v1",
+  "schema_version": "elitea.current-sdk-baseline.v1",
   "distribution": "elitea-sdk",
   "distribution_version": "0.8.30",
   "source": {

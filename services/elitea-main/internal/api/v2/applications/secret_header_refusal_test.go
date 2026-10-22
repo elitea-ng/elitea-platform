@@ -73,7 +73,7 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 		},
 		{
 			// The defect this issue closes. Pylon answers 200 here.
-			name:        "the pylon literal is refused when the project has no value",
+			name:        "the legacy secret literal is refused when the project has no value",
 			err:         fmt.Errorf("look up p_1 secret: %w: %q", secrets.ErrSecretNotFound, "secrets_header_value"),
 			received:    "secret",
 			wantStatus:  http.StatusForbidden,
@@ -81,7 +81,7 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 		},
 		{
 			// The same fault reached through the other typed error.
-			name:        "the pylon literal is refused when the project has no vault",
+			name:        "the legacy secret literal is refused when the project has no vault",
 			err:         fmt.Errorf("look up p_1 secret: %w", secrets.ErrVaultAbsent),
 			received:    "secret",
 			wantStatus:  http.StatusForbidden,
@@ -155,7 +155,7 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 
 // The literal must not survive anywhere in the package. A constant deleted from
 // the comparison but kept for "documentation" is one edit away from returning.
-func TestThePylonLiteralIsNotAConstantHere(t *testing.T) {
+func TestTheLegacySecretLiteralIsNotAConstantHere(t *testing.T) {
 	t.Parallel()
 
 	reader := &stubSecretsReader{err: secrets.ErrSecretNotFound}
