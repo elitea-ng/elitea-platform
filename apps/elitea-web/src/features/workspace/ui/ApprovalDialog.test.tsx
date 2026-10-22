@@ -103,6 +103,26 @@ describe('ApprovalDialog', () => {
     expect(onRespond).toHaveBeenCalledWith('r1', 'deny');
   });
 
+  it('Escape in the reason box never denies: it keeps typed text and closes an empty box', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    renderWithTheme(<ApprovalDialog request={REQUEST} queued={0} onRespond={onRespond} />);
+
+    await user.click(screen.getByRole('button', { name: 'Decline and tell the agent why' }));
+    await user.type(screen.getByTestId('approval-feedback'), 'Use npm test');
+    await user.keyboard('{Escape}');
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByTestId('approval-feedback')).toHaveValue('Use npm test');
+
+    await user.clear(screen.getByTestId('approval-feedback'));
+    await user.keyboard('{Escape}');
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('approval-feedback')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deny' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(onRespond.mock.calls).toEqual([['r1', 'deny']]);
+  });
+
   it('does not answer on a backdrop click', async () => {
     const onRespond = vi.fn();
     const user = userEvent.setup();

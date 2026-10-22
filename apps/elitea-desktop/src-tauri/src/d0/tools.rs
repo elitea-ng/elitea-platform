@@ -3,20 +3,26 @@
 //! files a local file tool is about to change.
 //!
 //! Plan mode (#1225): [`PlanGatedToolset`] offers a toolset's tools only
-//! once the session has left plan mode (the remote toolkits), and an
-//! accepted `exit_plan_mode` copies the plan into the runtime's planner
-//! (one host-side call, `Planner::seed_from_markdown`) and tells the UI
-//! (`plan_accepted`).
+//! once the session has left plan mode (the remote toolkits),
+//! [`AcceptedPlanNote`] gives the model the build-mode environment once
+//! it has, and an accepted `exit_plan_mode` copies the plan into the
+//! runtime's planner (one host-side call, `Planner::seed_from_markdown`)
+//! and tells the UI (`plan_accepted`).
 
 use std::sync::Arc;
 
-use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_agent::LlmAgentBuilder;
+use adk_core::callbacks::BeforeModelResult;
+use adk_core::{Content, ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::planner::Planner;
 use elitea_local_tools::approvals::PermissionProfile;
+use elitea_local_tools::policy::LocalWorkPolicy;
 use elitea_local_tools::session::{EXIT_PLAN_MODE, LocalSession};
 use serde_json::{Value, json};
+use tokio::sync::OnceCell;
 
+use super::environment;
 use super::events::TurnEvents;
 use super::recorder::Recorder;
 
@@ -60,6 +66,65 @@ impl Toolset for PlanGatedToolset {
             return Ok(Vec::new());
         }
         self.inner.tools(ctx).await
+    }
+}
+
+/// The build-mode environment for a plan-mode turn's model steps after the
+/// person accepted the plan. The system prompt is fixed for the run and
+/// says "plan (read-only)"; from the first model step outside plan mode on,
+/// a system part ([`environment::accepted_plan`]) replaces that section:
+/// the facts gathered again with the tools offered now (the write and
+/// command guidance, the sandbox line), once per run.
+pub struct AcceptedPlanNote {
+    pub session: Arc<LocalSession>,
+    /// The folder's name, as [`environment::gather`] takes it.
+    pub folder: String,
+    pub policy: LocalWorkPolicy,
+    pub mentioned: Vec<String>,
+    /// Tools offered beside the session's own (the index's, the planner's).
+    pub extra_tools: Vec<String>,
+}
+
+impl AcceptedPlanNote {
+    /// `builder` with the note as a callback before every model step.
+    #[must_use]
+    pub fn bind_builder(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
+        let note = Arc::new(self);
+        let text: Arc<OnceCell<String>> = Arc::new(OnceCell::new());
+        builder.before_model_callback(Box::new(move |_ctx, mut request| {
+            let note = note.clone();
+            let text = text.clone();
+            Box::pin(async move {
+                if note.session.profile() == PermissionProfile::Plan {
+                    return Ok(BeforeModelResult::Continue(request));
+                }
+                let section = text.get_or_init(|| note.section()).await;
+                request
+                    .contents
+                    .insert(0, Content::new("system").with_text(section.clone()));
+                Ok(BeforeModelResult::Continue(request))
+            })
+        }))
+    }
+
+    async fn section(&self) -> String {
+        let mut tools: Vec<String> = self
+            .session
+            .available_tools()
+            .iter()
+            .map(|tool| tool.name.to_owned())
+            .collect();
+        tools.extend(self.extra_tools.iter().cloned());
+        let facts = environment::gather(
+            &self.session,
+            self.folder.clone(),
+            &self.policy,
+            false,
+            tools,
+            &self.mentioned,
+        )
+        .await;
+        environment::accepted_plan(&facts)
     }
 }
 

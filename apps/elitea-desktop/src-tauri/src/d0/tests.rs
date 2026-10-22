@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::api::{ApiError, Bearer, Credentials, PlatformApi};
 use super::approvals::UiDecision;
 use super::definition::RemoteToolSpec;
+use super::environment;
 use super::events::{AgentEvent, VecEmitter};
 use super::remote_tools::{self, RemoteContext, RetryPolicy};
 use super::turn::{AgentHost, HostDeps, PolicySource, TURNS_KEPT_PER_WORKSPACE, TurnRequest};
@@ -5896,6 +5897,34 @@ async fn accepting_the_plan_continues_the_same_session_in_build_mode() {
     }
     assert!(!building.iter().any(|t| t == "exit_plan_mode"));
     assert_eq!(tool_messages(&llm[1])[0]["accepted"], true);
+    // The model's instructions follow the mode: the planning step reads the
+    // plan-mode environment only; every step after the accept also reads
+    // the build-mode one, with the write tools' rules.
+    let system = |request: &Req| -> String {
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        body["messages"][0]["content"].as_str().unwrap().to_owned()
+    };
+    let planning_system = system(&llm[0]);
+    assert!(planning_system.contains("- Mode: plan (read-only)"));
+    assert!(!planning_system.contains(environment::ACCEPTED_PLAN_HEADING));
+    for step in &llm[1..] {
+        let text = system(step);
+        assert_eq!(
+            text.matches(environment::ACCEPTED_PLAN_HEADING).count(),
+            1,
+            "{text}"
+        );
+        let accepted = &text[text.find(environment::ACCEPTED_PLAN_HEADING).unwrap()..];
+        for present in [
+            "plan mode is over",
+            "denied paths and .git are not writable",
+            "never use sudo",
+            "edit_file",
+        ] {
+            assert!(accepted.contains(present), "{present}: {accepted}");
+        }
+        assert!(!accepted.contains("- Mode: plan"), "{accepted}");
+    }
     assert_eq!(
         std::fs::read_to_string(h.folder.path().join("notes.txt")).unwrap(),
         "hello\n"

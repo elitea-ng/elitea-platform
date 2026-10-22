@@ -21,8 +21,7 @@ import type { ApprovalDecision } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 
-/** What the host keeps of the person's text (2 KiB); the box stops at it too. */
-export const MAX_FEEDBACK_CHARS = 2048;
+import { clipUtf8 } from '../model/feedback';
 
 export interface PlanCardProps {
   /** The plan waiting for an answer; `undefined` renders nothing. */
@@ -69,9 +68,10 @@ function PlanPrompt({ proposal, onRespond }: PlanCardProps): React.JSX.Element |
         multiline
         minRows={2}
         value={feedback}
-        onChange={(event) => setFeedback(event.target.value.slice(0, MAX_FEEDBACK_CHARS))}
+        // The box stops at what the host keeps (UTF-8 bytes, not characters).
+        onChange={(event) => setFeedback(clipUtf8(event.target.value))}
         label={t('workspace.plan.feedback', 'What should change? (sent only if you decline)')}
-        slotProps={{ htmlInput: { maxLength: MAX_FEEDBACK_CHARS, 'data-testid': 'plan-card-feedback' } }}
+        slotProps={{ htmlInput: { 'data-testid': 'plan-card-feedback' } }}
       />
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <Button size="small" variant="contained" onClick={() => onRespond(proposal.request_id, 'accept')}>

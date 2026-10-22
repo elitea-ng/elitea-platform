@@ -372,14 +372,7 @@ fn clean(text: &str) -> String {
 }
 
 fn cut(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_owned();
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
+    elitea_agent_runtime::text::clip_bytes(text, max).to_owned()
 }
 
 /// The `approval_request` payload (without `request_id`).

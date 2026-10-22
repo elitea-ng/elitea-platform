@@ -77,7 +77,7 @@ use super::remote_tools::{
 };
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
-use super::tools::{ObservedToolset, PlanGatedToolset, ToolObserver};
+use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
 };
@@ -2294,18 +2294,16 @@ impl AgentHost {
                 &admitted.version_details,
             ),
         );
-        if index.is_some() {
-            facts
-                .tools
-                .extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
-        }
         // The runtime's planner, offered to every workspace turn (a coding
         // agent needs its checklist), plan mode included: it changes only
         // the session's plan state (#1225).
         let planner = Planner::new();
-        facts
-            .tools
-            .extend(PLANNER_TOOLS.iter().map(|name| (*name).to_owned()));
+        let mut extra_tools: Vec<String> = Vec::new();
+        if index.is_some() {
+            extra_tools.extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
+        }
+        extra_tools.extend(PLANNER_TOOLS.iter().map(|name| (*name).to_owned()));
+        facts.tools.extend(extra_tools.iter().cloned());
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -2422,6 +2420,18 @@ impl AgentHost {
             // adk takes it from the agent: RunConfig has no such field.
             .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
+        // A plan-mode turn whose plan the person accepts goes on in Build:
+        // its later model steps read the build-mode environment (#1225).
+        if request.plan_mode {
+            builder = AcceptedPlanNote {
+                session: workspace.session.clone(),
+                folder: folder.to_owned(),
+                policy: workspace.policy.clone(),
+                mentioned: mentioned.to_vec(),
+                extra_tools: extra_tools.clone(),
+            }
+            .bind_builder(builder);
+        }
         // A long turn's older tool results go to the model as notes once
         // the request passes 60% of the model's window; the session keeps
         // them whole. The window is the model's limits (`context.rs`). The

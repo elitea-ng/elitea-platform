@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PlanProposalPayload } from '@/shared/desktop/planIpc';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { MAX_FEEDBACK_CHARS, PlanCard } from './PlanCard';
+import { MAX_FEEDBACK_BYTES } from '../model/feedback';
+
+import { PlanCard } from './PlanCard';
 
 const PROPOSAL: PlanProposalPayload = {
   request_id: 'r1',
@@ -50,8 +52,15 @@ describe('PlanCard', () => {
     ]);
   });
 
-  it('bounds the feedback box to what the host keeps', () => {
-    renderWithTheme(<PlanCard proposal={PROPOSAL} onRespond={vi.fn()} />);
-    expect(screen.getByTestId('plan-card-feedback')).toHaveAttribute('maxlength', String(MAX_FEEDBACK_CHARS));
+  it('bounds the feedback box to what the host keeps, in UTF-8 bytes', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    renderWithTheme(<PlanCard proposal={PROPOSAL} onRespond={onRespond} />);
+    await user.click(screen.getByTestId('plan-card-feedback'));
+    // 1500 two-byte characters: within 2048 UTF-16 units, past 2048 bytes.
+    await user.paste('é'.repeat(1500));
+    await user.click(screen.getByRole('button', { name: 'Decline' }));
+    const sent = onRespond.mock.calls[0]?.[2] as string;
+    expect(new TextEncoder().encode(sent).length).toBe(MAX_FEEDBACK_BYTES);
   });
 });

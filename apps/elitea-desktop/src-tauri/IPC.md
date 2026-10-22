@@ -229,7 +229,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
-| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB, control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
+| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
@@ -298,10 +298,17 @@ or a remembered choice, and "always" is never offered. On `accept` the
 session switches to the `build` profile and the **same run** goes on: adk
 2.2 resolves the toolsets again after every tool batch, so the model's next
 step is offered every tool (remote toolkits included), and the host sends
-`plan_accepted {call_id}` (the UI turns its plan switch off). The tool
-answers `{accepted: true, message}`. When the model wrote no plan with
-`update_plan`, the host copies the accepted Markdown into the planner once
-(a `# heading` is the title, each list item a step). On `decline` the turn
+`plan_accepted {call_id}` (the UI turns its plan switch off). The system
+prompt was written for plan mode, so every later model step of the run
+also carries a `## Environment (plan accepted)` system section that
+replaces it: the environment gathered again in `build` (the sandbox line,
+the write and command guidance, the tools offered now). The tool
+answers `{accepted: true, message}`. Unless the model wrote a plan with
+steps in this run (`update_plan`), the host copies the accepted Markdown
+into the planner, replacing a previous turn's plan (done or not), and
+`plan_updated` follows: a `# heading` is the title, each top-level list
+item a step (nested items, fenced code and thematic breaks are not). On
+`decline` the turn
 stays in plan mode and the tool answers `{accepted: false, feedback?,
 message}`; the model revises the plan. The turn's `hitl_exchanges` record
 it as `kind: "plan_approval"`, `decision: "accept" | "decline"`, `value`

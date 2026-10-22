@@ -1742,18 +1742,16 @@ impl LocalSession {
     }
 }
 
-/// A `forbidden` prefix rule's refusal, as the model sees it:
-/// `{"error": "forbidden_by_rule", "justification": "…", "rule":
-/// "workspace#3"}` beside the usual fields, so it can take the suggested
-/// alternative instead of retrying.
-/// The key of a decision's value that says who decided; [`BY_PERSON`] for
-/// the person's own answer (a host's prompt sets it), absent for a rule.
+/// The key of a rejection's value that says who decided: [`BY_PERSON`] when
+/// the person declined in the host's prompt (the call's result then carries
+/// [`declined_details`]); absent when a rule or the policy decided.
 pub const DECIDED_BY: &str = "by";
 
-/// [`DECIDED_BY`]'s value for the person's own answer.
+/// [`DECIDED_BY`]'s value when the person declined the call themselves.
 pub const BY_PERSON: &str = "person";
 
-/// The code of a call the person declined (#1225).
+/// The `error.code` of a call the person declined (#1225), in
+/// [`declined_details`].
 pub const DECLINED_BY_PERSON: &str = "declined_by_person";
 
 /// The typed failure a call the person declined carries in its result
@@ -1789,13 +1787,13 @@ pub fn feedback_of(value: &Value) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    let mut end = text.len().min(MAX_FEEDBACK_BYTES);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    Some(text[..end].to_owned())
+    Some(elitea_agent_runtime::text::clip_bytes(text, MAX_FEEDBACK_BYTES).to_owned())
 }
 
+/// A `forbidden` prefix rule's refusal, as the model sees it:
+/// `{"error": "forbidden_by_rule", "justification": "…", "rule":
+/// "workspace#3"}` beside the usual fields, so it can take the suggested
+/// alternative instead of retrying.
 fn forbidden_by_rule(value: &Value, reason: &str) -> Option<ToolError> {
     if value.get("decision").and_then(Value::as_str) != Some("forbidden") {
         return None;

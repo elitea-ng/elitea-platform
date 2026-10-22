@@ -4,7 +4,9 @@
  *
  * Deny is the focused button and Escape denies: the safe answer is the one
  * the keyboard reaches without thought. The backdrop does not dismiss, since
- * an accidental click must not answer for the user.
+ * an accidental click must not answer for the user. While the reason box is
+ * open Escape never denies (that would drop what the person wrote): it
+ * closes an empty box and leaves a box with text alone.
  *
  * The `continue` kind (the run used its steps: go on?) is not a modal: it is
  * a compact card the page puts in the transcript, under what the agent did.
@@ -34,8 +36,9 @@ import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/
 
 import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
 
+import { clipUtf8 } from '../model/feedback';
+
 import { McpAuthorizationCard } from './McpAuthorizationCard';
-import { MAX_FEEDBACK_CHARS } from './PlanCard';
 
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */
@@ -132,9 +135,10 @@ function FeedbackBox({ value, onChange }: { value: string; onChange: (value: str
       minRows={2}
       inputRef={inputRef}
       value={value}
-      onChange={(event) => onChange(event.target.value.slice(0, MAX_FEEDBACK_CHARS))}
+      // The box stops at what the host keeps (UTF-8 bytes, not characters).
+      onChange={(event) => onChange(clipUtf8(event.target.value))}
       label={t('workspace.approval.feedback', 'Tell the agent why (and what to do instead)')}
-      slotProps={{ htmlInput: { maxLength: MAX_FEEDBACK_CHARS, 'data-testid': 'approval-feedback' } }}
+      slotProps={{ htmlInput: { 'data-testid': 'approval-feedback' } }}
     />
   );
 }
@@ -165,6 +169,13 @@ function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { re
     if (explained === '') respond('deny');
     else onRespond(request.request_id, 'deny_with_feedback', explained);
   };
+  const escape = (): void => {
+    if (feedback === null) respond('deny');
+    else if (explained === '') {
+      setFeedback(null);
+      denyRef.current?.focus();
+    }
+  };
   return (
     <Dialog
       open
@@ -175,7 +186,7 @@ function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { re
       // The focus trap claims focus after mount; Deny takes it once the dialog has finished opening (unless the person already opened the reason box).
       slotProps={{ transition: { onEntered: () => feedback === null && denyRef.current?.focus() } }}
       onClose={(_event, reason) => {
-        if (reason === 'escapeKeyDown') respond('deny');
+        if (reason === 'escapeKeyDown') escape();
       }}
     >
       <DialogTitle id="workspace-approval-title">{request.title}</DialogTitle>

@@ -36,7 +36,9 @@
 //!   only, no code): each step may be `{step, status}` instead of a string,
 //!   with `status` one of `pending`, `in_progress`, `completed` or
 //!   `cancelled`, plus an optional `explanation`; `title` may be left out
-//!   (the plan keeps its title). At most one step is `in_progress`. The SDK
+//!   (the plan keeps its title). A written plan has at most one step
+//!   `in_progress` (`update_plan` refuses more; a stored plan is read as it
+//!   is, so an older one with two still loads). The SDK
 //!   form (`title` and a list of strings) is unchanged, so cloud prompts
 //!   written for the SDK keep working.
 //!
@@ -48,7 +50,9 @@
 //! (`{title, explanation?, status, steps: [{n, step, status}]}`, `null` for a
 //! deleted plan) the desktop sends as its `plan_updated` event. A host that
 //! accepts a plan written elsewhere (the desktop's `exit_plan_mode`) copies
-//! it in with [`Planner::seed_from_markdown`], through the same live plan.
+//! it in with [`Planner::seed_from_markdown`], through the same live plan:
+//! it replaces any plan the model did not write in this run (a previous
+//! turn's checklist, done or not).
 //!
 //! The tools stay `is_read_only() == false` and not concurrency safe: they
 //! change only session state, but adk's `Auto` strategy would run read-only
@@ -212,6 +216,13 @@ struct Envelope {
 }
 
 impl Plan {
+    /// The plan's status from its steps: `completed` when every step is
+    /// settled (completed or cancelled), else `in_progress`.
+    fn settle_status(&mut self) {
+        let settled = !self.steps.is_empty() && self.steps.iter().all(Step::settled);
+        if settled { COMPLETED } else { IN_PROGRESS }.clone_into(&mut self.status);
+    }
+
     /// The SDK's `PlanState.render`, character for character.
     fn render(&self) -> String {
         if self.steps.is_empty() {
@@ -259,6 +270,10 @@ fn state_key(scope: &str) -> String {
     )
 }
 
+/// The per-field bounds a stored plan is held to. The one-step-in-progress
+/// rule is not among them: it is checked when a plan is written
+/// ([`refuse_bounds`], `start_step`), so a plan stored before the rule still
+/// reads.
 fn bounded(plan: &Plan) -> bool {
     plan.title.chars().count() <= MAX_TITLE_CHARS
         && plan
@@ -266,7 +281,6 @@ fn bounded(plan: &Plan) -> bool {
             .as_ref()
             .is_none_or(|text| text.chars().count() <= MAX_EXPLANATION_CHARS)
         && plan.steps.len() <= MAX_STEPS
-        && plan.steps.iter().filter(|step| step.in_progress()).count() <= 1
         && plan
             .steps
             .iter()
@@ -309,6 +323,8 @@ const UNREADABLE: &str = "The stored plan is unreadable. Create a new plan with 
 struct Live {
     scope: String,
     plan: Option<Plan>,
+    /// A tool of this run wrote `plan` (it was not just read from state).
+    written: bool,
 }
 
 /// The five tools over one shared live plan.
@@ -323,10 +339,19 @@ impl Shared {
     /// tools that only read say so, and the two that replace or remove the plan
     /// (`update_plan`, `delete_plan`) do not need the old value at all.
     fn current(&self, ctx: &dyn ToolContext) -> Result<(String, Stored), AdkError> {
+        self.current_with_origin(ctx)
+            .map(|(scope, stored, _)| (scope, stored))
+    }
+
+    /// [`Self::current`], and whether a tool of this run wrote the plan.
+    fn current_with_origin(
+        &self,
+        ctx: &dyn ToolContext,
+    ) -> Result<(String, Stored, bool), AdkError> {
         let scope = scope_of(ctx);
         let mut live = self.live.lock().map_err(|_| unavailable())?;
         if let Some(existing) = live.as_ref().filter(|existing| existing.scope == scope) {
-            return Ok((scope, Stored::Plan(existing.plan.clone())));
+            return Ok((scope, Stored::Plan(existing.plan.clone()), existing.written));
         }
         let key = state_key(&scope);
         let stored = ctx.session().and_then(|session| session.state().get(&key));
@@ -334,19 +359,20 @@ impl Shared {
             None => None,
             Some(value) => {
                 if !valid_state_entry(&key, &value) {
-                    return Ok((scope, Stored::Unreadable));
+                    return Ok((scope, Stored::Unreadable, false));
                 }
                 match serde_json::from_value::<Envelope>(value) {
                     Ok(envelope) => envelope.plan,
-                    Err(_) => return Ok((scope, Stored::Unreadable)),
+                    Err(_) => return Ok((scope, Stored::Unreadable, false)),
                 }
             }
         };
         *live = Some(Live {
             scope: scope.clone(),
             plan: plan.clone(),
+            written: false,
         });
-        Ok((scope, Stored::Plan(plan)))
+        Ok((scope, Stored::Plan(plan), false))
     }
 
     /// Make `plan` the live plan and carry it on the tool-result event.
@@ -369,6 +395,7 @@ impl Shared {
         *live = Some(Live {
             scope: scope.to_owned(),
             plan,
+            written: true,
         });
         Ok(())
     }
@@ -418,13 +445,15 @@ impl Planner {
         Arc::new(BasicToolset::new(TOOLSET_NAME, tools))
     }
 
-    /// Copy a plan the person accepted (Markdown) into the plan state when
-    /// the model has not written one: a `# heading` is the title, each list
-    /// item (`-`, `*`, `1.`, `- [ ]`, `- [x]`) a step, in order, pending
-    /// (checked ones completed). Called by a host inside the tool call that
+    /// Copy a plan the person accepted (Markdown) into the plan state unless
+    /// the model wrote one with steps in this run (its own checklist for the
+    /// plan it proposed wins): a `# heading` is the title, each top-level
+    /// list item (`-`, `*`, `1.`, `- [ ]`, `- [x]`) a step, in order, pending
+    /// (checked ones completed); nested items, fenced code and thematic
+    /// breaks are not steps. A plan only read from state (a previous turn's,
+    /// done or not) is replaced. Called by a host inside the tool call that
     /// accepted it, so the state rides that call's result event. True when
-    /// it wrote a plan; a plan that already has steps, or Markdown without
-    /// a list, writes nothing.
+    /// it wrote a plan; Markdown without a list writes nothing.
     ///
     /// # Errors
     ///
@@ -434,8 +463,8 @@ impl Planner {
         ctx: &dyn ToolContext,
         markdown: &str,
     ) -> Result<bool, AdkError> {
-        let (scope, stored) = self.shared.current(ctx)?;
-        if matches!(&stored, Stored::Plan(Some(plan)) if !plan.steps.is_empty()) {
+        let (scope, stored, written) = self.shared.current_with_origin(ctx)?;
+        if written && matches!(&stored, Stored::Plan(Some(plan)) if !plan.steps.is_empty()) {
             return Ok(false);
         }
         let Some(plan) = plan_from_markdown(markdown) else {
@@ -452,12 +481,29 @@ pub fn toolset() -> Arc<dyn Toolset> {
     Planner::new().toolset()
 }
 
-/// The steps of a Markdown plan, bounded as `update_plan` bounds them.
+/// The steps of a Markdown plan, bounded as `update_plan` bounds them: the
+/// top-level list items outside fenced code.
 fn plan_from_markdown(markdown: &str) -> Option<Plan> {
     let mut title = String::new();
     let mut steps = Vec::new();
-    for line in markdown.lines() {
-        let line = line.trim();
+    let mut fence: Option<(u8, usize)> = None;
+    // The indent of the first list item: a deeper item is nested.
+    let mut top: Option<usize> = None;
+    for raw in markdown.lines() {
+        let line = raw.trim();
+        if let Some(open) = fence {
+            if fence_marker(line).is_some_and(|(mark, len)| mark == open.0 && len >= open.1) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(marker) = fence_marker(line) {
+            fence = Some(marker);
+            continue;
+        }
+        if thematic_break(line) {
+            continue;
+        }
         if title.is_empty()
             && steps.is_empty()
             && let Some(heading) = line.strip_prefix('#')
@@ -471,11 +517,12 @@ fn plan_from_markdown(markdown: &str) -> Option<Plan> {
         let Some((text, done)) = list_item(line) else {
             continue;
         };
-        if text.is_empty() {
+        let depth = indent(raw);
+        if *top.get_or_insert(depth) + 2 <= depth || text.is_empty() {
             continue;
         }
         steps.push(Step {
-            description: clip_bytes(text, MAX_STEP_BYTES),
+            description: crate::text::clip_bytes(text, MAX_STEP_BYTES).to_owned(),
             status: if done { COMPLETED } else { PENDING }.to_owned(),
         });
         if steps.len() == MAX_STEPS {
@@ -524,15 +571,34 @@ fn list_item(line: &str) -> Option<(&str, bool)> {
     Some((rest, false))
 }
 
-fn clip_bytes(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_owned();
+/// A code fence's character and length (```` ``` ````, `~~~` or longer).
+fn fence_marker(line: &str) -> Option<(u8, usize)> {
+    let mark = *line.as_bytes().first()?;
+    if mark != b'`' && mark != b'~' {
+        return None;
     }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
+    let len = line.bytes().take_while(|byte| *byte == mark).count();
+    (len >= 3).then_some((mark, len))
+}
+
+/// A thematic break: three or more `-`, `*` or `_`, spaces between allowed
+/// (`---`, `* * *`, `- - -`).
+fn thematic_break(line: &str) -> bool {
+    let mut marks = line.bytes().filter(|byte| *byte != b' ' && *byte != b'\t');
+    let Some(mark) = marks.next() else {
+        return false;
+    };
+    matches!(mark, b'-' | b'*' | b'_')
+        && marks.clone().all(|byte| byte == mark)
+        && marks.count() >= 2
+}
+
+/// A line's indentation in columns (a tab is four).
+fn indent(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
 }
 
 fn encoded_len(plan: &Plan) -> usize {
@@ -782,13 +848,13 @@ impl PlanTool {
             Stored::Plan(Some(plan)) => plan.title.clone(),
             _ => String::new(),
         });
-        let all_settled = !steps.is_empty() && steps.iter().all(Step::settled);
-        let plan = Plan {
+        let mut plan = Plan {
             title,
-            status: if all_settled { COMPLETED } else { IN_PROGRESS }.to_owned(),
+            status: String::new(),
             explanation,
             steps,
         };
+        plan.settle_status();
         if encoded_len(&plan) > MAX_PLAN_BYTES {
             return Ok(format!(
                 "Error updating plan: the plan is larger than {} KiB.",
@@ -844,6 +910,8 @@ impl PlanTool {
                 }
             }
             IN_PROGRESS.clone_into(&mut plan.steps[index].status);
+            // Restarting a cancelled step of a settled plan reopens it.
+            plan.settle_status();
             let description = plan.steps[index].description.clone();
             let rendered = plan.render();
             self.shared.commit(ctx, &scope, Some(plan))?;
@@ -858,9 +926,7 @@ impl PlanTool {
             ));
         }
         COMPLETED.clone_into(&mut plan.steps[index].status);
-        if plan.steps.iter().all(Step::settled) {
-            COMPLETED.clone_into(&mut plan.status);
-        }
+        plan.settle_status();
         let done = plan.steps.iter().filter(|step| step.completed()).count();
         let rendered = plan.render();
         self.shared.commit(ctx, &scope, Some(plan))?;

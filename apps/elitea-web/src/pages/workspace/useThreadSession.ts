@@ -5,7 +5,7 @@
  * the folder's thread list, the last location, the app's project, and the
  * actions ⌘N / the palette reach.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
@@ -22,7 +22,7 @@ import {
   type WorkspaceTurn,
 } from '@/features/workspace';
 import type { PlanView } from '@/shared/desktop/planIpc';
-import type { ApprovalDecision, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { ApprovalDecision, StoredTurn, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useSelectedProject } from '@/widgets/app-shell';
 import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -103,17 +103,26 @@ function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: 
   return sets.reverse();
 }
 
+interface RecordedPlan {
+  turnId: string;
+  view: ReturnType<typeof replayView>;
+}
+
+/** The recorded turns that sent a `plan_updated`, each replayed once (memoised on the history, not per render). */
+function recordedPlansOf(turns: readonly StoredTurn[] | undefined): RecordedPlan[] {
+  if (turns === undefined) return [];
+  return turns.filter((stored) => stored.events.some((event) => event.kind === 'plan_updated')).map((stored) => ({ turnId: stored.turn_id, view: replayView(stored.events) }));
+}
+
 /**
  * The thread's checklist: the newest `plan_updated` of its turns — the
  * session's own, else the recorded ones (so the Plan tab replays after a
  * restart); `null` when none sent one or it was deleted.
  */
-function threadPlan(history: ThreadHistory, shown: ReadonlySet<string>, turn: WorkspaceTurn): PlanView | null {
+function threadPlan(recorded: readonly RecordedPlan[], shown: ReadonlySet<string>, turn: WorkspaceTurn): PlanView | null {
   const session = [...turn.earlier.map((entry) => entry.view), ...(turn.turnId === null ? [] : [turn.view])];
   if (session.some((view) => view.plan !== undefined)) return plan.latest(session);
-  if (history.kind !== 'local') return null;
-  const recorded = history.turns.filter((stored) => !shown.has(stored.turn_id) && stored.events.some((event) => event.kind === 'plan_updated'));
-  return plan.latest(recorded.map((stored) => replayView(stored.events)));
+  return plan.latest(recorded.filter((entry) => !shown.has(entry.turnId)).map((entry) => entry.view));
 }
 
 export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send' | 'prewarm'> {
@@ -191,6 +200,8 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const { canSend, sendError, send, prewarm } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
   const done = turn.view.done;
   const changeSets = changeSetsOf(history, shown, turn, prompts);
+  const localTurns = history.kind === 'local' ? history.turns : undefined;
+  const recordedPlans = useMemo(() => recordedPlansOf(localTurns), [localTurns]);
   // `/undo` acts on the last turn, as before: only when it changed files.
   const undoTurnId = done !== undefined && done.changedFiles > 0 ? turn.turnId : null;
   const commands = useSessionCommands(selection, turn, undoTurnId !== null);
@@ -235,7 +246,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     prompts,
     decided,
     answer,
-    plan: threadPlan(history, shown, turn),
+    plan: threadPlan(recordedPlans, shown, turn),
     undoTurnId,
     history,
     shown,

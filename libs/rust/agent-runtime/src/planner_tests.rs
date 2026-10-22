@@ -591,10 +591,50 @@ async fn only_one_step_in_progress() {
     let view = plan_update(&delta(&ctx)).expect("a plan update");
     assert_eq!(view["steps"][0]["status"], "pending");
     assert_eq!(view["steps"][1]["status"], "in_progress");
-    // A stored plan with two steps in progress is not a valid entry.
+    // The rule holds for writes only: a plan stored with two steps in
+    // progress (before the rule) is still a valid entry, and reads.
     let (key, mut value) = delta(&ctx).into_iter().next().expect("state");
     value["plan"]["steps"][0]["status"] = json!("in_progress");
-    assert!(!valid_state_entry(&key, &value));
+    assert!(valid_state_entry(&key, &value));
+    let delta = HashMap::from([(key, value.clone())]);
+    assert!(crate::instruction_authority::valid_state_delta(&delta));
+    let stored = SessionContext::with_entry(value);
+    let status = call(&self::tools().await, &stored, "get_plan_status", json!({})).await;
+    assert!(status.contains("0/2 completed, 2 in progress"), "{status}");
+}
+
+/// A cancelled step started or completed again leaves the plan's status
+/// coherent with its steps.
+#[tokio::test]
+async fn the_plan_status_follows_a_cancelled_step_reopened() {
+    let tools = tools().await;
+    let ctx = context();
+    call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({"steps": [
+            {"step": "a", "status": "completed"},
+            {"step": "b", "status": "cancelled"}
+        ]}),
+    )
+    .await;
+    assert_eq!(
+        plan_update(&delta(&ctx)).expect("plan")["status"],
+        "completed"
+    );
+    call(&tools, &ctx, "start_step", json!({"step_number": 2})).await;
+    let view = plan_update(&delta(&ctx)).expect("plan");
+    assert_eq!(view["steps"][1]["status"], "in_progress");
+    assert_eq!(
+        view["status"], "in_progress",
+        "a step in progress reopens the plan"
+    );
+    call(&tools, &ctx, "complete_step", json!({"step_number": 2})).await;
+    assert_eq!(
+        plan_update(&delta(&ctx)).expect("plan")["status"],
+        "completed"
+    );
 }
 
 /// The plan lives in session state: a new run (a fresh toolset, as after an
@@ -631,7 +671,7 @@ async fn plan_survives_session_reload() {
 }
 
 #[tokio::test]
-async fn an_accepted_markdown_plan_is_seeded_only_when_there_is_none() {
+async fn an_accepted_markdown_plan_is_seeded_unless_the_model_wrote_one_this_run() {
     let planner = Planner::new();
     let tools = planner
         .toolset()
@@ -657,7 +697,8 @@ async fn an_accepted_markdown_plan_is_seeded_only_when_there_is_none() {
         ])
     );
     // The toolset sees the seeded plan (one live plan), and a second seed
-    // over a plan with steps writes nothing.
+    // over a plan the model wrote in this run (its own checklist) writes
+    // nothing.
     let status = call(&tools, &ctx, "get_plan_status", json!({})).await;
     assert!(status.starts_with("📋 Rename X"), "{status}");
     let other = context();
@@ -682,6 +723,49 @@ async fn an_accepted_markdown_plan_is_seeded_only_when_there_is_none() {
             .expect("seed")
     );
     assert!(delta(&empty).is_empty());
+}
+
+/// A previous turn's plan, done or not, is only read in this run: the plan
+/// the person accepts now replaces it (and the replacement is a plan update
+/// on the accepting call's event).
+#[tokio::test]
+async fn an_accepted_plan_replaces_a_previous_turns_plan() {
+    for status in ["completed", "in_progress"] {
+        let stored = json!({"schema": 1, "scope": "session-1:planner-test", "plan": {
+            "title": "Old", "status": status,
+            "steps": [{"description": "old step", "status": "completed"}]
+        }});
+        let ctx = SessionContext::with_entry(stored);
+        let planner = Planner::new();
+        assert!(
+            planner
+                .seed_from_markdown(ctx.as_ref(), "# New\n\n- new step")
+                .expect("seed"),
+            "{status}"
+        );
+        let view = plan_update(&delta(&ctx)).expect("a plan update");
+        assert_eq!(view["title"], "New");
+        assert_eq!(
+            view["steps"],
+            json!([{"n": 1, "step": "new step", "status": "pending"}])
+        );
+    }
+}
+
+#[test]
+fn fenced_code_nested_items_and_thematic_breaks_are_not_steps() {
+    let markdown = "# Plan\n\n1. Add the flag\n   - in config.rs\n   - and the CLI\n\t* tabbed sub-item\n2. Test it\n\n```sh\n- cargo test\n1. not a step\n```\n\n~~~~\n* inside a tilde fence\n~~~\n* still inside\n~~~~\n\n* * *\n- - -\n***\n---\n___\n\n- Ship it\n";
+    let plan = plan_from_markdown(markdown).expect("a plan");
+    let steps: Vec<&str> = plan
+        .steps
+        .iter()
+        .map(|step| step.description.as_str())
+        .collect();
+    assert_eq!(steps, ["Add the flag", "Test it", "Ship it"]);
+    assert_eq!(plan.title, "Plan");
+    // A list that starts indented is still the top level.
+    let plan = plan_from_markdown("  - one\n  - two\n    - nested").expect("a plan");
+    assert_eq!(plan.steps.len(), 2);
 }
 
 #[test]
