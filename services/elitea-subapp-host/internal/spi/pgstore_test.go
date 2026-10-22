@@ -284,12 +284,13 @@ func TestPostgresStoreLeavesABrieflyDisconnectedOwnersRunsAlone(t *testing.T) {
 		  AND classid = (($1::bigint >> 32) & 4294967295)::oid AND objid = ($1::bigint & 4294967295)::oid`, key); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the lock to be free", func() bool {
+	lockFree := func() bool {
 		var held bool
 		_ = assertions.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1
 			AND classid = (($1::bigint >> 32) & 4294967295)::oid AND objid = ($1::bigint & 4294967295)::oid)`, key).Scan(&held)
 		return !held
-	})
+	}
+	waitFor(t, "the lock to be free", lockFree)
 	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
 		t.Fatalf("a sibling reaped on one free sighting: %d %v", n, err)
 	}
@@ -305,6 +306,13 @@ func TestPostgresStoreLeavesABrieflyDisconnectedOwnersRunsAlone(t *testing.T) {
 	// first free sighting after it starts a new grace rather than reaping at
 	// once on the stale one.
 	owner.Close()
+	// Close returns before the server has ended the claim session, so the
+	// lock can still read as held for a moment. A Reconcile in that window
+	// sees it held, which resets the wait instead of starting the grace, and
+	// the reap below then came one grace too early (reconciled 0, want 1).
+	// Wait for the server to free it, so this Reconcile is the first free
+	// sighting the comment above describes.
+	waitFor(t, "the closed owner's lock to be free", lockFree)
 	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
 		t.Fatalf("a sibling reaped on a free sighting that predates a held one: %d %v", n, err)
 	}
