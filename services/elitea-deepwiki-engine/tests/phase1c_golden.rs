@@ -2,7 +2,7 @@
 //! against the Python engine's.
 //!
 //! `tests/fixtures/phase1c/repo` exercises every Phase 1c pass: `FastAPI`
-//! routes under a router prefix, a `ctypes` library, a Pylon class API with
+//! routes under a router prefix, a `ctypes` library, a plugin class API with
 //! a `metadata.json` plugin name, `fetch` / `axios` / request-options
 //! clients, a Go gRPC server interface and `gin` routes, a Rust `extern
 //! "C"` export, data shapes shared by four languages, and markdown files

@@ -1756,7 +1756,7 @@
   "rest/v3alpha/e": "/e",
   "/x": ""
  },
- "pylon_endpoints": [
+ "plugin_endpoints": [
   "GET /api/v1/configurations/configurations/{project_id}",
   "GET /api/v1/configurations/configurations",
   "GET /api/v1/configurations/configurations/{mode}/{project_id}",

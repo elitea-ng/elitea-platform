@@ -2,7 +2,7 @@
 //!
 //! Every node's source text goes through a set of regex matchers — REST
 //! routes and clients, gRPC services and stubs, GraphQL roots, FFI exports,
-//! data shapes (`obj:`), BDD steps, CLI commands, Pylon class APIs — that
+//! data shapes (`obj:`), BDD steps, CLI commands, plugin class APIs — that
 //! yield canonical surface keys (`"POST /users"`, `"grpc:Cart/GetCart"`).
 //! [`materialize_contract_nodes`] then turns each distinct `(kind,
 //! surface)` into a `contract::<kind>::<surface>` node with a `defines`
@@ -1288,45 +1288,45 @@ fn match_cli(text: &str) -> Option<Vec<ApiSurface>> {
     Some(out)
 }
 
-// ── Pylon class APIs ────────────────────────────────────────────────────
+// ── Plugin class APIs ───────────────────────────────────────────────────
 
 pattern!(
-    PYLON_API_BASE,
+    CLASS_API_BASE,
     r"\bclass\s+\w+\s*\(\s*[^)]*?(?:APIBase|MethodView|Resource)\b"
 );
 pattern!(
-    PYLON_URL_PARAMS,
+    CLASS_API_URL_PARAMS,
     r"\burl_params\s*=\s*\[(?P<body>.*?)\]",
     "s"
 );
 pattern!(
-    PYLON_METHOD_DEF,
+    CLASS_API_METHOD_DEF,
     r"^\s*def\s+(?P<m>get|post|put|patch|delete|head|options)\s*\(",
     "mi"
 );
 pattern!(
-    PYLON_ROUTE_FROM_PATH,
+    CLASS_API_ROUTE_FROM_PATH,
     r"(/api(?:/v\d+\w*)?/[A-Za-z0-9_/\-]+?)\.py$"
 );
-pattern!(PYLON_PARAM, r"<[^>]+>");
-pattern!(PYLON_PARAM_NAMED, r"<(?:[^:>]+:)?(?P<name>[^>]+)>");
-pattern!(PYLON_MOUNT, r"^(/api(?:/v\d+\w*)?)/(.+)$");
+pattern!(CLASS_API_PARAM, r"<[^>]+>");
+pattern!(CLASS_API_PARAM_NAMED, r"<(?:[^:>]+:)?(?P<name>[^>]+)>");
+pattern!(PLUGIN_MOUNT, r"^(/api(?:/v\d+\w*)?)/(.+)$");
 pattern!(PLUGIN_NAME, r"^[A-Za-z][A-Za-z0-9_\-]*$");
 
-fn pylon_route_from_rel_path(rel_path: &str) -> String {
+fn plugin_route_from_rel_path(rel_path: &str) -> String {
     if rel_path.is_empty() {
         return String::new();
     }
     let norm = format!("/{}", rel_path.trim_start_matches('/'));
-    PYLON_ROUTE_FROM_PATH
+    CLASS_API_ROUTE_FROM_PATH
         .captures(&norm)
         .map(|c| group_at(&c, 1).to_owned())
         .unwrap_or_default()
 }
 
 /// The `url_params = [...]` suffixes, each part rewritten by `param`.
-fn pylon_suffixes(text: &str, param: impl Fn(&str) -> String) -> Vec<String> {
-    let Some(pm) = PYLON_URL_PARAMS.captures(text) else {
+fn plugin_url_suffixes(text: &str, param: impl Fn(&str) -> String) -> Vec<String> {
+    let Some(pm) = CLASS_API_URL_PARAMS.captures(text) else {
         return vec![String::new()];
     };
     group(&pm, "body")
@@ -1342,27 +1342,27 @@ fn pylon_suffixes(text: &str, param: impl Fn(&str) -> String) -> Vec<String> {
         .collect()
 }
 
-/// `_match_pylon_api`: a Pylon / Flask class API (`APIBase`, `MethodView`,
+/// A plugin-framework or Flask class API (`APIBase`, `MethodView`,
 /// `Resource`), routed by its file path, one surface per verb method.
-fn match_pylon_api(
+fn match_plugin_class_api(
     symbol_type: &str,
     text: &str,
     rel_path: &str,
     plugin_name: &str,
 ) -> Vec<ApiSurface> {
-    if symbol_type.to_lowercase() != "class" || text.is_empty() || !PYLON_API_BASE.is_match(text) {
+    if symbol_type.to_lowercase() != "class" || text.is_empty() || !CLASS_API_BASE.is_match(text) {
         return Vec::new();
     }
-    let base = pylon_route_from_rel_path(rel_path);
+    let base = plugin_route_from_rel_path(rel_path);
     if base.is_empty() {
         return Vec::new();
     }
-    let suffixes = pylon_suffixes(text, |tok| {
-        PYLON_PARAM.replace_all(tok, "{var}").into_owned()
+    let suffixes = plugin_url_suffixes(text, |tok| {
+        CLASS_API_PARAM.replace_all(tok, "{var}").into_owned()
     });
     // A Python set: its order is the hash seed's. Sorted here; the order
     // reaches only the edge insertion order, not the rows.
-    let methods: BTreeSet<String> = PYLON_METHOD_DEF
+    let methods: BTreeSet<String> = CLASS_API_METHOD_DEF
         .captures_iter(text)
         .map(|m| group(&m, "m").to_uppercase())
         .collect();
@@ -1371,7 +1371,7 @@ fn match_pylon_api(
     }
     let mut bases = vec![base.clone()];
     if !plugin_name.is_empty()
-        && let Some(mm) = PYLON_MOUNT.captures(&base)
+        && let Some(mm) = PLUGIN_MOUNT.captures(&base)
     {
         let rest = group_at(&mm, 2);
         if !rest.starts_with(&format!("{plugin_name}/")) && rest != plugin_name {
@@ -1395,7 +1395,7 @@ fn match_pylon_api(
     out
 }
 
-/// `plugin_name_from_metadata_text`: the `name` of a Pylon plugin's
+/// `plugin_name_from_metadata_text`: the `name` of a plugin's
 /// `metadata.json` (its URL mount segment), or `""`.
 #[must_use]
 pub fn plugin_name_from_metadata_text(text: &str) -> String {
@@ -1424,30 +1424,34 @@ pub fn plugin_name_from_metadata_text(text: &str) -> String {
     }
 }
 
-/// `derive_pylon_endpoints`: the deployed REST endpoints of a Pylon class
+/// `derive_plugin_endpoints`: the deployed REST endpoints of a plugin class
 /// API (`/api/v{N}/{plugin}/{file}{url_params}`), for the page writer.
 #[must_use]
-pub fn derive_pylon_endpoints(rel_path: &str, source_text: &str, plugin_name: &str) -> Vec<String> {
-    if source_text.is_empty() || !PYLON_API_BASE.is_match(source_text) {
+pub fn derive_plugin_endpoints(
+    rel_path: &str,
+    source_text: &str,
+    plugin_name: &str,
+) -> Vec<String> {
+    if source_text.is_empty() || !CLASS_API_BASE.is_match(source_text) {
         return Vec::new();
     }
-    let base = pylon_route_from_rel_path(rel_path);
+    let base = plugin_route_from_rel_path(rel_path);
     if base.is_empty() {
         return Vec::new();
     }
     let mut deployed = base.clone();
     if !plugin_name.is_empty()
-        && let Some(mm) = PYLON_MOUNT.captures(&base)
+        && let Some(mm) = PLUGIN_MOUNT.captures(&base)
         && !group_at(&mm, 2).starts_with(&format!("{plugin_name}/"))
     {
         deployed = format!("{}/{plugin_name}/{}", group_at(&mm, 1), group_at(&mm, 2));
     }
-    let suffixes = pylon_suffixes(source_text, |tok| {
-        PYLON_PARAM_NAMED
+    let suffixes = plugin_url_suffixes(source_text, |tok| {
+        CLASS_API_PARAM_NAMED
             .replace_all(tok, |c: &Captures<'_>| format!("{{{}}}", group(c, "name")))
             .into_owned()
     });
-    let methods: BTreeSet<String> = PYLON_METHOD_DEF
+    let methods: BTreeSet<String> = CLASS_API_METHOD_DEF
         .captures_iter(source_text)
         .map(|m| group(&m, "m").to_uppercase())
         .collect();
@@ -1503,7 +1507,7 @@ pub fn extract_api_surfaces(
     surfaces.extend(match_objects(text, language));
     surfaces.extend(match_bdd(text, node.rel_path));
     surfaces.extend(match_cli(text)?);
-    surfaces.extend(match_pylon_api(
+    surfaces.extend(match_plugin_class_api(
         node.symbol_type,
         node.source_text,
         node.rel_path,
@@ -1642,7 +1646,7 @@ impl FileScans {
     }
 }
 
-/// The Pylon plugin name from the first `metadata.json` node that has one.
+/// The plugin name from the first `metadata.json` node that has one.
 fn plugin_name_of(graph: &CodeGraph) -> String {
     graph
         .nodes()

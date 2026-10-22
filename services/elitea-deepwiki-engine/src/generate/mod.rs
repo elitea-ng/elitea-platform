@@ -60,7 +60,7 @@ use crate::structure::index::PlannerIndex;
 use crate::structure::model::LiveModel;
 use crate::structure::{self, PlannerChoice, StructureSettings, analysis};
 use crate::wiki::compose::{VersionClock, build_repo_identifier, normalize_wiki_id};
-use crate::wiki::context::PylonPlugin;
+use crate::wiki::context::PluginMount;
 use crate::wiki::expansion::ExpansionFlags;
 use crate::wiki::index::{GraphFacts, PageIndex};
 use crate::wiki::pages::{PageGenerator, PageSettings};
@@ -530,7 +530,7 @@ impl Pipeline<'_> {
                     exclude_tests: self.environment.exclude_tests,
                 },
                 budget: CONTEXT_TOKEN_BUDGET,
-                pylon: PylonPlugin::new(Some(root.clone())),
+                plugin_mount: PluginMount::new(Some(root.clone())),
             },
             chat,
             settings: PageSettings::new(repository.clone()),

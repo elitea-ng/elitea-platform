@@ -1090,7 +1090,7 @@ case and the real diagrams of the design documents and the Mermaid
 README — is byte-identical, fixes and statuses included.
 
 `tests/wiki_pages_golden.rs` runs the same gate without Python over
-`tests/fixtures/wiki/golden` (a repository with Python, C++, a Pylon API,
+`tests/fixtures/wiki/golden` (a repository with Python, C++, a plugin class API,
 Markdown and YAML; a split page; a page whose targets are only on disk or
 outside the checkout). `tests/wiki_contract.rs` holds the export to the
 frozen `conformance/provider/fixtures/deepwiki/generation` fixtures, and

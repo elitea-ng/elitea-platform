@@ -33,7 +33,7 @@
 //!   when that search failed: the repository context as the page context,
 //!   no files.
 
-use super::context::{PylonPlugin, RelevantContent, format_simple_context};
+use super::context::{PluginMount, RelevantContent, format_simple_context};
 use super::doc::{ContextDoc, count_documents};
 use super::expansion::{ExpansionFlags, ExpansionRequest, expand_for_page};
 use super::index::{IndexNode, PageIndex};
@@ -63,7 +63,7 @@ pub struct RetrievalContext<S: PageSearch> {
     pub repo_root: Option<PathBuf>,
     pub flags: ExpansionFlags,
     pub budget: usize,
-    pub pylon: PylonPlugin,
+    pub plugin_mount: PluginMount,
 }
 
 /// How a page's context was built (for the progress log).
@@ -143,7 +143,7 @@ impl<S: PageSearch> RetrievalContext<S> {
             &docs,
             page,
             self.index.facts(),
-            &self.pylon,
+            &self.plugin_mount,
         ))
     }
 
@@ -499,7 +499,7 @@ mod tests {
             repo_root: Some(root.clone()),
             flags: ExpansionFlags::default(),
             budget: CONTEXT_TOKEN_BUDGET,
-            pylon: PylonPlugin::new(Some(root.clone())),
+            plugin_mount: PluginMount::new(Some(root.clone())),
         };
         // The pre-change reading: the whole file, then the cap.
         let whole = |text: &str, total: &mut usize| {

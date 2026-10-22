@@ -1,8 +1,10 @@
 //! ADR-0026 decision 8 for the page prompts: every embedded prompt is the
-//! Python value, byte for byte.
+//! recorded value, byte for byte.
 //!
 //! `src/wiki/prompts/PROMPTS_MANIFEST.json` records the SHA-256 and length
-//! of each Python value; the test holds every embedded file to them. The
+//! of each prompt, first taken from the Python values; the test holds every
+//! embedded file to them, so a prompt change is a deliberate manifest edit
+//! (an entry that has moved off the Python value says so in `amended`). The
 //! manifest's `source` paths are historical: the Python engine was deleted
 //! after origin/main 1233e1582.
 
