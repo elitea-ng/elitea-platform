@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the clients and SDK of the previous (Python) platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,7 +11,7 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+ *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
  *   the named `SocialActionErrorResponse` schema and referenced only on
  *   those specific operations. Five more UNDOCUMENTED sites of the same
  *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -19,7 +19,7 @@
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -62,11 +62,11 @@ export const UserInviteResult = zod
       .enum(["invited", "already_member", "invalid_email", "failed"])
       .optional()
       .describe(
-        "The machine-readable half of `msg`. pylon carried these four cases only in free English prose, so the reference SPA could not tell them apart and showed one toast for a whole batch. `status` keeps its two pylon values, so this field is additive: an old client reads the response exactly as before.\n",
+        "The machine-readable half of `msg`. The legacy runtime carried these four cases only in free English prose, so the reference SPA could not tell them apart and showed one toast for a whole batch. `status` keeps its two legacy values, so this field is additive: an old client reads the response exactly as before.\n",
       ),
   })
   .describe(
-    "One element of the per-address array pylon's invite returns. The response carries one of these per requested address, and the whole response is 400 when any of them failed. A 400 therefore still means that the `ok` rows landed — each address is written in its own transaction, and one bad address does not roll back the others.\n",
+    "One element of the per-address array the legacy runtime's invite returns. The response carries one of these per requested address, and the whole response is 400 when any of them failed. A 400 therefore still means that the `ok` rows landed — each address is written in its own transaction, and one bad address does not roll back the others.\n",
   );
 
 export type UserInviteResult = zod.input<typeof UserInviteResult>;

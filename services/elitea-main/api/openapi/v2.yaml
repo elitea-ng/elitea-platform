@@ -8,7 +8,7 @@ info:
   x-elitea-client-contract: "1.17"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
-    Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+    Wire-compatible with the clients and SDK of the previous (Python) platform.
 
     ## Response shape conventions
     - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -16,7 +16,7 @@ info:
       and the handlers' inline `map[string]any{"error": ...}` writes). One
       documented shape deviates: the five social/handler.go 500 sites (Like
       :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
-      pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+      legacy `{"ok": false, "error": ...}` envelope instead, modeled as
       the named `SocialActionErrorResponse` schema and referenced only on
       those specific operations. Five more UNDOCUMENTED sites of the same
       envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -24,7 +24,7 @@ info:
     - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
       middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
       and no elitea-main code emits a 429 body — documenting one would be contract
-      fiction. Re-add per-operation 429 responses (pylon shape:
+      fiction. Re-add per-operation 429 responses (legacy-runtime shape:
       `{"error": {"message", "type": "rate_limit_error", "code":
       "rate_limit_exceeded"}}`) when rate limiting becomes real.
     - Field names are **snake_case** unless the Go handler observably marshals
@@ -1256,7 +1256,7 @@ components:
       description: |
         The cost view over gateway.llm_budget_accumulators. Its shape is the
         accumulator's own: money per (scope, scope_id, period). The per-model,
-        per-agent, per-user and per-day views the pylon original carried are
+        per-agent, per-user and per-day views the legacy runtime carried are
         absent here because nothing in this architecture records those
         dimensions — see the operation description.
       required: [kpis, periods, by_scope, periods_truncated, date_from, date_to]
@@ -4921,7 +4921,7 @@ components:
       type: object
       required: [ok, error]
       description: >
-        NOTE(W2): the notification routes write the pylon `{"ok": false,
+        NOTE(W2): the notification routes write the legacy `{"ok": false,
         "error": ...}` envelope on every failure, including "Notification is
         not found", which answers 400 rather than 404
         (internal/api/v2/notifications/api.go:479-491).
@@ -5248,7 +5248,7 @@ components:
         NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write
         encodes `{"error": message}`) and the handlers' inline
         `map[string]any{"error": ...}` writes. No operation documented in this
-        spec emits the pylon `ok` field via THIS schema; the five
+        spec emits the legacy `ok` field via THIS schema; the five
         social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named
         `SocialActionErrorResponse` schema instead (see there), and five more
         UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350,
@@ -5446,7 +5446,7 @@ components:
         One row of the admin Tasks table. `task_id`, `status`, `started_at`
         and `user` carry the legacy listing's names verbatim
         (legacy/plugins/admin/api/v2/tasks.py:94-108); the rest are new,
-        because pylon had one kind of task, one project, no completion time,
+        because the legacy runtime had one kind of task, one project, no completion time,
         and a stop button it always offered.
       required: [task_id, kind, name, status, cancellable]
       properties:
@@ -6104,7 +6104,7 @@ components:
           type: string
           description: >
             NOTE(#898): the editor's free-text "Editor Notes". It has no column
-            of its own on `application_versions` and is not meant to: pylon
+            of its own on `application_versions` and is not meant to: the legacy runtime
             stores it inside this same jsonb (elitea_issues issue 5410 chose the
             blob over a per-tenant schema migration), folding the top-level
             `notes` write field in
@@ -6283,7 +6283,7 @@ components:
         agent_type:
           type: string
           description: >
-            Kept although pylon's ApplicationVersionListModel excluded it:
+            Kept although the legacy runtime's ApplicationVersionListModel excluded it:
             apps/elitea-web reads it off the summary to shape the version
             dropdown (pages/agents/lib/editApplicationMappers.ts
             toVersionSummaries, and its pipeline twin).
@@ -6392,7 +6392,7 @@ components:
             (versionTags, internal/api/v2/applications/handler.go). The
             export and fork echoes project name and data only, so it is
             optional. A write ignores it: the handler matches a tag by name,
-            the same way pylon does
+            the same way the legacy runtime does
             (legacy/plugins/elitea_core/utils/application_utils.py:219-226).
         name:
           type: string
@@ -6409,7 +6409,7 @@ components:
         from unvalidated client maps: a fork payload tag without a name
         yields {"name": null, ...}. Hence name is nullable and not required.
         NOTE(#345): the same shape is now also the WRITE shape — `tags` on
-        VersionWriteRequest refs this schema, matching pylon's own
+        VersionWriteRequest refs this schema, matching the legacy runtime's own
         PromptTagUpdateModel (name, optional data, optional id).
 
     ApplicationVersionDetail:
@@ -6429,7 +6429,7 @@ components:
         notes:
           type: string
           description: >
-            NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon's
+            NOTE(#898): `meta.notes`, surfaced beside `meta` as the legacy runtime's
             `hydrate_notes_from_meta` surfaces it. Always a string on the
             version-detail read and on the two write echoes ("" when the
             version carries no notes); absent from the other version maps
@@ -6493,7 +6493,7 @@ components:
       description: >
         NOTE(#336): one entry of the runtime skill registry the SDK binds
         `load_skill` against (elitea_sdk/runtime/tools/skill_tools.py:127-131).
-        It is the five-key projection pylon's `resolve_runtime_skills` produces
+        It is the five-key projection the legacy runtime's `resolve_runtime_skills` produces
         (legacy/plugins/elitea_core/utils/skill_utils.py:1570-1607);
         `skill_version_id` and `version_name` are deliberately absent.
 
@@ -6510,7 +6510,7 @@ components:
                 jsonb under the `icon_meta` key, which
                 internal/api/v2/applications/handler.go:1314 copies without
                 inspecting it. An absent or falsy value becomes `{}`, which is
-                what pylon's set_icon_meta produces.
+                what the legacy runtime's set_icon_meta produces.
             attached_skills:
               type: array
               items: { $ref: '#/components/schemas/AttachedSkill' }
@@ -6665,13 +6665,13 @@ components:
           maxLength: 1000
           description: >
             NOTE(#898): the editor's free-text notes, accepted at the top level
-            the way pylon accepts them and folded into `meta.notes` by every
+            the way the legacy runtime accepts them and folded into `meta.notes` by every
             write path (create, create-version and the PUT). Omit the key to
             leave the stored value alone; an explicit empty string clears it.
-            Longer than 1000 characters is REFUSED with a 400 — pylon's own
+            Longer than 1000 characters is REFUSED with a 400 — the legacy runtime's own
             ceiling (models/pd/version.py:116). The agent editor sends the
             value inside `meta` instead, which is the same store; both spellings
-            are accepted so a pylon-shaped client keeps working.
+            are accepted so a client written against the legacy runtime keeps working.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -6808,13 +6808,13 @@ components:
           type: string
           enum: [invited, already_member, invalid_email, failed]
           description: >
-            The machine-readable half of `msg`. pylon carried these four cases
+            The machine-readable half of `msg`. The legacy runtime carried these four cases
             only in free English prose, so the reference SPA could not tell
             them apart and showed one toast for a whole batch. `status` keeps
-            its two pylon values, so this field is additive: an old client
+            its two legacy values, so this field is additive: an old client
             reads the response exactly as before.
       description: >
-        One element of the per-address array pylon's invite returns. The
+        One element of the per-address array the legacy runtime's invite returns. The
         response carries one of these per requested address, and the whole
         response is 400 when any of them failed. A 400 therefore still means
         that the `ok` rows landed — each address is written in its own
@@ -6829,7 +6829,7 @@ components:
           description: >
             Target user id. A batch edit sends the selected ids COMMA-JOINED in
             this one string (entities/user/model/useEditUser.ts's
-            useBatchEditUsers). `id` and `ids` are pylon's own spellings and are
+            useBatchEditUsers). `id` and `ids` are the legacy runtime's own spellings and are
             accepted too.
         id: { type: string }
         ids:
@@ -6850,7 +6850,7 @@ components:
       properties:
         msg: { type: string }
       description: >
-        pylon's acknowledgement shape — a single `msg` string.
+        The legacy runtime's acknowledgement shape — a single `msg` string.
 
     Role:
       type: object
@@ -7966,7 +7966,7 @@ components:
             sub-agent. It is not `items.length > 0` — `items` answers the
             opposite relation (what this version uses). A reference with no
             valid parent mapping is an orphan and does not count, matching
-            pylon (legacy/plugins/elitea_core/rpc/application.py:1861-1863).
+            the legacy runtime (legacy/plugins/elitea_core/rpc/application.py:1861-1863).
         referencing_parents:
           type: array
           description: >
@@ -8107,7 +8107,7 @@ components:
         as a six-element hand-written list that no SDK, snapshot, database or
         configuration produced; that handler now refuses with 501 instead.
 
-        `document_types`, `image_types` and `code_types` are the pylon keys
+        `document_types`, `image_types` and `code_types` are the legacy keys
         apps/elitea-ui reads (src/slices/fileTypes.js). They were UNDESCRIBED
         here, which is why this note exists: the reviewed route
         (internal/api/v2/indextypes, currentIndexTypesResponse) has emitted all
@@ -10084,7 +10084,7 @@ components:
         — the key set is the static map's keys plus nothing else; served
         verbatim by ListTypeSchemas (internal/api/v2/toolkits/handler.go:231-233).
       description: >
-        NOTE(W2): toolkit-type → settings-JSON-Schema map (pylon_indexer
+        NOTE(W2): toolkit-type → settings-JSON-Schema map (legacy indexer
         /toolkits/ parity).
 
     # ---- Icons ---------------------------------------------------------------
@@ -10227,7 +10227,7 @@ components:
         NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:353-380
         (UpdateSkillIcon). The body is decoded as a free map and stored verbatim
         as meta.icon_meta, but `name` and `url` must both be strings or the
-        request is a 400 — pylon's model declares them required, and an
+        request is a 400 — the legacy runtime's model declares them required, and an
         icon_meta without them is one the read path cannot render.
 
     SkillIconBindRefusal:
@@ -10243,7 +10243,7 @@ components:
       description: >
         NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:333-336 and :392-395
         — the 404 both binding routes answer. It is NOT the flat
-        `{"error": "..."}` shape; pylon answers `{ok, msg}` here and the port
+        `{"error": "..."}` shape; the legacy runtime answers `{ok, msg}` here and the port
         keeps it.
 
     SkillIconDeleteRefusal:
@@ -10841,7 +10841,7 @@ components:
             `agent` and the empty string are both STORED as `openai`. `agent`
             is accepted because the platform's own markdown export writes it
             for a stored `openai` agent (export_markdown.go,
-            markdownAgentType, mirroring pylon's _application_to_md), so
+            markdownAgentType, mirroring the legacy runtime's _application_to_md), so
             without the mapping an exported `.agent.md` file was not importable
             through this API — only through a web client, which renames the
             value in its own file parser (issue 845).
@@ -11105,7 +11105,7 @@ components:
         different answer from an explicit false or zero. Ranges are enforced on
         write (internal/domain/contextsettings); an out-of-range value is
         refused with {"error", "field"}. `enable_context_editing` is not in
-        pylon's ContextManagementModel but IS read out of the same dict by
+        the legacy runtime's ContextManagementModel but IS read out of the same dict by
         set_context_strategy, and the Memory page has always sent it.
 
     MemorySummarization:
@@ -11129,7 +11129,7 @@ components:
       description: >
         The user's default summarization settings, stored in
         centry.social_users.default_summarization (jsonb) and edited by
-        Settings > Memory. pylon's SummarizationModel, field for field. Three
+        Settings > Memory. The legacy runtime's SummarizationModel, field for field. Three
         of these flatten into a conversation's
         `context_strategy.summary_llm_settings` when one is resolved:
         summary_model_name -> model_name, summary_model_project_id ->
@@ -11171,7 +11171,7 @@ components:
           description: >
             The caller's own federated identity references, exactly as
             public.auth_core__user_provider.provider_ref stores them
-            (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject).
+            (`oidc:<sub>`, `saml:<nameid>`, or a legacy-runtime bare subject).
             An operator copies one of these into the deployment's
             `identity.initial_global_admins` to make a global administrator,
             which previously needed a SELECT against the production database.
@@ -11298,7 +11298,7 @@ components:
           enum: [false]
         error: { type: string }
       description: >
-        NOTE(W2): the pylon-era `{"ok": false, "error": "..."}` envelope,
+        NOTE(W2): the legacy `{"ok": false, "error": "..."}` envelope,
         DIFFERENT from this spec's normal ErrorResponse `{"error": "..."}`
         shape (see ErrorResponse's own description). Written on exactly 5
         failure paths in social/handler.go: Like (:268), Unlike (:301), Pin
@@ -11611,11 +11611,11 @@ components:
       required: [tool_name]
       description: >
         NOTE(W2): the body `toolkitrun.DecodeRequest` reads
-        (internal/api/v2/toolkitrun/response.go:78-118). It is pylon's
+        (internal/api/v2/toolkitrun/response.go:78-118). It is the legacy runtime's
         `TestToolkitToolInputModel` minus the fields this platform refuses to
         take from a caller.
 
-        NO SETTINGS AND NO CREDENTIALS ARE ACCEPTED. pylon takes
+        NO SETTINGS AND NO CREDENTIALS ARE ACCEPTED. The legacy runtime takes
         `toolkit_config.settings` from the request and runs the tool against
         them, which is how its own UI tests unsaved form values. This operation
         names the toolkit in the URL and reads the SAVED row instead, because a
@@ -11682,7 +11682,7 @@ components:
 
         A TOOL THAT RAISED IS 200 ON PURPOSE. The run completed, and "it raised,
         and here is why" is the answer to "does this tool work against my saved
-        settings". pylon could not tell these conditions apart, because the SDK
+        settings". The legacy runtime could not tell these conditions apart, because the SDK
         handed it one dict.
       properties:
         authorization_retry:
@@ -11707,7 +11707,7 @@ components:
           type: string
           description: >
             The execution this run wrote. On 504 it is the handle to poll, which
-            is why that branch is 504 and not pylon's 400: the request gave up,
+            is why that branch is 504 and not the legacy runtime's 400: the request gave up,
             the run did not (response.go:205-215). Absent on a refusal that
             happened before admission, because nothing was written and nothing
             ran.
@@ -11757,7 +11757,7 @@ components:
       required: [name, description, inputSchema]
       description: >
         NOTE(W2): internal/mcpregistry/registry.go:41-45 — the Tool struct, as
-        `tools_list` serialises it. `inputSchema` keeps pylon's camelCase
+        `tools_list` serialises it. `inputSchema` keeps the legacy runtime's camelCase
         spelling. That spelling is the wire contract the Python SDK reads
         (elitea_sdk toolkits/tools.py, _init_single_mcp_tool), so do not rename
         it.
@@ -11779,7 +11779,7 @@ components:
       required: [name, tools, project_id, sio_sid, timeout_tools_list, timeout_tools_call, group]
       description: >
         NOTE(W2): internal/mcpregistry/registry.go:59-67 — the Server struct,
-        which is pylon's `McpServer` shape. `tools_list` returns a bare array
+        which is the legacy runtime's `McpServer` shape. `tools_list` returns a bare array
         of it, with no envelope.
       properties:
         name: { type: string }
@@ -11796,7 +11796,7 @@ components:
           description: >
             Always null here. The field is the socket.io session id of the
             client that registered the server, and this service runs no
-            socket.io server. It stays in the body because pylon produces it.
+            socket.io server. It stays in the body because the legacy runtime produced it.
         timeout_tools_list:
           type: integer
           description: Seconds. Defaults to 90 (mcpregistry.DefaultTimeoutSeconds).
@@ -11811,7 +11811,7 @@ components:
       type: object
       required: [server, tool_call_id, params]
       description: >
-        NOTE(W2): the body pylon's `McpToolCallPostBody` accepts
+        NOTE(W2): the body the legacy runtime's `McpToolCallPostBody` accepts
         (legacy/plugins/elitea_core/models/mcp.py). Documented for completeness;
         internal/api/v2/mcp/registry.go:96 does not read it, because the
         endpoint refuses unconditionally and a 400 for a malformed body would
@@ -11829,7 +11829,7 @@ components:
           x-elitea-passthrough: >-
             NOTE(W2): genuinely open. These are the arguments of a tool defined
             by whichever MCP server the calling client registered, so their
-            shape is not knowable to this service at all — pylon forwards the
+            shape is not knowable to this service at all — the legacy runtime forwarded the
             dict unchanged down the socket. The endpoint does not read the body
             (internal/api/v2/mcp/registry.go:96).
 
@@ -11881,7 +11881,7 @@ components:
         mode:
           type: string
           description: >
-            The pylon mode the role belongs to — `administration`, `developer`,
+            The permission mode the role belongs to — `administration`, `developer`,
             `default`, … Reported for every mode that has roles; only non-default
             modes are writable here.
         role: { type: string }
@@ -12899,7 +12899,7 @@ components:
             - personal_project
             - failed
           description: >
-            The machine-readable reason. pylon returned one English log blob
+            The machine-readable reason. The legacy runtime returned one English log blob
             for the whole batch, so a console could not tell "added" from
             "was already a member" without matching on prose.
         msg:
@@ -13352,7 +13352,7 @@ components:
     #
     # The administration handler is a SECOND handler over a different store
     # (internal/api/v2/secrets/admin.go, vault row id "admin"). It ignores the
-    # {projectID} segment, and its bodies are pylon's admin bodies, not the
+    # {projectID} segment, and its bodies are the legacy runtime's admin bodies, not the
     # project ones above.
     AdminSecretListItem:
       type: object
@@ -13372,7 +13372,7 @@ components:
       description: >
         NOTE(issue 151): internal/api/v2/secrets/admin.go:190-209 — the
         administration single-secret GET. An unknown name is `{"secret": null}`
-        with 200, as in pylon.
+        with 200, as in the legacy runtime.
       properties:
         secret:
           type: string
@@ -13393,7 +13393,7 @@ components:
       type: object
       description: >
         NOTE(issue 151): internal/api/v2/secrets/admin.go:129-135 — the NESTED
-        body pylon's admin PUT takes. `old_name` selects the entry to replace
+        body the legacy runtime's admin PUT takes. `old_name` selects the entry to replace
         and the path `{name}` is what it becomes, so a rename is
         `old_name != name`. An empty `old_name` means the path name.
       properties:
@@ -14845,7 +14845,7 @@ paths:
   # Users, which does no method branching — every verb returned the same
   # {rows,total} listing, so Invite / Edit role / Remove reported success and
   # wrote nothing. The three write verbs now reach real handlers
-  # (internal/api/v2/eliteacore/users_write.go) that speak pylon's contract
+  # (internal/api/v2/eliteacore/users_write.go) that speak the legacy runtime's contract
   # (legacy/plugins/admin/api/v2/users.py) and are each gated on the matching
   # `configuration.users.users.*` permission.
   #
@@ -14950,7 +14950,7 @@ paths:
         Clears the users' rows in auth_core__project_user_role for this project.
         The auth_core__user account survives — the person may be a member of
         other projects, and "remove from project" is not "delete the account"
-        (parity with pylon's remove_users_from_project).
+        (parity with the legacy runtime's remove_users_from_project).
       tags: [admin]
       parameters:
         - name: id[]
@@ -14987,7 +14987,7 @@ paths:
   # ADMIN & TENANCY PARITY (issue 255)
   #
   # `administration` is a STATIC segment on all three, not a {mode} parameter:
-  # each pylon original registers `mode_handlers = {'administration': AdminAPI}`
+  # each legacy original registers `mode_handlers = {'administration': AdminAPI}`
   # and nothing else, so another mode has no handler to reach. A {mode} route
   # would have to answer something plausible for a mode that does not exist.
   # ==========================================================================
@@ -14996,7 +14996,7 @@ paths:
       operationId: listUserModeRoles
       summary: List every central role assignment, across all modes
       description: |
-        Which user holds which CENTRAL role in which pylon mode — the registry
+        Which user holds which CENTRAL role in which permission mode — the registry
         behind the admin console's Modes table. Each row carries the composite
         `<user_id>:<mode>:<role>` id the DELETE below consumes.
 
@@ -15141,16 +15141,16 @@ paths:
         added to every listed project with the one named role, and every
         (user, project) pair reports its own outcome.
 
-        It replaces two pylon console pages —
+        It replaces two legacy console pages —
         `legacy/plugins/admin/api/v2/invites_bulkusers.py` ("add every user to
         one project") and `invites_bulkprojects.py` ("add one user to many
         projects") — which are the same cross product with one side pinned.
         Both declare their own permission, and this route accepts either.
 
-        Four differences from pylon are deliberate and are recorded in
+        Four differences from the legacy runtime are deliberate and are recorded in
         `internal/api/v2/admin/invites_bulk.go`:
 
-        - The role set is ADDED to, never replaced. pylon's write replaces
+        - The role set is ADDED to, never replaced. The legacy runtime's write replaces
           every role the account holds in the project, which run over "all
           users" demotes every existing project admin.
         - Per-pair outcomes, not one English log blob.
@@ -16487,7 +16487,7 @@ paths:
         per call. A budget delta carries only {event_id, scope, scope_id,
         project_id, org_id, period_start, period_end, delta_nano_usd}, so no
         producer records those dimensions; an empty array would read as "this
-        project called no models", which is false. The pylon original answered
+        project called no models", which is false. The legacy runtime answered
         them from a per-call audit-event ledger that no longer exists.
 
         Amounts are exact decimals produced by PostgreSQL NUMERIC and are never
@@ -22049,7 +22049,7 @@ paths:
         parse gets the same status and the same `{error, error_description}`
         keys, with `error: invalid_client_version`.
 
-        Trending (`trend_start_period`/`trend_end_period`) is the one pylon
+        Trending (`trend_start_period`/`trend_end_period`) is the one legacy
         parameter still missing here.
       tags: [applications, client]
       parameters:
@@ -22466,7 +22466,7 @@ paths:
   # runtime plane. GET polls the run bound to a response message and DELETE
   # stops it through the same use case
   # DELETE /task/prompt_lib/{projectID}/{responseMessageID} runs. The path
-  # parameter is the RESPONSE MESSAGE UUID, not a pylon arbiter task id.
+  # parameter is the RESPONSE MESSAGE UUID, not a legacy Arbiter task id.
   #
   # Both operations are deliberately still absent from this document, for the
   # reason the chat_config note below gives and one more of their own: every
@@ -22543,10 +22543,10 @@ paths:
         body. The handler reads no body and writes nothing.
 
         The caller must send `X-SECRET`. The value must equal the project
-        vault's `secrets_header_value`, which is what pylon's
+        vault's `secrets_header_value`, which is what the legacy runtime's
         `check_secret_header` compares
         (legacy/plugins/elitea_core/utils/secrets.py:4-9). A mismatch answers
-        400 `{"error": "Invalid secret header"}`, the exact pylon body.
+        400 `{"error": "Invalid secret header"}`, the exact legacy body.
 
         Implementation: internal/api/v2/applications/handler.go,
         GetVersionExpanded.
@@ -24852,7 +24852,7 @@ paths:
     # `/*` wildcard the object-plane download uses, for the same reason its
     # comment gives: a key may contain `/`.
     #
-    # `default` is the pylon MODE segment the SDK's client still sends
+    # `default` is the legacy MODE segment the SDK's client still sends
     # (elitea-sdk runtime/clients/client.py builds this URL and appends
     # `/{bucket}/{artifact_name}`). The router resolves PermissionModeDefault
     # unconditionally here, so the segment selects nothing — it is matched
@@ -25472,7 +25472,7 @@ paths:
   # was gated on RouterConfig.Predictor — the prototype indexer transport — and
   # 404'd in every deployment.
   #
-  # It is NOT coming back, and it was never a chat surface. The pylon module
+  # It is NOT coming back, and it was never a chat surface. The legacy module
   # (legacy/plugins/elitea_core/api/v2/webchat.py) is an unauthenticated
   # Microsoft Bot Framework webhook stub: it echoes the caller's own text back
   # to a connector URL taken from the request body, carries the literal
@@ -25524,7 +25524,7 @@ paths:
   # and another a number, and a client comparing with `===` broke on exactly
   # one of them.
   #
-  # The `{mode}` twins of both paths are registered for pylon URL parity and
+  # The `{mode}` twins of both paths are registered for legacy URL parity and
   # are deliberately absent from this document: the mode segment is decoration
   # on this surface, one handler serves both forms, and no client in the
   # workspace calls the mode-ful URL.
@@ -25728,7 +25728,7 @@ paths:
 
         THE ONLY CONFIG SECTION A NON-ADMINISTRATOR MAY READ, and it is
         restricted by being a ROUTE rather than a parameter: there is no section
-        id a caller could substitute. pylon restricts it the same way
+        id a caller could substitute. The legacy runtime restricts it the same way
         (`_PUBLIC_SECTIONS = {"resources"}`).
 
         The answer merges the section's declared defaults with whatever an
@@ -25762,8 +25762,8 @@ paths:
   # ADMIN — system info (issue 36, item 7; issue #892)
   #
   # internal/api/v2/admin/handler.go:SystemInfo used to answer 501
-  # unconditionally, in every deployment: in pylon this route reports the
-  # versions of six named plugins, collected from the pylons that announced
+  # unconditionally, in every deployment: in the legacy runtime this route reports the
+  # versions of six named plugins, collected from the runtime instances that announced
   # themselves on the Arbiter bus in the last 60 seconds. This service loads
   # no plugins and has no such bus, and AGENTS.md names both as things the
   # target architecture does not preserve. The route used to invent a
@@ -25777,7 +25777,7 @@ paths:
   # gateway version — this service still has no fleet telemetry for any of
   # those, and reporting one without a real source would be the #219 defect
   # again. `components` is deliberately the same `[{name, version}]` shape
-  # pylon's `plugins` used, so apps/elitea-web's Help Center tooltip
+  # the legacy runtime's `plugins` used, so apps/elitea-web's Help Center tooltip
   # (useResourcesConfig.ts) needed no reshaping, only a real source.
   # ==========================================================================
   /admin/system_info/prompt_lib:
@@ -26087,7 +26087,7 @@ paths:
   # segment, so a key with a separator could not be addressed through it.
   #
   # WHAT THIS FAMILY DOES NOT DO, stated here because a client can observe it:
-  # pylon decodes the upload through Pillow, refuses an image smaller than the
+  # the legacy runtime decodes the upload through Pillow, refuses an image smaller than the
   # requested box, and re-encodes every icon to PNG at at most 64x64. There is
   # no image codec in this service, so the bytes are stored as uploaded and
   # `size` reports the box the CLIENT asked for. An icon may therefore be
@@ -26238,7 +26238,7 @@ paths:
         (UpdateSkillIcon).
 
         The body is the icon_meta object the upload answered. `name` and `url`
-        are REQUIRED strings — pylon parses the body through a model that
+        are REQUIRED strings — the legacy runtime parses the body through a model that
         declares them so, and a payload missing either is a 400 here rather
         than an icon_meta the read path cannot render. Empty strings in both
         reset the version to the default icon.
@@ -26635,7 +26635,7 @@ paths:
                   type: string
                   default: agent
                   description: >-
-                    Only "agent" is accepted; pylon's SkillEntityTypes enum has
+                    Only "agent" is accepted; the legacy runtime's SkillEntityTypes enum has
                     no other member
                     (internal/api/v2/skillpublish/attach.go:66-72).
       responses:
@@ -27472,7 +27472,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Like failed (pylon-era ok:false envelope)
+          description: Like failed (legacy ok:false envelope)
           content:
             application/json:
               schema:
@@ -27498,7 +27498,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Unlike failed (pylon-era ok:false envelope)
+          description: Unlike failed (legacy ok:false envelope)
           content:
             application/json:
               schema:
@@ -27537,7 +27537,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Like failed (pylon-era ok:false envelope)
+          description: Like failed (legacy ok:false envelope)
           content:
             application/json:
               schema:
@@ -27562,7 +27562,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Unlike failed (pylon-era ok:false envelope)
+          description: Unlike failed (legacy ok:false envelope)
           content:
             application/json:
               schema:
@@ -28454,7 +28454,7 @@ paths:
         internal/api/router.go:1913-1914.
 
         POST WITH NO BODY. The handler reads both arguments from the URL and
-        never opens the request body. pylon declares the verb, so the route
+        never opens the request body. The legacy runtime declares the verb, so the route
         keeps it. Send no payload; the handler discards one.
 
         A BLOCKED TYPE IS REFUSED, NOT EMPTIED. The type sits in the URL, so
@@ -28563,7 +28563,7 @@ paths:
         the shared body at :737-781, which maps the outcome through
         internal/api/v2/toolkitrun/response.go. Registered at
         internal/api/router.go:2445-2446, gated on
-        `models.applications.tool.patch` — pylon declares only
+        `models.applications.tool.patch` — the legacy runtime declares only
         `test_toolkit_tool.py`, so both verbs that run a tool take the string
         that module declares.
 
@@ -28685,7 +28685,7 @@ paths:
   # every MCP result. The protocol they speak is the Model Context Protocol
   # specification, and internal/api/v2/mcp/server.go is the implementation note.
   #
-  # `mode` is pylon's dispatch key, not decoration: tools_call registers
+  # `mode` is the legacy runtime's dispatch key, not decoration: tools_call registers
   # `default` only and internal_mcp_pat_status registers `prompt_lib` only, so
   # those are the literal segments here rather than a {mode} parameter.
   #
@@ -28714,7 +28714,7 @@ paths:
         own project therefore follows them into every project they work in
         (internal/api/v2/mcp/registry.go:116-129).
 
-        The body is a bare array, which is pylon's shape. An empty array is now
+        The body is a bare array, which is the legacy runtime's shape. An empty array is now
         an honest read of the rows: it means the project has no registered
         server. A read failure answers 503 instead, because reporting an empty
         toolset would make an agent answer without its tools.
@@ -28853,7 +28853,7 @@ paths:
   # ==========================================================================
   # SECRETS (issue 151)
   #
-  # pylon serves /api/v2/<plugin>/<resource-module>/<mode>/<params>. The
+  # The legacy runtime serves /api/v2/<plugin>/<resource-module>/<mode>/<params>. The
   # plugin is `secrets`; its resource modules are
   # legacy/plugins/secrets/api/v2/{secrets,secret,hide}.py — hence the
   # doubled first segment, which is the REAL legacy shape and not the
@@ -28866,7 +28866,7 @@ paths:
   # This domain was absent from this spec entirely until issue 151, which is why
   # nothing generated or contract-tested caught the divergence.
   #
-  # `mode` is a real dispatch key, not decoration: pylon's
+  # `mode` is a real dispatch key, not decoration: the legacy runtime's
   # APIBase.proxy_method looks it up in mode_handlers and abort(404)s on a
   # miss. Only two modes exist — `default` (project vault) and
   # `administration` (the GLOBAL vault). elitea-main implements BOTH, and any
@@ -29000,7 +29000,7 @@ paths:
       description: >
         NOTE(issue 151): internal/api/v2/secrets/handler.go registers this POST
         with an administration branch only (admin.go's AdminCreate). `default`
-        answers 405, because pylon's project API defines only get/put/delete on
+        answers 405, because the legacy runtime's project API defines only get/put/delete on
         this path. The name comes from the path and must match
         `^[A-Za-z0-9_]+$`. A duplicate name is a 400, never an overwrite.
       tags: [secrets]
@@ -29111,10 +29111,10 @@ paths:
         `default` mode only. A hidden secret disappears from the list
         endpoint but is still readable by name through the single-secret GET,
         which reports `is_hidden: true`. BUG-FOR-BUG: a missing secret is a
-        400, not a 404 (handler.go's Hide) — matching pylon's hide.py.
+        400, not a 404 (handler.go's Hide) — matching the legacy runtime's hide.py.
 
         `administration` mode ALWAYS answers 401. The global vault has no
-        hidden section, so pylon refuses the call with that sentence and
+        hidden section, so the legacy runtime refuses the call with that sentence and
         admin.go's AdminHide reproduces it. The admin page renders no hide
         control at all.
       tags: [secrets]
@@ -29156,13 +29156,13 @@ paths:
       operationId: showSecretWithoutMode
       summary: Read one secret — the mode-less legacy form
       description: >
-        pylon's api_tools.with_modes registers the mode-less URL alongside
+        The legacy runtime's api_tools.with_modes registers the mode-less URL alongside
         the mode-ful one for every resource, and proxy_method defaults
         `mode` to "default", so this is the project handler under another
         URL. It is spelled out here because elitea-sdk is a live caller:
         elitea_sdk/runtime/clients/client.py:108 and sandbox_client.py:237
         build {api_v2}/secrets/secret/{project_id} and append /{name}.
-        pylon serves the mode-less form of the other five routes too;
+        The legacy runtime serves the mode-less form of the other five routes too;
         elitea-main does not, because nothing in the workspace calls them.
       tags: [secrets]
       responses:
@@ -29418,7 +29418,7 @@ paths:
   # the key back. See services/elitea-main/internal/api/v2/configurations/
   # stored_check.go.
   #
-  # Each also has a `{mode}` twin the router registers for pylon URL parity
+  # Each also has a `{mode}` twin the router registers for legacy URL parity
   # (`/check_stored_connection/{mode}/{project_id}/{config_id}`, and so on).
   # The twins are deliberately absent from this document, as they are for every
   # other configurations route: the mode segment is decoration on this surface,

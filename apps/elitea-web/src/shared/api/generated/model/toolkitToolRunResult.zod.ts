@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the clients and SDK of the previous (Python) platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,7 +11,7 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+ *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
  *   the named `SocialActionErrorResponse` schema and referenced only on
  *   those specific operations. Five more UNDOCUMENTED sites of the same
  *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -19,7 +19,7 @@
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -66,7 +66,7 @@ export const ToolkitToolRunResult = zod
       .string()
       .optional()
       .describe(
-        "The execution this run wrote. On 504 it is the handle to poll, which is why that branch is 504 and not pylon's 400: the request gave up, the run did not (response.go:205-215). Absent on a refusal that happened before admission, because nothing was written and nothing ran.\n",
+        "The execution this run wrote. On 504 it is the handle to poll, which is why that branch is 504 and not the legacy runtime's 400: the request gave up, the run did not (response.go:205-215). Absent on a refusal that happened before admission, because nothing was written and nothing ran.\n",
       ),
     tool_name: zod
       .string()
@@ -104,7 +104,7 @@ export const ToolkitToolRunResult = zod
       ),
   })
   .describe(
-    'NOTE(W2): the one body `toolkitrun.WriteOutcome` and `toolkitrun.WriteError` write for every settled and every refused run (internal/api/v2/toolkitrun/response.go:145-241). THE STATUS CODE CARRIES THE OUTCOME; there is no status string to read:\n200 with `ok: true` — the run reached the tool and the tool returned. 200 with `ok: false` — the run reached the tool and the tool RAISED. 422 with `reason: unsupported_toolkit` — this image cannot build that toolkit type. 422 with `reason: unknown_tool` — the toolkit has no tool by that name. 504 with `reason: timeout` — the bounded wait passed. The run is STILL GOING and durable; `task_id` names it. 500 with `reason: runtime_failure` — a server fault, reported with a safe message and no cause.\nA TOOL THAT RAISED IS 200 ON PURPOSE. The run completed, and "it raised, and here is why" is the answer to "does this tool work against my saved settings". pylon could not tell these conditions apart, because the SDK handed it one dict.\n',
+    'NOTE(W2): the one body `toolkitrun.WriteOutcome` and `toolkitrun.WriteError` write for every settled and every refused run (internal/api/v2/toolkitrun/response.go:145-241). THE STATUS CODE CARRIES THE OUTCOME; there is no status string to read:\n200 with `ok: true` — the run reached the tool and the tool returned. 200 with `ok: false` — the run reached the tool and the tool RAISED. 422 with `reason: unsupported_toolkit` — this image cannot build that toolkit type. 422 with `reason: unknown_tool` — the toolkit has no tool by that name. 504 with `reason: timeout` — the bounded wait passed. The run is STILL GOING and durable; `task_id` names it. 500 with `reason: runtime_failure` — a server fault, reported with a safe message and no cause.\nA TOOL THAT RAISED IS 200 ON PURPOSE. The run completed, and "it raised, and here is why" is the answer to "does this tool work against my saved settings". The legacy runtime could not tell these conditions apart, because the SDK handed it one dict.\n',
   );
 
 export type ToolkitToolRunResult = zod.input<typeof ToolkitToolRunResult>;

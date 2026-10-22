@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the clients and SDK of the previous (Python) platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,7 +11,7 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+ *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
  *   the named `SocialActionErrorResponse` schema and referenced only on
  *   those specific operations. Five more UNDOCUMENTED sites of the same
  *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -19,7 +19,7 @@
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -53,7 +53,7 @@ export const McpToolCallRequest = zod
       .describe("Arguments forwarded verbatim to the tool."),
   })
   .describe(
-    "NOTE(W2): the body pylon's `McpToolCallPostBody` accepts (legacy/plugins/elitea_core/models/mcp.py). Documented for completeness; internal/api/v2/mcp/registry.go:96 does not read it, because the endpoint refuses unconditionally and a 400 for a malformed body would imply a well-formed one would be dispatched.\n",
+    "NOTE(W2): the body the legacy runtime's `McpToolCallPostBody` accepts (legacy/plugins/elitea_core/models/mcp.py). Documented for completeness; internal/api/v2/mcp/registry.go:96 does not read it, because the endpoint refuses unconditionally and a 400 for a malformed body would imply a well-formed one would be dispatched.\n",
   );
 
 export type McpToolCallRequest = zod.input<typeof McpToolCallRequest>;

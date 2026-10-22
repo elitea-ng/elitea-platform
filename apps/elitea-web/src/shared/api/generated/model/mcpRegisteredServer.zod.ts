@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the clients and SDK of the previous (Python) platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,7 +11,7 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+ *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
  *   the named `SocialActionErrorResponse` schema and referenced only on
  *   those specific operations. Five more UNDOCUMENTED sites of the same
  *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -19,7 +19,7 @@
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -51,7 +51,7 @@ export const McpRegisteredServer = zod
       .string()
       .nullable()
       .describe(
-        "Always null here. The field is the socket.io session id of the client that registered the server, and this service runs no socket.io server. It stays in the body because pylon produces it.\n",
+        "Always null here. The field is the socket.io session id of the client that registered the server, and this service runs no socket.io server. It stays in the body because the legacy runtime produced it.\n",
       ),
     timeout_tools_list: zod
       .int()
@@ -64,7 +64,7 @@ export const McpRegisteredServer = zod
       .describe('Defaults to "Other" (mcpregistry.DefaultGroup).'),
   })
   .describe(
-    "NOTE(W2): internal/mcpregistry/registry.go:59-67 — the Server struct, which is pylon's `McpServer` shape. `tools_list` returns a bare array of it, with no envelope.\n",
+    "NOTE(W2): internal/mcpregistry/registry.go:59-67 — the Server struct, which is the legacy runtime's `McpServer` shape. `tools_list` returns a bare array of it, with no envelope.\n",
   );
 
 export type McpRegisteredServer = zod.input<typeof McpRegisteredServer>;

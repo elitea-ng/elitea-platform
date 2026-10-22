@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the clients and SDK of the previous (Python) platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,7 +11,7 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+ *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
  *   the named `SocialActionErrorResponse` schema and referenced only on
  *   those specific operations. Five more UNDOCUMENTED sites of the same
  *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -19,7 +19,7 @@
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -3252,7 +3252,7 @@ export const getDiscoverToolkitToolsUrl = (
  * internal/api/router.go:1913-1914.
  *
  * POST WITH NO BODY. The handler reads both arguments from the URL and
- * never opens the request body. pylon declares the verb, so the route
+ * never opens the request body. The legacy runtime declares the verb, so the route
  * keeps it. Send no payload; the handler discards one.
  *
  * A BLOCKED TYPE IS REFUSED, NOT EMPTIED. The type sits in the URL, so
@@ -3845,7 +3845,7 @@ export const getTestToolkitToolUrl = (projectId: string, toolId: number) => {
  * the shared body at :737-781, which maps the outcome through
  * internal/api/v2/toolkitrun/response.go. Registered at
  * internal/api/router.go:2445-2446, gated on
- * `models.applications.tool.patch` — pylon declares only
+ * `models.applications.tool.patch` — the legacy runtime declares only
  * `test_toolkit_tool.py`, so both verbs that run a tool take the string
  * that module declares.
  *
@@ -4161,7 +4161,7 @@ export const getListRegisteredMcpServersUrl = (projectId: string) => {
  * own project therefore follows them into every project they work in
  * (internal/api/v2/mcp/registry.go:116-129).
  *
- * The body is a bare array, which is pylon's shape. An empty array is now
+ * The body is a bare array, which is the legacy runtime's shape. An empty array is now
  * an honest read of the rows: it means the project has no registered
  * server. A read failure answers 503 instead, because reporting an empty
  * toolset would make an agent answer without its tools.

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the clients and SDK of the previous (Python) platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,7 +11,7 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
+ *   legacy `{"ok": false, "error": ...}` envelope instead, modeled as
  *   the named `SocialActionErrorResponse` schema and referenced only on
  *   those specific operations. Five more UNDOCUMENTED sites of the same
  *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
@@ -19,7 +19,7 @@
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (legacy-runtime shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -57,7 +57,7 @@ export const DocumentLoadersResponse = zod
     code_types: zod.record(zod.string(), zod.string()).optional(),
   })
   .describe(
-    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the pylon keys apps/elitea-ui reads (src/slices/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal/api/v2/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
+    "NOTE(W2): ONE body answers two clients, and the deployment decides which half is real.\n`items` and `total` are the published contract. With ELITEA_INDEX_TYPES_ENABLED off the compatibility handler answered them as a six-element hand-written list that no SDK, snapshot, database or configuration produced; that handler now refuses with 501 instead.\n`document_types`, `image_types` and `code_types` are the legacy keys apps/elitea-ui reads (src/slices/fileTypes.js). They were UNDESCRIBED here, which is why this note exists: the reviewed route (internal/api/v2/indextypes, currentIndexTypesResponse) has emitted all five keys since issue 394, and a client generated from this document could not see three of them.\nThe two halves project the SAME rows and cannot disagree: every `supported_extensions` list is the sorted key set of the map named by the same `type`.\n",
   );
 
 export type DocumentLoadersResponse = zod.input<typeof DocumentLoadersResponse>;
