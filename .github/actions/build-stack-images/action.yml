@@ -113,7 +113,7 @@ runs:
   using: composite
   steps:
     # Third-party (non-`build:`) images the compose files reference — postgres,
-    # nats, pgvector, rustfs, traefik, the oidc-mock base, otel, etc. — pulled
+    # nats, pgvector, rustfs, the oidc-mock base, otel, etc. — pulled
     # up front with a bounded retry, before buildx even starts.
     #
     # Why: three CI runs in one day died before any test ran with a Docker Hub

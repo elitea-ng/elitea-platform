@@ -15,8 +15,8 @@ adk-core = { version = "=2.2.0", default-features = false }
 adk-runner = { version = "=2.2.0", default-features = false }
 adk-session = { version = "=2.2.0", default-features = false }
 # The engine sidecars' shared crates (ADR-0027): the error contract, the
-# NDJSON stream and stop flag, Python-compatible text; the socket server, the
-# container probe and process tracing.
+# NDJSON stream and stop flag, Python-compatible text; the socket's gRPC
+# server, the container probe and process tracing.
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 # Leiden for the communities stage.
@@ -47,9 +47,10 @@ jsonrepair = { version = "=0.1.0", default-features = false, features = ["serde"
 # Entity ids are Python's md5 prefix; file hashes its sha256.
 md-5 = "=0.10.6"
 sha2 = "=0.10.9"
-# investigate's source-tool calls through the platform (the model client's
-# transport builds the client).
-reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
+# investigate's source-tool calls: elitea.runtime.v1.InternalToolService's
+# InvokeToolkit on the platform listener (#1359 U5), over the model calls'
+# channel.
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.
@@ -79,6 +80,13 @@ elitea-inventory-core = { path = "../../libs/rust/inventory-core", features = ["
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "=1.53.2", features = ["test-util"] }
+# The sidecar's refusals (tests/sidecar.rs): a status code and message.
+tonic = { version = "=0.14.6", default-features = false }
+# The model fakes served as elitea.llm.v1.ModelService over real gRPC
+# (`testing::with_model_service`): the engine's model calls are gRPC.
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
+# The platform's toolkit invocations, faked (tests/investigate.rs, native).
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc", features = ["testing"] }
 
 [lints.rust]
 unsafe_code = "forbid"

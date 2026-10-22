@@ -31,7 +31,6 @@
 #![expect(
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
-    clippy::new_without_default,
     clippy::result_unit_err,
     reason = "moved verbatim from the worker, where these items were crate-private; \
               each error type documents its codes, and per-function sections \
@@ -50,6 +49,7 @@ pub(crate) mod invocation;
 pub(crate) mod materialize;
 pub(crate) mod mcp;
 pub(crate) mod mcp_error;
+pub(crate) mod mcp_internal;
 pub(crate) mod mcp_tool_cache;
 pub(crate) mod policy;
 pub mod snapshot;
@@ -239,8 +239,9 @@ pub use materialize::{
     tool_needs_file_store, toolkit_needs_file_store,
 };
 pub use mcp::{
-    AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
-    RETIRED_SSE_MESSAGE, materialize_mcp_toolsets_with_tokens_and_authorization,
+    AdkHttpMcpConnector, INTERNAL_TOOLS_ORIGIN, McpConnector, McpMaterializationError,
+    McpMaterializationErrorCode, RETIRED_SSE_MESSAGE,
+    materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use mcp::{RemoteMcpConfig, mcp_authorization_required_fixture};
@@ -257,9 +258,11 @@ pub use tool_binding::{
     freeze_toolsets,
 };
 
-/// Identity header names the platform edge projects for Main. Exact names, not
-/// an `x-auth-` prefix: third-party APIs use `X-Auth-Token`, `X-Auth-Key` and
-/// similar names for their own credentials.
+/// Identity header names an edge used to project for Main. No edge projects
+/// them any more (#1359 removed that plane), but they stay reserved so a
+/// toolkit can never forge one toward a deployment that still trusts them.
+/// Exact names, not an `x-auth-` prefix: third-party APIs use `X-Auth-Token`,
+/// `X-Auth-Key` and similar names for their own credentials.
 const RESERVED_PLATFORM_HEADER_NAMES: [&str; 10] = [
     "x-auth-type",
     "x-auth-id",

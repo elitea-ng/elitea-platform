@@ -1,8 +1,6 @@
 package browserauth
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -10,12 +8,10 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
-func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
-	routes, _, _ := newTestFormRoutes(t)
+func TestFormRoutesOwnExactChildSurfaceWithoutDuplicates(t *testing.T) {
+	routes, _ := newTestFormRoutes(t)
 	observed := make(map[string]map[string]int)
 	if err := chi.Walk(routes, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if observed[route] == nil {
@@ -28,7 +24,6 @@ func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
 	}
 
 	expected := map[string][]string{
-		AuthPath:          {http.MethodGet, http.MethodHead, http.MethodOptions},
 		LoginPath:         {http.MethodGet, http.MethodHead, http.MethodOptions},
 		LogoutPath:        {http.MethodGet, http.MethodHead, http.MethodOptions},
 		FormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
@@ -59,56 +54,53 @@ func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
 	if _, exposed := observed["/oidc/login"]; exposed {
 		t.Fatal("Form-selected routes exposed the unselected OIDC provider")
 	}
+	// FormPaths is what the composition root registers under BasePath; a path
+	// the router serves but FormPaths omits would be unreachable, and the
+	// reverse would mount a 404.
+	paths := FormPaths()
+	if len(paths) != len(expected) {
+		t.Fatalf("FormPaths() = %v, want the %d routed paths", paths, len(expected))
+	}
+	for _, path := range paths {
+		if _, routed := expected[path]; !routed {
+			t.Fatalf("FormPaths() lists %q, which the router does not serve", path)
+		}
+	}
 }
 
-func TestFormRoutesDispatchCoreAndProviderThroughOneBaseMount(t *testing.T) {
-	form, dependencies := newTestHandler(t)
-	core := newCoreTestHandler(
-		t,
-		coreCredentialFunc(func(context.Context, forwardapp.Source, forwardapp.CredentialInput) (forwardapp.CredentialResult, error) {
-			return acceptedCoreToken(), nil
-		}),
-		panicCoreSession(t),
-		nil,
-	)
-	routes, err := NewFormRoutes(core, form)
-	if err != nil {
-		t.Fatal(err)
-	}
+// The forward-auth check and its X-Auth-* identity projection are gone
+// (#1359). Every method on /auth/check is now chi's 404, and it reaches no
+// Form dependency.
+func TestFormRoutesNoLongerServeTheForwardAuthCheck(t *testing.T) {
+	routes, dependencies := newTestFormRoutes(t)
 	router := mountFormRoutes(routes)
-
-	authRequest := coreRequest(BasePath + AuthPath)
-	authRequest.Header.Set("Authorization", "Bearer valid")
-	authRecorder := httptest.NewRecorder()
-	router.ServeHTTP(authRecorder, authRequest)
-	requireCoreOK(t, authRecorder)
-
-	loginRecorder := httptest.NewRecorder()
-	router.ServeHTTP(
-		loginRecorder,
-		httptest.NewRequest(http.MethodGet, BasePath+LoginPath+"?target_to=%2Fafter", nil),
-	)
-	if loginRecorder.Code != http.StatusFound ||
-		!strings.HasPrefix(loginRecorder.Header().Get("Location"), BasePath+FormLoginPath+"?") ||
-		dependencies.flow.beginCalls != 1 {
-		t.Fatalf(
-			"status=%d location=%q begin=%d",
-			loginRecorder.Code,
-			loginRecorder.Header().Get("Location"),
-			dependencies.flow.beginCalls,
-		)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPost} {
+		request := httptest.NewRequest(method, BasePath+"/check?target=rpc", nil)
+		request.Header.Set("Authorization", "Bearer valid")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s /auth/check status=%d, want 404", method, recorder.Code)
+		}
+		for name := range recorder.Header() {
+			if strings.HasPrefix(name, "X-Auth-") {
+				t.Fatalf("%s /auth/check emitted %s", method, name)
+			}
+		}
+	}
+	if dependencies.flow.beginCalls != 0 || dependencies.admitter.calls != 0 {
+		t.Fatal("/auth/check reached Form dependencies")
 	}
 }
 
 func TestFormRoutesMethodContractsAndUnsupportedMethods(t *testing.T) {
-	routes, _, dependencies := newTestFormRoutes(t)
+	routes, dependencies := newTestFormRoutes(t)
 	router := mountFormRoutes(routes)
 	contracts := []struct {
 		path    string
 		allow   string
 		allowed map[string]struct{}
 	}{
-		{path: AuthPath, allow: "GET, HEAD, OPTIONS", allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodOptions)},
 		{path: LoginPath, allow: "GET, HEAD, OPTIONS", allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodOptions)},
 		{path: LogoutPath, allow: "GET, HEAD, OPTIONS", allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodOptions)},
 		{path: FormLoginPath, allow: "GET, HEAD, OPTIONS", allowed: methodSet(http.MethodGet, http.MethodHead, http.MethodOptions)},
@@ -172,7 +164,7 @@ func TestFormRoutesMethodContractsAndUnsupportedMethods(t *testing.T) {
 }
 
 func TestFormRoutesDoNotExposeUnselectedOrUnknownChildren(t *testing.T) {
-	routes, _, dependencies := newTestFormRoutes(t)
+	routes, dependencies := newTestFormRoutes(t)
 	router := mountFormRoutes(routes)
 	for _, path := range []string{
 		BasePath + "/oidc/login",
@@ -206,38 +198,10 @@ func TestFormRoutesDoNotExposeUnselectedOrUnknownChildren(t *testing.T) {
 	}
 }
 
-func TestNewFormRoutesRejectsIncompleteComposition(t *testing.T) {
-	_, core, dependencies := newTestFormRoutes(t)
-	form, _ := newTestHandler(t)
-	for _, test := range []struct {
-		name string
-		core *CoreHandler
-		form *Handler
-	}{
-		{name: "missing core", form: form},
-		{name: "missing form", core: core},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewFormRoutes(test.core, test.form); !errors.Is(err, ErrInvalidHandlerConfiguration) {
-				t.Fatalf("error = %v, want %v", err, ErrInvalidHandlerConfiguration)
-			}
-		})
-	}
-	if dependencies.flow.beginCalls != 0 || dependencies.flow.completeCalls != 0 ||
-		dependencies.flow.logoutCalls != 0 {
-		t.Fatal("constructor reached Form flow")
-	}
-}
-
-func newTestFormRoutes(t *testing.T) (chi.Router, *CoreHandler, *testDependencies) {
+func newTestFormRoutes(t *testing.T) (chi.Router, *testDependencies) {
 	t.Helper()
 	form, dependencies := newTestHandler(t)
-	core := newCoreTestHandler(t, panicCoreCredential(t), panicCoreSession(t), nil)
-	routes, err := NewFormRoutes(core, form)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return routes, core, dependencies
+	return form.Routes(), dependencies
 }
 
 func mountFormRoutes(routes chi.Router) http.Handler {

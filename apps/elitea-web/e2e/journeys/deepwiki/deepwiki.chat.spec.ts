@@ -61,6 +61,21 @@ async function ask(page: Page, question: string) {
   );
 }
 
+/*
+ * EVERY JOURNEY HERE STARTS ITS OWN CONVERSATION. A drawer whose browser has
+ * no conversation key ADOPTS the member's most recent stored conversation
+ * (the feature; DWIKI-017's comment explains it), and these journeys run on
+ * parallel workers as the same member. So a journey that asked without a key
+ * adopted whichever conversation another worker had just written and appended
+ * its turn there: DWIKI-017 on webkit read "Fixture answer to: A question with
+ * nothing attached" as the last answer of the conversation it owned. A unique
+ * key per test makes every drawer start fresh; DWIKI-012c, -017 and -019 seed
+ * their own key after this one, and the later init script wins.
+ */
+test.beforeEach(async ({ page }, testInfo) => {
+  await seedConversationKey(page, `dwiki-${testInfo.testId}-${String(testInfo.retry)}-${String(Date.now())}`);
+});
+
 test.describe('DeepWiki chat', () => {
   // A provider round trip through the facade, plus the fixture's paced steps:
   // longer than Playwright's 30s default, which killed a passing answer mid-poll.

@@ -4,9 +4,9 @@
 // The provider holds no platform credential (ADR-0022 decision 6), so it is
 // the FACADE — which already reaches the provider over mTLS and already
 // holds the database — that registers on its behalf: it reads the
-// provider's own descriptor, records origin + manifest + an inactive
-// revision under the public project, then probes /health on an interval
-// and writes what it saw. A provider that is down at boot is retried on the
+// provider's own descriptor (ProviderService.Describe, #1359), records
+// origin + manifest + an inactive revision under the public project, then
+// asks Health on an interval and writes what it saw. A provider that is down at boot is retried on the
 // same interval; a provider that answers a different descriptor later is
 // re-registered (one more manifest row, one more revision — the plane is
 // append-only by design).
@@ -17,19 +17,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/grpc/status"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
@@ -51,16 +50,17 @@ type Options struct {
 	Interval time.Duration
 	// Timeout for one probe request.
 	Timeout time.Duration
-	// Client overrides the mTLS client built from the facade config (tests).
-	Client *http.Client
-	// RequireTLS is the hop's rule; tests over plain httptest turn it off.
-	RequireTLS *bool
+	// Provider is the facade's own client to the provider (proxy.Proxy's
+	// Client): the registrar shares the facade's connection and certificate
+	// reloader rather than dialling the same listener a second time.
+	// Required.
+	Provider subappv1.ProviderServiceClient
 }
 
 // Registrar is one facade's registrar.
 type Registrar struct {
-	target     *url.URL
-	client     *http.Client
+	target     string
+	provider   subappv1.ProviderServiceClient
 	secret     []byte
 	store      Store
 	opts       Options
@@ -71,8 +71,9 @@ type Registrar struct {
 
 const maxDescriptorBytes = 1 << 20
 
-// New builds a registrar for the provider behind cfg. envName names the
-// setting in error messages, as the proxy does.
+// New builds a registrar for the provider behind cfg, over the facade's own
+// client to it (opts.Provider). envName names the setting in error
+// messages, as the proxy does.
 func New(cfg facade.Config, envName string, store Store, opts Options, logger *slog.Logger) (*Registrar, error) {
 	if store == nil {
 		return nil, errors.New("registrar: a store is required")
@@ -83,25 +84,12 @@ func New(cfg facade.Config, envName string, store Store, opts Options, logger *s
 	if logger == nil {
 		logger = slog.Default()
 	}
-	requireTLS := true
-	if opts.RequireTLS != nil {
-		requireTLS = *opts.RequireTLS
-	}
-	target, err := hop.ParseTarget(cfg.BaseURL, hop.TargetOptions{EnvName: envName, RequireTLS: requireTLS})
-	if err != nil {
+	if err := hop.ParseGRPCTarget(cfg.Target, envName); err != nil {
 		return nil, err
 	}
-	client := opts.Client
-	if client == nil {
-		serverName := cfg.ServerName
-		if serverName == "" {
-			serverName = target.Hostname()
-		}
-		transport, err := llmproxy.NewMTLSTransport(cfg.ClientCertFile, cfg.ClientKeyFile, cfg.CAFile, serverName)
-		if err != nil {
-			return nil, fmt.Errorf("registrar: build provider mTLS transport: %w", err)
-		}
-		client = &http.Client{Transport: transport}
+	provider := opts.Provider
+	if provider == nil {
+		return nil, errors.New("registrar: the facade's provider client is required")
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Minute
@@ -112,16 +100,16 @@ func New(cfg facade.Config, envName string, store Store, opts Options, logger *s
 	if opts.Actor == "" {
 		opts.Actor = "facade"
 	}
-	return &Registrar{target: target, client: client, secret: []byte(cfg.IdentitySecret), store: store, opts: opts, logger: logger}, nil
+	return &Registrar{target: cfg.Target, provider: provider, secret: []byte(cfg.IdentitySecret), store: store, opts: opts, logger: logger}, nil
 }
 
 // ProviderID is the provider's own name, once its descriptor has been read.
 func (r *Registrar) ProviderID() string { return r.providerID }
 
-// Origin is the provider's service location as registered: the target's
-// scheme, host and port, no path.
+// Origin is the provider's service location as registered: its gRPC
+// listener, as grpcs://host:port.
 func (r *Registrar) Origin() string {
-	return r.target.Scheme + "://" + r.target.Host
+	return "grpcs://" + r.target
 }
 
 // Once reads the descriptor, registers it when it is new or changed, and
@@ -182,36 +170,22 @@ func nextRegistrarRetry(previous, interval time.Duration) time.Duration {
 	return min(next, interval)
 }
 
-func (r *Registrar) get(ctx context.Context, path string) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, r.target.ResolveReference(&url.URL{Path: path}).String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Accept", "application/json")
-	// The provider's identity gate admits only the probes unsigned; the
-	// descriptor is read as the facade itself, under the registration's
-	// project, with the same signer the proxied calls use.
-	if len(r.secret) > 0 {
-		llmproxy.SignIdentityHeaders(request.Header, r.secret, strconv.FormatInt(r.opts.ProjectID, 10), "0", "", "")
-	}
-	return r.client.Do(request)
+// signed is ctx carrying the facade's own identity: the descriptor is read
+// as the facade, under the registration's project, with the signer the
+// proxied calls use. The health probe is admitted unsigned and carries it
+// anyway.
+func (r *Registrar) signed(ctx context.Context) context.Context {
+	return proxy.SignedContext(ctx, r.secret, strconv.FormatInt(r.opts.ProjectID, 10), "0", "")
 }
 
-// register reads /descriptor and files it when its bytes differ from the
+// register reads the descriptor and files it when its bytes differ from the
 // last registration this process made.
 func (r *Registrar) register(ctx context.Context) error {
-	response, err := r.get(ctx, "/descriptor")
+	response, err := r.provider.Describe(r.signed(ctx), &subappv1.DescribeRequest{})
 	if err != nil {
 		return fmt.Errorf("read the provider descriptor: %w", err)
 	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("read the provider descriptor: HTTP %d", response.StatusCode)
-	}
-	manifest, err := io.ReadAll(io.LimitReader(response.Body, maxDescriptorBytes+1))
-	if err != nil {
-		return fmt.Errorf("read the provider descriptor: %w", err)
-	}
+	manifest := response.GetDescriptorJson()
 	if len(manifest) > maxDescriptorBytes {
 		return fmt.Errorf("the provider descriptor exceeds the %d byte limit", maxDescriptorBytes)
 	}
@@ -241,23 +215,17 @@ func (r *Registrar) register(ctx context.Context) error {
 	return nil
 }
 
-// probe reads /health: healthy when it answers 200 with status UP; the
-// detail keeps what was seen either way.
+// probe asks Health: healthy when it answers with status UP; the detail
+// keeps what was seen either way.
 func (r *Registrar) probe(ctx context.Context) (bool, string) {
 	started := time.Now()
-	response, err := r.get(ctx, "/health")
-	if err != nil {
-		return false, "health probe failed: " + err.Error()
-	}
-	defer func() { _ = response.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	response, err := r.provider.Health(r.signed(ctx), &subappv1.HealthRequest{})
 	elapsed := time.Since(started).Round(time.Millisecond)
-	var health struct {
-		Status string `json:"status"`
+	if err != nil {
+		return false, fmt.Sprintf("health probe failed (%s): %s", status.Code(err), status.Convert(err).Message())
 	}
-	_ = json.Unmarshal(body, &health)
-	if response.StatusCode != http.StatusOK || !strings.EqualFold(health.Status, "UP") {
-		return false, fmt.Sprintf("health answered HTTP %d status=%q in %s", response.StatusCode, health.Status, elapsed)
+	if !strings.EqualFold(response.GetStatus(), "UP") {
+		return false, fmt.Sprintf("health answered status=%q in %s", response.GetStatus(), elapsed)
 	}
 	return true, fmt.Sprintf("health UP in %s", elapsed)
 }

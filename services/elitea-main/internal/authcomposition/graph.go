@@ -13,7 +13,6 @@ import (
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authattempt"
@@ -34,46 +33,41 @@ const (
 var ErrInvalidGraph = errors.New("invalid authentication composition graph")
 
 // FormGraphDependencies are production-owned dependencies that must not be
-// recreated inside Auth. PostgreSQL is Main's existing pool. MainRoutePublicRules
-// must be the complete audited set declared by route owners; nil is rejected so
-// omission cannot look like an intentionally empty set.
+// recreated inside Auth. PostgreSQL is Main's existing pool.
+//
+// There is no gateway edge here any more. The graph used to compose two
+// forward-auth kernels and the /internal/auth/main handler that projected an
+// X-Auth-* identity for an authenticating edge; no edge calls it (#1359), so
+// the route-owned public rules and the native token validator that only that
+// edge consumed are gone with it.
 type FormGraphDependencies struct {
-	PostgreSQL           *pgxpool.Pool
-	MainRoutePublicRules []forwardapp.PublicRule
+	PostgreSQL *pgxpool.Pool
 	// Brand is the resolved brand pack the login page renders (ADR-0024
 	// WP5); nil renders the default presentation.
 	Brand browserapi.BrandSource
 	// FormSignInEnabled turns on the local username/password sign-in
 	// (ELITEA_FORM_LOGIN_ENABLED, off by default). Off, the graph still
-	// composes everything the gateway edge, PAT validation and the runtime's
-	// forwarded-identity check depend on, but BrowserRoutes is nil and the
-	// Form handler holds NO users: no configured password is accepted
-	// anywhere. The zero value is the safe one on purpose.
+	// composes PAT validation and signing, which the runtime depends on, but
+	// BrowserRoutes is nil and the Form handler holds NO users: no configured
+	// password is accepted anywhere. The zero value is the safe one on
+	// purpose.
 	FormSignInEnabled bool
-	// NativeTokens validates native access tokens (ADR-0025 WP2) at the
-	// gateway edge (/forward-auth) as well as in the API group: without it a
-	// Form-plane edge refuses every native call before it reaches
-	// elitea-main. Nil — a nil INTERFACE, never a typed nil pointer — keeps
-	// the edge PAT-only.
-	NativeTokens authsvc.TokenValidator
 }
 
-// FormGraph owns the Form browser routes and the separate current-Main gateway
-// authorization edge. Its sign-in state (sessions, login transactions, attempt
+// FormGraph owns the Form browser routes and the personal-access-token
+// signing material. Its sign-in state (sessions, login transactions, attempt
 // windows) lives in the injected PostgreSQL pool (shared migration 0153),
 // which remains caller-owned. The graph owns no connection of its own.
 type FormGraph struct {
 	routes            http.Handler
 	browserRoutes     http.Handler
-	mainEdgeAuth      http.Handler
-	mainKernel        *forwardapp.Kernel
 	patIssuer         *authsvc.LocalIssuer
 	projectPATIssuer  *authsvc.ProjectSystemIssuer
 	patValidator      *authsvc.LocalValidator
 	patSigningKey     []byte
-	proxyResolver     *browserapi.TrustedProxyResolver
 	formUsers         FormUserReport
 	formSignInEnabled bool
+	formSessions      *browserapi.FormSessions
 }
 
 func NewFormGraph(
@@ -93,8 +87,7 @@ func newFormGraph(
 	dependencies FormGraphDependencies,
 	observe func(*materializedFiles),
 ) (*FormGraph, error) {
-	if ctx == nil || dependencies.PostgreSQL == nil ||
-		dependencies.MainRoutePublicRules == nil {
+	if ctx == nil || dependencies.PostgreSQL == nil {
 		return nil, ErrInvalidGraph
 	}
 	if err := ctx.Err(); err != nil {
@@ -158,39 +151,6 @@ func newFormGraph(
 		dependencies.PostgreSQL,
 		material.patSigningKey,
 	)
-	credentials, err := forwardapp.NewTokenCredentialAuthenticator(
-		authsvc.NewNativeAwareValidator(patValidator, dependencies.NativeTokens),
-	)
-	if err != nil {
-		return nil, composeError("credential authenticator", err)
-	}
-	directPolicy, err := forwardapp.NewPublicPolicy(nil)
-	if err != nil {
-		return nil, composeError("Direct public policy", err)
-	}
-	mainRules, err := mainPublicRules(config, dependencies.MainRoutePublicRules)
-	if err != nil {
-		return nil, err
-	}
-	mainPolicy, err := forwardapp.NewPublicPolicy(mainRules)
-	if err != nil {
-		return nil, composeError("Main public policy", err)
-	}
-	// With Form sign-in off, a Form session that predates the switch (the
-	// cookie lives up to cookie.lifetime_seconds) must stop authorizing too;
-	// otherwise "disabled" would mean "disabled for new sign-ins only".
-	var sessionAuthorizer forwardapp.SessionAuthorizer = flow
-	if !dependencies.FormSignInEnabled {
-		sessionAuthorizer = formSessionsRefused{next: flow}
-	}
-	directKernel, err := forwardapp.NewKernel(credentials, sessionAuthorizer, directPolicy)
-	if err != nil {
-		return nil, composeError("Direct authorization kernel", err)
-	}
-	mainKernel, err := forwardapp.NewKernel(credentials, sessionAuthorizer, mainPolicy)
-	if err != nil {
-		return nil, composeError("Main authorization kernel", err)
-	}
 
 	cookies, err := cookiePolicy(config.Cookie)
 	if err != nil {
@@ -199,46 +159,20 @@ func newFormGraph(
 	proxyResolver, err := browserapi.NewTrustedProxyResolver(browserapi.TrustedProxyConfig{
 		TrustedProxyCIDRs: append([]string(nil), config.TrustedProxyCIDRs...),
 		PublicOrigin:      config.PublicOrigin,
-		// Every replica reads the same document, so every replica verifies
-		// what any replica's EdgeAuth signed. The resolver derives its own
-		// key from this one (HKDF with a distinct label) and keeps no alias.
-		IdentityProjectionSecret: material.attemptKey,
 	})
 	if err != nil {
 		return nil, composeError("trusted proxy resolver", err)
 	}
-	mappers, err := browserapi.NewSuccessMapper(config.Mappers.Contract)
-	if err != nil {
-		return nil, composeError("Auth mapper projection", err)
+	// With Form sign-in off, a Form session that predates the switch (the
+	// cookie lives up to cookie.lifetime_seconds) must stop authenticating
+	// too; otherwise "disabled" would mean "disabled for new sign-ins only".
+	var sessionAuthorizer browserapi.FormSessionAuthorizer = flow
+	if !dependencies.FormSignInEnabled {
+		sessionAuthorizer = formSessionsRefused{next: flow}
 	}
-	coreHandler, err := browserapi.NewCoreHandler(
-		directKernel,
-		proxyResolver,
-		cookies,
-		browserapi.CoreConfig{
-			CredentialHeaders:  credentialHeaders(config.Credentials.Headers),
-			AccessDeniedTarget: config.Redirects.DirectAccessDenied,
-			Mappers:            mappers,
-		},
-	)
+	formSessions, err := browserapi.NewFormSessions(cookies, sessionAuthorizer)
 	if err != nil {
-		return nil, composeError("Direct Auth handler", err)
-	}
-	mainHandler, err := browserapi.NewMainHandler(
-		mainKernel,
-		proxyResolver,
-		cookies,
-		browserapi.MainConfig{
-			CredentialHeaders:  credentialHeaders(config.Credentials.Headers),
-			AccessDeniedTarget: config.Redirects.MainAccessDenied,
-			// The edge resolves this handler's relative Location against the
-			// address it called, which is this service's internal one. The
-			// configuration already names the origin browsers use.
-			PublicOrigin: config.PublicOrigin,
-		},
-	)
-	if err != nil {
-		return nil, composeError("Main EdgeAuth handler", err)
+		return nil, composeError("Form session reader", err)
 	}
 	formProvider := material.formProvider
 	if !dependencies.FormSignInEnabled {
@@ -264,10 +198,7 @@ func newFormGraph(
 	if err != nil {
 		return nil, composeError("Form handler", err)
 	}
-	routes, err := browserapi.NewFormRoutes(coreHandler, formHandler)
-	if err != nil {
-		return nil, composeError("Form routes", err)
-	}
+	routes := formHandler.Routes()
 
 	var browserRoutes http.Handler
 	if dependencies.FormSignInEnabled {
@@ -277,8 +208,7 @@ func newFormGraph(
 		routes:            routes,
 		browserRoutes:     browserRoutes,
 		formSignInEnabled: dependencies.FormSignInEnabled,
-		mainEdgeAuth:      mainHandler,
-		mainKernel:        mainKernel,
+		formSessions:      formSessions,
 		patIssuer:         patIssuer,
 		projectPATIssuer:  projectPATIssuer,
 		patValidator:      patValidator,
@@ -286,7 +216,6 @@ func newFormGraph(
 		// returns. The graph must sign a new personal access token with the
 		// SAME key patValidator reads it back with. See SignPAT.
 		patSigningKey: append([]byte(nil), material.patSigningKey...),
-		proxyResolver: proxyResolver,
 		formUsers: FormUserReport{
 			Configured:          material.formProvider.UserCount(),
 			MisconfiguredLogins: material.formProvider.MisconfiguredLogins(),
@@ -315,16 +244,18 @@ func (graph *FormGraph) FormUsers() FormUserReport {
 	}
 }
 
-// ForwardedIdentityVerifier returns the same trusted-peer policy used by the
-// browser and Main EdgeAuth edges. Production product routes must not parse
-// a second CIDR configuration or trust forwarded identity headers directly.
-func (graph *FormGraph) ForwardedIdentityVerifier() *browserapi.TrustedProxyResolver {
+// FormSessions reads the Form session cookie for apimw.Auth. It replaces the
+// forwarded-identity verifier the X-Auth-* edge projection needed (#1359):
+// elitea-main resolves the browser's Form session itself, so no edge has to.
+func (graph *FormGraph) FormSessions() *browserapi.FormSessions {
 	if graph == nil {
 		return nil
 	}
-	return graph.proxyResolver
+	return graph.formSessions
 }
 
+// Routes is the Form router, mounted or not. Tests drive sign-in through it
+// while BrowserRoutes is nil.
 func (graph *FormGraph) Routes() http.Handler {
 	if graph == nil {
 		return nil
@@ -339,37 +270,11 @@ func (graph *FormGraph) FormSignInEnabled() bool {
 
 // BrowserRoutes returns only the browser-facing Form login/logout surface,
 // or nil while Form sign-in is disabled.
-// The compatibility Auth Core /auth handler requires EdgeAuth-generated
-// source metadata and must not be exposed through an ordinary reverse proxy.
 func (graph *FormGraph) BrowserRoutes() http.Handler {
 	if graph == nil {
 		return nil
 	}
 	return graph.browserRoutes
-}
-
-// MainEdgeAuth returns the gateway-only current-Main authorization edge.
-// It is deliberately separate from the public Auth Core /auth route because
-// the two current-baseline credential traversal policies differ.
-func (graph *FormGraph) MainEdgeAuth() http.Handler {
-	if graph == nil {
-		return nil
-	}
-	return graph.mainEdgeAuth
-}
-
-// AuthorizeMain fixes current Main traversal semantics at the composition
-// boundary. A future Main HTTP adapter supplies normalized credentials/session
-// data but cannot accidentally select Direct traversal.
-func (graph *FormGraph) AuthorizeMain(
-	ctx context.Context,
-	request forwardapp.Request,
-) (forwardapp.Decision, error) {
-	if graph == nil || graph.mainKernel == nil {
-		return forwardapp.Decision{}, ErrInvalidGraph
-	}
-	request.Traversal = forwardapp.MainTraversal
-	return graph.mainKernel.Authorize(ctx, request)
 }
 
 // ValidateToken reuses the exact current-baseline HS512 PAT validation path
@@ -423,10 +328,10 @@ func (graph *FormGraph) IssueProjectToken(
 }
 
 // formSessionsRefused answers a Form-provider session as unauthenticated.
-// It decorates the session authorizer both edge kernels use while Form
-// sign-in is disabled; every other provider's session passes through.
+// It decorates the Form session reader while Form sign-in is disabled; every
+// other provider's session passes through.
 type formSessionsRefused struct {
-	next forwardapp.SessionAuthorizer
+	next browserapi.FormSessionAuthorizer
 }
 
 func (r formSessionsRefused) Authorize(ctx context.Context, sessionID string) (browserapp.Authorization, error) {
@@ -511,28 +416,6 @@ func provisioningPolicy(config IdentityConfig) identityapp.ProvisioningPolicy {
 		}
 	}
 	return policy
-}
-
-func credentialHeaders(config []CredentialHeaderConfig) []browserapi.CredentialHeader {
-	headers := make([]browserapi.CredentialHeader, 0, len(config))
-	for _, header := range config {
-		headers = append(headers, browserapi.CredentialHeader{Name: header.Name, Type: header.Type})
-	}
-	return headers
-}
-
-func mainPublicRules(config Config, routeOwned []forwardapp.PublicRule) ([]forwardapp.PublicRule, error) {
-	configured, err := config.MainConfiguredPublicRules()
-	if err != nil {
-		return nil, err
-	}
-	if routeOwned == nil || len(configured)+len(routeOwned) > forwardapp.MaxPublicRules {
-		return nil, fmt.Errorf("%w: Main public rules", ErrInvalidGraph)
-	}
-	rules := make([]forwardapp.PublicRule, 0, len(configured)+len(routeOwned))
-	rules = append(rules, configured...)
-	rules = append(rules, routeOwned...)
-	return rules, nil
 }
 
 func cookiePolicy(config CookieConfig) (*browserapi.CookiePolicy, error) {

@@ -7,6 +7,7 @@
 
 mod common;
 
+use elitea_engine_sidecar::client::EngineClient;
 use elitea_engine_sidecar::server;
 use elitea_inventory_engine::config::Settings;
 use elitea_inventory_engine::native::NativeRunner;
@@ -14,31 +15,18 @@ use elitea_inventory_engine::runner::Runner;
 use elitea_inventory_engine::store::{self, GraphKey};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
-async fn invoke(socket: &PathBuf, tool: &str, arguments: &Value) -> Vec<Value> {
-    let mut stream = UnixStream::connect(socket).await.expect("connect");
-    let payload =
-        json!({"invocation_id": format!("i-{tool}"), "tool": tool, "arguments": arguments})
-            .to_string();
-    let request = format!(
-        "POST /engine/invoke HTTP/1.1\r\nhost: engine\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    stream.write_all(request.as_bytes()).await.expect("write");
-    let mut raw = Vec::new();
-    tokio::time::timeout(Duration::from_mins(1), stream.read_to_end(&mut raw))
-        .await
-        .expect("an answer in time")
-        .expect("read");
-    String::from_utf8_lossy(&raw)
-        .lines()
-        .filter(|line| line.starts_with('{'))
-        .map(|line| serde_json::from_str(line).expect("NDJSON"))
-        .collect()
+async fn invoke(socket: &Path, tool: &str, arguments: &Value) -> Vec<Value> {
+    let mut client = EngineClient::connect(socket).await.expect("connect");
+    tokio::time::timeout(
+        Duration::from_mins(1),
+        client.invoke(&format!("i-{tool}"), tool, arguments),
+    )
+    .await
+    .expect("an answer in time")
+    .expect("a stream")
 }
 
 fn answer(prompt: &str) -> String {
@@ -74,6 +62,8 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
             common::database_url("socket"),
         ),
         ("ELITEA_INVENTORY_GIT_ALLOWLIST", "127.0.0.1".to_owned()),
+        // The platform listener: the mock gateway (only its origin counts).
+        ("ELITEA_INVENTORY_MODEL_SERVICE_URL", gateway.clone()),
         (
             "ELITEA_INVENTORY_SCRATCH_PATH",
             root.join("jobs").display().to_string(),

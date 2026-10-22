@@ -98,7 +98,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Typecheck
         run: npm run typecheck
       - name: Lint (oxlint + tsgolint + elitea/* + i18next bridge)
@@ -157,7 +166,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Storybook tests
         # Issue #483, the fourth gate of the same shape. This step read
         # `if [ -d .storybook ] … else echo "storybook project pending"`. The
@@ -219,7 +237,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Unit tests (coverage shard)
         env:
           VITEST_SKIP_COVERAGE_THRESHOLDS: true
@@ -281,7 +308,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Download coverage shards
         uses: actions/download-artifact@v8
         with:
@@ -375,7 +411,16 @@ jobs:
         # 'success'`. One pull request then reports every red gate at once,
         # as the old one-job-per-gate layout did, instead of one per push.
         id: install
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
 
       # ── Rule-layer self-test ────────────────────────────────────────────
       - name: Rule-layer self-test
@@ -706,7 +751,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Build (app + admin + maintenance + brand-preview + docs)
         # `npm run build`'s chain now includes `build:docs` (embedded-docs
         # programme decision 7): the search-index generator then

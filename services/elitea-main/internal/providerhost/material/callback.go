@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,29 @@ type Grant struct {
 	Bearer  string
 	Expires time.Time
 	UUID    string
+}
+
+// PlatformRouteBase is the base of the `api_base` every facade hands its
+// engine: `https://elitea-platform.invalid/llm/v1`. It is a route NAME, not
+// an address (.invalid never resolves). Since #1359 U5 an engine reaches
+// elitea-main only over the platform gRPC listener — models over
+// elitea.llm.v1.ModelService, artifacts over
+// elitea.runtime.v1.ArtifactObjectService, source tools over
+// elitea.runtime.v1.InternalToolService — at the address its host gives it
+// (ELITEA_<APP>_MODEL_SERVICE_URL); api_base still names which route a model
+// call takes. It replaced ELITEA_DEEPWIKI_CALLBACK_BASE_URL and
+// ELITEA_INVENTORY_CALLBACK_BASE_URL.
+const PlatformRouteBase = "https://elitea-platform.invalid"
+
+// RetiredCallbackBaseURL refuses a retired per-facade callback origin
+// variable (#1359 U5) when it is set, naming it, so an operator learns the
+// hop changed instead of it being silently ignored.
+func RetiredCallbackBaseURL(name string, lookup func(string) (string, bool)) error {
+	if value, ok := lookup(name); ok && strings.TrimSpace(value) != "" {
+		return fmt.Errorf("%s is retired (#1359 U5): the engine calls back over the platform gRPC listener "+
+			"(ModelService, ArtifactObjectService, InternalToolService) and no callback origin is configured; remove the variable", name)
+	}
+	return nil
 }
 
 // CallbackSettings builds the `llm_settings` block.

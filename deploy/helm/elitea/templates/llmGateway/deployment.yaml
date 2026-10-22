@@ -47,6 +47,14 @@
 */}}
 {{- include "elitea-llm-gateway.validateGuards" . -}}
 {{- /*
+  #1359: the gateway serves /llm only on its mutual-TLS gRPC listener
+  (GATEWAY_GRPC_ADDR) and refuses to start without GATEWAY_TLS_*. The HTTP
+  listener serves health and metrics only, so nothing may route /llm to it.
+*/ -}}
+{{- if not .Values.llmGateway.mtls.enabled }}{{- fail "llmGateway.mtls.enabled must be true: the gateway serves /llm only on its mutual-TLS gRPC listener (#1359) and does not start without the material" }}{{- end }}
+{{- if dig "ingress" "enabled" false .Values.llmGateway }}{{- fail "llmGateway.ingress was removed (#1359): the gateway serves /llm only to elitea-main over mutual-TLS gRPC, and its HTTP listener serves health and metrics only" }}{{- end }}
+{{- if ne (get $env "GATEWAY_GRPC_ADDR" | default "" | toString) (printf ":%v" .Values.llmGateway.service.grpcPort) }}{{- fail (printf "llmGateway.env.GATEWAY_GRPC_ADDR must be \":%v\" (llmGateway.service.grpcPort), or the headless gRPC Service targets a port nothing listens on" .Values.llmGateway.service.grpcPort) }}{{- end }}
+{{- /*
   SECRETS_MASTER_KEY: the gateway refuses to start without it (see
   elitea-llm-gateway.masterKeyRef). The entry is replaced by the checked
   reference, or dropped when there is none and the development opt-out is set.
@@ -118,8 +126,13 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
+            # Plaintext: /healthz, /readyz and /metrics only (kubelet, Prometheus).
             - name: http
               containerPort: 8083
+              protocol: TCP
+            # Mutual TLS: elitea.gateway.v1.GatewayService, every /llm call.
+            - name: grpc
+              containerPort: {{ .Values.llmGateway.service.grpcPort }}
               protocol: TCP
           env:
             {{- range $key, $value := $env }}
@@ -131,11 +144,9 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.llmGateway.mtls.enabled }}
-            # FIX 1 (HIGH): inject TLS paths so the server calls ListenAndServeTLS
-            # (TLS) or ListenAndServeTLS+RequireAndVerifyClientCert (mTLS when
-            # GATEWAY_TLS_CA_FILE is set). Paths mirror the volumeMount below.
-            # Without these the binary sees empty vars and stays on plain HTTP
-            # even though the cert secret is mounted (design §9.1, FIX #10).
+            # The gRPC listener's server certificate and the CA it verifies
+            # elitea-main's client certificate against (#1359). Paths mirror
+            # the volumeMount below; the gateway refuses to start without them.
             - name: GATEWAY_TLS_CERT_FILE
               value: {{ .Values.llmGateway.mtls.mountPath }}/tls.crt
             - name: GATEWAY_TLS_KEY_FILE
@@ -177,38 +188,9 @@ spec:
                 command:
                   {{- toYaml .Values.llmGateway.preStop.command | nindent 18 }}
           {{- end }}
-          {{- if .Values.llmGateway.mtls.enabled }}
-          # tcpSocket, not httpGet, and this is not a style preference.
-          #
-          # With mtls.enabled the server calls ListenAndServeTLS on THIS port
-          # and sets ClientAuth = RequireAndVerifyClientCert
-          # (internal/server/server.go). An httpGet probe speaks cleartext to
-          # that listener, so every probe fails with "client sent an HTTP
-          # request to an HTTPS server". Readiness never passes — and because
-          # the LIVENESS probe fails with it, the kubelet restarts a process
-          # that is working correctly. A default install of this chart
-          # CrashLoopBackOffs a healthy gateway; that is what it did on the
-          # first cluster that ran it.
-          #
-          # `scheme: HTTPS` is not the fix either: the kubelet presents no
-          # client certificate, and this server requires and verifies one.
-          #
-          # So the probe asserts what can be asserted without a credential —
-          # the listener accepts connections. /healthz and /readyz still exist
-          # and still answer; reaching them from a probe needs either a second,
-          # cleartext listener for them or a probe that can present a client
-          # certificate, and both are larger changes than this file.
-          livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.llmGateway.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.llmGateway.probes.liveness.failureThreshold }}
-          readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.llmGateway.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.llmGateway.probes.readiness.failureThreshold }}
-          {{- else }}
+          # httpGet on the plaintext HTTP listener (#1359). It serves health and
+          # metrics only; /llm is on the mutual-TLS gRPC port, so a kubelet probe
+          # needs no client certificate here.
           livenessProbe:
             httpGet:
               path: {{ .Values.llmGateway.probes.liveness.path }}
@@ -221,7 +203,6 @@ spec:
               port: http
             periodSeconds: {{ .Values.llmGateway.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.llmGateway.probes.readiness.failureThreshold }}
-          {{- end }}
           resources:
             {{- toYaml .Values.llmGateway.resources | nindent 12 }}
           volumeMounts:

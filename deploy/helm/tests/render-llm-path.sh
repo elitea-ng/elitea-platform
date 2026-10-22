@@ -195,11 +195,11 @@ fi
 # readable client certificate is a fatal boot error.
 refuses "a gateway URL with no client certificate" \
   "LLM_GATEWAY_CLIENT_CERT" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083"
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8443"
 
 refuses "a gateway URL with no CA bundle" \
   "LLM_GATEWAY_CA_FILE" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083" \
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8443" \
   --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
   --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key
 
@@ -211,14 +211,32 @@ refuses "certificate material with no gateway URL" \
 # as file paths, so that shape could never work.
 refuses "certificate text where a file path belongs" \
   "absolute file path" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083" \
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8443" \
   --set-string main.env.LLM_GATEWAY_CLIENT_CERT="-----BEGIN CERTIFICATE-----" \
   --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
   --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
 
 refuses "a gateway URL with no scheme" \
   "missing scheme or host" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="gw:8083" \
+  --set-string main.env.LLM_GATEWAY_URL="gw:8443" \
+  --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
+  --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
+  --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
+
+# The gRPC hop is mutual TLS only (#1359). gateway_client.go refuses http://,
+# so the chart must refuse it first.
+refuses "a cleartext gateway URL" \
+  "not https" "$MAIN" \
+  --set-string main.env.LLM_GATEWAY_URL="http://gw:8443" \
+  --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
+  --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
+  --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
+
+# The gateway HTTP port (8083) now serves health and metrics only. A URL that
+# still names it would boot and then fail every /llm call with 502.
+refuses "a gateway URL on the infra HTTP port" \
+  "health and metrics only" "$MAIN" \
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083" \
   --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
   --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
   --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt

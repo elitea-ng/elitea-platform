@@ -38,8 +38,7 @@ func NewCurrentAuthorsRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentAuthorsRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentAuthorsRoute
 	}
 

@@ -4,23 +4,19 @@ use std::time::Duration;
 
 use adk_rust::tool::SimpleToolContext;
 use adk_rust::{ReadonlyContext, Tool, Toolset};
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, Response, StatusCode, Version};
-use http_body_util::{BodyExt, Full};
 use serde_json::{Map, Value, json};
-use tonic::body::Body;
 
 use super::ToolAdmissionPolicy;
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::artifact::config::{ArtifactConfigErrorCode, ArtifactToolkitConfig};
 use super::families::artifact::tools::build_artifact_toolset;
 use crate::protocol::control::test_runtime_context_authority;
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 
 /// The SDK's own names, which the stored `selected_tools` of every artifact
 /// toolkit created through the product's form carries.
@@ -38,41 +34,21 @@ const SDK_TOOL_NAMES: &[&str] = &[
 pub(crate) struct FixtureRpc {
     body: Mutex<String>,
     paths: Mutex<Vec<String>>,
-    /// The request bodies the tools actually sent. The bucket and the key are
-    /// IN the body, not in the path, so a test about which object a call
-    /// addresses has nothing to assert without them.
+    /// The request documents the tools actually sent. The bucket and the key
+    /// are IN the document, not in the route, so a test about which object a
+    /// call addresses has nothing to assert without them.
     requests: Mutex<Vec<Value>>,
 }
 
-#[async_trait]
-impl RuntimeContextRpc for FixtureRpc {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        self.paths
-            .lock()
-            .expect("fixture paths")
-            .push(request.uri().path().to_owned());
-        let sent = request
-            .into_body()
-            .collect()
-            .await
-            .map(http_body_util::Collected::to_bytes)
-            .unwrap_or_default();
-        if let Ok(parsed) = serde_json::from_slice::<Value>(&sent) {
+#[tonic::async_trait]
+impl ContextRoutes for FixtureRpc {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+        self.paths.lock().expect("fixture paths").push(call.route);
+        if let Ok(parsed) = serde_json::from_slice::<Value>(&call.body) {
             self.requests.lock().expect("fixture requests").push(parsed);
         }
         let raw = self.body.lock().expect("fixture body").clone();
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", raw.len())
-            .body(Body::new(Full::new(Bytes::copy_from_slice(raw.as_bytes()))))
-            .expect("fixture response"))
+        Ok(ContextAnswer::Json(raw.into_bytes()))
     }
 }
 
@@ -83,7 +59,7 @@ fn authority(body: &str) -> (ArtifactToolAuthority, Arc<FixtureRpc>) {
         requests: Mutex::new(Vec::new()),
     });
     let client = RuntimeContextClient::with_rpc(
-        FixtureRpcHandle(Arc::clone(&rpc)),
+        Routes(FixtureRpcHandle(Arc::clone(&rpc))),
         RuntimeContextConfig {
             origin: "https://content.internal:443".to_owned(),
             deadline: Duration::from_secs(1),
@@ -105,13 +81,10 @@ fn authority(body: &str) -> (ArtifactToolAuthority, Arc<FixtureRpc>) {
 
 struct FixtureRpcHandle(Arc<FixtureRpc>);
 
-#[async_trait]
-impl RuntimeContextRpc for FixtureRpcHandle {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        self.0.post(request).await
+#[tonic::async_trait]
+impl ContextRoutes for FixtureRpcHandle {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+        self.0.answer(call).await
     }
 }
 
@@ -259,7 +232,7 @@ async fn a_read_within_the_cap_returns_the_files_text() {
     assert_eq!(answer, json!("TOKEN-VALUE"));
     assert_eq!(
         rpc.paths.lock().expect("fixture paths").as_slice(),
-        ["/executions/execution-one/generations/2/runtime-context/artifacts/read"]
+        ["artifacts/read"]
     );
 }
 

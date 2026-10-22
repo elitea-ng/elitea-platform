@@ -5,8 +5,8 @@
 {{/*
 Release-INDEPENDENT on purpose. These names are certificate material: the
 runtime mTLS server certificates carry DNS SANs for them, the worker dials
-control/output/content on `elitea-main`, and platform_origin is pinned to a
-certificate whose only SAN is `elitea-platform-edge`. Helm's usual
+control/output/content/platform on `elitea-main` (platform_origin is
+`https://elitea-main:9446`). Helm's usual
 "<release>-<chart>" would rename them per release and fail every handshake with
 an error that reads like a trust problem, nowhere near the rename.
 
@@ -266,6 +266,11 @@ because it passes a manifest the binary then rejects.
 {{- end -}}
 
 {{/*
+  Before the ELITEA_RUNTIME_* ownership check below, so a retired name is
+  refused with its migration message rather than the generic one.
+*/}}
+{{- include "elitea-main.validateRetiredCallbacks" . -}}
+{{/*
   The runtime block is rendered by elitea-main.runtimeEnv, and the env map is
   rendered beside it into the same ConfigMap. A name in both produces a
   duplicate key, which Kubernetes rejects on apply — long after `helm template`
@@ -283,6 +288,8 @@ because it passes a manifest the binary then rejects.
 {{- include "elitea-main.validateVectorClient" . -}}
 {{- include "elitea-main.validateSelfLLMOrigins" . -}}
 {{- include "elitea-main.validateRuntime" . -}}
+{{- include "elitea-main.validateModelService" . -}}
+{{- include "elitea-main.validatePlatformServices" . -}}
 {{- include "elitea-main.validateConnectionBudget" . -}}
 {{- include "elitea-main.validateAuthMaterial" . -}}
 {{- end }}
@@ -510,12 +517,16 @@ elitea-main.validateLLMGateway — issue #463.
 The /llm proxy is all-or-nothing, and the failure it produces when half
 configured is a CrashLoopBackOff rather than a disabled feature.
 
-internal/llmproxy/proxy.go builds an mTLS transport whenever Config.Transport is
-nil, and the only seam for a plaintext transport is a struct field with no
-environment binding, so it is test-only. With LLM_GATEWAY_URL set and any of the
-three material paths empty, tls.LoadX509KeyPair or os.ReadFile fails,
-llmproxy.New returns an error, and cmd/elitea-main returns
-"compose llm gateway proxy" as a fatal boot error.
+internal/llmproxy/gateway_client.go (#1359: gRPC over mutual TLS to the
+gateway's GatewayService) always loads the client certificate; the only
+seam for other material is a struct field with no environment binding, so it
+is test-only. With LLM_GATEWAY_URL set and any of the three material paths
+empty, NewGatewayClient fails, and cmd/elitea-main returns
+"compose llm gateway client" as a fatal boot error.
+
+LLM_GATEWAY_URL names the gateway gRPC listener: https://<host>:<port>, no
+path. The gateway HTTP port (llmGateway.service.port) serves health and
+metrics only, so a URL on that port is refused here too.
 
 So this refuses the half-configured values file at `helm template` time.
 
@@ -533,18 +544,23 @@ the /llm path. That state is no longer silent: with no URL the router answers
   "LLM_GATEWAY_CLIENT_KEY" (get $env "LLM_GATEWAY_CLIENT_KEY" | toString)
   "LLM_GATEWAY_CA_FILE" (get $env "LLM_GATEWAY_CA_FILE" | toString) -}}
 {{- if $url -}}
-{{- if not (or (hasPrefix "https://" $url) (hasPrefix "http://" $url)) -}}
-{{- fail (printf "env.LLM_GATEWAY_URL must be an absolute URL with a scheme and a host. internal/llmproxy/proxy.go refuses anything else: \"target url %q missing scheme or host\"." $url) -}}
+{{- $parsed := urlParse $url -}}
+{{- if or (ne $parsed.scheme "https") (not $parsed.host) (and $parsed.path (ne $parsed.path "/")) -}}
+{{- fail (printf "env.LLM_GATEWAY_URL must be https://<host>:<port> of the gateway gRPC listener, with no path. internal/llmproxy/gateway_client.go refuses anything else: got %q (missing scheme or host, or not https)." $url) -}}
+{{- end -}}
+{{- $infraPort := printf ":%v" (.Values.llmGateway.service.port | default 8083) -}}
+{{- if hasSuffix $infraPort $parsed.host -}}
+{{- fail (printf "env.LLM_GATEWAY_URL is %q, the gateway HTTP port (llmGateway.service.port). That listener serves health and metrics only; /llm is the gRPC listener (llmGateway.service.grpcPort, default 8443) behind llmGateway.service.grpcName." $url) -}}
 {{- end -}}
 {{- range $name, $value := $material -}}
 {{- if not $value -}}
-{{- fail (printf "env.LLM_GATEWAY_URL is set, so env.%s must be set too. internal/llmproxy/proxy.go always builds an mTLS transport and reads this value as a FILE PATH; an empty path makes cmd/elitea-main exit at boot with \"compose llm gateway proxy\". Set all three of LLM_GATEWAY_CLIENT_CERT, LLM_GATEWAY_CLIENT_KEY and LLM_GATEWAY_CA_FILE, and mount the material at those paths." $name) -}}
+{{- fail (printf "env.LLM_GATEWAY_URL is set, so env.%s must be set too. internal/llmproxy/gateway_client.go always loads mutual TLS material and reads this value as a FILE PATH; an empty path makes cmd/elitea-main exit at boot with \"compose llm gateway client\". Set all three of LLM_GATEWAY_CLIENT_CERT, LLM_GATEWAY_CLIENT_KEY and LLM_GATEWAY_CA_FILE, and mount the material at those paths." $name) -}}
 {{- end -}}
 {{- if not (hasPrefix "/" $value) -}}
-{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q. internal/llmproxy/proxy.go passes it to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
+{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q. internal/llmproxy/gateway_client.go passes it to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
 {{- end -}}
 {{- if and $clientMaterial.enabled (not (hasPrefix $mountPath $value)) -}}
-{{- fail (printf "env.%s is %q, which fileConfig.llmGatewayClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container, and the pod exits at boot with \"compose llm gateway proxy\"." $name $value $mountPath) -}}
+{{- fail (printf "env.%s is %q, which fileConfig.llmGatewayClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container, and the pod exits at boot with \"compose llm gateway client\"." $name $value $mountPath) -}}
 {{- end -}}
 {{- end -}}
 {{- if not $clientMaterial.enabled -}}
@@ -556,7 +572,7 @@ the /llm path. That state is no longer silent: with no URL the router answers
 {{- else -}}
 {{- range $name, $value := $material -}}
 {{- if $value -}}
-{{- fail (printf "env.%s is set but env.LLM_GATEWAY_URL is empty, so no proxy is composed and the material is never read. Set env.LLM_GATEWAY_URL, or clear env.%s." $name $name) -}}
+{{- fail (printf "env.%s is set but env.LLM_GATEWAY_URL is empty, so no gateway client is composed and the material is never read. Set env.LLM_GATEWAY_URL, or clear env.%s." $name $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -567,8 +583,8 @@ elitea-main.validateDeepWiki — the same all-or-nothing shape as the /llm hop
 above, for the same reason (ADR-0022 P2/P3).
 
 internal/api/v2/deepwiki/config.go's Validate() refuses an enabled facade that
-is missing the base URL, any of the three certificate paths, or the callback
-origin, and cmd/elitea-main turns that into a fatal boot error. So a
+is missing the base URL or any of the three certificate paths, and
+cmd/elitea-main turns that into a fatal boot error. So a
 half-configured values file is a CrashLoopBackOff, not a disabled feature, and
 this refuses it while the operator is still looking at their terminal.
 
@@ -586,16 +602,15 @@ reads, which looks configured and does nothing.
   "ELITEA_DEEPWIKI_CLIENT_CERT_FILE" (get $env "ELITEA_DEEPWIKI_CLIENT_CERT_FILE" | toString)
   "ELITEA_DEEPWIKI_CLIENT_KEY_FILE" (get $env "ELITEA_DEEPWIKI_CLIENT_KEY_FILE" | toString)
   "ELITEA_DEEPWIKI_CA_FILE" (get $env "ELITEA_DEEPWIKI_CA_FILE" | toString) -}}
+{{- if get $env "ELITEA_DEEPWIKI_BASE_URL" -}}
+{{- fail "env.ELITEA_DEEPWIKI_BASE_URL was retired with the provider's HTTPS SPI (#1359): elitea-main reaches it over gRPC at env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET (host:port, derived by the chart when deepwiki.enabled). Remove BASE_URL; cmd/elitea-main refuses it at boot too (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
 {{- fail (printf "env.ELITEA_DEEPWIKI_ENABLED is %q, which is neither true nor false. internal/api/v2/deepwiki/config.go refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
 {{- end -}}
 {{- if $on -}}
-{{- $url := get $env "ELITEA_DEEPWIKI_BASE_URL" | toString -}}
-{{- if not (hasPrefix "https://" $url) -}}
-{{- fail (printf "env.ELITEA_DEEPWIKI_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; NewProxy catches it at startup." $url) -}}
-{{- end -}}
-{{- if not (include "elitea-deepwiki.callbackBaseUrl" .) -}}
-{{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL must name the origin the PROVIDER calls back to for artifacts and models. Without it a generation runs to completion and then cannot hand back what it produced — the failure arrives at the end of the most expensive operation the facade offers. Set it to this deployment's own in-cluster origin, e.g. http://elitea-main:8080." -}}
+{{- if not (or (get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET") (include "elitea-deepwiki.platformGrpcTarget" .)) -}}
+{{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, but there is no provider to dial: deepwiki.enabled is false here, so the chart derives no env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET. Turn deepwiki.enabled on, or set the target to the host:port of a provider deployed elsewhere (#1359)." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_DEEPWIKI_GIT_ALLOWLIST") -}}
 {{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_GIT_ALLOWLIST must name the git hosts this deployment may clone from. It is fail-closed: empty refuses every repository, at the point a user asks for a wiki. It must hold the SAME value as deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST — this side checks it before opening the vault, that side before building a clone URL, and two that disagree mean an invocation that starts and then fails." -}}
@@ -713,11 +728,11 @@ half-configured values file is a CrashLoopBackOff, not a disabled feature.
 TWO THINGS ARE DELIBERATELY NOT REQUIRED HERE, and both are differences from
 DeepWiki rather than omissions:
 
-  * ELITEA_INVENTORY_CALLBACK_BASE_URL. An empty one DISABLES source expansion
-    and mounts the facade anyway — the eight tools that only read a graph still
-    work, and the three that name a source get the provider's own refusal.
-    cmd/elitea-main logs which of the two it built. Requiring it here would
-    refuse an install the code supports.
+  * a source-expansion origin. There is none any more (#1359 U5): the
+    provider reads and writes artifacts over ArtifactObjectService on
+    elitea-main's platform listener, so expansion depends only on the
+    Configurations plane. ELITEA_INVENTORY_CALLBACK_BASE_URL is retired and
+    refused (elitea-main.validateRetiredCallbacks).
   * ELITEA_INVENTORY_GIT_ALLOWLIST. It is fail-closed on the facade side alone;
     the provider has no allowlist to keep in step with, because Inventory has
     no request-supplied clone URL. An unset one refuses every source, at the
@@ -738,13 +753,15 @@ reads, which looks configured and does nothing.
   "ELITEA_INVENTORY_CLIENT_CERT_FILE" (get $env "ELITEA_INVENTORY_CLIENT_CERT_FILE" | toString)
   "ELITEA_INVENTORY_CLIENT_KEY_FILE" (get $env "ELITEA_INVENTORY_CLIENT_KEY_FILE" | toString)
   "ELITEA_INVENTORY_CA_FILE" (get $env "ELITEA_INVENTORY_CA_FILE" | toString) -}}
+{{- if get $env "ELITEA_INVENTORY_BASE_URL" -}}
+{{- fail "env.ELITEA_INVENTORY_BASE_URL was retired with the provider's HTTPS SPI (#1359): elitea-main reaches it over gRPC at env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET (host:port, derived by the chart when inventory.enabled). Remove BASE_URL; cmd/elitea-main refuses it at boot too (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
 {{- fail (printf "env.ELITEA_INVENTORY_ENABLED is %q, which is neither true nor false. facade.ConfigFromEnv refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
 {{- end -}}
 {{- if $on -}}
-{{- $url := get $env "ELITEA_INVENTORY_BASE_URL" | toString -}}
-{{- if not (hasPrefix "https://" $url) -}}
-{{- fail (printf "env.ELITEA_INVENTORY_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; proxy.New catches it at startup." $url) -}}
+{{- if not (or (get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET") (include "elitea-inventory.platformGrpcTarget" .)) -}}
+{{- fail "env.ELITEA_INVENTORY_ENABLED is on, but there is no provider to dial: inventory.enabled is false here, so the chart derives no env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET. Turn inventory.enabled on, or set the target to the host:port of a provider deployed elsewhere (#1359)." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
 {{- if not (hasKey (.Values.main.secrets | default dict) "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
@@ -954,6 +971,218 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 {{- end }}
 
+{{/*
+elitea-main.subappCallbackIdentity — the workload identity the DeepWiki and
+Inventory engines present on elitea-main's platform listener: the one DNS SAN
+of the sub-application callback client certificate
+(deploy/scripts/gen-runtime-certs.sh mints it as subapp-callback-client.crt,
+the Secret deepwiki.callbackClient / inventory.callbackClient names). The
+chart cannot read that certificate, so the name is the minting script's; a
+certificate minted with another SAN is admitted through
+main.runtime.modelService.extraClients instead.
+*/}}
+{{- define "elitea-main.subappCallbackIdentity" -}}dns:elitea-subapp-callback{{- end -}}
+
+{{/*
+elitea-main.modelServiceOrigin — the origin a DeepWiki/Inventory engine dials
+for elitea.llm.v1.ModelService: elitea-main's platform listener, the same
+origin the worker is handed (worker.runtime.platformOrigin), so the two
+cannot name different listeners.
+*/}}
+{{- define "elitea-main.modelServiceOrigin" -}}{{- .Values.worker.runtime.platformOrigin | toString -}}{{- end -}}
+
+{{/*
+elitea-main.modelServiceClients — ELITEA_MODEL_SERVICE_CLIENTS, the workload
+identities admitted to elitea.llm.v1.ModelService (#1359 U2), comma-separated:
+
+  * the agent worker's SPIFFE ID, worker.runtimeSession.expectedIdentity, when
+    this release runs the worker. The chart cannot read the certificate, and
+    that value is the one the runtime-session Job asserts against the
+    certificate itself, so the allowlist and the certificate cannot disagree
+    without that Job failing;
+  * the sub-application callback identity, when a DeepWiki or Inventory
+    engine sidecar makes model calls (elitea-deepwiki.modelCalls,
+    elitea-inventory.modelCalls);
+  * main.runtime.modelService.extraClients, for callers deployed elsewhere.
+*/}}
+{{- define "elitea-main.modelServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if or (include "elitea-deepwiki.modelCalls" .) (include "elitea-inventory.modelCalls" .) -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range ((.Values.main.runtime.modelService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.validateModelService — the ModelService allowlist (#1359 U2).
+
+cmd/elitea-main refuses to start while the platform listener is open
+(runtime.enabled, which requires listeners.platformAddress) and
+ELITEA_MODEL_SERVICE_CLIENTS names nobody, and refuses an entry that is not a
+"dns:" or "spiffe://" identity. Both are a CrashLoopBackOff, so both are
+refused here. The quieter failure is a worker the list does not name: elitea-
+main boots (DeepWiki's identity keeps the list non-empty) and every model call
+the worker makes is PermissionDenied, so every chat turn fails. That is why
+the worker's identity is required, not optional, whenever the worker runs.
+*/}}
+{{- define "elitea-main.validateModelService" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $modelService := (.Values.main.runtime | default dict).modelService | default dict -}}
+{{- if hasKey $env "ELITEA_MODEL_SERVICE_CLIENTS" -}}
+{{- fail "main.env.ELITEA_MODEL_SERVICE_CLIENTS must not be set: the chart renders it from the worker's identity (worker.runtimeSession.expectedIdentity), the sub-application callback identity (when DeepWiki or Inventory runs) and main.runtime.modelService.extraClients. A name in both maps makes a duplicate ConfigMap key. Move extra identities to main.runtime.modelService.extraClients." -}}
+{{- end -}}
+{{- $extra := $modelService.extraClients | default list -}}
+{{- if not (kindIs "slice" $extra) -}}
+{{- fail (printf "main.runtime.modelService.extraClients must be a list of identities, got %v." $extra) -}}
+{{- end -}}
+{{- range $extra -}}
+{{- $id := toString . -}}
+{{- if not (or (regexMatch "^dns:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $id) (hasPrefix "spiffe://" $id)) -}}
+{{- fail (printf "main.runtime.modelService.extraClients entry %q is not a workload identity: write dns:<lower-case DNS SAN> or a spiffe:// URI (internal/transport/grpcauth). cmd/elitea-main refuses anything else at boot." $id) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.main.runtime.enabled -}}
+{{- if .Values.worker.enabled -}}
+{{- $worker := (.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString -}}
+{{- if not $worker -}}
+{{- fail "worker.enabled=true needs worker.runtimeSession.expectedIdentity: the SPIFFE ID in the worker certificate's one URI SAN (deploy/scripts/gen-runtime-certs.sh: RUNTIME_WORKER_SPIFFE_ID, default spiffe://elitea.standalone/ns/default/sa/agent-worker). The worker makes its model calls over elitea.llm.v1.ModelService (#1359 U2), which admits only the identities in ELITEA_MODEL_SERVICE_CLIENTS, and the chart cannot read the certificate to find it. Without it every model call the worker makes is refused and every chat turn fails. The runtime-session Job checks the value against the certificate, so a wrong one fails the install instead of the first turn." -}}
+{{- end -}}
+{{- if not (hasPrefix "spiffe://" $worker) -}}
+{{- fail (printf "worker.runtimeSession.expectedIdentity is %q, but the worker certificate carries exactly one spiffe:// URI SAN (internal/auth/workloadidentity), so nothing else can name it." $worker) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (include "elitea-main.modelServiceClients" .) -}}
+{{- fail "main.runtime.enabled=true opens elitea-main's platform listener, and ELITEA_MODEL_SERVICE_CLIENTS would be empty: no worker (worker.enabled), no DeepWiki or Inventory engine, and no main.runtime.modelService.extraClients. cmd/elitea-main refuses to start with a ModelService nobody may call. Run the worker in this release, or list the identities of the callers deployed elsewhere (dns:<name> or spiffe:// URIs) in main.runtime.modelService.extraClients." -}}
+{{- end -}}
+{{- else if $extra -}}
+{{- fail "main.runtime.modelService.extraClients is set but main.runtime.enabled is false, so elitea-main opens no platform listener and serves no ModelService. Turn the runtime on, or clear the list." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.artifactServiceClients — ELITEA_ARTIFACT_SERVICE_CLIENTS, the
+workload identities admitted to elitea.runtime.v1.ArtifactObjectService on the
+platform listener (#1359 U5), comma-separated:
+
+  * the agent worker's SPIFFE ID (worker.runtimeSession.expectedIdentity) when
+    this release runs the worker: the Office toolkits' object host and the
+    indexing artifact source;
+  * the sub-application callback identity whenever DeepWiki or Inventory runs
+    at all: the HOST container uploads what a run produced and the engine
+    reads artifact folders, both presenting the callback client certificate;
+  * main.runtime.artifactService.extraClients.
+
+Empty is legal: elitea-main then does not register the service, and every
+caller is refused.
+*/}}
+{{- define "elitea-main.artifactServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if or .Values.deepwiki.enabled .Values.inventory.enabled -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range (((.Values.main.runtime | default dict).artifactService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.internalToolServiceClients — ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS,
+the workload identities admitted to elitea.runtime.v1.InternalToolService
+(#1359 U5): the worker's SPIFFE ID when the worker runs (its internal MCP
+toolkits), the sub-application callback identity when Inventory runs (the
+engine's investigate source-tool calls, which replaced its HTTP test_tool
+hop), plus main.runtime.internalToolService.extraClients. Empty is legal: the
+service is not registered.
+*/}}
+{{- define "elitea-main.internalToolServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.inventory.enabled -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range (((.Values.main.runtime | default dict).internalToolService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.validatePlatformServices — the ArtifactObjectService and
+InternalToolService allowlists (#1359 U5), checked like ModelService's:
+main.env may not set them (the chart renders them), every extraClients entry
+must be a workload identity cmd/elitea-main accepts, and extraClients without
+the runtime is a list nothing reads.
+*/}}
+{{- define "elitea-main.validatePlatformServices" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $runtime := .Values.main.runtime | default dict -}}
+{{- range $pair := list (list "ELITEA_ARTIFACT_SERVICE_CLIENTS" "artifactService" "ArtifactObjectService") (list "ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS" "internalToolService" "InternalToolService") -}}
+{{- $name := index $pair 0 -}}
+{{- $key := index $pair 1 -}}
+{{- $service := index $pair 2 -}}
+{{- if hasKey $env $name -}}
+{{- fail (printf "main.env.%s must not be set: the chart renders it from the worker's identity (worker.runtimeSession.expectedIdentity)%s and main.runtime.%s.extraClients. A name in both maps makes a duplicate ConfigMap key. Move extra identities to main.runtime.%s.extraClients." $name (ternary ", the sub-application callback identity (when DeepWiki or Inventory runs)" ", the sub-application callback identity (when Inventory runs)" (eq $key "artifactService")) $key $key) -}}
+{{- end -}}
+{{- $extra := (get $runtime $key | default dict).extraClients | default list -}}
+{{- if not (kindIs "slice" $extra) -}}
+{{- fail (printf "main.runtime.%s.extraClients must be a list of identities, got %v." $key $extra) -}}
+{{- end -}}
+{{- range $extra -}}
+{{- $id := toString . -}}
+{{- if not (or (regexMatch "^dns:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $id) (hasPrefix "spiffe://" $id)) -}}
+{{- fail (printf "main.runtime.%s.extraClients entry %q is not a workload identity: write dns:<lower-case DNS SAN> or a spiffe:// URI (internal/transport/grpcauth). cmd/elitea-main refuses anything else at boot." $key $id) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $extra (not $runtime.enabled) -}}
+{{- fail (printf "main.runtime.%s.extraClients is set but main.runtime.enabled is false, so elitea-main opens no platform listener and serves no %s. Turn the runtime on, or clear the list." $key $service) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.validateRetiredCallbacks — the HTTP callback origins #1359 U5
+retired. elitea-main refuses each at boot (a set value would mean an operator
+still expects an HTTP hop that no longer exists), so the render refuses them
+too, whatever the value:
+
+  * ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL, the internal MCP origin handed to the
+    worker: its internal MCP calls are InternalToolService on the platform
+    listener now;
+  * ELITEA_DEEPWIKI_CALLBACK_BASE_URL / ELITEA_INVENTORY_CALLBACK_BASE_URL, the
+    artifact origin handed to the engines as llm_settings.api_base: artifacts
+    are ArtifactObjectService on the platform listener, models ModelService,
+    and api_base is a fixed route name elitea-main writes itself.
+*/}}
+{{- define "elitea-main.validateRetiredCallbacks" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if hasKey $env "ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL" -}}
+{{- fail "main.env.ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL was retired (#1359 U5): the worker's internal MCP calls go over elitea.runtime.v1.InternalToolService on elitea-main's platform gRPC listener. Remove it; cmd/elitea-main refuses it at boot (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- range $name := list "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" "ELITEA_INVENTORY_CALLBACK_BASE_URL" -}}
+{{- if hasKey $env $name -}}
+{{- fail (printf "main.env.%s was retired (#1359 U5): the provider reads and writes artifacts over elitea.runtime.v1.ArtifactObjectService and makes its model calls over elitea.llm.v1.ModelService, both on elitea-main's platform gRPC listener (worker.runtime.platformOrigin), so there is no HTTP callback origin to configure. Remove it; cmd/elitea-main refuses it at boot (docs/UPGRADING.md)." $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "elitea-main.validateRuntime" -}}
 {{- include "elitea.codeNodes.validate" . -}}
 {{- $runtime := .Values.main.runtime | default dict -}}
@@ -1051,15 +1280,20 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.enabled=true needs runtime.signingKeyId (ELITEA_RUNTIME_SIGNING_KEY_ID). It must equal the key id inside command-signing-keyring.json, or startup fails on the mismatch." -}}
 {{- end -}}
 
-{{/* Three listeners, three distinct addresses. */}}
-{{- $addresses := list ($listeners.controlAddress | toString) ($listeners.outputAddress | toString) ($listeners.contentAddress | toString) -}}
+{{/* Four listeners, four distinct addresses: control, output, content and
+     the platform listener (#1359), which serves the product API over mTLS to
+     the worker and the sub-applications. */}}
+{{- $addresses := list ($listeners.controlAddress | toString) ($listeners.outputAddress | toString) ($listeners.contentAddress | toString) ($listeners.platformAddress | toString) -}}
 {{- range $address := $addresses -}}
 {{- if not $address -}}
-{{- fail "runtime.enabled=true needs runtime.listeners.controlAddress, runtime.listeners.outputAddress and runtime.listeners.contentAddress, each with a numeric TCP port." -}}
+{{- fail "runtime.enabled=true needs runtime.listeners.controlAddress, runtime.listeners.outputAddress, runtime.listeners.contentAddress and runtime.listeners.platformAddress, each with a numeric TCP port." -}}
 {{- end -}}
 {{- end -}}
-{{- if ne (len ($addresses | uniq)) 3 -}}
-{{- fail (printf "runtime.listeners needs three distinct addresses. internal/runtimecomposition/config.go refuses a repeat: \"runtime listeners require distinct addresses\". Got %v." $addresses) -}}
+{{- if ne (len ($addresses | uniq)) 4 -}}
+{{- fail (printf "runtime.listeners needs four distinct addresses. internal/runtimecomposition/config.go refuses a repeat: \"runtime listeners require distinct addresses\". Got %v." $addresses) -}}
+{{- end -}}
+{{- if eq (include "elitea-main.runtimePort" $listeners.platformAddress) "8080" -}}
+{{- fail "runtime.listeners.platformAddress uses port 8080, the public HTTP listener's port. config.go refuses it: the platform listener serves TLS." -}}
 {{- end -}}
 
 {{/* The material volume. Every remaining runtime name is a FILE PATH, and the
@@ -1124,6 +1358,18 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 {{- end -}}
 
+{{/*
+  currentMainBaseUrl retired with #1359 U5. It named the internal MCP origin
+  elitea-main handed the worker; the worker's internal MCP calls are now
+  elitea.runtime.v1.InternalToolService on the platform gRPC listener, which
+  the worker already dials (worker.runtime.platformOrigin), so there is no
+  origin left to configure. cmd/elitea-main refuses
+  ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL at boot, so the key is refused here
+  whatever its value.
+*/}}
+{{- if hasKey $agent "currentMainBaseUrl" -}}
+{{- fail "main.runtime.agentExecutionDispatch.currentMainBaseUrl was retired (#1359 U5): the worker's internal MCP calls go over elitea.runtime.v1.InternalToolService on elitea-main's platform gRPC listener, which the worker already reaches at worker.runtime.platformOrigin. Remove the key; cmd/elitea-main refuses ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL at boot (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{/* Agent-execution dispatch: the four agent turn routes. */}}
 {{- if $agent.enabled -}}
 {{- if not $agent.commandStream -}}
@@ -1132,23 +1378,11 @@ and the term that actually moves is the one this counts.
 {{- if not (has ($agent.commandStream | toString) $streams) -}}
 {{- fail (printf "runtime.agentExecutionDispatch.commandStream is %q, not one of the command bus's streams %v." ($agent.commandStream | toString) $streams) -}}
 {{- end -}}
-{{/*
-  currentMainBaseUrl is OPTIONAL. Empty means "call my own listener": elitea-main
-  derives http://127.0.0.1:<port> from ELITEA_HTTP_ADDRESS, because the
-  next-input-suggestion policy call is a self call and this process serves
-  cleartext. Set it only where another server answers that path, and then it must
-  be an origin that TERMINATES TLS. An https origin aimed at elitea-main's own
-  cleartext port is what internal/runtimecomposition/config.go now refuses at
-  boot, after it made every chat turn log a failed policy call.
-*/}}
-{{- if and $agent.currentMainBaseUrl (not (hasPrefix "https://" ($agent.currentMainBaseUrl | toString))) -}}
-{{- fail (printf "runtime.agentExecutionDispatch.currentMainBaseUrl must be an https origin with no path, query or fragment, or empty to call elitea-main's own listener. internal/runtimecomposition/config.go validates it. Got %q." ($agent.currentMainBaseUrl | toString)) -}}
-{{- end -}}
 {{- if eq ($agent.commandStream | toString) ($runtime.commandStream | toString) -}}
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
 {{- end -}}
 {{- else -}}
-{{- if or $agent.commandStream $agent.currentMainBaseUrl -}}
+{{- if $agent.commandStream -}}
 {{- fail "runtime.agentExecutionDispatch settings are present but runtime.agentExecutionDispatch.enabled is false. config.go refuses that combination: \"runtime agent execution dispatch settings require explicit enablement\"." -}}
 {{- end -}}
 {{- end -}}
@@ -1248,9 +1482,6 @@ ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT: {{ $sse.maxStreamsPerProject | defau
 {{- if $agent.enabled }}
 ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
-{{- if $agent.currentMainBaseUrl }}
-ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
-{{- end }}
 {{- end }}
 {{- if $ingest.enabled }}
 ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
@@ -1284,6 +1515,23 @@ ELITEA_RUNTIME_CONTENT_ADDRESS: {{ $listeners.contentAddress | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* The platform listener (#1359): elitea-main's internal gRPC port (gRPC
+     only, no HTTP), the worker's platform_origin. It reuses the content listener's keypair (its SAN is
+     this Service's name) and, like every runtime listener, requires a client
+     certificate the runtime CA signed. */}}
+ELITEA_RUNTIME_PLATFORM_ADDRESS: {{ $listeners.platformAddress | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* #1359 U2: who may call elitea.llm.v1.ModelService on that listener.
+     cmd/elitea-main refuses to start without one while the listener is open;
+     elitea-main.validateModelService refuses the empty list at render. */}}
+ELITEA_MODEL_SERVICE_CLIENTS: {{ include "elitea-main.modelServiceClients" . | quote }}
+{{/* #1359 U5: who may call elitea.runtime.v1.ArtifactObjectService and
+     elitea.runtime.v1.InternalToolService on that listener. An empty list
+     leaves the service unregistered (elitea-main.validatePlatformServices). */}}
+ELITEA_ARTIFACT_SERVICE_CLIENTS: {{ include "elitea-main.artifactServiceClients" . | quote }}
+ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS: {{ include "elitea-main.internalToolServiceClients" . | quote }}
 {{- if .Values.vector.enabled }}
 {{/* ADR-0031: the client identities admitted to TokenIntrospectionService on
      the control listener above — elitea-vector's client certificate, whose
@@ -1389,3 +1637,4 @@ elitea-llm-gateway.masterKeyRef).
 {{- fail "elitea-main has no SECRETS_MASTER_KEY source and refuses to start without one: it will not store project vault keys unwrapped. Set main.secrets.SECRETS_MASTER_KEY.secretName / .key (a Secret holding a base64url 32-byte Fernet key; the gateway must carry the same value), or, for a throwaway local install only, set main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\"." -}}
 {{- end -}}
 {{- end }}
+

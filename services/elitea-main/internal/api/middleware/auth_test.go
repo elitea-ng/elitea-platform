@@ -25,19 +25,11 @@ func (f principalValidatorFunc) ValidatePrincipal(ctx context.Context, user auth
 	return f(ctx, user)
 }
 
-type forwardedIdentityVerifierFunc func(*http.Request) error
-
-func (f forwardedIdentityVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return f(request)
-}
-
-func allowForwardedIdentity(*http.Request) error { return nil }
-
 // unusedTokenValidator names a credential reader that always refuses.
 //
 // The tests below carry it so AuthConfig describes a deployment WITH a
-// credential plane; none of them presents a credential the reader can accept,
-// and the forwarded-identity tests never reach it at all. It replaces
+// credential plane; none of them presents a credential the reader can
+// accept. It replaces
 // newTestClient, which returned the pylon Redis-RPC validator #383 deleted —
 // that client refused everything too, by failing to dial Redis, so no
 // assertion in this file changes.
@@ -140,124 +132,6 @@ func TestAuth_BasicAuthExtractsUsername(t *testing.T) {
 	}
 }
 
-func TestAuth_TraefikHeaders(t *testing.T) {
-	var gotUser auth.User
-	var gotSource auth.AuthenticationSource
-	handler := middleware.Auth(middleware.AuthConfig{
-		Validator:                 unusedTokenValidator(),
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
-		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
-			if user.Email != "" {
-				t.Fatalf("forwarded reference was trusted as email: %+v", user)
-			}
-			user.Email = "authoritative@example.com"
-			return user, nil
-		}),
-	})(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			u, ok := auth.UserFromContext(r.Context())
-			if !ok {
-				t.Fatal("expected user in context")
-			}
-			gotUser = u
-			var sourceOK bool
-			gotSource, sourceOK = auth.AuthenticationSourceFromContext(r.Context())
-			if !sourceOK {
-				t.Fatal("expected authentication source in context")
-			}
-			w.WriteHeader(http.StatusOK)
-		}),
-	)
-
-	req := httptest.NewRequest("GET", "/api/v1/test", nil)
-	req.Header.Set("X-Auth-Type", "user")
-	req.Header.Set("X-Auth-Id", "123")
-	req.Header.Set("X-Auth-Reference", "user@example.com")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if gotUser.ID != "123" || gotUser.UserID != "123" {
-		t.Errorf("expected user ID 123, got %+v", gotUser)
-	}
-	if gotUser.Email != "authoritative@example.com" {
-		t.Errorf("expected authoritative email, got %q", gotUser.Email)
-	}
-	if gotUser.AuthType != "user" {
-		t.Errorf("expected AuthType user, got %q", gotUser.AuthType)
-	}
-	if gotSource != auth.AuthenticationSourceForwarded {
-		t.Errorf("expected forwarded source, got %d", gotSource)
-	}
-	if runtimePrincipal, ok := auth.RuntimePrincipalFromContext(auth.ContextWithAuthenticatedUser(context.Background(), gotUser, gotSource)); !ok || runtimePrincipal.ID != "123" {
-		t.Fatalf("verified forwarded runtime principal = %+v, present=%v", runtimePrincipal, ok)
-	}
-}
-
-func TestAuth_TraefikTokenNormalizesCompatibilityIDToOwningUser(t *testing.T) {
-	var gotUser auth.User
-	handler := middleware.Auth(middleware.AuthConfig{
-		Validator:                 unusedTokenValidator(),
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
-		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
-			if user.TokenID != "900" || user.UserID != "7" {
-				t.Fatalf("unvalidated forwarded identity = %+v", user)
-			}
-			user.ID = user.UserID
-			return user, nil
-		}),
-	})(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var ok bool
-			gotUser, ok = auth.UserFromContext(r.Context())
-			if !ok {
-				t.Fatal("expected user in context")
-			}
-			w.WriteHeader(http.StatusOK)
-		}),
-	)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
-	req.Header.Set("X-Auth-Type", "token")
-	req.Header.Set("X-Auth-Id", "900")
-	req.Header.Set("X-Auth-User-ID", "7")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if gotUser.ID != "7" || gotUser.TokenID != "900" || gotUser.UserID != "7" {
-		t.Fatalf("forwarded token identity = %+v, compatibility ID must be the owning user", gotUser)
-	}
-	if ownerID, ok := gotUser.OwningUserID(); !ok || ownerID != 7 {
-		t.Fatalf("owning user = %d, %v; want 7", ownerID, ok)
-	}
-}
-
-func TestAuth_TrustedForwardedIdentityRequiresPrincipalValidator(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{
-		Validator:                 unusedTokenValidator(),
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
-	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("unvalidated forwarded identity reached protected handler")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
-	req.Header.Set("X-Auth-Type", "token")
-	req.Header.Set("X-Auth-Id", "42")
-	req.Header.Set("X-Auth-User-ID", "7")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
-	}
-}
-
 func TestAuth_DoesNotTrustForwardedHeadersOnPublicListenerByDefault(t *testing.T) {
 	handler := middleware.Auth(middleware.AuthConfig{Validator: unusedTokenValidator()})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -275,65 +149,14 @@ func TestAuth_DoesNotTrustForwardedHeadersOnPublicListenerByDefault(t *testing.T
 	}
 }
 
-func TestAuthRejectsForwardedIdentityFromUnverifiedPeer(t *testing.T) {
-	verifierCalls := 0
-	handler := middleware.Auth(middleware.AuthConfig{
-		Validator: unusedTokenValidator(),
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(func(*http.Request) error {
-			verifierCalls++
-			return errors.New("untrusted socket peer")
-		}),
-		PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
-			t.Fatal("unverified forwarded identity reached principal validation")
-			return auth.User{}, nil
-		}),
-	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("unverified forwarded identity reached protected handler")
-	}))
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/projects", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "7")
-	recorder := httptest.NewRecorder()
-
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusUnauthorized || verifierCalls != 1 {
-		t.Fatalf("status=%d verifier calls=%d", recorder.Code, verifierCalls)
-	}
-}
-
-func TestAuthRejectsDuplicateForwardedIdentityHeaders(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{
-		Validator:                 unusedTokenValidator(),
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
-		PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
-			t.Fatal("ambiguous forwarded identity reached principal validation")
-			return auth.User{}, nil
-		}),
-	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("ambiguous forwarded identity reached protected handler")
-	}))
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/projects", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "7")
-	request.Header["x-auth-id"] = []string{"8"}
-	recorder := httptest.NewRecorder()
-
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want %d", recorder.Code, http.StatusUnauthorized)
-	}
-}
-
 func TestAuthRejectsCredentialWhenAuthoritativePrincipalCheckFails(t *testing.T) {
 	handler := middleware.Auth(middleware.AuthConfig{
 		Validator: tokenValidatorFunc(func(context.Context, string) (auth.User, error) {
 			return auth.User{ID: "7", UserID: "7", AuthType: "token"}, nil
 		}),
 		PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
-			// See the note in auth_traefik_test.go: a suspension reports
-			// auth.ErrPrincipalInactive, and only that answer is a 401 (#537).
+			// A suspension reports auth.ErrPrincipalInactive, and only that
+			// answer is a 401 (#537).
 			return auth.User{}, auth.ErrPrincipalInactive
 		}),
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -382,28 +205,6 @@ func TestAuthConsultsOnlyTheLocalValidatorForABearerCredential(t *testing.T) {
 	}
 	if validatorCalls != 1 {
 		t.Fatalf("local validator calls = %d, want 1", validatorCalls)
-	}
-}
-
-func TestAuth_TraefikHeaders_MissingID(t *testing.T) {
-	handler := middleware.Auth(middleware.AuthConfig{
-		Validator:                 unusedTokenValidator(),
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
-	})(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.Fatal("should not reach handler without Authorization header")
-		}),
-	)
-
-	req := httptest.NewRequest("GET", "/api/v1/test", nil)
-	req.Header.Set("X-Auth-Type", "user")
-	// Missing X-Auth-Id
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rec.Code)
 	}
 }
 

@@ -3,10 +3,11 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/stretchr/testify/require"
 
@@ -47,9 +48,9 @@ func TestWarmAttachmentExtractionFilesTheResultTheFirstTurnReads(t *testing.T) {
 	require.Eventually(t, func() bool { return cache.savedCount() == 1 }, 10*time.Second, 5*time.Millisecond)
 
 	response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	var document RuntimeAttachmentObjectContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+	require.NoError(t, json.Unmarshal(response.Body, &document))
 	require.Equal(t, "warmed text", document.Content)
 	require.EqualValues(t, 1, extractions.Load(), "the turn must read the warmed sidecar, not extract again")
 }

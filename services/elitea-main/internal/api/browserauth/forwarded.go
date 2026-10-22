@@ -7,66 +7,44 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/net/http/httpguts"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
 const (
 	maxTrustedProxyCIDRs = 64
 	maxForwardedForBytes = 2048
 	maxForwardedHops     = 32
-	maxForwardedMethod   = 32
-	maxMapperValueBytes  = 512
-	maxAuthQueryBytes    = 2048
-	maxAuthQueryValues   = 16
 )
 
 var ErrInvalidForwardedRequest = errors.New("invalid or untrusted forwarded request")
 
 // TrustedProxyConfig defines the only network boundary from which forwarded
-// request metadata is accepted. PublicOrigin is also authoritative: forwarded
-// scheme and host values cannot select a redirect origin.
+// request metadata is accepted. PublicOrigin is validated so the document
+// keeps one meaning for every consumer of the auth configuration.
+//
+// It no longer carries an identity-projection secret: the X-Auth-* projection
+// this resolver used to sign and verify is gone (#1359), and what remains is
+// the client-address interpretation login attempt limiting depends on.
 type TrustedProxyConfig struct {
 	TrustedProxyCIDRs []string
 	PublicOrigin      string
 	Development       bool
-	// IdentityProjectionSecret keys the signature EdgeAuth puts on the
-	// X-Auth-* projection (IdentitySignatureHeader). It is mandatory: without
-	// it the only proof left would be the socket peer's address.
-	IdentityProjectionSecret []byte
-}
-
-// ForwardedRequest is the normalized source used by EdgeAuth policy. The
-// presence bits preserve the current distinction between an omitted mapper
-// target and an explicitly empty target.
-type ForwardedRequest struct {
-	Method        string
-	Proto         string
-	Host          string
-	URI           string
-	ClientIP      string
-	Target        string
-	TargetPresent bool
-	Scope         string
-	ScopePresent  bool
 }
 
 // TrustedProxyResolver validates one or more explicitly trusted proxy hops.
-// It never consumes X-Forwarded-* metadata from an arbitrary direct client.
-// Request.RemoteAddr must still contain the raw socket peer; generic RealIP
-// middleware must not run before this resolver.
+// It never consumes X-Forwarded-* metadata from an arbitrary direct client:
+// a peer outside the trusted set IS the client, whatever X-Forwarded-For it
+// sends. That is the compose case, where elitea-main is the browser edge
+// with no proxy in front (#1359). Request.RemoteAddr must still contain the
+// raw socket peer; generic RealIP middleware must not run before this
+// resolver.
 type TrustedProxyResolver struct {
-	trusted       []netip.Prefix
-	publicScheme  string
-	publicHost    string
-	projectionKey []byte
-	now           func() time.Time
+	trusted []netip.Prefix
 }
 
 func NewTrustedProxyResolver(config TrustedProxyConfig) (*TrustedProxyResolver, error) {
@@ -82,11 +60,6 @@ func NewTrustedProxyResolver(config TrustedProxyConfig) (*TrustedProxyResolver, 
 		return nil, ErrInvalidForwardedRequest
 	}
 
-	projectionKey, err := deriveIdentityProjectionKey(config.IdentityProjectionSecret)
-	if err != nil {
-		return nil, ErrInvalidForwardedRequest
-	}
-
 	trusted := make([]netip.Prefix, 0, len(config.TrustedProxyCIDRs))
 	for _, raw := range config.TrustedProxyCIDRs {
 		if raw == "" || raw != strings.TrimSpace(raw) {
@@ -99,80 +72,12 @@ func NewTrustedProxyResolver(config TrustedProxyConfig) (*TrustedProxyResolver, 
 		trusted = append(trusted, prefix.Masked())
 	}
 
-	return &TrustedProxyResolver{
-		trusted:       trusted,
-		publicScheme:  origin.Scheme,
-		publicHost:    origin.Host,
-		projectionKey: projectionKey,
-		now:           time.Now,
-	}, nil
+	return &TrustedProxyResolver{trusted: trusted}, nil
 }
 
-func (r *TrustedProxyResolver) Resolve(request *http.Request) (ForwardedRequest, error) {
-	if r == nil || request == nil {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-	clientIP, err := r.resolveClientIP(request)
-	if err != nil {
-		return ForwardedRequest{}, err
-	}
-
-	method, err := uniqueRequiredHeader(request.Header, "X-Forwarded-Method")
-	if err != nil || len(method) > maxForwardedMethod || !httpguts.ValidHeaderFieldName(method) {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-	proto, err := uniqueRequiredHeader(request.Header, "X-Forwarded-Proto")
-	if err != nil || !strings.EqualFold(proto, r.publicScheme) {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-	host, err := uniqueRequiredHeader(request.Header, "X-Forwarded-Host")
-	if err != nil || !httpguts.ValidHostHeader(host) || !strings.EqualFold(host, r.publicHost) {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-	uri, err := uniqueRequiredHeader(request.Header, "X-Forwarded-Uri")
-	if err != nil || browserflow.ValidateReturnTarget(uri) != nil {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-
-	if len(request.URL.RawQuery) > maxAuthQueryBytes {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-	query, err := url.ParseQuery(request.URL.RawQuery)
-	if err != nil {
-		return ForwardedRequest{}, ErrInvalidForwardedRequest
-	}
-	queryValues := 0
-	for _, values := range query {
-		queryValues += len(values)
-		if queryValues > maxAuthQueryValues {
-			return ForwardedRequest{}, ErrInvalidForwardedRequest
-		}
-	}
-	target, targetPresent, err := optionalSingleQueryValue(query, "target")
-	if err != nil {
-		return ForwardedRequest{}, err
-	}
-	scope, scopePresent, err := optionalSingleQueryValue(query, "scope")
-	if err != nil {
-		return ForwardedRequest{}, err
-	}
-
-	return ForwardedRequest{
-		Method:        method,
-		Proto:         r.publicScheme,
-		Host:          r.publicHost,
-		URI:           uri,
-		ClientIP:      clientIP.String(),
-		Target:        target,
-		TargetPresent: targetPresent,
-		Scope:         scope,
-		ScopePresent:  scopePresent,
-	}, nil
-}
-
-// ResolveClientKey shares the exact trusted-hop interpretation used by the
-// EdgeAuth source. Login attempt limiting therefore cannot be bypassed by a
-// second, weaker X-Forwarded-For parser.
+// ResolveClientKey is the one trusted-hop interpretation of X-Forwarded-For.
+// Login attempt limiting therefore cannot be bypassed by a second, weaker
+// parser.
 //
 // The key is the client's address for IPv4 and its /64 for IPv6. One IPv6
 // subscriber is routinely given a whole /64 (SLAAC, privacy addresses) and
@@ -193,33 +98,18 @@ func attemptClientKey(address netip.Addr) string {
 	return browserapp.AttemptClientKey(address)
 }
 
-// VerifyForwardedIdentityPeer proves that EdgeAuth produced the X-Auth-*
-// projection on this request: the projection carries an unexpired
-// IdentitySignatureHeader over exactly these identity values, this method and
-// this request URI. The socket peer must also be a configured proxy, but that
-// is a second fence and never the proof — an address inside
-// trusted_proxy_cidrs says nothing about who chose the headers.
-func (r *TrustedProxyResolver) VerifyForwardedIdentityPeer(request *http.Request) error {
-	if r == nil || request == nil {
-		return ErrInvalidForwardedRequest
-	}
-	peer, err := remoteAddress(request.RemoteAddr)
-	if err != nil || !r.isTrusted(peer) {
-		return ErrInvalidForwardedRequest
-	}
-	if !r.verifyIdentityProjection(request) {
-		return ErrInvalidForwardedRequest
-	}
-	return nil
-}
-
 func (r *TrustedProxyResolver) resolveClientIP(request *http.Request) (netip.Addr, error) {
 	if r == nil || request == nil {
 		return netip.Addr{}, ErrInvalidForwardedRequest
 	}
 	peer, err := remoteAddress(request.RemoteAddr)
-	if err != nil || !r.isTrusted(peer) {
+	if err != nil {
 		return netip.Addr{}, ErrInvalidForwardedRequest
+	}
+	if !r.isTrusted(peer) {
+		// A direct client: its X-Forwarded-For is its own claim, and
+		// believing it would let it pick a fresh attempt window per request.
+		return peer, nil
 	}
 	raw, err := uniqueRequiredHeader(request.Header, "X-Forwarded-For")
 	if err != nil || len(raw) > maxForwardedForBytes {
@@ -280,16 +170,4 @@ func uniqueRequiredHeader(headers http.Header, name string) (string, error) {
 		return "", ErrInvalidForwardedRequest
 	}
 	return values[0], nil
-}
-
-func optionalSingleQueryValue(values url.Values, name string) (string, bool, error) {
-	items, present := values[name]
-	if !present {
-		return "", false, nil
-	}
-	if len(items) != 1 || len(items[0]) > maxMapperValueBytes || !utf8.ValidString(items[0]) ||
-		strings.ContainsFunc(items[0], unicode.IsControl) {
-		return "", false, ErrInvalidForwardedRequest
-	}
-	return items[0], true, nil
 }

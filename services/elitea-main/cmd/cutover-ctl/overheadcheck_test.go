@@ -170,18 +170,18 @@ func TestOverheadCheck_ResultFields(t *testing.T) {
 }
 
 // TestOverheadCheck_K6Args pins the exact k6 invocation shape: summary export to
-// the given path, GATEWAY_URL passed via -e (not argv-embedded secrets), script
+// the given path, BASE_URL passed via -e (the API key is NOT in argv), script
 // last. A drift here silently changes what the BFF.9d validator measures.
 func TestOverheadCheck_K6Args(t *testing.T) {
 	got := k6Args(k6RunParams{
-		Script: "testdata/overhead_loadtest.js", GatewayURL: "http://gw:8083", SummaryPath: "/tmp/s.json",
+		Script: "testdata/overhead_loadtest.js", BaseURL: "http://main:8080", SummaryPath: "/tmp/s.json",
 	})
 	want := []string{
 		"run",
 		"--no-thresholds",
 		"--summary-trend-stats", "avg,min,med,max,p(90),p(95),p(99)",
 		"--summary-export", "/tmp/s.json",
-		"-e", "GATEWAY_URL=http://gw:8083",
+		"-e", "BASE_URL=http://main:8080",
 		"testdata/overhead_loadtest.js",
 	}
 	if len(got) != len(want) {
@@ -224,7 +224,7 @@ func TestOverheadCheck_RunK6Summary_Success(t *testing.T) {
 	stub := fakeK6(t, summary, 0)
 
 	var stdout, stderr bytes.Buffer
-	data, err := runK6Summary(stub, k6RunParams{Script: "testdata/overhead_loadtest.js", GatewayURL: "http://gw:8083"}, &stdout, &stderr)
+	data, err := runK6Summary(stub, k6RunParams{Script: "testdata/overhead_loadtest.js", BaseURL: "http://main:8080"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestOverheadCheck_RunK6Summary_Success(t *testing.T) {
 // an error (the gate must not read a partial summary from a failed run).
 func TestOverheadCheck_RunK6Summary_NonZeroExit(t *testing.T) {
 	stub := fakeK6(t, `{}`, 3)
-	_, err := runK6Summary(stub, k6RunParams{Script: "script.js", GatewayURL: "http://gw:8083"}, io.Discard, io.Discard)
+	_, err := runK6Summary(stub, k6RunParams{Script: "script.js", BaseURL: "http://main:8080"}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("expected error for non-zero k6 exit, got nil")
 	}
@@ -254,7 +254,7 @@ func TestOverheadCheck_RunK6Summary_NonZeroExit(t *testing.T) {
 // TestOverheadCheck_RunK6Summary_MissingBinary asserts a clear error when the
 // k6 binary does not exist.
 func TestOverheadCheck_RunK6Summary_MissingBinary(t *testing.T) {
-	_, err := runK6Summary(filepath.Join(t.TempDir(), "no-such-k6"), k6RunParams{Script: "script.js", GatewayURL: "http://gw:8083"}, io.Discard, io.Discard)
+	_, err := runK6Summary(filepath.Join(t.TempDir(), "no-such-k6"), k6RunParams{Script: "script.js", BaseURL: "http://main:8080"}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("expected error for missing k6 binary, got nil")
 	}
@@ -268,7 +268,7 @@ func TestOverheadCheck_RunK6Summary_NoExport(t *testing.T) {
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
-	_, err := runK6Summary(stub, k6RunParams{Script: "script.js", GatewayURL: "http://gw:8083"}, io.Discard, io.Discard)
+	_, err := runK6Summary(stub, k6RunParams{Script: "script.js", BaseURL: "http://main:8080"}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("expected error when summary export is missing, got nil")
 	}
@@ -287,7 +287,7 @@ func TestOverheadCheck_WriteBenchmarkFile_RoundTrip(t *testing.T) {
 		Pass:        true,
 		Source:      "k6-run",
 		Script:      "testdata/overhead_loadtest.js",
-		GatewayURL:  "http://localhost:8083",
+		BaseURL:     "http://localhost:8080",
 		GeneratedAt: "2026-07-25T00:00:00Z",
 	}
 	if err := writeBenchmarkFile(path, want); err != nil {
@@ -346,26 +346,22 @@ func TestOverheadCheck_ResolveBenchmarkOut(t *testing.T) {
 	}
 }
 
-// TestOverheadCheck_K6Args_IdentityAndModel pins the extended invocation: MODEL
-// and the four pre-signed identity envs are appended before the script path.
-func TestOverheadCheck_K6Args_IdentityAndModel(t *testing.T) {
+// TestOverheadCheck_K6Args_ProjectsAndModel pins the extended invocation: MODEL
+// and the PROJECTS selector list are appended before the script path.
+func TestOverheadCheck_K6Args_ProjectsAndModel(t *testing.T) {
 	got := k6Args(k6RunParams{
-		Script: "s.js", GatewayURL: "http://gw:8083", SummaryPath: "/tmp/s.json",
-		Model:           "openai/Qwen/Qwen3.6-35B-A3B-FP8",
-		IdentityProject: "9103", IdentityUser: "u", IdentityTenant: "t",
-		IdentitySignature: "sha256=abc",
+		Script: "s.js", BaseURL: "http://main:8080", SummaryPath: "/tmp/s.json",
+		Model:    "openai/Qwen/Qwen3.6-35B-A3B-FP8",
+		Projects: []string{"9103", "9104"},
 	})
 	want := []string{
 		"run",
 		"--no-thresholds",
 		"--summary-trend-stats", "avg,min,med,max,p(90),p(95),p(99)",
 		"--summary-export", "/tmp/s.json",
-		"-e", "GATEWAY_URL=http://gw:8083",
+		"-e", "BASE_URL=http://main:8080",
 		"-e", "MODEL=openai/Qwen/Qwen3.6-35B-A3B-FP8",
-		"-e", "IDENTITY_PROJECT=9103",
-		"-e", "IDENTITY_USER=u",
-		"-e", "IDENTITY_TENANT=t",
-		"-e", "IDENTITY_SIGNATURE=sha256=abc",
+		"-e", "PROJECTS=9103,9104",
 		"s.js",
 	}
 	if len(got) != len(want) {
@@ -514,5 +510,37 @@ func TestOverheadCheck_K6V2FlatSummaryShape(t *testing.T) {
 	}
 	if res.MetricUsed != "gateway_overhead_ms" || res.P99MS != 20.62 || !res.Pass {
 		t.Errorf("res = %+v, want gateway_overhead_ms p99=20.62 pass", res)
+	}
+}
+
+// TestOverheadCheck_ProjectsFromFile reads the project ids the load spreads
+// across, and refuses what would corrupt the comma-separated PROJECTS env.
+func TestOverheadCheck_ProjectsFromFile(t *testing.T) {
+	write := func(body string) string {
+		path := filepath.Join(t.TempDir(), "projects.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	got, err := projectsFromFile(write(`[{"project_id":"9101","user_id":"u"},{"project_id":" 9102 "}]`))
+	if err != nil {
+		t.Fatalf("projectsFromFile: %v", err)
+	}
+	if len(got) != 2 || got[0] != "9101" || got[1] != "9102" {
+		t.Errorf("projects = %v, want [9101 9102]", got)
+	}
+	for name, body := range map[string]string{
+		"empty":     `[]`,
+		"no id":     `[{"user_id":"u"}]`,
+		"comma":     `[{"project_id":"1,2"}]`,
+		"malformed": `{`,
+	} {
+		if _, err := projectsFromFile(write(body)); err == nil {
+			t.Errorf("%s: projectsFromFile accepted %s", name, body)
+		}
+	}
+	if _, err := projectsFromFile(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Error("projectsFromFile accepted a missing file")
 	}
 }

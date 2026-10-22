@@ -109,7 +109,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-admission-ctl ./cmd/elitea-admission-ctl && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/cutover-ctl ./cmd/cutover-ctl
+    go build -trimpath -ldflags="-s -w" -o /out/cutover-ctl ./cmd/cutover-ctl && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-grpc-health ./cmd/elitea-grpc-health
 
 # ── Vulnerability scan: NOT a stage here. Do not add one back. ────────────────
 # A `FROM aquasec/trivy:latest AS scanner` stage used to sit at this point. No
@@ -147,7 +149,7 @@ ENTRYPOINT ["/elitea-main"]
 
 # ── Stage 4: mixed Centry deployment ──────────────────────────────────────────
 # `/nonexistent` is deliberate and stays that way. In deploy/centry-hybrid the
-# traefik router sends only /healthz and a short list of API paths to
+# edge router sent only /healthz and a short list of API paths to
 # elitea-main; `/admin/app` falls through the `current-platform` PathPrefix(`/`)
 # router to pylon_main, which serves the legacy admin_ui plugin. This image is
 # not an admin server, so it carries no admin bundle.

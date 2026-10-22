@@ -1,0 +1,23 @@
+# The kind stack's NATS (deploy/helm/nats), layered on values-scale1.yaml.
+# elitea-main's runtime plane needs a JetStream command bus, and the DeepWiki
+# host's cancellation fan-out a NATS client (#1359). Only what a throwaway
+# cluster cannot provide changes here.
+nats:
+  config:
+    jetstream:
+      fileStore:
+        pvc:
+          # The upstream chart derives max_file_store from this size, and
+          # JetStream RESERVES each stream's MaxBytes against it at creation:
+          # the bootstrap's GATEWAY_BUDGET_DELTAS alone reserves 1 GiB
+          # (nats-bootstrap values deltas.maxBytes), so a 1Gi store refuses
+          # it ("insufficient storage resources available", 10047) once any
+          # other bounded stream exists. kind's local-path provisioner does
+          # not enforce the size, so the headroom costs no disk.
+          size: 4Gi
+  promExporter:
+    # No Prometheus Operator in kind, so no PodMonitor CRD. The exporter stays
+    # on: the chart's guards tie the command-bus alerts to it, and the
+    # PrometheusRule renders only where the CRD exists anyway.
+    podMonitor:
+      enabled: false

@@ -267,7 +267,7 @@ describe('TurnController', () => {
   });
 
   // DEF-R3 (mobile E2E run 2): with the workspace stopped behind a
-  // reachable proxy (traefik answers 502), a send retried in place ~6 times in
+  // reachable proxy (the edge answers 502), a send retried in place ~6 times in
   // ~17 s, then failed for good; nothing was sent after the workspace came
   // back. A gateway answer now hands the send to the outbox, like no answer.
   it.each([502, 503, 504])('hands a send a proxy answered %i for to the outbox after one attempt', async (status) => {

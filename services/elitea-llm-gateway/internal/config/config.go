@@ -15,6 +15,12 @@ import (
 )
 
 const (
+	// DefaultGRPCAddr is where GatewayService listens (#1359).
+	DefaultGRPCAddr = ":8443"
+	// DefaultGRPCClients admits elitea-main's client certificate, whose one
+	// DNS SAN is "elitea-main".
+	DefaultGRPCClients = "dns:elitea-main"
+
 	// DefaultShutdownTimeout is the ceiling on srv.Shutdown()'s context.
 	// It MUST be ≥150s and rise together with the Deployment's
 	// terminationGracePeriodSeconds so provider streams (up to ~120s) drain
@@ -153,8 +159,17 @@ const (
 
 // Config holds the resolved gateway configuration.
 type Config struct {
-	// HTTPAddr is the listen address for the /llm HTTP server.
+	// HTTPAddr is the listen address of the HTTP server. It serves health
+	// and metrics only: /llm is served over gRPC (GRPCAddr, #1359).
 	HTTPAddr string
+	// GRPCAddr is the listen address of the GatewayService gRPC listener
+	// (GATEWAY_GRPC_ADDR). It always requires mutual TLS (TLSCertFile,
+	// TLSKeyFile, TLSCAFile).
+	GRPCAddr string
+	// GRPCClients lists the workload identities admitted to GatewayService
+	// (GATEWAY_GRPC_CLIENTS, comma-separated "dns:<name>" or spiffe:// IDs of
+	// the client certificate).
+	GRPCClients string
 	// DatabaseURL is the Postgres DSN (Fernet vault + governance rows live here).
 	DatabaseURL string
 	// ShutdownTimeout bounds graceful shutdown; ≥150s (§9.5).
@@ -248,10 +263,11 @@ type Config struct {
 	// default 1).
 	ExpectedReplicas int
 
-	// TLS / mTLS (FIX #10). When TLSCertFile and TLSKeyFile are both set the
-	// server switches to ListenAndServeTLS. When TLSCAFile is also set, client
-	// certificates are required and verified against the CA bundle (mTLS).
-	// All three are empty by default (plain HTTP, for local/dev use).
+	// The mTLS material of the GatewayService gRPC listener (#1359): the
+	// server certificate and key, and the CA bundle client certificates must
+	// chain to. All three are required; the gateway refuses to start without
+	// them, because that listener is the only way to /llm. The HTTP listener
+	// (health and metrics) does not use them.
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
@@ -386,6 +402,8 @@ type Config struct {
 func FromEnv() Config {
 	return Config{
 		HTTPAddr:            envOr("GATEWAY_HTTP_ADDR", ":8083"),
+		GRPCAddr:            envOr("GATEWAY_GRPC_ADDR", DefaultGRPCAddr),
+		GRPCClients:         envOr("GATEWAY_GRPC_CLIENTS", DefaultGRPCClients),
 		DatabaseURL:         envOr("DATABASE_URL", "postgres://localhost:5432/elitea?sslmode=disable"),
 		ShutdownTimeout:     durationOr("GATEWAY_SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 		InitialPoolSize:     intOr("GATEWAY_INITIAL_POOL_SIZE", DefaultInitialPoolSize),

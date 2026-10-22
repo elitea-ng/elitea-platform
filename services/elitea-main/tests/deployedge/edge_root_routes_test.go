@@ -22,23 +22,23 @@
 // link of the form https://<host>/?utm_source=x therefore skipped the redirect
 // and reached the SPA container at path "/", which its nginx does not serve.
 //
-// RUN IT WITH -count=1, for the reason edge_middlewares_test.go gives: these
-// files live in deploy/, outside this module, so the test cache does not track
-// them.
+// THE COMPOSE EDGE IS GO NOW (#1359 P2). Both defects above lived in Traefik's
+// dynamic files, which are deleted. elitea-main is the compose browser edge
+// (internal/api/webedge), so these gates send the paths through the real
+// router with the web relay on and observe which process answers. The
+// Gateway API edge, which still has a rule list, is read by
+// edge_gateway_api_test.go with the shared classification at the end of this
+// file.
 package deployedge_test
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"gopkg.in/yaml.v3"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
@@ -46,13 +46,10 @@ import (
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
-// This gate reads `browserEdgeFiles` from edge_identity_strip_test.go: the two
-// edge files that serve a browser directly.
-//
-// The cluster runs a THIRD browser edge, a Gateway API HTTPRoute, and for a
+// The cluster runs a SECOND browser edge, a Gateway API HTTPRoute, and for a
 // whole release this file could not see it (#568). edge_gateway_api_test.go
-// now reads it and holds it to the classification below, through the two
-// helpers at the end of this file.
+// reads it and holds it to the classification below, through the two helpers
+// at the end of this file.
 
 // rootMountedGoPaths are sample request paths that the Go router serves from
 // the root, outside the /api/ prefix. Each names the router.go site that
@@ -87,124 +84,81 @@ var notForwardedGoPaths = map[string]string{
 	"/startupz": "the startup probe, same reason",
 }
 
-// edgeWithRules is the subset of the dynamic configuration this gate reads.
-type edgeWithRules struct {
-	HTTP struct {
-		Routers map[string]struct {
-			Rule    string `yaml:"rule"`
-			Service string `yaml:"service"`
-		} `yaml:"routers"`
-		Middlewares map[string]struct {
-			RedirectRegex struct {
-				Regex       string `yaml:"regex"`
-				Replacement string `yaml:"replacement"`
-			} `yaml:"redirectRegex"`
-		} `yaml:"middlewares"`
-	} `yaml:"http"`
-}
-
-func parseEdgeWithRules(t *testing.T, path string) edgeWithRules {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+// composeEdgeForwards answers, by sending the request, whether the compose
+// edge hands requestPath to elitea-main. The peer is a browser on a published
+// port, not a loopback probe.
+func composeEdgeForwards(edge *composeEdge) edgeForwards {
+	return func(t *testing.T, requestPath string) bool {
+		t.Helper()
+		return edge.do(t, http.MethodGet, requestPath, nil).reachedMain
 	}
-	var parsed edgeWithRules
-	if err := yaml.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	return parsed
-}
-
-// matcherPattern extracts the path arguments of a Traefik rule. The rules this
-// gate reads are flat disjunctions of Path, PathPrefix and PathRegexp, so a
-// full expression parser is not needed. This gate reports any other matcher,
-// and does not ignore it. An unread matcher makes this gate answer "no match"
-// for a path that the edge does forward.
-var matcherPattern = regexp.MustCompile("(Path|PathPrefix|PathRegexp)\\(`([^`]*)`\\)")
-
-// ruleMatches answers whether the rule forwards requestPath.
-func ruleMatches(t *testing.T, rule, requestPath string) bool {
-	t.Helper()
-	stripped := matcherPattern.ReplaceAllString(rule, "")
-	stripped = strings.NewReplacer("||", "", "(", "", ")", "", " ", "").Replace(stripped)
-	if stripped != "" {
-		t.Fatalf("the rule uses a matcher this gate cannot read: %q leaves %q", rule, stripped)
-	}
-	for _, matcher := range matcherPattern.FindAllStringSubmatch(rule, -1) {
-		kind, value := matcher[1], matcher[2]
-		if kind == "Path" && requestPath == value {
-			return true
-		}
-		if kind == "PathPrefix" && strings.HasPrefix(requestPath, value) {
-			return true
-		}
-		if kind == "PathRegexp" && regexp.MustCompile(value).MatchString(requestPath) {
-			return true
-		}
-	}
-	return false
 }
 
 func TestBrowserEdgesForwardEveryRootMountedGoRoute(t *testing.T) {
-	root := repoRoot(t)
-	for _, relative := range browserEdgeFiles {
-		t.Run(relative, func(t *testing.T) {
-			edge := parseEdgeWithRules(t, filepath.Join(root, relative))
-			api, ok := edge.HTTP.Routers["api"]
-			if !ok {
-				t.Fatalf("%s has no `api` router", relative)
-			}
-			for requestPath, why := range rootMountedGoPaths {
-				if !ruleMatches(t, api.Rule, requestPath) {
-					t.Errorf("%s: the `api` rule does not forward %s (%s); traefik answers its own 404 for it", relative, requestPath, why)
-				}
-			}
-			for requestPath, why := range notForwardedGoPaths {
-				if ruleMatches(t, api.Rule, requestPath) {
-					t.Errorf("%s: the `api` rule forwards %s (%s); this entrypoint serves browsers and must not publish it", relative, requestPath, why)
-				}
-			}
-		})
+	edge := startComposeEdge(t, browserFacingRouterConfig(), browserRemoteAddr)
+	for requestPath, why := range rootMountedGoPaths {
+		answer := edge.do(t, http.MethodGet, requestPath, nil)
+		if !answer.reachedMain {
+			t.Errorf("the compose edge does not hand %s to elitea-main (%s); web=%v status=%d", requestPath, why, answer.reachedWeb, answer.status)
+		}
+	}
+	for requestPath, why := range notForwardedGoPaths {
+		answer := edge.do(t, http.MethodGet, requestPath, nil)
+		if answer.reachedMain || answer.status != http.StatusNotFound {
+			t.Errorf("the compose edge publishes %s to a browser (%s): status %d; it must answer 404", requestPath, why, answer.status)
+		}
+	}
+}
+
+// TestHealthIsPublicAtTheComposeEdge pins the one public probe (#569): a
+// browser-port /healthz answers 200 from elitea-main with no session.
+func TestHealthIsPublicAtTheComposeEdge(t *testing.T) {
+	edge := startComposeEdge(t, browserFacingRouterConfig(), browserRemoteAddr)
+	answer := edge.do(t, http.MethodGet, "/healthz", nil)
+	if !answer.reachedMain || answer.status != http.StatusOK {
+		t.Fatalf("GET /healthz through the compose edge: reachedMain=%v status=%d body=%q", answer.reachedMain, answer.status, answer.body)
+	}
+}
+
+// TestComposeEdgeLetsALoopbackProbeRead is the other half of notForwardedGoPaths:
+// the paths are withheld from a browser, not deleted. A probe inside the
+// container reaches them over loopback.
+func TestComposeEdgeLetsALoopbackProbeRead(t *testing.T) {
+	edge := startComposeEdge(t, browserFacingRouterConfig(), "")
+	for requestPath := range notForwardedGoPaths {
+		if answer := edge.do(t, http.MethodGet, requestPath, nil); !answer.reachedMain {
+			t.Errorf("a loopback GET %s did not reach elitea-main (status %d); the container's own probe would fail", requestPath, answer.status)
+		}
 	}
 }
 
 func TestRootRedirectKeepsTheQueryString(t *testing.T) {
-	// Traefik applies redirectRegex with Go's own regexp.ReplaceAllString, so
-	// the pair below is evaluated exactly as the edge evaluates it.
 	cases := []struct {
+		method     string
 		requestURI string
+		status     int
 		want       string
 	}{
-		{"http://elitea.example/", "http://elitea.example/app/"},
-		{"https://elitea.example/", "https://elitea.example/app/"},
-		{"http://elitea.example/?utm_source=newsletter", "http://elitea.example/app/?utm_source=newsletter"},
-		{"http://elitea.example/?a=1&b=2", "http://elitea.example/app/?a=1&b=2"},
+		{http.MethodGet, "/", http.StatusFound, "/app/"},
+		{http.MethodHead, "/", http.StatusFound, "/app/"},
+		{http.MethodGet, "/?utm_source=newsletter", http.StatusFound, "/app/?utm_source=newsletter"},
+		{http.MethodGet, "/?a=1&b=2", http.StatusFound, "/app/?a=1&b=2"},
+		// Not permanent, and a non-GET keeps its method.
+		{http.MethodPost, "/", http.StatusTemporaryRedirect, "/app/"},
 	}
-
-	root := repoRoot(t)
-	for _, relative := range browserEdgeFiles {
-		t.Run(relative, func(t *testing.T) {
-			edge := parseEdgeWithRules(t, filepath.Join(root, relative))
-			middleware, ok := edge.HTTP.Middlewares["redirect-to-app"]
-			if !ok {
-				t.Fatalf("%s has no `redirect-to-app` middleware", relative)
-			}
-			pattern, err := regexp.Compile(middleware.RedirectRegex.Regex)
-			if err != nil {
-				t.Fatalf("%s: the redirect regex does not compile: %v", relative, err)
-			}
-			for _, testCase := range cases {
-				if !pattern.MatchString(testCase.requestURI) {
-					t.Errorf("%s: %s does not match the redirect regex, so traefik passes it to the SPA container at path /, which its nginx does not serve", relative, testCase.requestURI)
-					continue
-				}
-				got := pattern.ReplaceAllString(testCase.requestURI, middleware.RedirectRegex.Replacement)
-				if got != testCase.want {
-					t.Errorf("%s: %s redirects to %s, want %s", relative, testCase.requestURI, got, testCase.want)
-				}
-			}
-		})
+	edge := startComposeEdge(t, browserFacingRouterConfig(), browserRemoteAddr)
+	for _, testCase := range cases {
+		answer := edge.do(t, testCase.method, testCase.requestURI, nil)
+		if answer.reachedWeb {
+			t.Errorf("%s %s reached the web container at path /, which its nginx does not serve", testCase.method, testCase.requestURI)
+			continue
+		}
+		if answer.status != testCase.status {
+			t.Errorf("%s %s answered %d, want %d (a 301/308 would be cached by the browser for good)", testCase.method, testCase.requestURI, answer.status, testCase.status)
+		}
+		if got := answer.header.Get("Location"); got != testCase.want {
+			t.Errorf("%s %s redirects to %q, want %q", testCase.method, testCase.requestURI, got, testCase.want)
+		}
 	}
 }
 
@@ -322,47 +276,18 @@ func sampleRequestPath(pattern string) string {
 	return strings.Join(segments, "/")
 }
 
-// mainServiceRules returns the rules of every router that sends traffic to
-// elitea-main. The `api` router is not the only one: the `mcp` router carves
-// /app/<id>/mcp out of the SPA prefix.
-func mainServiceRules(edge edgeWithRules) []string {
-	rules := make([]string, 0, len(edge.HTTP.Routers))
-	for _, router := range edge.HTTP.Routers {
-		if router.Service == "elitea-main" {
-			rules = append(rules, router.Rule)
-		}
-	}
-	return rules
-}
-
-func anyRuleMatches(t *testing.T, rules []string, requestPath string) bool {
-	t.Helper()
-	for _, rule := range rules {
-		if ruleMatches(t, rule, requestPath) {
-			return true
-		}
-	}
-	return false
-}
-
 // TestBrowserEdgesClassifyEveryRootMountedGoRoute derives the check from the
-// router, so a new root-mounted family cannot pass unnoticed.
+// router, so a new root-mounted family cannot pass unnoticed. On the compose
+// edge it also catches the opposite fault: a Go route the relay sends to the
+// web container (a new route under /app or /docs), which no rule list would
+// have shown.
 func TestBrowserEdgesClassifyEveryRootMountedGoRoute(t *testing.T) {
 	patterns := walkRootMountedGoRoutes(t)
-	root := repoRoot(t)
-	for _, relative := range browserEdgeFiles {
-		t.Run(relative, func(t *testing.T) {
-			rules := mainServiceRules(parseEdgeWithRules(t, filepath.Join(root, relative)))
-			if len(rules) == 0 {
-				t.Fatalf("%s has no router that serves elitea-main", relative)
-			}
-			forwards := func(t *testing.T, requestPath string) bool {
-				return anyRuleMatches(t, rules, requestPath)
-			}
-			assertPatternsClassified(t, relative, patterns, forwards, notAtTheBrowserEdge)
-			assertNoStaleExclusions(t, relative, patterns, forwards, notAtTheBrowserEdge)
-		})
-	}
+	edge := startComposeEdge(t, browserFacingRouterConfig(), browserRemoteAddr)
+	const relative = "compose edge (internal/api/webedge)"
+	forwards := composeEdgeForwards(edge)
+	assertPatternsClassified(t, relative, patterns, forwards, notAtTheBrowserEdge)
+	assertNoStaleExclusions(t, relative, patterns, forwards, notAtTheBrowserEdge)
 }
 
 // assertPatternsClassified fails on a root-mounted route that this edge neither

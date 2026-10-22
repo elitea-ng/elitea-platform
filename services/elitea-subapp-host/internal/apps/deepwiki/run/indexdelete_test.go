@@ -26,6 +26,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 // engineIndex stands in for the engine's delete_wiki_index.
@@ -263,7 +264,7 @@ func TestDeleteWikiReportsTheEnginesActualCounts(t *testing.T) {
 	}
 }
 
-func platformServer(t *testing.T, sidecar *fakeSidecar) *spi.Server {
+func platformServer(t *testing.T, sidecar *fakeSidecar) http.Handler {
 	t.Helper()
 	settings, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", func(key string) (string, bool) {
 		switch key {
@@ -281,12 +282,14 @@ func platformServer(t *testing.T, sidecar *fakeSidecar) *spi.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(t.Context())
+	if err := server.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
-	return server
+	return spitest.Handler(t, server)
 }
 
-func invokeSigned(t *testing.T, server *spi.Server, identity spi.Identity, tool string) map[string]any {
+func invokeSigned(t *testing.T, server http.Handler, identity spi.Identity, tool string) map[string]any {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "/tools/wiki_query/"+tool+"/invoke",
 		bytes.NewReader([]byte(`{"parameters": {}}`)))
@@ -299,7 +302,7 @@ func invokeSigned(t *testing.T, server *spi.Server, identity spi.Identity, tool 
 	if id == "" {
 		t.Fatalf("not accepted: %d %s", recorder.Code, recorder.Body.String())
 	}
-	return pollUntilTerminal(t, server, "/tools/wiki_query/"+tool+"/invocations/"+id)
+	return pollUntilTerminal(t, server, identity, "/tools/wiki_query/"+tool+"/invocations/"+id)
 }
 
 // ---------------------------------------------------------------------------

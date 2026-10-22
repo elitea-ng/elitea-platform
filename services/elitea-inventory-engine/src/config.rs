@@ -78,8 +78,21 @@ pub struct Settings {
     /// `DATABASE_URL`: the graph store (required by `native`).
     pub database_url: Option<elitea_engine_core::secret::Secret>,
     /// `CALLBACK_CA_FILE`: a PEM bundle the model transport trusts besides
-    /// the platform roots (the gateway reached over TLS through the edge).
+    /// the platform roots (the gateway reached over TLS: elitea-main's
+    /// internal platform listener signs with the runtime CA).
     pub callback_ca_file: Option<PathBuf>,
+    /// `CALLBACK_CERT_FILE` and `CALLBACK_KEY_FILE`, both or neither: the
+    /// client certificate the model transport presents. elitea-main's
+    /// platform listener requires a runtime-CA one.
+    pub callback_identity: Option<elitea_model_client::ClientIdentityFiles>,
+    /// `MODEL_SERVICE_URL`: the origin of elitea-main's platform listener
+    /// (`https://elitea-main:9446`). Every model call
+    /// (`elitea.llm.v1.ModelService`) and every source-tool call of
+    /// `investigate` (`elitea.runtime.v1.InternalToolService`, #1359 U5)
+    /// goes there over the callback CA and client certificate;
+    /// `llm_settings.api_base` only names the model route. The native runner
+    /// requires it; `http://` is accepted for a loopback host only (tests).
+    pub model_service: Option<String>,
     /// `MODEL_CONCURRENCY`: the ingestion model calls (extraction,
     /// relations, community labels) in flight at once across this engine
     /// process (default [`DEFAULT_MODEL_CONCURRENCY`]). Set it to the
@@ -89,6 +102,13 @@ pub struct Settings {
 
 /// `MODEL_CONCURRENCY` when unset: a small model server's slot count.
 pub const DEFAULT_MODEL_CONCURRENCY: usize = 8;
+
+/// The callback client certificate's setting, for its errors.
+pub const CALLBACK_CERT_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_CERT_FILE";
+/// Its private key's setting.
+pub const CALLBACK_KEY_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_KEY_FILE";
+/// The model service origin's setting.
+pub const MODEL_SERVICE_SETTING: &str = "ELITEA_INVENTORY_MODEL_SERVICE_URL";
 
 impl Settings {
     /// Read the process environment.
@@ -171,11 +191,21 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine keeps every graph in PostgreSQL and has no other storage"
             )));
         }
+        let callback_identity =
+            callback_identity(raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE"))?;
+        let model_service = model_service(raw("MODEL_SERVICE_URL"))?;
+        if runner == RunnerKind::Native && model_service.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {MODEL_SERVICE_SETTING}: the native engine reaches the model calls and the source tools only on elitea-main's platform listener (https://elitea-main:9446); llm_settings.api_base never names a host"
+            )));
+        }
         Ok(Self {
             source_types,
             ingest,
             database_url,
             callback_ca_file: raw("CALLBACK_CA_FILE").map(PathBuf::from),
+            callback_identity,
+            model_service,
             model_concurrency: usize::try_from(positive_count(
                 &raw,
                 "MODEL_CONCURRENCY",
@@ -190,6 +220,57 @@ impl Settings {
             fixture_step,
             fixtures: raw("FIXTURES").map(PathBuf::from),
         })
+    }
+}
+
+/// `CALLBACK_CERT_FILE` and `CALLBACK_KEY_FILE`: both or neither.
+fn callback_identity(
+    cert: Option<String>,
+    key: Option<String>,
+) -> Result<Option<elitea_model_client::ClientIdentityFiles>, ConfigError> {
+    match (cert, key) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => Ok(Some(elitea_model_client::ClientIdentityFiles {
+            cert_file: PathBuf::from(cert),
+            cert_file_setting: CALLBACK_CERT_SETTING,
+            key_file: PathBuf::from(key),
+            key_file_setting: CALLBACK_KEY_SETTING,
+        })),
+        _ => Err(ConfigError(format!(
+            "{CALLBACK_CERT_SETTING} and {CALLBACK_KEY_SETTING} must be set together"
+        ))),
+    }
+}
+
+/// `http://` to a loopback host: the tests' in-process platform listener.
+fn is_loopback_http(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.contains(']') => host,
+        _ => authority,
+    };
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    !authority.contains('@')
+        && (bare.eq_ignore_ascii_case("localhost")
+            || bare
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback()))
+}
+
+/// `MODEL_SERVICE_URL`: an https origin (the platform listener), a loopback
+/// `http://` one (tests), or unset.
+fn model_service(value: Option<String>) -> Result<Option<String>, ConfigError> {
+    match value {
+        None => Ok(None),
+        Some(origin) if origin.starts_with("https://") || is_loopback_http(&origin) => {
+            Ok(Some(origin))
+        }
+        Some(origin) => Err(ConfigError(format!(
+            "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
+        ))),
     }
 }
 
@@ -270,6 +351,7 @@ mod tests {
         assert_eq!(defaults.fixtures, None);
         assert_eq!(defaults.source_types, ["github", "ado_repos"]);
         assert_eq!(defaults.model_concurrency, DEFAULT_MODEL_CONCURRENCY);
+        assert_eq!(defaults.callback_identity, None);
         assert_eq!(
             defaults.ingest.scratch_path,
             PathBuf::from("/var/scratch/inventory")
@@ -278,6 +360,77 @@ mod tests {
             defaults.ingest.git_allowlist.is_empty(),
             "fail-closed: no host until one is listed"
         );
+    }
+
+    #[test]
+    fn the_callback_client_certificate_is_both_halves_or_neither() {
+        let parsed = settings(&[
+            ("ELITEA_INVENTORY_CALLBACK_CERT_FILE", "/run/callback.crt"),
+            ("ELITEA_INVENTORY_CALLBACK_KEY_FILE", "/run/callback.key"),
+        ])
+        .map(|s| s.callback_identity);
+        assert_eq!(
+            parsed,
+            Ok(Some(elitea_model_client::ClientIdentityFiles {
+                cert_file: PathBuf::from("/run/callback.crt"),
+                cert_file_setting: CALLBACK_CERT_SETTING,
+                key_file: PathBuf::from("/run/callback.key"),
+                key_file_setting: CALLBACK_KEY_SETTING,
+            }))
+        );
+        for half in [CALLBACK_CERT_SETTING, CALLBACK_KEY_SETTING] {
+            let refused = settings(&[(half, "/run/half.pem")]);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("must be set together")),
+                "{half}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_model_service_is_an_https_origin() {
+        let parsed = settings(&[(MODEL_SERVICE_SETTING, "https://elitea-main:9446")])
+            .map(|s| s.model_service);
+        assert_eq!(parsed, Ok(Some("https://elitea-main:9446".to_owned())));
+        assert_eq!(settings(&[]).map(|s| s.model_service), Ok(None));
+        assert!(
+            settings(&[(MODEL_SERVICE_SETTING, "http://elitea-main:8080")])
+                .is_err_and(|e| e.to_string().contains(MODEL_SERVICE_SETTING))
+        );
+        for loopback in [
+            "http://127.0.0.1:8080",
+            "http://[::1]:1/v1",
+            "http://localhost:9",
+        ] {
+            assert!(
+                settings(&[(MODEL_SERVICE_SETTING, loopback)]).is_ok(),
+                "{loopback}"
+            );
+        }
+        assert!(settings(&[(MODEL_SERVICE_SETTING, "http://127.0.0.1@evil:1")]).is_err());
+        // The native runner reaches the platform only there: required.
+        let native = settings(&[
+            ("ELITEA_INVENTORY_RUNNER", "native"),
+            (
+                "ELITEA_INVENTORY_DATABASE_URL",
+                "postgresql://u:p@db/inventory",
+            ),
+        ]);
+        assert!(
+            native.is_err_and(|e| e.to_string().contains(MODEL_SERVICE_SETTING)),
+            "started without the platform listener"
+        );
+        let native = settings(&[
+            ("ELITEA_INVENTORY_RUNNER", "native"),
+            (
+                "ELITEA_INVENTORY_DATABASE_URL",
+                "postgresql://u:p@db/inventory",
+            ),
+            (MODEL_SERVICE_SETTING, "https://elitea-main:9446"),
+        ]);
+        assert!(native.is_ok(), "{native:?}");
     }
 
     #[test]

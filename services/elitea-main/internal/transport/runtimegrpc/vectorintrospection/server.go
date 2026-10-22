@@ -34,7 +34,7 @@ import (
 	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -112,7 +112,7 @@ type Server struct {
 	validator   TokenValidator
 	facts       CallbackFacts
 	claimTokens ClaimTokenFacts
-	clients     map[string]struct{}
+	clients     grpcauth.Allowlist
 	logger      *slog.Logger
 }
 
@@ -123,16 +123,9 @@ func NewServer(validator TokenValidator, facts CallbackFacts, claimTokens ClaimT
 	if validator == nil || facts == nil || claimTokens == nil {
 		return nil, errors.New("vector token introspection requires a token validator, callback facts and claim token facts")
 	}
-	allowed := make(map[string]struct{}, len(clients))
-	for _, client := range clients {
-		client = strings.TrimSpace(client)
-		if !strings.HasPrefix(client, "dns:") && !strings.HasPrefix(client, "spiffe://") {
-			return nil, fmt.Errorf("vector introspection client %q is not a dns: or spiffe:// identity", client)
-		}
-		allowed[client] = struct{}{}
-	}
-	if len(allowed) == 0 {
-		return nil, errors.New("vector token introspection requires at least one client identity")
+	allowed, err := grpcauth.NewAllowlist(clients)
+	if err != nil {
+		return nil, fmt.Errorf("vector token introspection clients: %w", err)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -142,12 +135,8 @@ func NewServer(validator TokenValidator, facts CallbackFacts, claimTokens ClaimT
 
 // IntrospectToken answers whether request.Token is usable for vector access.
 func (s *Server) IntrospectToken(ctx context.Context, request *vectorv1.IntrospectTokenRequest) (*vectorv1.IntrospectTokenResponse, error) {
-	identity, err := workloadauth.VerifiedPeerIdentity(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "A verified client certificate is required.")
-	}
-	if _, ok := s.clients[identity]; !ok {
-		return nil, status.Error(codes.PermissionDenied, "This client may not introspect tokens.")
+	if _, err := s.clients.Authorize(ctx); err != nil {
+		return nil, err
 	}
 	token := request.GetToken()
 	if token == "" || len(token) > maxTokenBytes {

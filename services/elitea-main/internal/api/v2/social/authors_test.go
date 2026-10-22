@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -39,12 +40,6 @@ func (function currentAuthorsPrincipalValidatorFunc) ValidatePrincipal(
 	user auth.User,
 ) (auth.User, error) {
 	return function(ctx, user)
-}
-
-type currentAuthorsPeerVerifierFunc func(*http.Request) error
-
-func (function currentAuthorsPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return function(request)
 }
 
 type currentAuthorsPermissionResolverFunc func(context.Context, auth.User, string, string) (auth.PermissionResolution, error)
@@ -228,7 +223,7 @@ func TestNewCurrentAuthorsRouteRejectsIncompleteSecurityAndUnsupportedOperations
 		permissions auth.PermissionResolver
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
-		"missing validator":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: authConfig.ForwardedIdentityVerifier}, permissions: permissions},
+		"missing validator":   {reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing verifier":    {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: authConfig.PrincipalValidator}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
@@ -296,14 +291,8 @@ func currentAuthorsAuthConfig(
 ) apimw.AuthConfig {
 	return apimw.AuthConfig{
 		PrincipalValidator: principal,
-		ForwardedIdentityVerifier: currentAuthorsPeerVerifierFunc(
-			func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			},
-		),
+		FormSessions:       authtest.FormSessions{},
+		Validator:          authtest.Tokens{},
 	}
 }
 
@@ -327,8 +316,6 @@ func authorizedCurrentAuthorsPermissions() auth.PermissionResolver {
 func currentAuthorsRequest(target string) *http.Request {
 	request := httptest.NewRequest(http.MethodGet, target, nil)
 	request.RemoteAddr = "10.0.0.8:43120"
-	request.Header.Set("X-Auth-Type", "token")
-	request.Header.Set("X-Auth-ID", "91")
-	request.Header.Set("X-Auth-User-ID", "41")
+	authtest.BearerToken(request, "91", "41")
 	return request
 }

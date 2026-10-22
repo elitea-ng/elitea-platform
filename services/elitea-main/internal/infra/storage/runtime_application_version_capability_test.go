@@ -5,14 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"google.golang.org/grpc/codes"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/jackc/pgx/v5"
@@ -140,13 +140,12 @@ func TestNestedApplicationVersionRouteRefusesRejectedCapabilityBeforeReadingAnyt
 		}),
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, certificateWithURI(mustNestedCapabilityURI(t)), bytes.Repeat([]byte{4}, sha256.Size), "7", "41",
+	response := serve(server, nestedApplicationVersionRequest(
+		t, certificateWithURI(mustNestedCapabilityURI(t)), bytes.Repeat([]byte{4}, sha256.Size), 7, 41,
 	))
-	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Equal(t, codes.PermissionDenied, response.Code)
 	// The refusal must not leak which agent the claim tried to name.
-	require.NotContains(t, response.Body.String(), "41")
+	require.NotContains(t, string(response.Body), "41")
 }
 
 func mustNestedCapabilityURI(t *testing.T) *url.URL {

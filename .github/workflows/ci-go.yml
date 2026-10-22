@@ -39,6 +39,7 @@ on:
       # same false green in another costume (#409).
       - "scripts/go/**"
       - "scripts/contract/check_compiled_snapshots_postgres.sh"
+      - "scripts/contract/generate_proto.sh"
       - "scripts/coverage/**"
       - "Taskfile.yml"
   push:
@@ -77,6 +78,7 @@ on:
       # same false green in another costume (#409).
       - "scripts/go/**"
       - "scripts/contract/check_compiled_snapshots_postgres.sh"
+      - "scripts/contract/generate_proto.sh"
       - "scripts/coverage/**"
       - "Taskfile.yml"
 
@@ -89,6 +91,88 @@ permissions:
   contents: read
 
 jobs:
+  proto:
+    name: Protobuf contracts (lint, breaking, generated drift)
+    runs-on: ubuntu-latest
+    # #1359 D3: libs/proto is the one protobuf tree (the legacy proto/ +
+    # gen/ were deleted), and every internal hop is gRPC, so a contract edit
+    # is a wire change. Three gates, run only when the contracts, their
+    # generator or this workflow changed:
+    #   - buf lint (libs/proto/buf.yaml);
+    #   - buf breaking against the base commit (FILE rules) — a rolling
+    #     deploy runs old and new peers side by side;
+    #   - the checked-in Go and Python stubs equal a fresh
+    #     scripts/contract/generate_proto.sh run with the pinned toolchain
+    #     (libs/proto/toolchain.lock; the script refuses any other version).
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Did the contracts change?
+        id: changes
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # No usable base (a new branch, a force push) runs every gate.
+          if [ -z "$BASE" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "No usable base commit; running the contract gates."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            BASE="$(git rev-parse HEAD~1)"
+          elif git diff --quiet "$BASE" HEAD -- libs/proto scripts/contract/generate_proto.sh .github/workflows/ci-go.yml; then
+            echo "Contracts unchanged since ${BASE}; the gates have nothing to check."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          cache: false
+          go-version-file: go.work
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          python-version: "3.12"
+      - name: Install the pinned protobuf toolchain
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          lock=libs/proto/toolchain.lock
+          tools="$RUNNER_TEMP/proto-tools"
+          GOBIN="$tools" GOWORK=off go install "github.com/bufbuild/buf/cmd/buf@v$(jq -r '.buf' "$lock")"
+          GOBIN="$tools" GOWORK=off go install "google.golang.org/protobuf/cmd/protoc-gen-go@v$(jq -r '."protoc-gen-go"' "$lock")"
+          GOBIN="$tools" GOWORK=off go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v$(jq -r '."protoc-gen-go-grpc"' "$lock")"
+          python -m pip install --quiet --target "$RUNNER_TEMP/proto-tools-py" \
+            "grpcio-tools==$(jq -r '."grpcio-tools"' "$lock")" \
+            "protobuf==$(jq -r '."protobuf-python"' "$lock")"
+          {
+            echo "ELITEA_PROTO_GO_TOOLS=$tools"
+            echo "ELITEA_PROTO_PYTHON_TOOLS=$RUNNER_TEMP/proto-tools-py"
+            echo "ELITEA_PROTO_PYTHON=$(command -v python)"
+            echo "BUF_CACHE_DIR=$RUNNER_TEMP/buf-cache"
+          } >> "$GITHUB_ENV"
+      - name: buf lint and format
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          "$ELITEA_PROTO_GO_TOOLS/buf" lint libs/proto
+          "$ELITEA_PROTO_GO_TOOLS/buf" format --diff --exit-code libs/proto
+      - name: buf breaking against the base commit
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.changes.outputs.base }}
+        run: '"$ELITEA_PROTO_GO_TOOLS/buf" breaking libs/proto --against ".git#ref=${BASE},subdir=libs/proto"'
+      - name: Generated stubs match the contracts
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          scripts/contract/generate_proto.sh
+          git diff --exit-code -- libs/proto
+          untracked="$(git status --porcelain --untracked-files=all -- libs/proto)"
+          if [ -n "$untracked" ]; then
+            echo "generate_proto.sh produced files that are not checked in:" >&2
+            echo "$untracked" >&2
+            exit 1
+          fi
+
   sqlc:
     name: Reproduce SQLC queries
     runs-on: ubuntu-latest
@@ -164,7 +248,6 @@ jobs:
             services/elitea-subapp-host/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            gen/go/go.sum
             conformance/nativeclient/go.sum
 
       # golangci-lint-action installs AND runs in one step, and it runs in one
@@ -492,7 +575,6 @@ jobs:
             services/elitea-main/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            gen/go/go.sum
       - name: Check the editor fixture CI gate
         run: python3 -m unittest discover -s scripts/go/tests -p 'test_editor_lifecycle_ci.py' -v
       - name: Run required editor PostgreSQL acceptance

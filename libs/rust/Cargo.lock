@@ -1826,6 +1826,7 @@ dependencies = [
  "chrono",
  "elitea-connectors",
  "elitea-office-core",
+ "elitea-platform-rpc",
  "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
@@ -1968,18 +1969,21 @@ dependencies = [
 name = "elitea-engine-sidecar"
 version = "0.1.0"
 dependencies = [
- "axum",
  "elitea-engine-core",
- "http-body-util",
- "hyper",
  "hyper-util",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "prost",
+ "protoc-bin-vendored",
  "reqwest 0.13.5",
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -2101,8 +2105,13 @@ name = "elitea-model-client"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "elitea-engine-core",
  "elitea-llm-wire",
+ "elitea-model-rpc",
+ "futures-util",
+ "hyper",
+ "hyper-util",
  "rcgen",
  "reqwest 0.13.5",
  "serde_json",
@@ -2110,8 +2119,27 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tonic",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "elitea-model-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "elitea-model-rpc",
+ "futures-util",
+ "http",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
 ]
 
 [[package]]
@@ -2140,6 +2168,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-platform-rpc"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "elitea-platform-rpc",
+ "futures-util",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "zeroize",
+]
+
+[[package]]
 name = "elitea-repo-ingest"
 version = "0.1.0"
 dependencies = [
@@ -2147,14 +2192,14 @@ dependencies = [
  "base64 0.22.1",
  "elitea-connectors",
  "elitea-engine-core",
- "elitea-model-client",
+ "elitea-platform-rpc",
  "gix",
  "regex",
- "reqwest 0.13.5",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tokio-stream",
+ "tonic",
  "tracing",
  "zeroize",
 ]

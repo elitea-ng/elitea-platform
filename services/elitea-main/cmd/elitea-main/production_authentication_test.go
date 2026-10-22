@@ -49,7 +49,7 @@ func TestConfigurationsGateAcceptsAnOIDCOnlyCredentialPlane(t *testing.T) {
 			auth: apiGroupAuthConfig(
 				&authcomposition.FormGraph{},
 				&countingPrincipals{inner: activePrincipals{}},
-				&stubForwardedIdentityVerifier{},
+				&stubFormSessions{},
 				&countingPrincipals{inner: activePrincipals{}},
 				&countingTokens{},
 				apiGroupTestSecret,

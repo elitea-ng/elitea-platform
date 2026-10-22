@@ -49,6 +49,16 @@ type Invocation struct {
 	Result map[string]any
 }
 
+// state is the part of the invocation a store persists, copied — the
+// manager's lock held by the caller. The events and labels are not in it:
+// the store guards the first and the manager the second.
+func (i *Invocation) state() Invocation {
+	return Invocation{
+		ID: i.ID, Toolkit: i.Toolkit, Tool: i.Tool, Status: i.Status,
+		CreatedAt: i.CreatedAt, FinishedAt: i.FinishedAt, StopRequest: i.StopRequest, Result: i.Result,
+	}
+}
+
 // Terminal reports whether the invocation has a result.
 func (i *Invocation) Terminal() bool { return i.Status == statusStopped }
 
@@ -262,6 +272,9 @@ type Manager struct {
 	wg       sync.WaitGroup
 	stopOnce sync.Once
 	stopped  chan struct{}
+	// cancels fans a cancel out to the other replicas (Server's
+	// WithCancelBus); nil reaches this process only.
+	cancels CancelBus
 }
 
 // NewManager wraps a store; nil means an in-memory one.
@@ -373,8 +386,11 @@ func (m *Manager) SubmitLabelled(ctx context.Context, toolkit, tool string, labe
 func (m *Manager) run(ctx context.Context, invocation *Invocation, call Call) {
 	m.mu.Lock()
 	invocation.Status = statusRunning
+	snapshot := invocation.state()
 	m.mu.Unlock()
-	_ = m.store.Update(ctx, invocation)
+	// A snapshot taken under the lock, not the live struct: a cancel fanned
+	// in from another replica flips the live one's stop flag concurrently.
+	_ = m.store.Update(ctx, &snapshot)
 
 	var result map[string]any
 	body, err := call(ctx, &Context{invocation: invocation, manager: m})
@@ -395,8 +411,9 @@ func (m *Manager) run(ctx context.Context, invocation *Invocation, call Call) {
 	invocation.Status = statusStopped
 	invocation.FinishedAt = time.Now()
 	invocation.Result = result
+	snapshot = invocation.state()
 	m.mu.Unlock()
-	_ = m.store.Update(context.WithoutCancel(ctx), invocation)
+	_ = m.store.Update(context.WithoutCancel(ctx), &snapshot)
 }
 
 // Poll projects an invocation for the wire: nil when unknown; Started or
@@ -433,28 +450,65 @@ func (m *Manager) Poll(ctx context.Context, toolkit, tool, id string) (map[strin
 }
 
 // Cancel requests a stop; false when the invocation is unknown. The tool
-// observes it at its next Checkpoint — DELETE is 204 and only a request.
+// observes it at its next Checkpoint — Cancel only requests.
+//
+// The request reaches the run wherever it runs. The store records it (the
+// row's stop flag), the live struct is flipped when THIS process owns the
+// run, and otherwise the cancel bus (cancelbus.go) carries it to the replica
+// that does: with N replicas a cancel lands on any one of them, and before
+// #1359 one that landed on the wrong one was recorded and never acted on.
 func (m *Manager) Cancel(ctx context.Context, toolkit, tool, id string) (bool, error) {
 	invocation, err := m.store.Get(ctx, toolkit, tool, id)
 	if err != nil || invocation == nil {
 		return false, err
 	}
-	// The flag must reach the struct the RUNNING call checkpoints on. The
-	// in-memory store hands back that very struct; a durable store hands
-	// back a fresh row, so the live one is flipped too when this process
-	// owns the run. (A run owned by another replica cannot be stopped from
-	// here — the same limit the Python store had; its row still records
-	// the request.)
+	local := m.StopLocal(id)
 	m.mu.Lock()
 	invocation.StopRequest = true
-	if live, ok := m.inFlight[id]; ok {
-		live.invocation.StopRequest = true
-	}
 	m.mu.Unlock()
-	return true, m.store.Update(ctx, invocation)
+	// Only the flag is written when the store can: a durable store's Update
+	// writes the whole row as this replica read it, and the replica running
+	// the invocation may have finished it in between — a stale "running"
+	// written over its terminal body would make it poll InProgress for ever.
+	if recorder, ok := m.store.(StopRecorder); ok {
+		err = recorder.RequestStop(ctx, id)
+	} else {
+		err = m.store.Update(ctx, invocation)
+	}
+	if err != nil {
+		return true, err
+	}
+	if !local && !invocation.Terminal() && m.cancels != nil {
+		if err := m.cancels.Publish(ctx, id); err != nil {
+			// The row records the request either way; the replica running
+			// the invocation simply does not hear of it until it ends.
+			m.logger.Warn("could not fan the cancel out to the other replicas", "invocation", id, "error", err)
+		}
+	}
+	return true, nil
 }
 
-// InFlight is the number of invocations still running — what /slots reports
+// StopLocal flips the stop flag of a run THIS process owns and reports
+// whether it owned one. It is what a cancel fanned out by another replica
+// calls (Server.Start subscribes it); an id this process is not running is
+// none of its business, and the call is a no-op.
+func (m *Manager) StopLocal(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	live, ok := m.inFlight[id]
+	if ok {
+		live.invocation.StopRequest = true
+	}
+	return ok
+}
+
+// StopRecorder is a store that can record a stop request on its own,
+// without writing the rest of the row (PostgresStore).
+type StopRecorder interface {
+	RequestStop(ctx context.Context, id string) error
+}
+
+// InFlight is the number of invocations still running — what Slots reports
 // as active.
 func (m *Manager) InFlight() int {
 	m.mu.Lock()
@@ -474,10 +528,11 @@ type RunningInvocation struct {
 // selects to stop, then waits up to `wait` for them to leave. It returns how
 // many are still running afterwards (0 means they all stopped).
 //
-// The stop is the same cooperative one DELETE sends: the tool observes it at
+// The stop is the same cooperative one Cancel sends: the tool observes it at
 // its next checkpoint, and the engine call is stopped by the host's stop
-// watcher. A run owned by another replica cannot be stopped from here (the
-// limit Cancel documents).
+// watcher. Only this process's runs are matched: the labels live in memory,
+// so a run on another replica is not found here (the platform operation that
+// calls this reports what it left, and the caller retries).
 func (m *Manager) StopMatching(ctx context.Context, match func(RunningInvocation) bool, wait time.Duration) int {
 	m.mu.Lock()
 	var targets []RunningInvocation

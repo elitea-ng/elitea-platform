@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -211,7 +212,7 @@ func TestBothConstructorsProduceARunnerThatServesTheEngineTable(t *testing.T) {
 // The artifact factory answers nil — not an error — when the request carried
 // no transport, because a direct SPI call has none and must still run.
 func TestTheArtifactFactoryIsNilWithoutBothHalvesOfTheTransport(t *testing.T) {
-	factory := run.ArtifactClientFrom("")
+	factory := run.ArtifactClientFrom(artifacts.Callback{Target: "elitea-main:9446"})
 	for _, incomplete := range []map[string]any{
 		{},
 		{"api_base": "https://elitea.example"},

@@ -1,37 +1,25 @@
-// Package deployedge_test gates the Traefik edge configuration this
-// repository ships (#338).
+// Package deployedge_test gates the browser edges this repository ships.
 //
-// A Traefik router that names a middleware nobody defines does not fail loudly.
-// Traefik logs `middleware "x@file" does not exist`, drops the router, and
-// keeps serving. The traffic then falls to whichever router matches next, so
-// the caller gets an answer from the wrong process for a path the
-// configuration says goes to elitea-main, and the header-stripping middleware
-// that the dropped router carried never runs either. (The retired
-// deploy/centry-hybrid stack shipped exactly that: a PathPrefix("/")
-// catch-all to pylon answered HTTP 200.)
+// There are two. In a cluster it is the Gateway API HTTPRoute
+// (deploy/gateway-api/httproute.yaml, edge_gateway_api_test.go). In a compose
+// stack it is elitea-main itself, with its web relay turned on
+// (internal/api/webedge, compose_edge_harness_test.go) — the compose Traefik
+// that used to stand there is gone (#1359 P2).
 //
-// This test resolves every middleware reference against the definitions that
-// load with it, and it FAILS CLOSED: a configuration set whose files vanished,
-// or an edge file that no set covers, is a failure and not a skip.
+// This file holds the one rule that replaced the Traefik-only gates (#338,
+// #379): no Traefik configuration ships at all. Those gates existed because a
+// Traefik router that names a middleware or a service nobody defines does not
+// fail loudly; Traefik drops the router and keeps serving, so the traffic falls
+// to whichever router matches next and the header strip that router carried
+// never runs. A second Traefik edge reintroduced into a compose file would
+// bring that failure class back with nothing reading it, so its return fails
+// here. What the routers DID — route, strip, redirect — is now gated live
+// against the Go router in the sibling files.
 //
-// A router names two more things, and each one fails in the same silent way.
-// Two sibling gates read the configuration sets declared below:
-//
-//   - edge_services_test.go resolves the SERVICE each router names, and
-//     compares the published port in the authority header with the Compose
-//     default (#379);
-//   - edge_auth_target_test.go follows the edgeAuth ADDRESS each loaded
-//     router reaches, and checks that the stack registers it (#378).
-//
-// RUN IT WITH -count=1. The files this gate reads live in deploy/, outside
+// RUN IT WITH -count=1. The files these gates read live in deploy/, outside
 // this module. The Go test cache does not track them, so it can serve a stale
 // pass after those files change. `task test`, `task deploy:check-edge` and the
 // No Binaries workflow all pass -count=1.
-//
-// The No Binaries workflow runs this gate on every pull request. ci-go.yml
-// also runs it, but ci-go.yml is path-filtered and does not select
-// deploy/traefik/** or deploy/runtime/**, so it alone would miss an edge-only
-// change.
 package deployedge_test
 
 import (
@@ -43,81 +31,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
-
-// dynamicConfig is the subset of the Traefik dynamic configuration this gate
-// reads. Fields the gate does not use are ignored by the YAML decoder.
-type dynamicConfig struct {
-	HTTP struct {
-		Routers map[string]struct {
-			Middlewares []string `yaml:"middlewares"`
-		} `yaml:"routers"`
-		Middlewares map[string]struct {
-			Chain struct {
-				Middlewares []string `yaml:"middlewares"`
-			} `yaml:"chain"`
-		} `yaml:"middlewares"`
-	} `yaml:"http"`
-}
-
-// configSet is one Traefik file-provider unit: the exact set of files a single
-// Traefik process loads together. Middleware references resolve only inside
-// their own set, so the set boundary is the thing that must be modelled
-// correctly. Each set records the compose file that creates it, so a reviewer
-// can check the claim.
-type configSet struct {
-	name string
-	// dir loads every *.yml in one directory. This models a directory mount.
-	dir string
-	// files loads exactly these paths. This models single-file mounts.
-	files []string
-	// externalDefinitions names middlewares that a file OUTSIDE this
-	// repository defines for this set. Keep this list exact and small. It is
-	// the private-repository boundary, written down so that drift in the
-	// tracked file still fails the gate.
-	externalDefinitions []string
-	// externalServices names load-balancer services that a file OUTSIDE this
-	// repository defines for this set. It is the same boundary as
-	// externalDefinitions, for the reference edge_services_test.go resolves. A
-	// service name that is absent from both this list and the tracked files
-	// still fails the gate.
-	externalServices []string
-	// composeFiles names the tracked Compose files that create this set's
-	// stack. edge_auth_target_test.go reads them to answer one question: does
-	// the process behind an edgeAuth address register that address?
-	//
-	// Leave it empty when the Compose model is not in this repository. A set
-	// with no tracked Compose file and an edgeAuth reference fails, because
-	// nothing can answer that question for it.
-	composeFiles []string
-	// mountedBy is the evidence for the set boundary above.
-	mountedBy string
-}
-
-func configSets() []configSet {
-	return []configSet{
-		{
-			name:         "standalone edge",
-			files:        []string{"deploy/traefik/dynamic.yml"},
-			composeFiles: []string{"deploy/docker-compose.yml"},
-			mountedBy:    "deploy/docker-compose.yml mounts it alone at /etc/traefik/dynamic.yml",
-		},
-		{
-			name:  "standalone e2e edge",
-			files: []string{"deploy/traefik/dynamic.e2e.yml"},
-			composeFiles: []string{
-				"deploy/docker-compose.e2e-standalone.yml",
-				"deploy/docker-compose.standalone-full.yml",
-			},
-			mountedBy: "deploy/docker-compose.e2e-standalone.yml and deploy/docker-compose.standalone-full.yml mount it alone",
-		},
-		{
-			name:         "runtime platform edge",
-			files:        []string{"deploy/runtime/platform-edge-dynamic.yml"},
-			composeFiles: []string{"deploy/docker-compose.standalone-full.yml"},
-			mountedBy:    "deploy/docker-compose.standalone-full.yml mounts it alone at /etc/traefik/dynamic.yml",
-		},
-	}
-}
 
 // repoRoot walks up from the test's directory to the directory that holds
 // go.work. It never returns a guessed path: a gate that reads a hardcoded
@@ -141,236 +54,193 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// resolve returns the files of a set, failing when the set is empty.
-func (s configSet) resolve(t *testing.T, root string) []string {
+// edgeComposeService is the part of a compose service the edge gates read.
+type edgeComposeService struct {
+	Image       string    `yaml:"image"`
+	Ports       yaml.Node `yaml:"ports"`
+	Labels      yaml.Node `yaml:"labels"`
+	Environment yaml.Node `yaml:"environment"`
+}
+
+// environment reads a compose `environment:` value in either form, a map or a
+// list of KEY=VALUE.
+func (s edgeComposeService) environment() map[string]string {
+	values := map[string]string{}
+	switch s.Environment.Kind {
+	case yaml.MappingNode:
+		for index := 0; index+1 < len(s.Environment.Content); index += 2 {
+			values[s.Environment.Content[index].Value] = s.Environment.Content[index+1].Value
+		}
+	case yaml.SequenceNode:
+		for _, item := range s.Environment.Content {
+			key, value, _ := strings.Cut(item.Value, "=")
+			values[key] = value
+		}
+	}
+	return values
+}
+
+// shortPorts returns the short-syntax `ports:` entries. A long-syntax entry
+// comes back as published:target, so every caller reads one shape.
+func (s edgeComposeService) shortPorts() []string {
+	var ports []string
+	for _, item := range s.Ports.Content {
+		switch item.Kind {
+		case yaml.ScalarNode:
+			ports = append(ports, item.Value)
+		case yaml.MappingNode:
+			fields := map[string]string{}
+			for index := 0; index+1 < len(item.Content); index += 2 {
+				fields[item.Content[index].Value] = item.Content[index+1].Value
+			}
+			ports = append(ports, fields["published"]+":"+fields["target"])
+		}
+	}
+	return ports
+}
+
+type edgeComposeFile struct {
+	Services map[string]edgeComposeService `yaml:"services"`
+}
+
+// composeFilesUnderDeploy parses every compose file under deploy/, keyed by
+// path relative to the repository root. Helm templates are not YAML and are
+// skipped; a file that is not a compose file parses to no services.
+func composeFilesUnderDeploy(t *testing.T, root string) map[string]edgeComposeFile {
 	t.Helper()
-	if s.dir != "" {
-		pattern := filepath.Join(root, s.dir, "*.yml")
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			t.Fatalf("set %q: glob %s: %v", s.name, pattern, err)
-		}
-		if len(matches) == 0 {
-			t.Fatalf(
-				"set %q declares directory %s, but it holds no *.yml file. "+
-					"The configuration moved and this gate stopped gating. "+
-					"Update configSets(). Mount evidence: %s",
-				s.name, s.dir, s.mountedBy,
-			)
-		}
-		sort.Strings(matches)
-		return matches
-	}
-	resolved := make([]string, 0, len(s.files))
-	for _, rel := range s.files {
-		abs := filepath.Join(root, rel)
-		if _, err := os.Stat(abs); err != nil {
-			t.Fatalf(
-				"set %q declares file %s, which does not exist. "+
-					"The configuration moved and this gate stopped gating. "+
-					"Update configSets(). Mount evidence: %s",
-				s.name, rel, s.mountedBy,
-			)
-		}
-		resolved = append(resolved, abs)
-	}
-	return resolved
-}
-
-func parseDynamic(t *testing.T, path string) dynamicConfig {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var parsed dynamicConfig
-	if err := yaml.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("parse %s as Traefik dynamic configuration: %v", path, err)
-	}
-	return parsed
-}
-
-// providerLocalName drops the provider suffix. Traefik accepts both
-// `name` and `name@file` in a reference, and both mean the same middleware
-// when the provider is the file provider.
-func providerLocalName(reference string) string {
-	if index := strings.LastIndex(reference, "@"); index >= 0 {
-		return reference[:index]
-	}
-	return reference
-}
-
-// TestEveryRouterMiddlewareResolves is the gate. Every middleware a router
-// names must be defined by a file that loads with it.
-func TestEveryRouterMiddlewareResolves(t *testing.T) {
-	root := repoRoot(t)
-	sets := configSets()
-	if len(sets) == 0 {
-		t.Fatal("no configuration set is declared, so nothing is gated")
-	}
-
-	totalRouters := 0
-	for _, set := range sets {
-		paths := set.resolve(t, root)
-
-		defined := map[string]bool{}
-		for _, name := range set.externalDefinitions {
-			defined[name] = true
-		}
-		type reference struct {
-			router string
-			file   string
-			name   string
-		}
-		var references []reference
-		routers := 0
-
-		for _, path := range paths {
-			parsed := parseDynamic(t, path)
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				relative = path
-			}
-			for name := range parsed.HTTP.Middlewares {
-				defined[name] = true
-			}
-			for router, definition := range parsed.HTTP.Routers {
-				routers++
-				for _, named := range definition.Middlewares {
-					references = append(references, reference{
-						router: router, file: relative,
-						name: providerLocalName(named),
-					})
-				}
-			}
-			// A chain middleware references other middlewares and fails the
-			// same way a router does.
-			for name, definition := range parsed.HTTP.Middlewares {
-				for _, named := range definition.Chain.Middlewares {
-					references = append(references, reference{
-						router: "chain middleware " + name, file: relative,
-						name: providerLocalName(named),
-					})
-				}
-			}
-		}
-
-		if routers == 0 {
-			t.Fatalf(
-				"set %q loaded %d file(s) but declares no http.routers. "+
-					"Either the files moved or the shape changed, and this "+
-					"gate stopped gating. Mount evidence: %s",
-				set.name, len(paths), set.mountedBy,
-			)
-		}
-		totalRouters += routers
-
-		for _, ref := range references {
-			if !defined[ref.name] {
-				known := make([]string, 0, len(defined))
-				for name := range defined {
-					known = append(known, name)
-				}
-				sort.Strings(known)
-				t.Errorf(
-					"set %q: router %q in %s names middleware %q, which no "+
-						"file in this set defines.\n"+
-						"Traefik does not fail the stack for this. It drops "+
-						"the router and keeps serving, so the traffic falls "+
-						"to whichever router matches next.\n"+
-						"Defined in this set: %s\n"+
-						"Set boundary: %s",
-					set.name, ref.router, ref.file, ref.name,
-					strings.Join(known, ", "), set.mountedBy,
-				)
-			}
-		}
-	}
-
-	if totalRouters == 0 {
-		t.Fatal("no router was inspected, so this gate proved nothing")
-	}
-}
-
-// TestEveryEdgeFileBelongsToASet stops a new edge file from escaping the gate.
-// Adding deploy/somewhere/new-edge.yml with routers must either join a set or
-// fail this test. Without it, the gate above silently keeps passing while the
-// new file goes unchecked.
-func TestEveryEdgeFileBelongsToASet(t *testing.T) {
-	root := repoRoot(t)
-
-	covered := map[string]bool{}
-	for _, set := range configSets() {
-		for _, path := range set.resolve(t, root) {
-			covered[path] = true
-		}
-	}
-
 	deployDir := filepath.Join(root, "deploy")
 	if _, err := os.Stat(deployDir); err != nil {
 		t.Fatalf("deploy/ does not exist at %s, so this gate stopped gating: %v", deployDir, err)
 	}
-
-	var uncovered []string
+	found := map[string]edgeComposeFile{}
 	err := filepath.WalkDir(deployDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
+			if entry.Name() == "helm" || entry.Name() == "certs" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {
 			return nil
 		}
-		if covered[path] {
-			return nil
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
 		}
-		parsed := parseDynamicQuiet(path)
-		if parsed == nil || len(parsed.HTTP.Routers) == 0 {
-			return nil
-		}
-		names := 0
-		for _, definition := range parsed.HTTP.Routers {
-			names += len(definition.Middlewares)
-		}
-		if names == 0 {
+		var parsed edgeComposeFile
+		if yaml.Unmarshal(raw, &parsed) != nil || len(parsed.Services) == 0 {
 			return nil
 		}
 		relative, relErr := filepath.Rel(root, path)
 		if relErr != nil {
 			relative = path
 		}
-		uncovered = append(uncovered, relative)
+		found[relative] = parsed
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk deploy/: %v", err)
 	}
+	if _, ok := found["deploy/docker-compose.standalone-full.yml"]; !ok {
+		t.Fatalf("the walk did not parse deploy/docker-compose.standalone-full.yml, so it reads an incomplete tree: %v", sortedKeys(found))
+	}
+	return found
+}
 
-	if len(uncovered) > 0 {
-		sort.Strings(uncovered)
-		t.Fatalf(
-			"these files declare Traefik routers with middleware references "+
-				"but belong to no configuration set, so nothing checks that "+
-				"their middlewares exist:\n  %s\n"+
-				"Add each one to configSets() in this file, with the compose "+
-				"mount that proves which files load beside it.",
-			strings.Join(uncovered, "\n  "),
-		)
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// traefikRouterConfig is the shape of a Traefik dynamic file, as far as this
+// gate needs to recognise one.
+type traefikRouterConfig struct {
+	HTTP struct {
+		Routers map[string]any `yaml:"routers"`
+	} `yaml:"http"`
+}
+
+// TestNoTraefikEdgeShips replaces the middleware and service resolution gates.
+// It fails on any of the three ways a Traefik edge could come back: a dynamic
+// file with routers anywhere under deploy/, a compose service running a
+// traefik image, and Traefik routing labels on any compose service.
+func TestNoTraefikEdgeShips(t *testing.T) {
+	root := repoRoot(t)
+
+	if _, err := os.Stat(filepath.Join(root, "deploy", "traefik")); err == nil {
+		t.Error("deploy/traefik/ exists again. elitea-main is the compose browser edge (internal/api/webedge, #1359 P2); " +
+			"a Traefik in front of it brings back a routing layer no gate here reads")
+	}
+
+	scanned := 0
+	err := filepath.WalkDir(filepath.Join(root, "deploy"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == "helm" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {
+			return nil
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		scanned++
+		var parsed traefikRouterConfig
+		if yaml.Unmarshal(raw, &parsed) == nil && len(parsed.HTTP.Routers) > 0 {
+			relative, _ := filepath.Rel(root, path)
+			t.Errorf("%s declares Traefik http.routers. No compose stack runs Traefik any more (#1359 P2)", relative)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk deploy/: %v", err)
+	}
+	if scanned == 0 {
+		t.Fatal("no YAML file was read under deploy/, so this gate proved nothing")
+	}
+
+	files := composeFilesUnderDeploy(t, root)
+	for _, relative := range sortedKeys(files) {
+		for _, name := range sortedKeys(files[relative].Services) {
+			service := files[relative].Services[name]
+			image := strings.ToLower(service.Image)
+			if name == "traefik" || strings.HasPrefix(image, "traefik") || strings.Contains(image, "/traefik") {
+				t.Errorf("%s: service %q runs Traefik (image %q). elitea-main is the compose browser edge (#1359 P2)", relative, name, service.Image)
+			}
+			if labels := labelText(service.Labels); strings.Contains(labels, "traefik.") {
+				t.Errorf("%s: service %q carries Traefik labels. No compose stack runs Traefik any more (#1359 P2)", relative, name)
+			}
+		}
 	}
 }
 
-// parseDynamicQuiet returns nil for a file that is not a Traefik dynamic
-// configuration. Discovery must not fail on unrelated YAML, but note that
-// TestEveryRouterMiddlewareResolves parses declared files strictly.
-func parseDynamicQuiet(path string) *dynamicConfig {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+// labelText flattens a compose `labels:` value, which is either a list or a
+// map, into one string.
+func labelText(node yaml.Node) string {
+	var builder strings.Builder
+	var walk func(*yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.ScalarNode {
+			builder.WriteString(n.Value)
+			builder.WriteString("\n")
+		}
+		for _, child := range n.Content {
+			walk(child)
+		}
 	}
-	var parsed dynamicConfig
-	if err := yaml.Unmarshal(raw, &parsed); err != nil {
-		return nil
-	}
-	return &parsed
+	walk(&node)
+	return builder.String()
 }

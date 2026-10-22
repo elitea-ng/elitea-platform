@@ -103,29 +103,32 @@ fn safe_file_names_prevent_path_interpretation() {
 }
 
 #[test]
-fn grant_headers_are_sensitive_and_separate_from_execution_authority() {
+fn grants_travel_as_their_protobuf_encoding_and_stay_bundle_bound() {
     let (_, root, _) = fixture();
     let original = grant(&root);
-    assert!(grant_header(&original, &root).unwrap().is_sensitive());
-    assert!(grant_header(&original, &"a".repeat(64)).is_err());
+    assert_eq!(
+        grant_bytes(&original, &root).unwrap(),
+        original.encode_to_vec()
+    );
+    assert!(grant_bytes(&original, &"a".repeat(64)).is_err());
     for revision in [1, 2, 4] {
         let mut wrong = grant(&root);
         let mut claims = SandboxJobGrantClaimsV1::decode(wrong.claims_bytes.as_slice()).unwrap();
         claims.revision = revision;
         wrong.claims_bytes = claims.encode_to_vec();
-        assert!(grant_header(&wrong, &root).is_err());
+        assert!(grant_bytes(&wrong, &root).is_err());
     }
     let mut wrong = grant(&root);
     let mut claims = SandboxJobGrantClaimsV1::decode(wrong.claims_bytes.as_slice()).unwrap();
     claims.cancel_only = true;
     wrong.claims_bytes = claims.encode_to_vec();
-    assert!(grant_header(&wrong, &root).is_err());
+    assert!(grant_bytes(&wrong, &root).is_err());
     let mut malformed = grant(&root);
     malformed.signature.pop();
-    assert!(grant_header(&malformed, &root).is_err());
+    assert!(grant_bytes(&malformed, &root).is_err());
     let mut duplicate = grant(&root);
     duplicate.claims_bytes.extend_from_slice(&[8, 3]);
-    assert!(grant_header(&duplicate, &root).is_err());
+    assert!(grant_bytes(&duplicate, &root).is_err());
 }
 
 #[test]
@@ -188,14 +191,17 @@ async fn local_upload_verification_refuses_symlinks_and_changed_bytes() {
     );
 }
 
-fn response(status: StatusCode, media: &str, declared: usize, body: Vec<u8>) -> Response {
-    http::Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, media)
-        .header(CONTENT_LENGTH, declared)
-        .body(body)
-        .unwrap()
-        .into()
+// Fixture replies mirror the stream item type the transfer consumes.
+#[allow(clippy::unnecessary_wraps)]
+fn header(length: u64, content: &[u8]) -> Result<Option<FilePart>, Status> {
+    Ok(Some(FilePart::Header(SandboxContentFileHeaderV1 {
+        length,
+        sha256: digest::digest(&digest::SHA256, content).as_ref().to_vec(),
+    })))
+}
+#[allow(clippy::unnecessary_wraps)]
+fn chunk(bytes: &[u8]) -> Result<Option<FilePart>, Status> {
+    Ok(Some(FilePart::Chunk(bytes.to_vec())))
 }
 
 #[tokio::test]
@@ -203,32 +209,42 @@ async fn downloads_reject_corruption_and_incorrect_lengths_before_metadata_publi
     let (_, _, files) = fixture();
     let private = private_directory();
     let wheel = &files[1];
-    for (length, bytes, media) in [
-        (5, b"wrong".to_vec(), "application/octet-stream"),
-        (4, b"wheel".to_vec(), "application/octet-stream"),
-        (6, b"wheel!".to_vec(), "application/octet-stream"),
-        (5, b"wheel".to_vec(), "text/html"),
+    for parts in [
+        // Bytes that do not match the recorded digest.
+        vec![header(5, b"wheel"), chunk(b"wrong")],
+        // A header that disagrees with the record.
+        vec![header(4, b"whee"), chunk(b"whee")],
+        vec![header(5, b"wrong"), chunk(b"wheel")],
+        // Short, overrunning, and missing-header streams.
+        vec![header(5, b"wheel"), chunk(b"whee")],
+        vec![header(5, b"wheel"), chunk(b"wheel"), chunk(b"!")],
+        vec![chunk(b"wheel")],
+        vec![header(5, b"wheel"), header(5, b"wheel"), chunk(b"wheel")],
+        vec![header(5, b"wheel"), Ok(None), chunk(b"wheel")],
+        vec![],
     ] {
         let staging = tempfile::tempdir_in(private.path()).unwrap();
         assert!(matches!(
-            write_verified_file(
-                response(StatusCode::OK, media, length, bytes),
-                wheel,
-                staging.path()
-            )
-            .await,
+            write_verified_file(tokio_stream::iter(parts), wheel, staging.path()).await,
             Err(DependencyContentError::Integrity)
         ));
         assert!(!staging.path().join(RECORD_NAME).exists());
     }
     let staging = tempfile::tempdir_in(private.path()).unwrap();
+    assert!(matches!(
+        write_verified_file(
+            tokio_stream::iter([header(5, b"wheel"), Err(Status::unavailable("reset"))]),
+            wheel,
+            staging.path()
+        )
+        .await,
+        Err(DependencyContentError::Unavailable {
+            code: Code::Unavailable
+        })
+    ));
+    let staging = tempfile::tempdir_in(private.path()).unwrap();
     write_verified_file(
-        response(
-            StatusCode::OK,
-            "application/octet-stream",
-            5,
-            b"wheel".to_vec(),
-        ),
+        tokio_stream::iter([header(5, b"wheel"), chunk(b"whe"), chunk(b"el")]),
         wheel,
         staging.path(),
     )
@@ -241,41 +257,72 @@ async fn downloads_reject_corruption_and_incorrect_lengths_before_metadata_publi
 }
 
 #[tokio::test]
-async fn metadata_limits_and_service_errors_are_explicit() {
-    let mut too_large = response(
-        StatusCode::OK,
-        "application/json",
-        METADATA_LIMIT + 1,
-        vec![b' '; METADATA_LIMIT + 1],
-    );
-    assert!(check_response(&too_large, StatusCode::OK, "application/json", None).is_err());
-    assert!(bounded_metadata(&mut too_large).await.is_err());
-    let mut mismatched = response(StatusCode::OK, "application/json", 3, b"{}".to_vec());
-    assert!(bounded_metadata(&mut mismatched).await.is_err());
-    for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+async fn uploads_stream_bounded_chunks_and_report_a_shrunk_file_as_staging() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("content");
+    let content: Vec<u8> = (0..CHUNK_BYTES * 2 + 7)
+        .map(|index| u8::try_from(index % 256).unwrap())
+        .collect();
+    tokio::fs::write(&path, &content).await.unwrap();
+    let failure = Arc::new(Mutex::new(None));
+    let chunks: Vec<Vec<u8>> = file_chunks(
+        fs::File::open(&path).await.unwrap(),
+        content.len() as u64,
+        Arc::clone(&failure),
+    )
+    .collect()
+    .await;
+    assert!(chunks.iter().all(|chunk| chunk.len() <= CHUNK_BYTES));
+    assert_eq!(chunks.concat(), content);
+    assert!(take_read_failure(&failure).is_ok());
+
+    let chunks: Vec<Vec<u8>> = file_chunks(
+        fs::File::open(&path).await.unwrap(),
+        content.len() as u64 + 1,
+        Arc::clone(&failure),
+    )
+    .collect()
+    .await;
+    assert_eq!(chunks.concat(), content);
+    assert!(matches!(
+        take_read_failure(&failure),
+        Err(DependencyContentError::Staging(_))
+    ));
+}
+
+#[test]
+fn metadata_limits_and_service_errors_are_explicit() {
+    assert!(bounded_metadata(&vec![b' '; METADATA_LIMIT + 1]).is_err());
+    assert!(bounded_metadata(b"").is_err());
+    assert!(bounded_metadata(b"{}").is_ok());
+    for code in [Code::Unauthenticated, Code::PermissionDenied] {
         assert!(matches!(
-            check_status(&response(status, "text/plain", 0, vec![]), StatusCode::OK),
-            Err(DependencyContentError::Authority)
+            rpc_error(Status::new(code, "refused")),
+            DependencyContentError::Authority
         ));
     }
-    for status in [
-        StatusCode::UNPROCESSABLE_ENTITY,
-        StatusCode::PAYLOAD_TOO_LARGE,
-    ] {
+    for code in [Code::FailedPrecondition, Code::ResourceExhausted] {
         assert!(matches!(
-            check_status(&response(status, "text/plain", 0, vec![]), StatusCode::OK),
-            Err(DependencyContentError::Integrity)
+            rpc_error(Status::new(code, "refused")),
+            DependencyContentError::Integrity
         ));
     }
-    for status in [
-        StatusCode::FOUND,
-        StatusCode::NOT_FOUND,
-        StatusCode::SERVICE_UNAVAILABLE,
+    for code in [
+        Code::NotFound,
+        Code::Unavailable,
+        Code::Internal,
+        Code::Unimplemented,
+        Code::InvalidArgument,
     ] {
         assert!(
-            matches!(check_status(&response(status, "text/plain", 0, vec![]), StatusCode::OK), Err(DependencyContentError::Unavailable { status: value }) if value == status.as_u16())
+            matches!(rpc_error(Status::new(code, "refused")), DependencyContentError::Unavailable { code: value } if value == code)
         );
     }
+    let transport = Status::from_error(Box::new(std::io::Error::other("connection reset")));
+    assert!(matches!(
+        rpc_error(transport),
+        DependencyContentError::Transport(_)
+    ));
 }
 
 #[tokio::test]
@@ -283,8 +330,9 @@ async fn whole_bundle_deadline_releases_capacity_without_detached_grant_work() {
     let (_, root, _) = fixture();
     let directory = tempfile::tempdir().unwrap();
     let client = DependencyContentClient {
-        client: Client::new(),
-        origin: "https://never-called.invalid".into(),
+        client: content_client(
+            Endpoint::from_static("https://never-called.invalid").connect_lazy(),
+        ),
         staging: directory.path().into(),
         slots: Semaphore::new(1),
         deadline: Duration::from_millis(1),

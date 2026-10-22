@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	platformapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -37,16 +37,7 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 		snapshot,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: currentIndexTypesPeerVerifierFunc(
-				func(request *http.Request) error {
-					host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
-					if splitErr == nil &&
-						(host == "127.0.0.1" || host == "::1") {
-						return nil
-					}
-					return fmt.Errorf("untrusted peer")
-				},
-			),
+			FormSessions:       authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -158,8 +149,7 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request.Header.Set("X-Auth-Type", "user")
-			request.Header.Set("X-Auth-ID", test.userID)
+			authtest.SignIn(request, test.userID)
 			response, err := server.Client().Do(request)
 			if err != nil {
 				t.Fatal(err)

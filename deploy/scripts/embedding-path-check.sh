@@ -150,7 +150,7 @@ llm_post() {
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/$1', data=json.dumps($2).encode(),
+    'http://elitea-main:8080/llm/v1/$1', data=json.dumps($2).encode(),
     headers={'Authorization': 'Bearer ${DRIVER_JWT}', 'Content-Type': 'application/json'})
 try:
     print('OK', urllib.request.urlopen(request, context=context, timeout=30).read().decode()[:400])
@@ -166,7 +166,7 @@ llm_models() {
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/models',
+    'http://elitea-main:8080/llm/v1/models',
     headers={'Authorization': 'Bearer ${DRIVER_JWT}'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())

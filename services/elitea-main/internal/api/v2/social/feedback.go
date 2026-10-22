@@ -72,8 +72,7 @@ func NewCurrentFeedbackCreateRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentFeedbackCreateRoute, error) {
-	if creator == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if creator == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentFeedbackCreateRoute
 	}
 

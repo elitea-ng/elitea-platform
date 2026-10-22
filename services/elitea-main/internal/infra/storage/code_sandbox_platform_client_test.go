@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -25,7 +24,7 @@ func fakeCodePlatformClient(t *testing.T, c code.PlatformGrantClaims, r code.Pla
 		t.Fatal(err)
 	}
 	tr := &codeOwnerTestTransport{status: 200, body: string(raw)}
-	return &CodeOwnerClient{requester: c.RequesterWorkloadIdentity, endpoints: map[string]codeOwnerEndpoint{c.SupervisorAudience: {origin: "https://owner.invalid", client: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}}}, tr
+	return &CodeOwnerClient{requester: c.RequesterWorkloadIdentity, endpoints: map[string]codeOwnerEndpoint{c.SupervisorAudience: {client: tr}}}, tr
 }
 func TestCodePlatformClientClosedMethodsAndExactReply(t *testing.T) {
 	for _, operation := range []string{"read_retained_runtime", "read_pending_platform_call", "publish_committed_platform_reply"} {
@@ -63,7 +62,7 @@ func TestCodePlatformClientClosedMethodsAndExactReply(t *testing.T) {
 			case "publish_committed_platform_reply":
 				_, err = client.PublishCommittedPlatformReply(t.Context(), c, grant, reply)
 			}
-			if err != nil || tr.calls != 1 || tr.path != "/elitea.runtime.code-platform.v1/jobs/"+c.JobKey+"/"+strings.ReplaceAll(operation, "_", "-") || tr.query != "" {
+			if err != nil || tr.calls != 1 || tr.path != codePlatformOwnerMethod(operation)+"/"+c.JobKey {
 				t.Fatalf("err=%v attempts=%d path=%s", err, tr.calls, tr.path)
 			}
 			// Recovery or a different closed operation cannot reuse the same grant.
@@ -385,4 +384,16 @@ func TestCodePlatformClientCompletingRefusesMalformedBodiesOperationsAndHTTPRefu
 			t.Fatal("completed response authorized publication", runtime, err, tr.calls)
 		}
 	})
+}
+
+func codePlatformOwnerMethod(operation string) string {
+	switch operation {
+	case "read_retained_runtime":
+		return "CodePlatformOwnerReadRetainedRuntime"
+	case "read_pending_platform_call":
+		return "CodePlatformOwnerReadPendingCall"
+	case "publish_committed_platform_reply":
+		return "CodePlatformOwnerPublishReply"
+	}
+	return ""
 }

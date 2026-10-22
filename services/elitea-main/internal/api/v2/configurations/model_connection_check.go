@@ -36,7 +36,6 @@
 package configurations
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,7 +52,6 @@ import (
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 const llmModelConfigurationType = "llm_model"
@@ -151,7 +149,7 @@ func modelConnectionMessageFor(reason, detail string) string {
 // CheckModel implements ModelConnectionChecker over the same mTLS hop and the
 // same identity signature as Check.
 func (c *GatewayConnectionChecker) CheckModel(ctx context.Context, check ModelConnectionCheck) (ModelConnectionResult, error) {
-	if c == nil || c.modelHTTPClient == nil {
+	if c == nil || c.gateway == nil {
 		return ModelConnectionResult{}, errors.New("check model connection: the gateway client is not composed")
 	}
 	body := gatewayCredentialRequestBody(check.CredentialType, check.Credential)
@@ -163,18 +161,11 @@ func (c *GatewayConnectionChecker) CheckModel(ctx context.Context, check ModelCo
 	if err != nil {
 		return ModelConnectionResult{}, fmt.Errorf("check model connection: encode request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/llm/v1/check_connection", bytes.NewReader(raw))
-	if err != nil {
-		return ModelConnectionResult{}, fmt.Errorf("check model connection: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	llmproxy.SignIdentityHeaders(req.Header, c.identitySecret, connectionCheckProjectIDFrom(ctx), check.UserID, "", "")
-
-	resp, err := c.modelHTTPClient.Do(req)
+	resp, done, err := c.call(ctx, c.modelTimeout, c.gateway.CheckConnection, raw, check.UserID)
 	if err != nil {
 		return ModelConnectionResult{}, fmt.Errorf("check model connection: call gateway: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer done()
 	if resp.StatusCode != http.StatusOK {
 		return ModelConnectionResult{}, fmt.Errorf("check model connection: gateway responded with status %d", resp.StatusCode)
 	}

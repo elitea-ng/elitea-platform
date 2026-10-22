@@ -144,11 +144,11 @@ var audioRouteLimits = map[string]audioRouteLimit{
 }
 
 // audioRefusal is the request-scoped record of why the edge stopped an audio
-// request. The reverse proxy reports a body that hit the ceiling and a
+// request. The Gateway call reports a body that hit the ceiling and a
 // deadline that expired as plain transport errors, and the two are not
 // reliably distinguishable from a dead gateway by the error value alone. The
 // limiter therefore records the reason where it happens, and the proxy's
-// ErrorHandler reads it back.
+// writeHopError reads it back.
 type audioRefusal struct {
 	bodyTooLarge atomic.Bool
 }

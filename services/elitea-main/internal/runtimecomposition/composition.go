@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
@@ -730,9 +733,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct nested application version reader: %w", targetErr)
 		}
+		// The internal MCP builders are addressed at InternalToolOrigin, a
+		// name the worker resolves to InternalToolService on the platform
+		// gRPC listener (#1359 U5), never to an HTTP origin.
 		agentPrebuiltMCP, prebuiltErr := newCurrentAgentRuntimePrebuiltMCP(
 			mcpregistry.NewPrebuiltStore(dependencies.AdmissionPool),
-			config.CurrentMainBaseURL,
 			dependencies.ActorTokenIssuer,
 		)
 		if prebuiltErr != nil {
@@ -746,20 +751,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
 		}
-		// The runtime CA: the same bundle the private listeners verify
-		// worker client certificates against.
-		currentMainClient, targetErr := currentcore.NewTLSClient(config.ControlTLS.ClientCAPath)
-		if targetErr != nil {
-			return nil, fmt.Errorf("construct current Main policy client: %w", targetErr)
-		}
-		nextInputSuggestionResolver, targetErr := currentcore.NewNextInputSuggestionResolver(
-			config.CurrentMainBaseURL,
-			dependencies.ActorTokenIssuer,
-			currentMainClient,
-		)
-		if targetErr != nil {
-			return nil, fmt.Errorf("construct next-input-suggestion policy resolver: %w", targetErr)
-		}
+		// In process (#1359 H7): this used to be an HTTP self-call to the
+		// platform listener that always answered 404. No policy source
+		// exists yet (#334), so every turn carries no policy, as before.
+		nextInputSuggestionResolver := currentcore.NewNextInputSuggestionResolver(nil)
 		agentGuardrails, targetErr := platformconfig.NewGuardrailPolicyAdapter(dependencies.AdmissionPool)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent guardrail policy source: %w", targetErr)
@@ -2091,17 +2086,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		OutputMaxResponseBytes:          maxGRPCResponseBytes,
 		ControlGRPC:                     phaseOneGRPCPolicy(16),
 		OutputGRPC:                      phaseOneGRPCPolicy(4),
-		ContentMaxConnections:           64,
-		ContentMaxStreams:               maxContentRequests,
-		ContentReadTimeout:              10 * time.Second,
-		ContentWriteTimeout:             30 * time.Second,
-		ContentIdleTimeout:              time.Minute,
-		ContentMaxHeaderBytes:           16 * 1024,
+		ContentGRPC:                     contentGRPCPolicy(),
 		ShutdownTimeout:                 15 * time.Second,
 	}, runtimegrpc.PrivateServices{
-		Control:             controlServer,
-		Output:              outputServer,
-		Content:             contentServer.Routes(),
+		Control: controlServer,
+		Output:  outputServer,
+		Content: []runtimegrpc.PlatformService{{
+			Name: runtimev1.RuntimeContentService_ServiceDesc.ServiceName,
+			// Every RPC binds its own authority: an execution claim and fence in
+			// metadata, or a signed sandbox grant naming this exact peer.
+			Clients:  grpcauth.AnyVerifiedPeer(),
+			Register: contentServer.Register,
+		}},
 		VectorIntrospection: vectorIntrospection,
 		Workspace:           workspaceServer,
 		EgressAudit:         egressAuditServerOrNil(egressAuditServer),
@@ -2197,4 +2193,13 @@ func phaseOneGRPCPolicy(maxConcurrentStreams uint32) runtimegrpc.GRPCServerPolic
 		MaxConnectionAge:      30 * time.Minute,
 		MaxConnectionAgeGrace: 30 * time.Second,
 	}
+}
+
+// contentGRPCPolicy bounds the RuntimeContentService listener. Content calls
+// are short except input and bundle streams, which the per-route slots bound.
+func contentGRPCPolicy() runtimegrpc.GRPCServerPolicy {
+	policy := runtimegrpc.DefaultPlatformGRPCPolicy()
+	policy.MaxConnections = 64
+	policy.MaxConcurrentStreams = uint32(maxContentRequests)
+	return policy
 }

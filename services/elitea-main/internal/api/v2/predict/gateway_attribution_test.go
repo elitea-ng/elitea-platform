@@ -3,11 +3,11 @@ package predict
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 // captureIdentity runs one completion and returns the identity headers the
@@ -15,14 +15,13 @@ import (
 func captureIdentity(t *testing.T, attributionID string) http.Header {
 	t.Helper()
 	got := make(chan http.Header, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got <- r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 	}))
-	defer server.Close()
 
-	completer := NewGatewayCompleter(server.URL, nil, "shared-secret")
+	completer := NewGatewayCompleter(gatewaytest.Client(t, server, "shared-secret"))
 	if _, err := completer.Complete(context.Background(), CompletionRequest{
 		ProjectID:     "7",
 		UserID:        "42",

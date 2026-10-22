@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"io"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -61,14 +60,12 @@ func TestPostgresNodeRecoveryContentIsOriginalInspectionWithoutMaterialization(t
 			return nil, nil
 		}), 8192, 1)
 	require.NoError(t, err)
-	response := httptest.NewRecorder()
-	request := validContentRequest(t)
 	identity, err := url.Parse("spiffe://elitea.internal/runtime/worker-1")
 	require.NoError(t, err)
-	request.TLS.VerifiedChains[0][0] = certificateWithURI(identity)
-	server.Routes().ServeHTTP(response, request)
-	require.Equal(t, 200, response.Code)
-	require.Equal(t, data, response.Body.Bytes())
+	ctx := contentClaimContext(context.Background(), certificateWithURI(identity), "claim-1", bytes.Repeat([]byte{1}, sha256.Size))
+	_, body, err := collectInput(server, ctx, validInputRequest())
+	require.NoError(t, err)
+	require.Equal(t, data, body)
 	require.Equal(t, 1, queries)
 }
 

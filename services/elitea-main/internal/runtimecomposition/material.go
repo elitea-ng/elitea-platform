@@ -61,11 +61,17 @@ func (c Config) MaterialFiles() ([]MaterialFile, error) {
 		add(c.RustCompiledSnapshots.ProfilesFile, securefile.PublicMaterial)
 		add(c.RustCompiledSnapshots.AgentStateDSNFile, securefile.PrivateMaterial)
 	}
-	for _, listener := range []runtimeListenerFiles{
+	listeners := []runtimeListenerFiles{
 		{c.ControlTLS.CertificateChainPath, c.ControlTLS.PrivateKeyPath, c.ControlTLS.ClientCAPath},
 		{c.OutputTLS.CertificateChainPath, c.OutputTLS.PrivateKeyPath, c.OutputTLS.ClientCAPath},
 		{c.ContentTLS.CertificateChainPath, c.ContentTLS.PrivateKeyPath, c.ContentTLS.ClientCAPath},
-	} {
+	}
+	if c.PlatformAddress != "" {
+		listeners = append(listeners, runtimeListenerFiles{
+			c.PlatformTLS.CertificateChainPath, c.PlatformTLS.PrivateKeyPath, c.PlatformTLS.ClientCAPath,
+		})
+	}
+	for _, listener := range listeners {
 		add(listener.certificateChain, securefile.PublicMaterial)
 		add(listener.privateKey, securefile.PrivateMaterial)
 		add(listener.clientCA, securefile.PublicMaterial)

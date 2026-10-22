@@ -3,11 +3,10 @@
 # WHY THIS FILE EXISTS AT ALL, given the stack logs in through oidc-mock:
 # cmd/elitea-main/main.go:686-688 refuses to boot with ELITEA_RUNTIME_ENABLED=true
 # unless production authentication is composed, and the PrincipalValidator and
-# ForwardedIdentityVerifier it means are only ever assigned inside the
-# ELITEA_AUTH_CONFIG_FILE branch (main.go:222-223). The runtime's HTTP surface
-# authenticates against those two — internal/api/production_runtime.go:31-37
-# composes the execution-events SSE route with them and NO session-cookie
-# fallback — so there is no "runtime without production auth" configuration.
+# Form session reader it means are only ever assigned inside the
+# ELITEA_AUTH_CONFIG_FILE branch. (The reader replaced the forwarded-identity
+# verifier in #1359; no edge authenticates any more.) So there is no "runtime
+# without production auth" configuration.
 #
 # The auth schema (internal/authcomposition/config.go) currently models exactly
 # one provider, `form`; OIDC and SAML are documented as awaiting their own
@@ -26,28 +25,27 @@
 # is why the generator mints each one independently at random.
 schema_version: elitea.auth.form.v2
 
-# This is NOT decoration, and it is not the browser's origin.
-#
-# TrustedProxyResolver.Resolve rejects an edge-auth call whose
-# X-Forwarded-Proto and X-Forwarded-Host do not EQUAL this origin's scheme and
-# host (internal/api/browserauth/forwarded.go:109-116), answering 403 before the
-# credential is even read. The only edge-auth caller in this stack is
-# platform-edge, whose host is elitea-platform-edge, so that is what this must
-# say — pointing it at the browser edge (http://localhost:8084) made every
-# execution-events request 403 with nothing naming the header that mismatched.
-#
-# The browser is unaffected: it authenticates through oidc-mock against traefik
-# on :8084 and never traverses edge-auth. If a deployment routes browser
-# traffic through the auth edge too, this must name THAT origin and the
-# edge must be the only public entrypoint.
-public_origin: https://elitea-platform-edge
+# The browser's origin: the stack's entry point, http://localhost:8084
+# (STANDALONE_PORT). No edge authenticates for elitea-main any more (#1359,
+# which removed platform-edge and its edge-auth call), so the browser is the
+# only thing this can name. It scopes the Form session cookie (Secure,
+# host-only), and internal/authcomposition/config.go requires https with no
+# path or query, so the scheme is https: browsers treat localhost as a secure
+# context and keep a Secure cookie on http://localhost. A deployment on another
+# host or port names that one.
+public_origin: https://localhost:8084
 
-# The compose network. Non-empty is mandatory; these are the RFC1918 ranges
-# podman/docker hand out to compose networks.
+# The proxies whose X-Forwarded-For is believed. Loopback only, which in
+# practice means none: elitea-main is this stack's browser edge (#1359) and
+# nothing proxies in front of it, so a browser's request arrives from the
+# compose network's gateway address. Trusting the compose network (RFC1918,
+# as this file once did) believed the browser's own X-Forwarded-For, so a
+# client could name a fresh address per request and dodge the login attempt
+# limiter. An untrusted peer is keyed by its socket address instead
+# (browserauth.TrustedProxyResolver). The list must not be empty.
 trusted_proxy_cidrs:
-  - 10.0.0.0/8
-  - 172.16.0.0/12
-  - 192.168.0.0/16
+  - 127.0.0.1/32
+  - ::1/128
 
 redirects:
   direct_access_denied: /app/

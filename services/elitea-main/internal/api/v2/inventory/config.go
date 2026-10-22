@@ -27,10 +27,6 @@ type SourcesConfig struct {
 	GitEgress material.GitEgressPolicy
 	// SourceTypes is the toolkit types this deployment allows as sources.
 	SourceTypes []string
-	// CallbackBaseURL is the origin the provider reaches back on for
-	// artifacts and models — one value, because the engine derives the
-	// artifact base by stripping `/llm/v1` off it.
-	CallbackBaseURL string
 	// CallbackTokenTTL is the minted bearer's lifetime. Two hours by default:
 	// long enough for a large repository's ingestion, short enough that a
 	// leaked token is not a standing grant.
@@ -52,8 +48,10 @@ func SourcesFromEnv(lookup func(string) (string, bool)) (SourcesConfig, error) {
 	cfg := SourcesConfig{
 		GitEgress:        material.ParseGitEgress(get(GitAllowlistEnv), GitAllowlistEnv),
 		SourceTypes:      DefaultSourceTypes,
-		CallbackBaseURL:  get(CallbackBaseURLEnv),
 		CallbackTokenTTL: 2 * time.Hour,
+	}
+	if err := material.RetiredCallbackBaseURL(RetiredCallbackBaseURLEnv, lookup); err != nil {
+		return SourcesConfig{}, err
 	}
 	if raw := get(SourceTypesEnv); raw != "" {
 		cfg.SourceTypes = strings.FieldsFunc(raw, func(r rune) bool {

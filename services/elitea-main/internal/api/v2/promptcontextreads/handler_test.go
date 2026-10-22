@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -369,7 +370,7 @@ func TestCurrentRoutesAuthenticateAndAuthorizeBeforeReads(t *testing.T) {
 		want        int
 	}{
 		{name: "missing auth", path: "/api/v2/elitea_core/chat_config/prompt_lib/7", trusted: true, want: http.StatusUnauthorized},
-		{name: "untrusted edge", path: "/api/v2/elitea_core/chat_config/prompt_lib/7", auth: true, want: http.StatusUnauthorized},
+		{name: "forged X-Auth-* identity without a session", path: "/api/v2/elitea_core/chat_config/prompt_lib/7", want: http.StatusUnauthorized},
 		{name: "chat permission denied", path: "/api/v2/elitea_core/chat_config/prompt_lib/7", auth: true, trusted: true, permissions: []string{CurrentProjectContextPermission}, want: http.StatusForbidden},
 		{name: "context permission denied", path: "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", auth: true, trusted: true, permissions: []string{CurrentChatConfigPermission}, want: http.StatusForbidden},
 		{name: "invalid converter path", path: "/api/v2/elitea_core/chat_config/prompt_lib/not-an-id", auth: true, trusted: true, permissions: []string{CurrentChatConfigPermission}, want: http.StatusNotFound},
@@ -397,14 +398,7 @@ func TestCurrentRoutesAuthenticateAndAuthorizeBeforeReads(t *testing.T) {
 							return user, nil
 						},
 					),
-					ForwardedIdentityVerifier: currentPeerVerifierFunc(
-						func(*http.Request) error {
-							if !test.trusted {
-								return errors.New("untrusted")
-							}
-							return nil
-						},
-					),
+					FormSessions: authtest.FormSessions{},
 				},
 				permissions,
 			)
@@ -441,7 +435,6 @@ func TestCurrentPromptContextCompositionFailsClosed(t *testing.T) {
 	principal := currentPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := currentPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentPermissionResolverFunc(func(
 		context.Context,
 		auth.User,
@@ -451,8 +444,8 @@ func TestCurrentPromptContextCompositionFailsClosed(t *testing.T) {
 		return auth.PermissionResolution{}, nil
 	})
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}
 	for name, test := range map[string]struct {
 		chat        CurrentChatConfigReader
@@ -485,22 +478,22 @@ func TestCurrentPromptContextCompositionFailsClosed(t *testing.T) {
 }
 
 // An OIDC-only deployment has no FormGraph, so PrincipalValidator and
-// ForwardedIdentityVerifier are both nil and its only credential is the
+// FormSessions are both nil and its only credential is the
 // session cookie. NewCurrentRoutes must COMPOSE there — requiring the two
 // validators is what kept the chat-config route unservable in the E2E stack
 // and every other SSO-only install (#194) — and it must still refuse to read
 // anything for a request that carries no session.
 //
-// The second case is the security half of that relaxation: a caller who
-// forges X-Auth-Type/X-Auth-ID must NOT be authenticated when there is no
-// ForwardedIdentityVerifier to prove the edge, and no reader may be touched.
+// The second case is the security half of that relaxation: a Form session
+// cookie must NOT authenticate a deployment that composed no Form session
+// reader, and no reader may be touched.
 func TestCurrentRoutesComposeWithSessionOnlyAuthAndStillRejectUnauthenticated(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		authenticated bool
 	}{
 		{name: "no credential at all"},
-		{name: "forged forwarded identity headers", authenticated: true},
+		{name: "a Form cookie with no Form reader composed", authenticated: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			chat := &currentChatReaderStub{}
@@ -552,14 +545,7 @@ func newCurrentRoutesForTest(
 					return user, nil
 				},
 			),
-			ForwardedIdentityVerifier: currentPeerVerifierFunc(
-				func(request *http.Request) error {
-					if request.RemoteAddr != "10.0.0.8:43120" {
-						return errors.New("untrusted")
-					}
-					return nil
-				},
-			),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -573,8 +559,11 @@ func currentRequest(method, path string, authenticated bool, remoteAddr string) 
 	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = remoteAddr
 	if authenticated {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "11")
+		authtest.SignIn(request, "11")
+	} else {
+		// No credential, but the forged X-Auth-* identity the retired edge
+		// projection used: it must authenticate nobody (#1359).
+		authtest.ForgeXAuth(request, "11")
 	}
 	return request
 }
@@ -602,14 +591,6 @@ func (function currentPrincipalValidatorFunc) ValidatePrincipal(
 	user auth.User,
 ) (auth.User, error) {
 	return function(ctx, user)
-}
-
-type currentPeerVerifierFunc func(*http.Request) error
-
-func (function currentPeerVerifierFunc) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	return function(request)
 }
 
 func containsError(err error, text string) bool {

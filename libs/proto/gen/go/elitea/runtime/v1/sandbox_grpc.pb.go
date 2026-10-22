@@ -19,15 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SandboxSupervisorService_HydrateSandboxWorkspace_FullMethodName     = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxWorkspace"
-	SandboxSupervisorService_SubmitRustCompiledSnapshot_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/SubmitRustCompiledSnapshot"
-	SandboxSupervisorService_PublishRustCompiledSnapshot_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot"
-	SandboxSupervisorService_SubmitSandboxJob_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob"
-	SandboxSupervisorService_CancelSandboxJob_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob"
-	SandboxSupervisorService_LookupSandboxDependencies_FullMethodName   = "/elitea.runtime.v1.SandboxSupervisorService/LookupSandboxDependencies"
-	SandboxSupervisorService_PrepareSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies"
-	SandboxSupervisorService_PublishSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies"
-	SandboxSupervisorService_HydrateSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies"
+	SandboxSupervisorService_HydrateSandboxWorkspace_FullMethodName              = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxWorkspace"
+	SandboxSupervisorService_SubmitRustCompiledSnapshot_FullMethodName           = "/elitea.runtime.v1.SandboxSupervisorService/SubmitRustCompiledSnapshot"
+	SandboxSupervisorService_PublishRustCompiledSnapshot_FullMethodName          = "/elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot"
+	SandboxSupervisorService_SubmitSandboxJob_FullMethodName                     = "/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob"
+	SandboxSupervisorService_CancelSandboxJob_FullMethodName                     = "/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob"
+	SandboxSupervisorService_LookupSandboxDependencies_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/LookupSandboxDependencies"
+	SandboxSupervisorService_PrepareSandboxDependencies_FullMethodName           = "/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies"
+	SandboxSupervisorService_PublishSandboxDependencies_FullMethodName           = "/elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies"
+	SandboxSupervisorService_HydrateSandboxDependencies_FullMethodName           = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies"
+	SandboxSupervisorService_CodeOwnerRecoveryRead_FullMethodName                = "/elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoveryRead"
+	SandboxSupervisorService_CodeOwnerRecoverySealNoEffect_FullMethodName        = "/elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoverySealNoEffect"
+	SandboxSupervisorService_CodePlatformOwnerReadRetainedRuntime_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadRetainedRuntime"
+	SandboxSupervisorService_CodePlatformOwnerReadPendingCall_FullMethodName     = "/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadPendingCall"
+	SandboxSupervisorService_CodePlatformOwnerPublishReply_FullMethodName        = "/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerPublishReply"
 )
 
 // SandboxSupervisorServiceClient is the client API for SandboxSupervisorService service.
@@ -45,6 +50,18 @@ type SandboxSupervisorServiceClient interface {
 	PrepareSandboxDependencies(ctx context.Context, in *PrepareSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PrepareSandboxDependenciesResponseV1, error)
 	PublishSandboxDependencies(ctx context.Context, in *PublishSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PublishSandboxDependenciesResponseV1, error)
 	HydrateSandboxDependencies(ctx context.Context, in *HydrateSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*HydrateSandboxDependenciesResponseV1, error)
+	// Main's owner observations (#1359 U4; they replaced the JSON-over-h2
+	// routes /elitea.runtime.node-code-recovery.v1 and
+	// /elitea.runtime.code-platform.v1). The caller must be Main's configured
+	// workload identity, and each request is the exact canonical owner document
+	// carrying a Main-signed owner grant for this supervisor's audience. None of
+	// them submits, starts or resumes a runtime. Any refusal is a non-OK status
+	// that carries nothing from the ledger.
+	CodeOwnerRecoveryRead(ctx context.Context, in *CodeOwnerRecoveryReadRequestV1, opts ...grpc.CallOption) (*CodeOwnerRecoveryReadResponseV1, error)
+	CodeOwnerRecoverySealNoEffect(ctx context.Context, in *CodeOwnerRecoverySealNoEffectRequestV1, opts ...grpc.CallOption) (*CodeOwnerRecoverySealNoEffectResponseV1, error)
+	CodePlatformOwnerReadRetainedRuntime(ctx context.Context, in *CodePlatformOwnerReadRetainedRuntimeRequestV1, opts ...grpc.CallOption) (*CodePlatformOwnerReadRetainedRuntimeResponseV1, error)
+	CodePlatformOwnerReadPendingCall(ctx context.Context, in *CodePlatformOwnerReadPendingCallRequestV1, opts ...grpc.CallOption) (*CodePlatformOwnerReadPendingCallResponseV1, error)
+	CodePlatformOwnerPublishReply(ctx context.Context, in *CodePlatformOwnerPublishReplyRequestV1, opts ...grpc.CallOption) (*CodePlatformOwnerPublishReplyResponseV1, error)
 }
 
 type sandboxSupervisorServiceClient struct {
@@ -145,6 +162,56 @@ func (c *sandboxSupervisorServiceClient) HydrateSandboxDependencies(ctx context.
 	return out, nil
 }
 
+func (c *sandboxSupervisorServiceClient) CodeOwnerRecoveryRead(ctx context.Context, in *CodeOwnerRecoveryReadRequestV1, opts ...grpc.CallOption) (*CodeOwnerRecoveryReadResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodeOwnerRecoveryReadResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_CodeOwnerRecoveryRead_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) CodeOwnerRecoverySealNoEffect(ctx context.Context, in *CodeOwnerRecoverySealNoEffectRequestV1, opts ...grpc.CallOption) (*CodeOwnerRecoverySealNoEffectResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodeOwnerRecoverySealNoEffectResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_CodeOwnerRecoverySealNoEffect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) CodePlatformOwnerReadRetainedRuntime(ctx context.Context, in *CodePlatformOwnerReadRetainedRuntimeRequestV1, opts ...grpc.CallOption) (*CodePlatformOwnerReadRetainedRuntimeResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodePlatformOwnerReadRetainedRuntimeResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_CodePlatformOwnerReadRetainedRuntime_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) CodePlatformOwnerReadPendingCall(ctx context.Context, in *CodePlatformOwnerReadPendingCallRequestV1, opts ...grpc.CallOption) (*CodePlatformOwnerReadPendingCallResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodePlatformOwnerReadPendingCallResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_CodePlatformOwnerReadPendingCall_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) CodePlatformOwnerPublishReply(ctx context.Context, in *CodePlatformOwnerPublishReplyRequestV1, opts ...grpc.CallOption) (*CodePlatformOwnerPublishReplyResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodePlatformOwnerPublishReplyResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_CodePlatformOwnerPublishReply_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxSupervisorServiceServer is the server API for SandboxSupervisorService service.
 // All implementations must embed UnimplementedSandboxSupervisorServiceServer
 // for forward compatibility.
@@ -160,6 +227,18 @@ type SandboxSupervisorServiceServer interface {
 	PrepareSandboxDependencies(context.Context, *PrepareSandboxDependenciesRequestV1) (*PrepareSandboxDependenciesResponseV1, error)
 	PublishSandboxDependencies(context.Context, *PublishSandboxDependenciesRequestV1) (*PublishSandboxDependenciesResponseV1, error)
 	HydrateSandboxDependencies(context.Context, *HydrateSandboxDependenciesRequestV1) (*HydrateSandboxDependenciesResponseV1, error)
+	// Main's owner observations (#1359 U4; they replaced the JSON-over-h2
+	// routes /elitea.runtime.node-code-recovery.v1 and
+	// /elitea.runtime.code-platform.v1). The caller must be Main's configured
+	// workload identity, and each request is the exact canonical owner document
+	// carrying a Main-signed owner grant for this supervisor's audience. None of
+	// them submits, starts or resumes a runtime. Any refusal is a non-OK status
+	// that carries nothing from the ledger.
+	CodeOwnerRecoveryRead(context.Context, *CodeOwnerRecoveryReadRequestV1) (*CodeOwnerRecoveryReadResponseV1, error)
+	CodeOwnerRecoverySealNoEffect(context.Context, *CodeOwnerRecoverySealNoEffectRequestV1) (*CodeOwnerRecoverySealNoEffectResponseV1, error)
+	CodePlatformOwnerReadRetainedRuntime(context.Context, *CodePlatformOwnerReadRetainedRuntimeRequestV1) (*CodePlatformOwnerReadRetainedRuntimeResponseV1, error)
+	CodePlatformOwnerReadPendingCall(context.Context, *CodePlatformOwnerReadPendingCallRequestV1) (*CodePlatformOwnerReadPendingCallResponseV1, error)
+	CodePlatformOwnerPublishReply(context.Context, *CodePlatformOwnerPublishReplyRequestV1) (*CodePlatformOwnerPublishReplyResponseV1, error)
 	mustEmbedUnimplementedSandboxSupervisorServiceServer()
 }
 
@@ -196,6 +275,21 @@ func (UnimplementedSandboxSupervisorServiceServer) PublishSandboxDependencies(co
 }
 func (UnimplementedSandboxSupervisorServiceServer) HydrateSandboxDependencies(context.Context, *HydrateSandboxDependenciesRequestV1) (*HydrateSandboxDependenciesResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HydrateSandboxDependencies not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) CodeOwnerRecoveryRead(context.Context, *CodeOwnerRecoveryReadRequestV1) (*CodeOwnerRecoveryReadResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CodeOwnerRecoveryRead not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) CodeOwnerRecoverySealNoEffect(context.Context, *CodeOwnerRecoverySealNoEffectRequestV1) (*CodeOwnerRecoverySealNoEffectResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CodeOwnerRecoverySealNoEffect not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) CodePlatformOwnerReadRetainedRuntime(context.Context, *CodePlatformOwnerReadRetainedRuntimeRequestV1) (*CodePlatformOwnerReadRetainedRuntimeResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CodePlatformOwnerReadRetainedRuntime not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) CodePlatformOwnerReadPendingCall(context.Context, *CodePlatformOwnerReadPendingCallRequestV1) (*CodePlatformOwnerReadPendingCallResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CodePlatformOwnerReadPendingCall not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) CodePlatformOwnerPublishReply(context.Context, *CodePlatformOwnerPublishReplyRequestV1) (*CodePlatformOwnerPublishReplyResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CodePlatformOwnerPublishReply not implemented")
 }
 func (UnimplementedSandboxSupervisorServiceServer) mustEmbedUnimplementedSandboxSupervisorServiceServer() {
 }
@@ -381,6 +475,96 @@ func _SandboxSupervisorService_HydrateSandboxDependencies_Handler(srv interface{
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxSupervisorService_CodeOwnerRecoveryRead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CodeOwnerRecoveryReadRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).CodeOwnerRecoveryRead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_CodeOwnerRecoveryRead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).CodeOwnerRecoveryRead(ctx, req.(*CodeOwnerRecoveryReadRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_CodeOwnerRecoverySealNoEffect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CodeOwnerRecoverySealNoEffectRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).CodeOwnerRecoverySealNoEffect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_CodeOwnerRecoverySealNoEffect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).CodeOwnerRecoverySealNoEffect(ctx, req.(*CodeOwnerRecoverySealNoEffectRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_CodePlatformOwnerReadRetainedRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CodePlatformOwnerReadRetainedRuntimeRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).CodePlatformOwnerReadRetainedRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_CodePlatformOwnerReadRetainedRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).CodePlatformOwnerReadRetainedRuntime(ctx, req.(*CodePlatformOwnerReadRetainedRuntimeRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_CodePlatformOwnerReadPendingCall_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CodePlatformOwnerReadPendingCallRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).CodePlatformOwnerReadPendingCall(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_CodePlatformOwnerReadPendingCall_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).CodePlatformOwnerReadPendingCall(ctx, req.(*CodePlatformOwnerReadPendingCallRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_CodePlatformOwnerPublishReply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CodePlatformOwnerPublishReplyRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).CodePlatformOwnerPublishReply(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_CodePlatformOwnerPublishReply_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).CodePlatformOwnerPublishReply(ctx, req.(*CodePlatformOwnerPublishReplyRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxSupervisorService_ServiceDesc is the grpc.ServiceDesc for SandboxSupervisorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -423,6 +607,26 @@ var SandboxSupervisorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HydrateSandboxDependencies",
 			Handler:    _SandboxSupervisorService_HydrateSandboxDependencies_Handler,
+		},
+		{
+			MethodName: "CodeOwnerRecoveryRead",
+			Handler:    _SandboxSupervisorService_CodeOwnerRecoveryRead_Handler,
+		},
+		{
+			MethodName: "CodeOwnerRecoverySealNoEffect",
+			Handler:    _SandboxSupervisorService_CodeOwnerRecoverySealNoEffect_Handler,
+		},
+		{
+			MethodName: "CodePlatformOwnerReadRetainedRuntime",
+			Handler:    _SandboxSupervisorService_CodePlatformOwnerReadRetainedRuntime_Handler,
+		},
+		{
+			MethodName: "CodePlatformOwnerReadPendingCall",
+			Handler:    _SandboxSupervisorService_CodePlatformOwnerReadPendingCall_Handler,
+		},
+		{
+			MethodName: "CodePlatformOwnerPublishReply",
+			Handler:    _SandboxSupervisorService_CodePlatformOwnerPublishReply_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

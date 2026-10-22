@@ -140,6 +140,11 @@ test('J16f: the Flow/Yaml toggle swaps the canvas for the YAML editor, and back'
  * id, which is the claim the two views are one document.
  */
 test('J16f: the YAML pane shows the graph the server stored for this pipeline', async ({ page }) => {
+  // test.slow() (90 s, as the other create-edit-save-reload journeys in this
+  // folder): on a webkit CI leg with four workers this journey measured
+  // 30-35 s with no single slow call (every API read < 0.3 s), so the
+  // default 30 s budget cut it off mid-reload and it read as a hang.
+  test.slow();
   const pipeline = await createPipelineThroughApi(page.request, uniqueName('yamlcnt'), {
     instructions: PROBE_TEMPLATE,
   });

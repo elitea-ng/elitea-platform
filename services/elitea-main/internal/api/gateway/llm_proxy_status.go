@@ -45,7 +45,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
@@ -76,63 +75,36 @@ type StatusReader interface {
 	Status(ctx context.Context) (json.RawMessage, error)
 }
 
-// GatewayStatusClient reads `GET /governance/status` from elitea-llm-gateway
-// over the same mTLS-internal transport the `/llm` reverse proxy uses.
+// GatewayStatusClient reads the gateway's enforcement status through the
+// GovernanceStatus RPC (llmproxy.Gateway, gRPC over mutual TLS).
 //
-// No identity signature is sent, deliberately: the gateway verifies no HMAC on
-// this route, unlike the `/llm` dialect routes. Signing it would imply an
-// authorization the upstream does not perform, and reading as though it did is
-// how a caller ends up trusting a header the other side ignores.
-//
-// The route is on the SAME mux and listener as `/llm` — there is only one
-// (`cmd/elitea-llm-gateway/main.go`) — so what keeps it off the public edge is
-// that elitea-main proxies only `/llm` to a ClusterIP Service, not a separate
-// port. Mutual TLS protects the hop only where `TLSCAFile` is configured
-// (`internal/server/server.go`); on a deployment that leaves it unset this route
-// is reachable by anything inside the cluster. That is the same posture the
-// existing `/metrics` and `/readyz` routes already have.
+// No identity is sent, deliberately: the gateway verifies no identity on this
+// call, unlike the /llm dialect calls. Signing it would imply an
+// authorization the upstream does not perform. The call is admitted by the
+// gateway's client-certificate allowlist alone; the gateway's HTTP listener
+// serves only health and metrics, so nothing else reaches this status.
 type GatewayStatusClient struct {
-	httpClient *http.Client
-	baseURL    string
+	gateway llmproxy.Gateway
 }
 
-// NewGatewayStatusClient builds a reader against gatewayBaseURL (for example
-// "https://elitea-llm-gateway-svc:8443") over transport.
-func NewGatewayStatusClient(gatewayBaseURL string, transport http.RoundTripper) *GatewayStatusClient {
-	return &GatewayStatusClient{
-		httpClient: &http.Client{Transport: transport, Timeout: statusTimeout},
-		baseURL:    strings.TrimRight(gatewayBaseURL, "/"),
+// NewGatewayStatusClient builds a reader over gateway. It returns nil when
+// gateway is nil: a deployment without the gateway is supported, and the
+// handler reports that posture rather than failing to compose.
+func NewGatewayStatusClient(gateway llmproxy.Gateway) *GatewayStatusClient {
+	if gateway == nil {
+		return nil
 	}
-}
-
-// NewGatewayStatusClientFromConfig builds a reader from the same four settings
-// the `/llm` proxy and the connection checker read, so the gateway hop is
-// configured once. It returns (nil, nil) when no gateway URL is set: a
-// deployment without the gateway is supported, and the handler reports that
-// posture rather than failing to compose.
-func NewGatewayStatusClientFromConfig(gatewayURL, clientCertFile, clientKeyFile, caFile string) (*GatewayStatusClient, error) {
-	if strings.TrimSpace(gatewayURL) == "" {
-		return nil, nil
-	}
-	transport, err := llmproxy.NewMTLSTransport(clientCertFile, clientKeyFile, caFile, "")
-	if err != nil {
-		return nil, fmt.Errorf("compose gateway status client: %w", err)
-	}
-	return NewGatewayStatusClient(gatewayURL, transport), nil
+	return &GatewayStatusClient{gateway: gateway}
 }
 
 // Status fetches and returns the gateway's status body verbatim.
 func (c *GatewayStatusClient) Status(ctx context.Context) (json.RawMessage, error) {
-	if c == nil || c.baseURL == "" {
+	if c == nil || c.gateway == nil {
 		return nil, ErrNoGatewayStatusSource
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/governance/status", nil)
-	if err != nil {
-		return nil, fmt.Errorf("gateway status: build request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+	resp, err := c.gateway.GovernanceStatus(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("gateway status: call gateway: %w", err)
 	}

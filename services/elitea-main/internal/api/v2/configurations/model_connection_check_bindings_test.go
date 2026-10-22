@@ -432,7 +432,7 @@ func TestLLMModelCheck_RefusesAnInvalidDialProtocol(t *testing.T) {
 func TestLLMModelCheck_SignsTheCallerIntoTheGatewayIdentity(t *testing.T) {
 	var userHeader string
 	stub := newGatewayStub(t, http.StatusOK, `{"success":true,"probe":"completion"}`)
-	stub.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	stub.override = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userHeader = r.Header.Get("X-Elitea-User-Id")
 		_, _ = w.Write([]byte(`{"success":true,"probe":"completion"}`))
 	})

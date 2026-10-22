@@ -50,8 +50,7 @@ func NewCurrentIndexScheduleRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexScheduleRoute, error) {
-	if updater == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if updater == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexScheduleRoute
 	}
 

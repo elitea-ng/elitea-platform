@@ -723,7 +723,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// hard ceiling rises from 1024 to 4096 per capability (#966): the CHECKs on
 	// execution_admission_policies.max_outstanding and
 	// agent_admission_reservations.configured_max. No data, no permission.
-	require.EqualValues(t, 170, Head(shared))
+	//
+	// 171: shared/0171_provider_origin_grpcs.sql, the CHECK on
+	// provider_hub.provider_origin_registration.origin admits grpcs://host:port,
+	// the gRPC listener the facades' registrar now records (#1359). No data,
+	// no permission.
+	require.EqualValues(t, 171, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

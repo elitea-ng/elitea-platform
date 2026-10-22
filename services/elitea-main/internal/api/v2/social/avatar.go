@@ -55,8 +55,7 @@ func NewCurrentAvatarRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentAvatarRoute, error) {
-	if store == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if store == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentAvatarRoute
 	}
 

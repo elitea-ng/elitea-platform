@@ -6,7 +6,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -27,32 +26,24 @@ import (
 
 var ErrInvalidProductionAuthRoutes = errors.New("invalid production authentication routes")
 
-// ProductionAuthRoutes is constructed atomically so a caller cannot mount a
-// browser login surface without the gateway edge that authorizes the current
-// Main, or vice versa.
+// ProductionAuthRoutes is the Form plane's browser sign-in surface. It is
+// composed only while Form sign-in is enabled (ELITEA_FORM_LOGIN_ENABLED);
+// otherwise /auth belongs to the single sign-on plane when one is configured,
+// and is absent (404) when none is.
+//
+// It used to pair the browser surface with /internal/auth/main, the
+// forward-auth edge that projected an X-Auth-* identity. That edge is gone
+// (#1359): elitea-main reads the Form session cookie itself
+// (apimw.AuthConfig.FormSessions), so nothing calls an auth edge any more.
 type ProductionAuthRoutes struct {
 	browser http.Handler
-	main    http.Handler
 }
 
-func NewProductionAuthRoutes(browser, main http.Handler) (*ProductionAuthRoutes, error) {
-	if browser == nil || main == nil {
+func NewProductionAuthRoutes(browser http.Handler) (*ProductionAuthRoutes, error) {
+	if browser == nil {
 		return nil, ErrInvalidProductionAuthRoutes
 	}
-	return &ProductionAuthRoutes{browser: browser, main: main}, nil
-}
-
-// NewEdgeOnlyProductionAuthRoutes composes production authentication with
-// Form sign-in DISABLED (ELITEA_FORM_LOGIN_ENABLED, off by default): the
-// gateway edge is mounted, and no Form browser route is — so /auth belongs
-// to the single sign-on plane when one is configured, and is absent (404)
-// when none is. It is a separate constructor, not a nil argument, so a
-// missing browser handler can never be mistaken for a deliberate choice.
-func NewEdgeOnlyProductionAuthRoutes(main http.Handler) (*ProductionAuthRoutes, error) {
-	if main == nil {
-		return nil, ErrInvalidProductionAuthRoutes
-	}
-	return &ProductionAuthRoutes{main: main}, nil
+	return &ProductionAuthRoutes{browser: browser}, nil
 }
 
 // NewRouter builds the single production route composition. It used to
@@ -107,10 +98,9 @@ func NewRouter(cfg RouterConfig) chi.Router {
 // refusals, once. router_cross_cutting_gates_test.go walks the composed router
 // and fails on any /api/v2 route that answers without all three.
 //
-// The two browser-auth edges at the top are not /api/v2 routes and stay on
-// the root as they were: /auth is the sign-in surface and /internal/auth/main
-// is the gateway edge's identity check, neither of which a maintenance window
-// or a client version may close.
+// The Form sign-in surface at the top is not an /api/v2 route and stays on the
+// root as it was: neither a maintenance window nor a client version may close
+// /auth.
 func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig, gates []func(http.Handler) http.Handler) {
 	if cfg.ProductionAuth != nil {
 		// Exactly one browser-auth plane may own /auth. router.go mounts
@@ -128,25 +118,16 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig, gates []func(
 		// coexist" described an intent the router never implemented.
 		//
 		// OIDC wins the browser prefix, because it is the plane a browser in
-		// such a deployment actually authenticates through. The internal
-		// edge-auth endpoint below is NOT skipped: it is a distinct path, the
-		// edge's identity check depends on it, and it is what the runtime's
-		// ForwardedIdentityVerifier is paired with. Single-plane deployments are
-		// unaffected in either direction.
+		// such a deployment actually authenticates through. Single-plane
+		// deployments are unaffected in either direction.
 		//
 		// cfg.SessionHandler, not cfg.Auth.SessionHandler: router.go:371 folds the
 		// latter into the former before reaching here, and the OIDC mount at
 		// router.go:408 tests exactly this field. Testing the other one would
 		// miss a caller that sets the top-level field directly and panic again.
-		//
-		// A nil browser handler is NewEdgeOnlyProductionAuthRoutes: Form
-		// sign-in is disabled, and no Form route is mounted at all.
-		if cfg.SessionHandler == nil && cfg.ProductionAuth.browser != nil {
+		if cfg.SessionHandler == nil {
 			mountFormBrowserRoutes(r, cfg.ProductionAuth.browser)
 		}
-		// This address is reached only by the gateway's EdgeAuth middleware;
-		// deployment routing must never expose it as a product route.
-		r.Method(http.MethodGet, browserauth.MainEdgeAuthPath, cfg.ProductionAuth.main)
 	}
 	r.Group(func(r chi.Router) {
 		r.Use(apimw.NoStore)

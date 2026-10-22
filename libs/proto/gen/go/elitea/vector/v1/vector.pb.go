@@ -121,7 +121,7 @@ func (Source) EnumDescriptor() ([]byte, []int) {
 // SOURCE_MEMORY and refused for every other source.
 //
 //	PERSONAL: the memories of the user the token was minted for (the
-//	          principal "user:<id>"). Refused for a token that names no user
+//	          principal `user:<id>`). Refused for a token that names no user
 //	          and for a token whose claim runs in a conversation with more
 //	          than one person (TokenIntrospection personal_memory_allowed).
 //	PROJECT:  the memories shared by every user of the token's project.

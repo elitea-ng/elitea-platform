@@ -10,13 +10,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
-	"mime"
-	"net/http"
 	"net/url"
-	"strings"
 	"time"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
 	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
@@ -108,15 +108,21 @@ func validCodeClaim(id string, attempt, epoch uint64, fence string, issued, expi
 
 type CodeOwnerEndpoint struct {
 	Audience string
-	Origin   string
-	TLS      *tls.Config
+	// Origin is the supervisor's https://host:port gRPC listener.
+	Origin string
+	TLS    *tls.Config
 }
 type codeOwnerEndpoint struct {
-	origin string
-	client *http.Client
+	conn   *grpc.ClientConn
+	client runtimev1.SandboxSupervisorServiceClient
+	tls    *tls.Config
 }
 
-// CodeOwnerClient calls only closed recovery and retained-runtime helper routes. It never submits executable jobs.
+// codeOwnerMessageBytes caps one owner RPC message in either direction.
+const codeOwnerMessageBytes = 16 << 20
+
+// CodeOwnerClient calls only the closed recovery and retained-runtime owner
+// RPCs of SandboxSupervisorService. It never submits executable jobs.
 type CodeOwnerClient struct {
 	endpoints map[string]codeOwnerEndpoint
 	requester string
@@ -129,18 +135,22 @@ func NewCodeOwnerClient(requester string, configs []CodeOwnerEndpoint) (*CodeOwn
 	c := &CodeOwnerClient{endpoints: map[string]codeOwnerEndpoint{}, requester: requester}
 	for _, cfg := range configs {
 		u, err := url.Parse(cfg.Origin)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" || !code.Identity(cfg.Audience) || cfg.TLS == nil || cfg.TLS.InsecureSkipVerify || cfg.TLS.GetClientCertificate != nil || cfg.TLS.RootCAs == nil || len(cfg.TLS.Certificates) != 1 || len(cfg.TLS.Certificates[0].Certificate) == 0 || cfg.TLS.Certificates[0].PrivateKey == nil {
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Port() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" || !code.Identity(cfg.Audience) || cfg.TLS == nil || cfg.TLS.InsecureSkipVerify || cfg.TLS.GetClientCertificate != nil || cfg.TLS.RootCAs == nil || len(cfg.TLS.Certificates) != 1 || len(cfg.TLS.Certificates[0].Certificate) == 0 || cfg.TLS.Certificates[0].PrivateKey == nil {
+			c.Close()
 			return nil, code.ErrRejected
 		}
 		if _, ok := c.endpoints[cfg.Audience]; ok {
+			c.Close()
 			return nil, code.ErrRejected
 		}
 		leaf, err := x509.ParseCertificate(cfg.TLS.Certificates[0].Certificate[0])
 		if err != nil {
+			c.Close()
 			return nil, code.ErrRejected
 		}
 		peer, err := workloadidentity.Certificate(leaf)
 		if err != nil || peer != requester {
+			c.Close()
 			return nil, code.ErrRejected
 		}
 		tlsConfig := cfg.TLS.Clone()
@@ -162,15 +172,17 @@ func NewCodeOwnerClient(requester string, configs []CodeOwnerEndpoint) (*CodeOwn
 			}
 			return nil
 		}
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = nil
-		transport.TLSClientConfig = tlsConfig
-		transport.DisableCompression = true
-		transport.MaxConnsPerHost = 2
-		transport.MaxIdleConnsPerHost = 2
-		transport.TLSHandshakeTimeout = 2 * time.Second
-		transport.ResponseHeaderTimeout = 10 * time.Second
-		c.endpoints[audience] = codeOwnerEndpoint{origin: strings.TrimSuffix(cfg.Origin, "/"), client: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		conn, err := grpc.NewClient("dns:///"+u.Host,
+			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+			grpc.WithNoProxy(),
+			grpc.WithDisableRetry(),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(codeOwnerMessageBytes), grpc.MaxCallSendMsgSize(codeOwnerMessageBytes)),
+		)
+		if err != nil {
+			c.Close()
+			return nil, code.ErrRejected
+		}
+		c.endpoints[audience] = codeOwnerEndpoint{conn: conn, client: runtimev1.NewSandboxSupervisorServiceClient(conn), tls: tlsConfig}
 	}
 	return c, nil
 }
@@ -178,7 +190,7 @@ func NewCodeOwnerClient(requester string, configs []CodeOwnerEndpoint) (*CodeOwn
 func (c *CodeOwnerClient) Close() {
 	if c != nil {
 		for _, endpoint := range c.endpoints {
-			endpoint.client.CloseIdleConnections()
+			_ = endpoint.conn.Close()
 		}
 	}
 }
@@ -192,15 +204,18 @@ func (c *CodeOwnerClient) Read(ctx context.Context, claims code.GrantClaims, gra
 	if !ok {
 		return nil, code.ErrRejected
 	}
-	route := "read"
-	if claims.Operation == "seal_no_effect" {
-		route = "seal-no-effect"
-	}
 	body, err := code.Canonical(code.OwnerRequest{Schema: "elitea.sandbox.node-code-recovery-request.v1", Grant: grant})
 	if err != nil || len(body) > 16*1024 {
 		return nil, code.ErrRejected
 	}
-	raw, err := boundedCodeOwnerPost(ctx, endpoint, "/elitea.runtime.node-code-recovery.v1/jobs/"+claims.JobKey+"/"+route, body, code.MaxReceiptBytes, 3*time.Second)
+	raw, err := boundedCodeOwnerCall(ctx, code.MaxReceiptBytes, 3*time.Second, func(ctx context.Context) ([]byte, error) {
+		if claims.Operation == "seal_no_effect" {
+			response, err := endpoint.client.CodeOwnerRecoverySealNoEffect(ctx, &runtimev1.CodeOwnerRecoverySealNoEffectRequestV1{JobKey: claims.JobKey, RequestJson: body})
+			return response.GetResponseJson(), err
+		}
+		response, err := endpoint.client.CodeOwnerRecoveryRead(ctx, &runtimev1.CodeOwnerRecoveryReadRequestV1{JobKey: claims.JobKey, RequestJson: body})
+		return response.GetResponseJson(), err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -221,35 +236,20 @@ func (c *CodeOwnerClient) Read(ctx context.Context, claims code.GrantClaims, gra
 	return bytes.Clone(result.Receipt), nil
 }
 
-// boundedCodeOwnerPost is private: callers below choose fixed purpose-specific routes.
-// No retry, redirect, caller origin, query or automatic credential forwarding is exposed.
-func boundedCodeOwnerPost(ctx context.Context, endpoint codeOwnerEndpoint, path string, body []byte, max int, deadline time.Duration) (raw []byte, err error) {
+// boundedCodeOwnerCall is private: callers below choose fixed purpose-specific
+// RPCs. No retry, caller origin or automatic credential forwarding is exposed,
+// and any refusal from the supervisor is a refusal here.
+func boundedCodeOwnerCall(ctx context.Context, max int, deadline time.Duration, call func(context.Context) ([]byte, error)) ([]byte, error) {
 	limited, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
-	request, err := http.NewRequestWithContext(limited, http.MethodPost, endpoint.origin+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, code.ErrRejected
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	response, err := endpoint.client.Do(request)
+	raw, err := call(limited)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, code.ErrRejected
 	}
-	defer func() {
-		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
-			raw, err = nil, code.ErrRejected
-		}
-	}()
-	media, params, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if err != nil || media != "application/json" || len(params) != 0 || response.StatusCode != http.StatusOK || response.ContentLength > int64(max) || response.Header.Get("Content-Encoding") != "" {
-		return nil, code.ErrRejected
-	}
-	raw, err = io.ReadAll(io.LimitReader(response.Body, int64(max)+1))
-	if err != nil || len(raw) > max || response.ContentLength >= 0 && int64(len(raw)) != response.ContentLength {
+	if len(raw) == 0 || len(raw) > max {
 		return nil, code.ErrRejected
 	}
 	return raw, nil
@@ -312,15 +312,6 @@ func (c *CodeOwnerClient) platformOperation(ctx context.Context, claims code.Pla
 	if c == nil || claims.Validate() != nil || claims.RequesterWorkloadIdentity != c.requester || !signedCodeOwnerGrantMatches(grant, "elitea.sandbox.code-platform-owner-signed-grant.v1", claims) {
 		return code.PlatformOwnerResponse{}, code.ErrRejected
 	}
-	route := ""
-	switch claims.Operation {
-	case "read_retained_runtime":
-		route = "read-retained-runtime"
-	case "read_pending_platform_call":
-		route = "read-pending-platform-call"
-	case "publish_committed_platform_reply":
-		route = "publish-committed-platform-reply"
-	}
 	if (claims.Operation == "publish_committed_platform_reply") != (reply != nil) {
 		return code.PlatformOwnerResponse{}, code.ErrRejected
 	}
@@ -336,7 +327,20 @@ func (c *CodeOwnerClient) platformOperation(ctx context.Context, claims code.Pla
 	if err != nil || len(body) > limit {
 		return code.PlatformOwnerResponse{}, code.ErrRejected
 	}
-	raw, err := boundedCodeOwnerPost(ctx, endpoint, "/elitea.runtime.code-platform.v1/jobs/"+claims.JobKey+"/"+route, body, code.MaxPlatformResponseBytes, 10*time.Second)
+	raw, err := boundedCodeOwnerCall(ctx, code.MaxPlatformResponseBytes, 10*time.Second, func(ctx context.Context) ([]byte, error) {
+		switch claims.Operation {
+		case "read_retained_runtime":
+			response, err := endpoint.client.CodePlatformOwnerReadRetainedRuntime(ctx, &runtimev1.CodePlatformOwnerReadRetainedRuntimeRequestV1{JobKey: claims.JobKey, RequestJson: body})
+			return response.GetResponseJson(), err
+		case "read_pending_platform_call":
+			response, err := endpoint.client.CodePlatformOwnerReadPendingCall(ctx, &runtimev1.CodePlatformOwnerReadPendingCallRequestV1{JobKey: claims.JobKey, RequestJson: body})
+			return response.GetResponseJson(), err
+		case "publish_committed_platform_reply":
+			response, err := endpoint.client.CodePlatformOwnerPublishReply(ctx, &runtimev1.CodePlatformOwnerPublishReplyRequestV1{JobKey: claims.JobKey, RequestJson: body})
+			return response.GetResponseJson(), err
+		}
+		return nil, code.ErrRejected
+	})
 	if err != nil {
 		return code.PlatformOwnerResponse{}, err
 	}

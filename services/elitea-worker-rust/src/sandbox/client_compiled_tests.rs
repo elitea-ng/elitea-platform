@@ -170,6 +170,65 @@ impl SandboxSupervisorService for SupervisorFixture {
             "Workspace hydration is outside this fixture.",
         ))
     }
+    async fn code_owner_recovery_read(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodeOwnerRecoveryReadRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodeOwnerRecoveryReadResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_owner_recovery_seal_no_effect(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodeOwnerRecoverySealNoEffectRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodeOwnerRecoverySealNoEffectResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_platform_owner_read_retained_runtime(
+        &self,
+        _: Request<
+            crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadRetainedRuntimeRequestV1,
+        >,
+    ) -> Result<
+        Response<
+            crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadRetainedRuntimeResponseV1,
+        >,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_platform_owner_read_pending_call(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadPendingCallRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadPendingCallResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_platform_owner_publish_reply(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodePlatformOwnerPublishReplyRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodePlatformOwnerPublishReplyResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
     async fn submit_sandbox_job(
         &self,
         _request: Request<SubmitSandboxJobRequestV1>,

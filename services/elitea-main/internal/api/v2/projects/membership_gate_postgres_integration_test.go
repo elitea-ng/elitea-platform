@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
@@ -160,8 +161,7 @@ const projectListGatePeer = "10.0.0.8:43120"
 func projectListGateRequest(userID string) *http.Request {
 	request := httptest.NewRequest(http.MethodGet, handler.CurrentProjectListPath, nil)
 	request.RemoteAddr = projectListGatePeer
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", userID)
+	authtest.SignIn(request, userID)
 	return request
 }
 
@@ -173,7 +173,7 @@ func newProjectListGateRoute(t *testing.T, pool *pgxpool.Pool) *handler.CurrentP
 			PrincipalValidator: principalValidatorFunc(
 				func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },
 			),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(*http.Request) error { return nil }),
+			FormSessions: authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)

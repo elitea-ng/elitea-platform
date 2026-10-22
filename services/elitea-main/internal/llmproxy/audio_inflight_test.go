@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // waitForArrivals waits until the backend has seen want requests.
@@ -31,7 +32,7 @@ func waitForArrivals(t *testing.T, arrived *atomic.Int64, want int64, what strin
 func TestAudio_InFlightCapRefusesTheExtraRequestBeforeForwarding(t *testing.T) {
 	var arrived atomic.Int64
 	unblock := make(chan struct{})
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		arrived.Add(1)
 		_, _ = io.Copy(io.Discard, r.Body)
 		<-unblock
@@ -41,7 +42,7 @@ func TestAudio_InFlightCapRefusesTheExtraRequestBeforeForwarding(t *testing.T) {
 	defer backend.Close()
 	defer close(unblock)
 
-	p := proxyTo(t, backend.URL, "sekret")
+	p := proxyTo(t, backend, "sekret")
 	member := func(userID string) *http.Request {
 		req := audioRequest("/llm/v1/audio/transcriptions", strings.NewReader("audio"))
 		return req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: userID, UserID: userID}))

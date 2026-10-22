@@ -17,15 +17,23 @@ import (
 //
 // The gateway MUST stream SSE responses incrementally — each chunk flushed as
 // it is produced, not accumulated and delivered as one buffered blob at
-// end-of-response. This must hold end-to-end through both hops (edge reverse
-// proxy → gateway) and Traefik, for BOTH dialects:
+// end-of-response. This must hold end-to-end, as a caller of the documented
+// /llm endpoint sees it, for BOTH dialects:
 //
 //   - OpenAI    POST /llm/v1/chat/completions  — data-only frames, "data: [DONE]" terminator
 //   - Anthropic POST /llm/v1/messages          — named-event frames, "event: message_stop" terminator
 //
 // Both are Content-Type text/event-stream; they differ only in event names and
-// terminator, not transport. A buffering hop (e.g. a reverse proxy without
-// FlushInterval<0, or missing X-Accel-Buffering: no) collapses the whole
+// terminator, not transport.
+//
+// WHERE IT PROBES, AND WHY THERE. The probe calls elitea-main's public /llm
+// with a personal access token, exactly as an external caller does, so the
+// stream it times has crossed every hop that could buffer it: the ingress,
+// elitea-main's /llm edge (which must flush each body read), the
+// GatewayService gRPC stream (which must carry each frame as its own message)
+// and the gateway's own SSE writer. Calling GatewayService directly would skip
+// the edge and the ingress, which is exactly where a missing flush or a
+// missing X-Accel-Buffering: no would hide. Any buffering hop collapses the
 // response into a single read, which this check detects and fails.
 //
 // Detection is timing-based and split into pure, unit-testable pieces:
@@ -159,23 +167,22 @@ func buildProbes(openaiModel, anthropicModel string) []dialectProbe {
 	}
 }
 
-// probeStream POSTs the dialect's streaming request to the gateway and classifies
-// the response body. It returns an error if the request fails, the status is not
-// 200, or the Content-Type is not text/event-stream — all of which mean the
-// stream was not served correctly regardless of timing.
-// sign, when non-nil, stamps auth/identity headers onto the request (the
-// gateway enforces signed X-Elitea-* identity headers whenever
-// GATEWAY_IDENTITY_SECRET is set — which FIX #9 makes mandatory with NATS on).
-func probeStream(client *http.Client, gatewayURL string, p dialectProbe, minGap time.Duration, sign func(*http.Request)) (streamVerdict, error) {
+// probeStream POSTs the dialect's streaming request to /llm at baseURL and
+// classifies the response body. It returns an error if the request fails, the
+// status is not 200, or the Content-Type is not text/event-stream — all of
+// which mean the stream was not served correctly regardless of timing.
+// auth, when non-nil, stamps the caller's credentials onto the request
+// (edgeAuth).
+func probeStream(client *http.Client, baseURL string, p dialectProbe, minGap time.Duration, auth func(*http.Request)) (streamVerdict, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
-		strings.TrimRight(gatewayURL, "/")+p.path, strings.NewReader(p.body))
+		strings.TrimRight(baseURL, "/")+p.path, strings.NewReader(p.body))
 	if err != nil {
 		return streamVerdict{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	if sign != nil {
-		sign(req)
+	if auth != nil {
+		auth(req)
 	}
 
 	resp, err := client.Do(req)
@@ -200,35 +207,32 @@ func probeStream(client *http.Client, gatewayURL string, p dialectProbe, minGap 
 }
 
 // cmdSSEFlushCheck is the `cutover-ctl sse-flush-check` entrypoint. It probes
-// both dialect streaming endpoints on the gateway and exits 0 only when BOTH
-// deliver their SSE frames incrementally.
+// both dialect streaming endpoints on elitea-main's public /llm and exits 0
+// only when BOTH deliver their SSE frames incrementally; 1 when either does
+// not; 2 on a configuration error (no API key).
 func cmdSSEFlushCheck(args []string) {
 	fs := flag.NewFlagSet("sse-flush-check", flag.ExitOnError)
-	gatewayURL := fs.String("gateway-url", "http://localhost:8083", "base URL of the gateway (edge reverse proxy or elitea-llm-gateway-svc)")
+	baseURL := fs.String("base-url", envOr("DEPLOYMENT_URL", defaultBaseURL), "elitea-main public origin serving /llm (default $DEPLOYMENT_URL, else "+defaultBaseURL+")")
+	apiKey := fs.String("api-key", os.Getenv("API_KEY"), "personal access token for /llm (default $API_KEY)")
+	projectID := fs.String("project-id", "", "project to bill, sent as "+edgeProjectHeader+" (empty = the token owner's personal project)")
 	minGapMS := fs.Int("min-gap-ms", 5, "minimum max-inter-frame gap (ms) to accept a stream as incremental")
 	timeoutS := fs.Int("timeout-s", 30, "per-request timeout in seconds")
 	openaiModel := fs.String("openai-model", "gpt-4o", "model for the OpenAI-dialect probe")
 	anthropicModel := fs.String("anthropic-model", "claude-sonnet-5", "model for the Anthropic-dialect probe")
-	identitySecret := fs.String("identity-secret", os.Getenv("GATEWAY_IDENTITY_SECRET"), "edge identity HMAC secret (empty = unsigned)")
-	projectID := fs.String("project-id", "", "project ID for the signed identity headers")
-	userID := fs.String("user-id", "cutover-ctl", "user ID for the signed identity headers")
-	tenantID := fs.String("tenant-id", "", "tenant ID for the signed identity headers")
 	_ = fs.Parse(args)
 
+	if *apiKey == "" {
+		fmt.Fprintln(os.Stderr, "sse-flush-check: --api-key (or $API_KEY) is required: /llm authenticates every caller")
+		os.Exit(2)
+	}
 	minGap := time.Duration(*minGapMS) * time.Millisecond
 	client := &http.Client{Timeout: time.Duration(*timeoutS) * time.Second}
-
-	var sign func(*http.Request)
-	if *projectID != "" {
-		sign = func(req *http.Request) {
-			signIdentity(req, []byte(*identitySecret), *projectID, *userID, *tenantID)
-		}
-	}
+	auth := func(req *http.Request) { edgeAuth(req, *apiKey, *projectID) }
 
 	probes := buildProbes(*openaiModel, *anthropicModel)
 	failed := false
 	for _, p := range probes {
-		verdict, err := probeStream(client, *gatewayURL, p, minGap, sign)
+		verdict, err := probeStream(client, *baseURL, p, minGap, auth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "✗ %s (%s): %v\n", p.name, p.path, err)
 			failed = true
@@ -246,7 +250,7 @@ func cmdSSEFlushCheck(args []string) {
 		fmt.Fprintln(os.Stderr, "\nSSE incremental flush not proven for all dialects (spec §2.3, gate BFF.1).")
 		os.Exit(1)
 	}
-	fmt.Printf("✓ sse-flush-check: both dialects stream incrementally through %s\n", *gatewayURL)
+	fmt.Printf("✓ sse-flush-check: both dialects stream incrementally through %s\n", *baseURL)
 }
 
 // Test-compat probe singletons (default models).
@@ -254,3 +258,21 @@ var (
 	openAIProbe    = buildProbes("gpt-4o", "claude-sonnet-5")[0]
 	anthropicProbe = buildProbes("gpt-4o", "claude-sonnet-5")[1]
 )
+
+// defaultBaseURL is elitea-main's HTTP listener on a local stack.
+const defaultBaseURL = "http://localhost:8080"
+
+// edgeProjectHeader is the /llm project selector (middleware.HeaderProjectSelector).
+const edgeProjectHeader = "X-Project-Id"
+
+// edgeAuth authenticates req as an external /llm caller: the personal access
+// token as a bearer and, when projectID is set, the project to bill (the token
+// owner must be a member). The edge resolves and signs the identity the
+// gateway sees; a caller cannot set it, and any X-Elitea-* header it sends is
+// stripped.
+func edgeAuth(req *http.Request, apiKey, projectID string) {
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if projectID != "" {
+		req.Header.Set(edgeProjectHeader, projectID)
+	}
+}

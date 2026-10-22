@@ -38,12 +38,10 @@ type Config struct {
 	// A mis-wired composition root must degrade closed.
 	Resolver auth.PermissionResolver
 
-	// ForwardedIdentityVerifier proves that the X-Auth-* headers on a request
-	// were written by the authenticating edge and not by the browser.
-	//
-	// It is what makes the forwarded-identity source below usable at all. A nil
-	// verifier yields no identity from headers — never a trusted one.
-	ForwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
+	// FormSessions reads the Form plane's own browser session cookie
+	// (`elitea_browser_auth`), the same reader apimw.Auth uses. Nil — every
+	// deployment without an auth document — reads no Form cookie.
+	FormSessions apimw.FormSessionAuthenticator
 
 	// Sessions validates the SERVER-SIDE browser session an `elitea_session`
 	// cookie names (shared migration 0117).
@@ -58,8 +56,8 @@ type Config struct {
 
 	// Emails resolves the operator's address for the nav footer. Optional:
 	// without it the footer falls back to the generic word "Admin", which is
-	// what it already did for every load served through the forwarded-identity
-	// path (the headers carry an ID, never an address).
+	// what it already did for every load served through the old
+	// forwarded-identity path (the headers carried an ID, never an address).
 	Emails EmailLookup
 }
 
@@ -120,7 +118,7 @@ const (
 	// accessDenied: the user was resolved (or refused as suspended) and holds
 	// no administration permission.
 	accessDenied = "denied"
-	// accessUnauthenticated: there is no usable session or forwarded identity.
+	// accessUnauthenticated: there is no usable session.
 	accessUnauthenticated = "unauthenticated"
 	// accessUnavailable: the answer could not be obtained (store or resolver
 	// fault). It says nothing about the user.
@@ -158,22 +156,23 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 	// Read the operator from the request, then resolve the permissions that
 	// operator really holds.
 	//
-	// TWO credential sources, in the order an authenticating edge makes them
-	// available. Reading only the second is what emptied the admin sidebar:
+	// TWO credential sources, in the order apimw.Auth reads them. Reading only
+	// the second is what emptied the admin sidebar:
 	//
-	//  1. The identity the edge PROJECTED onto this request as X-Auth-*, proven
-	//     to have crossed the header-stripping ingress. The runtime deployment
-	//     logs a browser in at /auth/login, which stores an opaque
-	//     server-side session under `elitea_browser_auth` — a different cookie,
-	//     with a different shape, from a different store. No `elitea_session`
-	//     cookie exists on that browser at all, so source 2 found nothing, the
-	//     handler injected `permissions: []`, and the SPA hid every nav item it
-	//     has: `adminNavItems.ts` shows an item only when the injected list
-	//     carries one of its permissions. The operator got a sidebar containing
-	//     nothing but their own avatar, and ten implemented pages reachable only
-	//     by typing a URL. `user_name` was empty for the same reason, which is
-	//     why the footer read the generic fallback "Admin" rather than an
-	//     address — one cause, both symptoms.
+	//  1. The Form session. A Form deployment logs a browser in at
+	//     /auth/login, which stores an opaque server-side session under
+	//     `elitea_browser_auth` — a different cookie, with a different shape,
+	//     from a different store. No `elitea_session` cookie exists on that
+	//     browser at all, so source 2 found nothing, the handler injected
+	//     `permissions: []`, and the SPA hid every nav item it has:
+	//     `adminNavItems.ts` shows an item only when the injected list carries
+	//     one of its permissions. The operator got a sidebar containing nothing
+	//     but their own avatar, and ten implemented pages reachable only by
+	//     typing a URL. `user_name` was empty for the same reason, which is why
+	//     the footer read the generic fallback "Admin" rather than an address —
+	//     one cause, both symptoms. This source used to be the X-Auth-*
+	//     projection an authenticating edge copied onto the request; that edge
+	//     plane is gone (#1359) and the cookie is read here instead.
 	//
 	//  2. The `elitea_session` HMAC cookie minted by internal/api/v2/auth's OIDC
 	//     handler, for a deployment that authenticates through that path.
@@ -194,12 +193,11 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 	// The resolver closes both halves with one query: the administration mode
 	// reads only roles with mode='administration', and the resolver refuses a
 	// suspended user.
-	if principal, ok := apimw.ForwardedIdentity(r, h.cfg.ForwardedIdentityVerifier); ok {
-		// The headers carry an ID and never an address, so the display name
-		// comes from the database — after the resolver has confirmed the user is
-		// real and active, never before, so a spoofed ID cannot be used to probe
-		// for addresses.
-		userID, permissions, access := h.resolveForwarded(r.Context(), principal)
+	if principal, ok := h.formSessionPrincipal(r); ok {
+		// The session carries an ID and never an address, so the display name
+		// comes from the database — after the resolver has confirmed the user
+		// is real and active, never before.
+		userID, permissions, access := h.resolveFormSession(r.Context(), principal)
 		cfg.Access = access
 		if userID > 0 {
 			cfg.UserID = userID
@@ -269,7 +267,7 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 	// This page is per-operator and must never be replayed to another one.
 	//
 	// It carries the signed-in operator's address and the exact list of
-	// administration-mode permissions they hold. Until the forwarded-identity
+	// administration-mode permissions they hold. Until the Form session
 	// source above existed, the runtime deployment received a byte-identical
 	// payload on every load — empty permissions, empty name — so a cache could
 	// not leak anything. It can now: with no directive and no validator, a
@@ -380,19 +378,32 @@ func (h *Handler) resolvePermissions(ctx context.Context, userID int64) ([]strin
 	return resolution.Permissions, accessFor(resolution.Permissions)
 }
 
-// resolveForwarded resolves the permissions of a principal an authenticating
-// edge projected onto the request.
+// formSessionPrincipal reads the Form session cookie. A missing, rejected or
+// unreadable one yields no identity, and source 2 decides: this page renders
+// for anybody and only ever withholds permissions, so a store outage must not
+// become an error page.
+func (h *Handler) formSessionPrincipal(r *http.Request) (auth.User, bool) {
+	if h.cfg.FormSessions == nil {
+		return auth.User{}, false
+	}
+	principal, err := h.cfg.FormSessions.AuthenticateFormSession(r)
+	if err != nil {
+		return auth.User{}, false
+	}
+	return principal, true
+}
+
+// resolveFormSession resolves the permissions of the Form session's
+// principal.
 //
-// It hands the WHOLE principal to the resolver rather than a bare numeric ID:
-// a forwarded token principal carries a token ID that is not its owner's user
-// ID, and the resolver is the component that cross-checks the pair and reports
-// the owning user. Taking `X-Auth-ID` as a user ID would read a token's ID as a
-// user's on every token-authenticated load.
+// It hands the WHOLE principal to the resolver rather than a bare numeric ID,
+// so the resolver — the component that cross-checks the ids and reports the
+// owning user — stays the one place that decides who this is.
 //
 // The returned user ID is 0 whenever the resolver refused or failed — an
 // absent, suspended or unmatched principal — and the caller then injects no
 // identity, not a partial one. The third value is the Access reason.
-func (h *Handler) resolveForwarded(ctx context.Context, principal auth.User) (int64, []string, string) {
+func (h *Handler) resolveFormSession(ctx context.Context, principal auth.User) (int64, []string, string) {
 	if h.cfg.Resolver == nil {
 		return 0, nil, accessUnavailable
 	}
@@ -400,18 +411,10 @@ func (h *Handler) resolveForwarded(ctx context.Context, principal auth.User) (in
 		ctx, principal, auth.PermissionModeAdministration, "",
 	)
 	if err != nil {
-		// `is_token` is a BOOL derived from the principal, not the principal's
-		// own strings. Every field of `principal` is request-header material
-		// (X-Auth-Type / X-Auth-ID / X-Auth-User-ID), and copying header
-		// material verbatim into a log is how attacker-chosen content reaches
-		// the log sink — CodeQL go/clear-text-logging flags exactly that flow,
-		// and it is right to: the values reaching here are constrained to a
-		// two-element enum only because tryTraefikHeaders already rejected
-		// everything else, which is an invariant no reader of this line can
-		// see. The bool answers the question the line exists for — which
-		// resolution branch refused — and carries none of the input.
-		slog.DebugContext(ctx, "admin ui: forwarded permission resolution refused or failed",
-			"is_token", principal.TokenID != "", "error", err)
+		// The principal's own strings stay out of the log: they identify a
+		// user, and the line only has to say that this branch refused.
+		slog.DebugContext(ctx, "admin ui: Form session permission resolution refused or failed",
+			"error", err)
 		return 0, nil, classifyResolverError(err)
 	}
 	if resolution.UserID <= 0 {

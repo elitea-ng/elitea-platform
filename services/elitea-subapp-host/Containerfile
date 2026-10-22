@@ -8,9 +8,12 @@
 # not retried by Go itself).
 FROM golang:1.26-trixie AS builder
 WORKDIR /src
-# The generated platform gRPC contract (libs/proto), the module's one local
-# replace: go.mod points at ../../libs/proto/gen/go.
+# The module's local replaces (go.mod): the generated platform gRPC
+# contract (../../libs/proto/gen/go) and the shared NATS connector
+# (../../libs/go/natsconn, the cancellation fan-out). Keep this list in
+# step with go.mod's replace directives.
 COPY libs/proto/gen/go ./libs/proto/gen/go
+COPY libs/go/natsconn ./libs/go/natsconn
 WORKDIR /src/services/elitea-subapp-host
 COPY services/elitea-subapp-host/go.mod services/elitea-subapp-host/go.sum ./
 COPY services/elitea-subapp-host/ ./

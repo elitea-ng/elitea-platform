@@ -30,6 +30,13 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-inventory-engine/**"
       - "libs/rust/**"
+      # The build.rs of the gRPC crates compile these contracts (#1359):
+      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
+      # the artifact and internal-tool services of elitea.runtime.v1.
+      - "libs/proto/elitea/engine/**"
+      - "libs/proto/elitea/llm/**"
+      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
+      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/inventory/**"
       - "conformance/provider/fixtures/inventory/**"
@@ -44,6 +51,13 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-inventory-engine/**"
       - "libs/rust/**"
+      # The build.rs of the gRPC crates compile these contracts (#1359):
+      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
+      # the artifact and internal-tool services of elitea.runtime.v1.
+      - "libs/proto/elitea/engine/**"
+      - "libs/proto/elitea/llm/**"
+      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
+      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/inventory/**"
       - "conformance/provider/fixtures/inventory/**"

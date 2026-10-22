@@ -165,9 +165,9 @@ spec:
               containerPort: 8080
               protocol: TCP
             {{- if .Values.main.runtime.enabled }}
-            # The runtime plane's three listeners (issue #382). The agent
-            # worker dials all three, so they must be reachable on the Service
-            # as well as declared here.
+            # The runtime plane's listeners (issue #382). The agent worker
+            # dials all of them, so they must be reachable on the Service as
+            # well as declared here.
             - name: runtime-control
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
               protocol: TCP
@@ -176,6 +176,14 @@ spec:
               protocol: TCP
             - name: runtime-content
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.contentAddress }}
+              protocol: TCP
+            # The platform listener (#1359): elitea-main's internal gRPC port
+            # (mTLS, per-service workload allowlists) for the worker, the
+            # engines and the sub-application host. gRPC only — no HTTP probe
+            # may target it. The name is "runtime-plat" because Kubernetes caps
+            # a port name at 15 characters.
+            - name: runtime-plat
+              containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
               protocol: TCP
             {{- end }}
           envFrom:

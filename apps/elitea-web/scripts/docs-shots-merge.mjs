@@ -104,8 +104,8 @@ function normalizeViewport(viewport, source, id) {
  * Every batch handed to this merge so far (the original hand-authored
  * entries and staging batches A/B/C) wrote routes WITHOUT the `/app` prefix
  * — `/chat`, `/agents/latest/:agentId`, `/toolkits/create`, etc. — which
- * `docs-shots.ts` then opens literally, landing on whatever the traefik
- * default vhost or a 404 serves at that bare path rather than the intended
+ * `docs-shots.ts` then opens literally, landing on whatever the browser
+ * edge or a 404 serves at that bare path rather than the intended
  * screen. Batch D (admin) got it right by writing `/admin/app/...` routes
  * directly. So the fix belongs here, applied once to both existing and
  * incoming entries, rather than re-explained to every future writer: a

@@ -70,8 +70,7 @@ func NewCurrentApplicationStartRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentApplicationStartRoute, error) {
-	if useCase == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if useCase == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentApplicationStartRoute
 	}
 	handler := &currentApplicationStartHandler{useCase: useCase}

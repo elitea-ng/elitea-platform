@@ -376,6 +376,18 @@ raise SystemExit(1)
 
 # reject_retired_embedding_var stops a run that still sets the retired variable.
 # A silent no-op would hide the reason the value stopped taking effect.
+# grpc_answer <grpcurl -v output> <trailer name> prints "<trailer|notrailer>+<code>"
+# for a call grpcurl reported. grpcurl writes the trailers on stdout and the
+# status on stderr, and a container engine relays the two streams separately,
+# so the captured text has no fixed order between them; this reads each one
+# on its own.
+grpc_answer() {
+  local seen=notrailer code
+  case "$1" in *"$2"*) seen=trailer ;; esac
+  code="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*Code: //p' | head -n 1)"
+  printf '%s+%s' "$seen" "${code:-none}"
+}
+
 reject_retired_embedding_var() {
   if [ -n "${INDEX_EMBEDDING_MODEL:-}" ]; then
     echo "ERROR: INDEX_EMBEDDING_MODEL is retired (#468)." >&2
@@ -936,7 +948,10 @@ case "${1:-}" in
     # container states, so a REAL failure — a service stuck `starting`, an
     # unhealthy container, a migration that exited non-zero — still exits 1.
     up_status=0
-    $COMPOSE_BIN $COMPOSE_F up -d --wait || up_status=$?
+    # --remove-orphans: a stack brought up before #1359 P2 still runs its
+    # `traefik` container, which holds STANDALONE_PORT and would refuse
+    # elitea-main the browser port it now publishes.
+    $COMPOSE_BIN $COMPOSE_F up -d --wait --remove-orphans || up_status=$?
     if [ "$up_status" -ne 0 ]; then
       if stack_is_settled; then
         echo "→ compose --wait exited ${up_status} because a one-shot job finished;"
@@ -953,7 +968,7 @@ case "${1:-}" in
     echo "     admin console http://${HOST}:${PORT}/admin/app/"
     echo "     API           http://${HOST}:${PORT}/api/v2"
     echo "     OIDC provider http://localhost:${OIDC_PORT}"
-    echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
+    echo "     gateway       http://localhost:${STANDALONE_GATEWAY_PORT:-8085}/healthz (health and metrics; /llm is internal gRPC)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
     ;;
 
@@ -1092,7 +1107,8 @@ SQL
     # Give every seeded user an active PAT.
     #
     # Not optional, and not obvious: when the worker claims an execution it POSTs
-    # to the content listener for a client token, which resolves through
+    # to the content listener (RuntimeContentService.GetEliteaClientToken) for a
+    # client token, which resolves through
     # ActorTokenIssuer → LocalIssuer.IssueToken. That issuer "never creates,
     # rotates, or stores a PAT" — it re-signs an EXISTING active one
     # (GetActivePATForUser). With no row the claim fails at stage
@@ -1537,13 +1553,18 @@ SQL
     # so that list adds two assertions per extra target. Both lists are
     # declared here, and counted here, so the lists and the floor cannot
     # disagree. Read scripts/lib/assertion-floor.sh.
-    RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445")
-    IDENTITY_PROBE_TARGETS=("https://elitea-platform-edge/api/v2/social/author"
-                            "http://elitea-main:8080/api/v2/social/author")
+    RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445" "platform 9446")
+    # The platform listener (:9446) left this list when it became gRPC-only
+    # (#1359 D1); the check asserts it serves no HTTP at all instead.
+    IDENTITY_PROBE_TARGETS=("http://elitea-main:8080/api/v2/social/author")
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
     ASSERTION_SITES="$(derive_assertion_floor "$0" "$ASSERTION_SITE_PATTERN" "$ASSERTION_SITE_RANGE")"
-    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) ))
+    # runtime_service_probe (#1359 U5) holds one accepting arm and is called
+    # once per platform service probe: each call site past the first is one
+    # more assertion.
+    RUNTIME_SERVICE_PROBE_SITES="$(derive_assertion_floor "$0" '^[[:space:]]+runtime_service_probe[[:space:]]+[A-Z]' "$ASSERTION_SITE_RANGE")"
+    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) + RUNTIME_SERVICE_PROBE_SITES - 1 ))
     ALLOW_SKIPS=0
     for check_arg in "${@:2}"; do
       case "$check_arg" in
@@ -1607,51 +1628,93 @@ SQL
     }
     trap report_check_result EXIT
 
-    # ── The gateway mTLS hop ─────────────────────────────────────────────────
-    # Talk to the gateway directly over mTLS. /llm routes need signed identity
-    # headers that only elitea-main can produce, so this checks transport and
-    # liveness, not the completion path.
-    echo "→ gateway mTLS on https://localhost:${GW_PORT}:"
-    # --http1.1 is required, not cosmetic: curl offers h2 via ALPN, the gateway
-    # accepts it, and the response then fails with an INTERNAL_ERROR stream
-    # reset. elitea-main's own transport pins NextProtos to http/1.1 for the
-    # same reason, so this matches the real client.
-    #
-    # The answer is CAPTURED and compared (#422). The probe used to end in
-    # `&& echo`, which makes the curl a non-final member of an AND list. `set -e`
-    # does not act on such a command, and nothing counted the result, so the
-    # FIRST assertion of `check` could not turn `check` red.
-    gw_health="$(curl -sS --http1.1 --cert "$CERTS/client.crt" --key "$CERTS/client.key" \
-         --cacert "$CERTS/ca.crt" --resolve "elitea-llm-gateway:${GW_PORT}:127.0.0.1" \
-         -w '\nHTTP %{http_code}' \
-         "https://elitea-llm-gateway:${GW_PORT}/healthz" 2>&1 || true)"
+    # ── The gateway hops (#1359) ─────────────────────────────────────────────
+    # The gateway has two listeners. :8083 (published as ${GW_PORT}) is
+    # plaintext infra: /healthz, /readyz and /metrics only. :8443 is the
+    # GatewayService gRPC listener that carries every /llm call from
+    # elitea-main, over mutual TLS. It is not published; it is probed from
+    # inside the compose network below.
+    echo "→ gateway health on http://localhost:${GW_PORT}:"
+    # The answer is CAPTURED and compared (#422). A probe that ends in `&& echo`
+    # is a non-final member of an AND list, so `set -e` does not act on it and
+    # it cannot turn `check` red.
+    gw_health="$(curl -sS -w '\nHTTP %{http_code}' \
+         "http://localhost:${GW_PORT}/healthz" 2>&1 || true)"
     case "$gw_health" in
       *'"status":"ok"'*'HTTP 200'*)
-        ok "the gateway answers /healthz over mTLS (HTTP 200)" ;;
-      *) fail "the gateway did not answer /healthz over mTLS: $(printf '%s' "$gw_health" | tr '\n' ' ' | cut -c1-200)" ;;
+        ok "the gateway answers /healthz on its infra listener (HTTP 200)" ;;
+      *) fail "the gateway did not answer /healthz: $(printf '%s' "$gw_health" | tr '\n' ' ' | cut -c1-200)" ;;
     esac
 
-    # The negative control, and the reason the assertion above is not enough on
-    # its own. A 200 proves that the gateway ANSWERED a caller that offered a
-    # certificate. It does not prove the listener REQUIRED one: a listener that
-    # loses RequireAndVerifyClientCert answers the same 200, because the client
-    # offers a certificate the server never asks for. So repeat the request with
-    # NO client certificate. It must be refused in the handshake.
-    #
-    # The failure MODE is read as well. A gateway that is not running refuses
-    # this request too, and calling that a pass reports "mTLS is enforced" about
-    # a dead process. curl reports a refused or timed-out connection as (7) or
-    # (28); neither reached a handshake, so neither measures the requirement.
-    gw_anon="$(curl -sS --http1.1 --cacert "$CERTS/ca.crt" \
-         --resolve "elitea-llm-gateway:${GW_PORT}:127.0.0.1" \
-         -o /dev/null -w 'HTTP %{http_code}' \
-         "https://elitea-llm-gateway:${GW_PORT}/healthz" 2>&1 || true)"
+    # One-off container on the stack's network with deploy/certs mounted. It
+    # needs the openssl CLI, which debian:trixie-slim does not ship.
+    gw_probe() {
+      ${COMPOSE_BIN%% *} run --rm --network "${PROJECT}_default" -v "${CERTS}:/m:ro" \
+        --entrypoint sh docker.io/library/postgres:18 -c "$1" 2>&1 || true
+    }
+    echo "→ gateway GatewayService gRPC on elitea-llm-gateway:8443 (mTLS, from inside the network):"
+    # The positive half: elitea-main's own material completes a TLS 1.3
+    # handshake, the server cert verifies for the name in LLM_GATEWAY_URL, and
+    # the listener speaks h2. A wrong SAN or a CA mismatch fails the verify.
+    gw_grpc="$(gw_probe "openssl s_client -connect elitea-llm-gateway:8443 -servername elitea-llm-gateway -verify_hostname elitea-llm-gateway -CAfile /m/ca.crt -cert /m/client.crt -key /m/client.key -tls1_3 -alpn h2 </dev/null")"
+    case "$gw_grpc" in
+      *'ALPN protocol: h2'*'Verify return code: 0'*|*'Verify return code: 0'*'ALPN protocol: h2'*)
+        ok "the gateway gRPC listener completes mTLS with elitea-main's certificate (TLS 1.3, h2)" ;;
+      *) fail "the gateway gRPC listener did not complete mTLS with elitea-main's certificate: $(printf '%s' "$gw_grpc" | grep -E 'error|Verify return|ALPN|errno' | tr '\n' ' ' | cut -c1-200)" ;;
+    esac
+
+    # The negative control. A completed handshake does not prove the listener
+    # REQUIRED a certificate: one that loses RequireAndVerifyClientCert
+    # completes it too. Under TLS 1.3 the refusal arrives AFTER the client's
+    # Finished, so stdin stays open for a second and s_client reads the alert.
+    # A dead gateway gives "Connection refused", which is not a pass.
+    gw_anon="$(gw_probe "(sleep 1) | openssl s_client -connect elitea-llm-gateway:8443 -servername elitea-llm-gateway -CAfile /m/ca.crt -tls1_3 -alpn h2")"
     case "$gw_anon" in
-      *'HTTP 200'*)
-        fail "the gateway served /healthz to a caller with NO client certificate. The listener does not require one, so the elitea-main → gateway hop is not mutually authenticated" ;;
-      *'curl: (7)'*|*'curl: (28)'*|*'Failed to connect'*|*'Connection refused'*|*'Could not resolve'*)
-        fail "the no-certificate probe never reached a TLS handshake, so the mTLS requirement was not measured: $(printf '%s' "$gw_anon" | tr '\n' ' ' | cut -c1-160)" ;;
-      *) ok "the gateway refuses a caller with no client certificate ($(printf '%s' "$gw_anon" | tr '\n' ' ' | cut -c1-120))" ;;
+      *'certificate required'*)
+        ok "the gateway gRPC listener refuses a caller with no client certificate" ;;
+      *) fail "the gateway gRPC listener did not refuse a caller with no client certificate, so the elitea-main → gateway hop is not proven mutually authenticated: $(printf '%s' "$gw_anon" | grep -E 'alert|error|errno|Verify return' | tr '\n' ' ' | cut -c1-200)" ;;
+    esac
+
+    echo "→ browser edge on http://localhost:${PORT} (elitea-main, #1359 P2):"
+    # elitea-main IS the browser edge: it redirects `/`, relays /app and /docs
+    # to elitea-web (internal/api/webedge) and serves everything else itself.
+    # The relayed answers carry nginx's Server header and elitea-main's do
+    # not, which is what tells the two sides apart here.
+    edge_probe() { # $1 path → "<code> <location> <server>"
+      curl -sS -o /dev/null -w '%{http_code} %{redirect_url} %header{server}' \
+           "http://localhost:${PORT}$1" 2>/dev/null || echo "000"
+    }
+    edge_root="$(edge_probe '/?utm_source=check')"
+    case "$edge_root" in
+      "302 http://localhost:${PORT}/app/?utm_source=check "*)
+        ok "/ redirects to /app/ (302, query kept)" ;;
+      *) fail "/ did not answer 302 to /app/?utm_source=check: ${edge_root}" ;;
+    esac
+    # Two sites, not a loop: the assertion floor counts `ok` sites.
+    edge_web="$(edge_probe /app/)"
+    case "$edge_web" in
+      "200 "*nginx*) ok "/app/ is served by elitea-web through elitea-main (${edge_web})" ;;
+      *) fail "/app/ did not come from elitea-web: ${edge_web}" ;;
+    esac
+    edge_web="$(edge_probe /docs/)"
+    case "$edge_web" in
+      "200 "*nginx*) ok "/docs/ is served by elitea-web through elitea-main (${edge_web})" ;;
+      *) fail "/docs/ did not come from elitea-web: ${edge_web}" ;;
+    esac
+    edge_mcp="$(edge_probe '/app/1/mcp')"
+    case "$edge_mcp" in
+      000*|*nginx*) fail "/app/1/mcp did not reach elitea-main (the MCP carve-out): ${edge_mcp}" ;;
+      *) ok "/app/1/mcp reaches elitea-main, not the SPA (${edge_mcp%% *})" ;;
+    esac
+    edge_health="$(curl -sS "http://localhost:${PORT}/healthz" 2>/dev/null || true)"
+    case "$edge_health" in
+      *'"status":"ok"'*) ok "/healthz is public on the browser origin" ;;
+      *) fail "/healthz did not answer {\"status\":\"ok\"}: $(printf '%s' "$edge_health" | cut -c1-200)" ;;
+    esac
+    edge_ready="$(edge_probe '/readyz')"
+    case "$edge_ready" in
+      "404 "*) ok "/readyz is withheld from the browser origin (404)" ;;
+      *) fail "/readyz answered ${edge_ready%% *} on the browser origin; its body names each dependency's state" ;;
     esac
 
     echo "→ elitea-main /llm reachability:"
@@ -1671,14 +1734,15 @@ SQL
       *) fail "elitea-main answered HTTP ${main_code:-000} on /api/v2/llm/v1/models. An unauthenticated caller gets 401 or 403 from a live elitea-main, so this one is not answering" ;;
     esac
 
-    # ── Edge identity-header strip (#326) ────────────────────────────────────
-    # elitea-main accepts X-Auth-Type + X-Auth-Id as a finished identity from
-    # any source address inside auth.form.yml's trusted_proxy_cidrs, which is
-    # the whole compose network. The browser edge sits on that network, so
-    # without deploy/traefik/dynamic.e2e.yml's strip-client-identity middleware
-    # a caller with no credential at all picks its own user id. Measured on this
-    # stack before the fix: `curl -H 'X-Auth-ID: 4'` returned that user's
-    # /social/author record with HTTP 200.
+    # ── Client identity-header strip (#326, #1359) ──────────────────────────
+    # elitea-main USED TO accept X-Auth-Type + X-Auth-Id as a finished identity
+    # from any source address inside auth.form.yml's trusted_proxy_cidrs, which
+    # is the whole compose network, so without the edge's strip-client-identity
+    # middleware a caller with no credential at all picked its own user id.
+    # Measured on this stack before the fix: `curl -H 'X-Auth-ID: 4'` returned
+    # that user's /social/author record with HTTP 200. That reader is gone
+    # (#1359) and elitea-main strips the names itself; these probes keep
+    # proving that end to end, through the edge.
     #
     # Written to be DISCRIMINATING. A bare "spoof gets 401" would also pass on a
     # stack where the edge is down, the route is unmounted, or nothing is
@@ -1687,7 +1751,7 @@ SQL
     # report the PAT's own user. Two things therefore have to hold: the
     # legitimate path still works through the middleware, and the forged header
     # neither authenticates on its own nor overrides a genuine credential.
-    echo "→ edge identity-header strip (#326):"
+    echo "→ client identity-header strip (#326, #1359):"
     spoof_uuid="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
         psql -U elitea -d elitea -tAc \
         "SELECT uuid FROM public.auth_core__token
@@ -1719,7 +1783,7 @@ PY
                 -H 'X-Auth-Type: user' -H "X-Auth-ID: ${spoof_user}" "$spoof_route" || true)"
       case "$code" in
         401|403) ok "forged X-Auth-ID alone is rejected (HTTP ${code})" ;;
-        *) fail "forged X-Auth-ID alone got HTTP ${code} — the edge is forwarding client identity headers (#326)" ;;
+        *) fail "forged X-Auth-ID alone got HTTP ${code} — a client identity header authenticated (#326, #1359)" ;;
       esac
 
       body="$(curl -s -H "Authorization: Bearer ${spoof_jwt}" "$spoof_route" || true)"
@@ -1878,23 +1942,142 @@ sys.stdout.write(reply)
         ;;
     esac
 
-    # The worker's platform_origin must terminate TLS with the runtime CA's
-    # edge certificate; the SDK verifies it against that CA alone. A plain
-    # connect would pass against any TLS listener, so verify the chain.
-    edge="$(probe "openssl s_client -connect elitea-platform-edge:443 -CAfile /m/runtime-ca.crt -servername elitea-platform-edge </dev/null")"
-    case "$edge" in
-      *"Verify return code: 0"*) ok "platform-edge TLS verifies against the runtime CA" ;;
-      *) fail "platform-edge did not present a runtime-CA certificate for elitea-platform-edge" ;;
+    # The worker's platform_origin is elitea-main's platform listener (#1359).
+    # The listener loop above proves it refuses a client with no certificate;
+    # this proves the worker's own
+    # identity is ADMITTED and the chain verifies for elitea-main against the
+    # runtime CA alone, which is exactly what the worker's transport checks.
+    # The listener is gRPC only (#1359 D1), so the probe is grpc.health.v1
+    # through the elitea-grpc-health tool in the elitea-main image.
+    platform="$($ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+      --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone \
+      --addr elitea-main:9446 --ca /m/runtime-ca.crt --server-name elitea-main \
+      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key 2>&1 || true)"
+    case "$platform" in
+      SERVING) ok "platform listener :9446 serves gRPC health to the worker identity and verifies as elitea-main" ;;
+      *) fail "platform listener :9446 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$platform" | tail -1)" ;;
+    esac
+    # The content listener (:9445) is gRPC too since #1359 U4
+    # (elitea.runtime.v1.RuntimeContentService). Its grpc.health.v1 answers
+    # any runtime-CA workload identity, exactly as the worker and the sandbox
+    # supervisor reach it.
+    content="$($ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+      --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone \
+      --addr elitea-main:9445 --ca /m/runtime-ca.crt --server-name elitea-main \
+      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key 2>&1 || true)"
+    case "$content" in
+      SERVING) ok "content listener :9445 serves gRPC health to the worker identity and verifies as elitea-main" ;;
+      *) fail "content listener :9445 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$content" | tail -1)" ;;
+    esac
+    # It used to serve the product HTTP API (the forged-identity probes below
+    # ran against it). Now even the worker's own certificate gets no HTTP
+    # there: an http/1.1 client completes the handshake with no protocol
+    # negotiated — positive evidence the listener does not speak HTTP/1.1 —
+    # and the gRPC server closes the connection without answering
+    # (runtimegrpc/platform_server_test.go holds the same behaviour).
+    platform_http="$(probe "printf 'GET /api/v2/social/author HTTP/1.1\\r\\nHost: elitea-main\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -connect elitea-main:9446 -CAfile /m/runtime-ca.crt -servername elitea-main -cert /m/agent-worker-client.crt -key /m/agent-worker-client.key -alpn http/1.1")"
+    case "$platform_http" in
+      *"HTTP/1."*) fail "platform listener :9446 answered HTTP/1.1: $(printf '%s' "$platform_http" | grep -m1 'HTTP/1.')" ;;
+      *"No ALPN negotiated"*) ok "platform listener :9446 serves no HTTP (http/1.1 not negotiated, connection closed)" ;;
+      *) fail "platform listener :9446 did not complete a handshake for the http/1.1 probe: $(printf '%s' "$platform_http" | tail -1)" ;;
     esac
 
-    # ── Edge identity projection, from inside the network ───────────────────
-    # elitea-main accepts X-Auth-* only with EdgeAuth's signature over the
-    # identity, method and request URI. These probes run where the worker
-    # runs: through the platform edge, and straight at elitea-main:8080, which
-    # compose cannot make unreachable. Each unsigned projection must be refused,
-    # and the same request with a real PAT must still answer as the PAT's own
-    # user — so a down edge or an unmounted route cannot pass for a refusal.
-    echo "→ edge identity projection (inside the network):"
+    # elitea.llm.v1.ModelService (#1359 U2): the worker's and the engines'
+    # model calls. grpcurl reads the service from the repository's own proto
+    # (the listener serves no reflection) and calls Embeddings as the engines
+    # do: the sub-application callback certificate, a bearer in metadata. The
+    # bearer is deliberately invalid, so no model runs and nothing is billed.
+    # Admitted, the call reaches the /llm pipeline, whose 401 comes back as
+    # Unauthenticated WITH the elitea-model-refusal-bin trailer: proof the
+    # service is mounted, the callback identity is in
+    # ELITEA_MODEL_SERVICE_CLIENTS, and the pipeline answers. A status without
+    # that trailer is the hop failing instead (grpcauth, the gateway).
+    model_rpc() { # model_rpc <cert dir> <cert basename>
+      $ENGINE run --rm --network "$NETWORK" --user 0:0 \
+        -v "${RUNTIME_CERTS}:/m:ro" -v "$1:/c:ro" -v "${REPO_ROOT}/libs/proto:/proto:ro" \
+        docker.io/fullstorydev/grpcurl:v1.9.1 -v \
+        -cacert /m/runtime-ca.crt -cert "/c/$2.crt" -key "/c/$2.key" \
+        -import-path /proto -proto elitea/llm/v1/model.proto \
+        -H 'authorization: Bearer standalone-stack-invalid-bearer' \
+        -d '{"call":{},"body":""}' \
+        elitea-main:9446 elitea.llm.v1.ModelService/Embeddings 2>&1 || true
+    }
+    # grpcurl prints the trailers on stdout and the status on stderr, and
+    # `docker run` relays the two streams separately, so their order in the
+    # captured text is not fixed: each is matched on its own.
+    model="$(model_rpc "$RUNTIME_CERTS" subapp-callback-client)"
+    case "$(grpc_answer "$model" elitea-model-refusal-bin)" in
+      trailer+Unauthenticated)
+        ok "ModelService on :9446 admits the callback identity and answers an invalid bearer with the pipeline's 401 (Unauthenticated + refusal trailer)" ;;
+      *+PermissionDenied)
+        fail "ModelService on :9446 refused dns:elitea-subapp-callback — it is missing from ELITEA_MODEL_SERVICE_CLIENTS" ;;
+      *) fail "ModelService on :9446 did not answer as the /llm pipeline: $(printf '%s' "$model" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
+    esac
+    # And the allowlist is an allowlist: a runtime-CA client certificate that
+    # is NOT listed (elitea-main's own elitea-vector client, DNS:elitea-main)
+    # is PermissionDenied by grpcauth before the pipeline runs, so with no
+    # refusal trailer.
+    if [ -f "${REPO_ROOT}/deploy/certs/vector/main-client.crt" ]; then
+      unlisted="$(model_rpc "${REPO_ROOT}/deploy/certs/vector" main-client)"
+      case "$unlisted" in
+        *"elitea-model-refusal-bin"*) fail "ModelService ran the pipeline for dns:elitea-main, which ELITEA_MODEL_SERVICE_CLIENTS does not list" ;;
+        *"Code: PermissionDenied"*) ok "ModelService refuses a runtime-CA identity it does not list (PermissionDenied, no refusal trailer)" ;;
+        *) fail "ModelService answered an unlisted identity unexpectedly: $(printf '%s' "$unlisted" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
+      esac
+    else
+      skip "no deploy/certs/vector/main-client.crt to probe an unlisted ModelService identity with (run: deploy/scripts/gen-vector-certs.sh)"
+    fi
+
+    # elitea.runtime.v1.ArtifactObjectService and InternalToolService (#1359
+    # U5): the artifact and internal-MCP hops that used to be HTTP. The same
+    # shape as the ModelService probe: an invalid bearer, so nothing is read
+    # or run. Admitted, the call reaches the artifact route (or the MCP
+    # endpoint), whose 401 comes back WITH the service's refusal trailer;
+    # PermissionDenied without it is grpcauth refusing an identity missing
+    # from ELITEA_ARTIFACT_SERVICE_CLIENTS / ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS.
+    runtime_rpc() { # runtime_rpc <cert basename> <proto> <json> <method>
+      $ENGINE run --rm --network "$NETWORK" --user 0:0 \
+        -v "${RUNTIME_CERTS}:/m:ro" -v "${REPO_ROOT}/libs/proto:/proto:ro" \
+        docker.io/fullstorydev/grpcurl:v1.9.1 -v \
+        -cacert /m/runtime-ca.crt -cert "/m/$1.crt" -key "/m/$1.key" \
+        -import-path /proto -proto "$2" \
+        -H 'authorization: Bearer standalone-stack-invalid-bearer' \
+        -d "$3" \
+        elitea-main:9446 "$4" 2>&1 || true
+    }
+    runtime_service_probe() { # runtime_service_probe <label> <identity> <clients env> <trailer> <answer>
+      case "$(grpc_answer "$5" "$4")" in
+        trailer+Unauthenticated)
+          ok "$1 on :9446 admits $2 and answers an invalid bearer with the route's 401 (Unauthenticated + $4)" ;;
+        *+PermissionDenied)
+          fail "$1 on :9446 refused $2 — it is missing from $3" ;;
+        *+Unimplemented)
+          fail "$1 is not registered on :9446 ($3 is empty?)" ;;
+        *) fail "$1 on :9446 did not answer as its route: $(printf '%s' "$5" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
+      esac
+    }
+    # One call per line, no loop: EXPECTED_ASSERTIONS counts these call sites.
+    runtime_service_probe ArtifactObjectService subapp-callback-client ELITEA_ARTIFACT_SERVICE_CLIENTS elitea-artifact-refusal-bin \
+      "$(runtime_rpc subapp-callback-client elitea/runtime/v1/artifact_object.proto '{"project_id":1}' elitea.runtime.v1.ArtifactObjectService/ListBuckets)"
+    runtime_service_probe ArtifactObjectService agent-worker-client ELITEA_ARTIFACT_SERVICE_CLIENTS elitea-artifact-refusal-bin \
+      "$(runtime_rpc agent-worker-client elitea/runtime/v1/artifact_object.proto '{"project_id":1}' elitea.runtime.v1.ArtifactObjectService/ListBuckets)"
+    runtime_service_probe InternalToolService agent-worker-client ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS elitea-internal-tool-refusal-bin \
+      "$(runtime_rpc agent-worker-client elitea/runtime/v1/internal_tool.proto '{"scope":{"project_id":1,"scope":"applications"}}' elitea.runtime.v1.InternalToolService/ListTools)"
+    # The Inventory engine's `investigate` source-tool calls (InvokeToolkit)
+    # are made under the callback identity.
+    runtime_service_probe InternalToolService subapp-callback-client ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS elitea-internal-tool-refusal-bin \
+      "$(runtime_rpc subapp-callback-client elitea/runtime/v1/internal_tool.proto '{"project_id":1,"toolkit_id":"1","tool_name":"probe"}' elitea.runtime.v1.InternalToolService/InvokeToolkit)"
+
+    # ── Client identity headers, from inside the network ────────────────────
+    # The signed X-Auth-* projection an authenticating edge used to add is gone
+    # (#1359): elitea-main reads no X-Auth-* header at all, signed or not. These
+    # probes run where the worker runs, straight at elitea-main:8080, which
+    # compose cannot make unreachable (the platform listener serves no HTTP any
+    # more; the check above proves that). Each forged
+    # projection must be refused, and the same request with a real PAT must
+    # still answer as the PAT's own user — so a down edge or an unmounted route
+    # cannot pass for a refusal.
+    echo "→ client identity headers (inside the network):"
     if [ -z "${spoof_jwt:-}" ] || [ -z "${spoof_other:-}" ]; then
       for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
         skip "no PAT and second user to contrast the ${target%%/api/*} probes against (run: $0 seed-runtime)"
@@ -1921,8 +2104,8 @@ except Exception as error:
         out="$(identity_probe "$target" 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}" \
                  "X-Auth-User-ID: ${spoof_other}" 'X-Auth-Signature: v1.0.AAAA')"
         case "$out" in
-          401*|403*) ok "unsigned projection refused at ${target%%/api/*} (HTTP ${out%% *})" ;;
-          *) fail "unsigned projection at ${target%%/api/*} answered '${out%% *}', want 401/403" ;;
+          401*|403*) ok "forged X-Auth-* projection refused at ${target%%/api/*} (HTTP ${out%% *})" ;;
+          *) fail "forged X-Auth-* projection at ${target%%/api/*} answered '${out%% *}', want 401/403" ;;
         esac
         out="$(identity_probe "$target" "Authorization: Bearer ${spoof_jwt}" \
                  'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}")"
@@ -2104,7 +2287,7 @@ context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 body = json.dumps({'model': '${WRITE_MODEL}',
                    'messages': [{'role': 'user', 'content': 'api-created credential check'}]}).encode()
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/chat/completions', data=body,
+    'http://elitea-main:8080/llm/v1/chat/completions', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     print('OK', urllib.request.urlopen(request, context=context, timeout=30).read().decode())
@@ -2214,7 +2397,7 @@ context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 body = json.dumps({'model': '${CHAT_MODEL_NAME}',
                    'messages': [{'role': 'user', 'content': 'standalone check'}]}).encode()
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/chat/completions', data=body,
+    'http://elitea-main:8080/llm/v1/chat/completions', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2256,7 +2439,7 @@ body = json.dumps({'model': '${EMB_MODEL_NAME}',
                    'encoding_format': 'float',
                    'input': 'standalone embedding check'}).encode()
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/embeddings', data=body,
+    'http://elitea-main:8080/llm/v1/embeddings', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2301,7 +2484,7 @@ except Exception as error:
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/models',
+    'http://elitea-main:8080/llm/v1/models',
     headers={'Authorization': 'Bearer ${LLM_JWT}'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2476,12 +2659,12 @@ except Exception as error:
       if [ -z "$CHAT_PAT" ] || [ -z "$CHAT_USER" ]; then
         skip "no PAT to drive the turn (run: $0 seed-runtime)"
       else
-        # Run INSIDE the compose network, not from the host: the events stream
-        # is only reachable through platform-edge (#289), and the edge's
-        # certificate has exactly one SAN — elitea-platform-edge — so a host
-        # client would fail hostname verification even if the name resolved.
-        # The mock image is used purely as a python runtime with the runtime CA
-        # available; --user 0:0 so it can read the 0600 signing key.
+        # Run INSIDE the compose network, not from the host, against
+        # elitea-main's public port: the product API (conversations, the
+        # events stream, #289) is HTTP there, and the platform listener
+        # (:9446) is gRPC-only since #1359. The mock image is used purely as a
+        # python runtime with the runtime material available; --user 0:0 so it
+        # can read the 0600 signing key.
         # Drive the turn with the model THIS STACK holds, not chat-smoke.py's
         # compiled-in default.
         #
@@ -2515,8 +2698,7 @@ except Exception as error:
           -v "${REPO_ROOT}/deploy/scripts/chat-smoke.py:/opt/chat-smoke.py:ro" \
           --user 0:0 --entrypoint python3 \
           ghcr.io/eliteaai/elitea-mock-llm:standalone /opt/chat-smoke.py \
-          --base-url "https://elitea-platform-edge" \
-          --ca /m/runtime-ca.crt \
+          --base-url "http://elitea-main:8080" \
           --pat-uuid "$CHAT_PAT" \
           --signing-key /m/auth-pat-signing-key \
           --user-id "$CHAT_USER" \

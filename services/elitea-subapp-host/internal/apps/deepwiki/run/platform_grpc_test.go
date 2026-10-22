@@ -122,7 +122,9 @@ func platformHost(t *testing.T, sidecar *fakeSidecar, pki *testPKI, clients stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(t.Context())
+	if err := server.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{pki.serverTC}, ClientCAs: pki.caPool,
 		ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}

@@ -106,11 +106,11 @@ fn artifact_assembler(
 ) -> (PipelineNativeAgentAssembler, Arc<Mutex<Vec<String>>>) {
     let paths = Arc::new(Mutex::new(Vec::new()));
     let runtime = RuntimeContextClient::with_rpc(
-        PipelineRuntimeContextFixture {
+        Routes(PipelineRuntimeContextFixture {
             responses: Mutex::new(responses.iter().map(runtime_response).collect()),
             calls: Arc::new(AtomicUsize::new(0)),
             paths: Arc::clone(&paths),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -169,7 +169,7 @@ async fn artifact_list_node_runs_under_the_claim_and_projects_its_listing() {
     let paths = paths.lock().expect("fixture paths").clone();
     assert_eq!(paths.len(), 1, "exactly one claim-bound call: {paths:?}");
     assert!(
-        paths[0].ends_with("/runtime-context/artifacts/list"),
+        paths[0] == "artifacts/list",
         "the listing must use the claim-bound artifact route: {paths:?}"
     );
     let rendered = serde_json::to_string(&browser).expect("browser events");
@@ -284,9 +284,8 @@ fn redeem_response() -> Value {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_pptx_direct_node_reads_a_deck_through_the_office_host() {
-    use crate::transport::office_host::OfficeRuntime;
     use crate::transport::office_host_tests::ObjectApi;
-    let api = ObjectApi::new();
+    let api = ObjectApi::for_project(&["ephemeral-pipeline-token"], 17);
     let mut deck = elitea_office_core::Deck::new(&elitea_office_core::Limits::default());
     let slide = deck
         .add_slide(elitea_office_core::SlideLayout::Blank)
@@ -299,10 +298,7 @@ async fn a_pptx_direct_node_reads_a_deck_through_the_office_host() {
     .expect("text");
     api.put("hello.pptx", deck.save().expect("deck bytes"));
     let (assembler, _) = artifact_assembler(&[redeem_response()]);
-    let assembler = assembler.with_office_runtime(Some(Arc::new(OfficeRuntime::with_transport(
-        "https://platform.internal:9446",
-        Arc::clone(&api) as Arc<dyn elitea_connectors::transport::Transport>,
-    ))));
+    let assembler = assembler.with_office_runtime(Some(Arc::new(api.runtime())));
     let invocation = assembler
         .assemble(authorized(&pptx_pipeline_request()))
         .await
@@ -377,12 +373,8 @@ async fn run_office_pipeline(
     request: &super::super::request::AgentExecutionRequest,
     api: &Arc<crate::transport::office_host_tests::ObjectApi>,
 ) -> String {
-    use crate::transport::office_host::OfficeRuntime;
     let (assembler, _) = artifact_assembler(&[redeem_response()]);
-    let assembler = assembler.with_office_runtime(Some(Arc::new(OfficeRuntime::with_transport(
-        "https://platform.internal:9446",
-        Arc::clone(api) as Arc<dyn elitea_connectors::transport::Transport>,
-    ))));
+    let assembler = assembler.with_office_runtime(Some(Arc::new(api.runtime())));
     let invocation = assembler
         .assemble(authorized(request))
         .await
@@ -394,7 +386,7 @@ async fn run_office_pipeline(
 #[tokio::test(flavor = "current_thread")]
 async fn a_docx_direct_node_reads_a_document_through_the_office_host() {
     use crate::transport::office_host_tests::ObjectApi;
-    let api = ObjectApi::new();
+    let api = ObjectApi::for_project(&["ephemeral-pipeline-token"], 17);
     let mut doc = elitea_office_core::Document::new(&roomy_limits());
     doc.add_paragraph("Quarterly pipeline document")
         .expect("paragraph");
@@ -413,7 +405,7 @@ async fn a_docx_direct_node_reads_a_document_through_the_office_host() {
 #[tokio::test(flavor = "current_thread")]
 async fn an_xlsx_direct_node_reads_a_workbook_through_the_office_host() {
     use crate::transport::office_host_tests::ObjectApi;
-    let api = ObjectApi::new();
+    let api = ObjectApi::for_project(&["ephemeral-pipeline-token"], 17);
     let mut book = elitea_office_core::Workbook::new(&roomy_limits());
     book.write_cell(
         0,

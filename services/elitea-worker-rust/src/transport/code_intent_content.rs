@@ -1,8 +1,10 @@
 //! Two-stage original Code admission on the existing current-claim mTLS channel.
 use super::{
-    Body, CLAIM_HEADER, CONTENT_LENGTH, CONTENT_TYPE, Duration, FENCE_HEADER, InputContentClient,
-    InputContentError, Method, PATH_SEGMENT, Request, StatusCode, Version, timeout,
-    utf8_percent_encode,
+    Code, Duration, InputContentClient, InputContentError, Status, claim_request, content_scope,
+    is_transport_status, timeout,
+};
+use crate::protocol::elitea::runtime::v1::{
+    RegisterCodeIntentRequestV1, RegisterCodeVisitRequestV1,
 };
 use crate::{
     protocol::control::ClaimBoundSandboxAuthority,
@@ -12,8 +14,14 @@ use crate::{
     },
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use http_body_util::BodyExt as _;
 use serde::{Deserialize, Serialize};
+
+/// The two admission stages, one RPC each.
+#[derive(Clone, Copy)]
+enum Admission {
+    Visit,
+    Intent,
+}
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -63,7 +71,7 @@ struct IntentResponse {
 impl InputContentClient {
     #[cfg(test)]
     pub(crate) fn with_original_code_visit_fixture_rpc(
-        rpc: impl super::InputContentRpc + 'static,
+        rpc: impl super::content_fake::ContentFake,
     ) -> Self {
         Self::with_original_code_visit_fixture_rpc_deadline(rpc, Duration::from_secs(1))
     }
@@ -71,7 +79,7 @@ impl InputContentClient {
     /// slow on purpose.
     #[cfg(test)]
     pub(crate) fn with_original_code_visit_fixture_rpc_deadline(
-        rpc: impl super::InputContentRpc + 'static,
+        rpc: impl super::content_fake::ContentFake,
         deadline: Duration,
     ) -> Self {
         Self::with_rpc(
@@ -97,7 +105,7 @@ impl InputContentClient {
         let bytes = self
             .code_intent_post(
                 claim,
-                "visits",
+                Admission::Visit,
                 serde_json::to_vec(&request).map_err(|_| invalid())?,
             )
             .await?;
@@ -153,7 +161,7 @@ impl InputContentClient {
         let bytes = self
             .code_intent_post(
                 claim,
-                "intents",
+                Admission::Intent,
                 serde_json::to_vec(&request).map_err(|_| invalid())?,
             )
             .await?;
@@ -183,7 +191,7 @@ impl InputContentClient {
     async fn code_intent_post(
         &self,
         claim: &ClaimBoundSandboxAuthority,
-        operation: &str,
+        stage: Admission,
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, InputContentError> {
         if payload.len() > 5 * 1024 * 1024 {
@@ -192,75 +200,55 @@ impl InputContentClient {
             ));
         }
         let (execution, generation, claim_id, fence) = claim.intent_content_binding();
-        let uri = format!(
-            "{}/executions/{}/generations/{generation}/code-sandbox/{operation}",
-            self.config.origin,
-            utf8_percent_encode(execution, PATH_SEGMENT)
-        );
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri(uri)
-            .header(CLAIM_HEADER, claim_id)
-            .header(FENCE_HEADER, URL_SAFE_NO_PAD.encode(fence))
-            .header(CONTENT_TYPE, "application/json")
-            .header(CONTENT_LENGTH, payload.len())
-            .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                payload,
-            ))))
-            .map_err(|_| invalid())?;
+        let scope = Some(content_scope(execution, generation));
+        let mut rpc = self.rpc();
         timeout(self.config.deadline.min(Duration::from_secs(10)), async {
-            let mut response = self
-                .rpc
-                .get(request)
-                .await
-                .map_err(InputContentError::Transport)?;
-            if matches!(
-                response.status(),
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT
-            ) {
-                return Err(InputContentError::AuthorizationFailed(
-                    "the original Code intent was refused",
-                ));
+            let bytes = match stage {
+                Admission::Visit => {
+                    let request = RegisterCodeVisitRequestV1 {
+                        scope,
+                        visit_json: payload,
+                    };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.register_code_visit(request)
+                        .await
+                        .map(|response| response.into_inner().visit_json)
+                }
+                Admission::Intent => {
+                    let request = RegisterCodeIntentRequestV1 {
+                        scope,
+                        intent_json: payload,
+                    };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.register_code_intent(request)
+                        .await
+                        .map(|response| response.into_inner().response_json)
+                }
             }
-            if response.status() != StatusCode::OK
-                || response.version() != Version::HTTP_2
-                || response
-                    .headers()
-                    .get(CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .is_none_or(|v| v.split(';').next() != Some("application/json"))
-            {
+            .map_err(intent_status)?;
+            if bytes.len() > 16 * 1024 {
                 return Err(invalid());
-            }
-            let mut bytes = Vec::new();
-            while let Some(frame) = response.body_mut().frame().await {
-                let frame = frame.map_err(|_| {
-                    InputContentError::DependencyUnavailable(
-                        "the original Code intent response was interrupted",
-                    )
-                })?;
-                if frame.is_trailers() {
-                    return Err(invalid());
-                }
-                if let Ok(data) = frame.into_data() {
-                    if bytes
-                        .len()
-                        .checked_add(data.len())
-                        .is_none_or(|n| n > 16 * 1024)
-                    {
-                        return Err(invalid());
-                    }
-                    bytes.extend_from_slice(&data);
-                }
             }
             Ok(bytes)
         })
         .await
-        .map_err(|_| {
-            InputContentError::DependencyUnavailable("the original Code intent response timed out")
-        })?
+        .map_err(|_| timed_out())?
     }
+}
+/// A stale claim or a conflicting admission is a refusal; any other answer
+/// from Main leaves the binding unproven.
+fn intent_status(status: Status) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied | Code::Aborted => {
+            InputContentError::AuthorizationFailed("the original Code intent was refused")
+        }
+        Code::DeadlineExceeded => timed_out(),
+        _ if is_transport_status(&status) => InputContentError::transport(status),
+        _ => invalid(),
+    }
+}
+fn timed_out() -> InputContentError {
+    InputContentError::DependencyUnavailable("the original Code intent response timed out")
 }
 fn original_visit_request<'a>(
     declaration: &'a crate::sandbox::code_recovery::OriginalCodeDeclarationInput<'a>,

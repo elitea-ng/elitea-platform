@@ -182,9 +182,8 @@ func (in Invocation) Serve(w http.ResponseWriter, r *http.Request) {
 	// alongside the new one; the header and the field must agree.
 	r.Header.Del("Content-Length")
 
-	// The status is observed through the proxy's own ModifyResponse hook, not
-	// by wrapping the ResponseWriter. A wrapper has to forward Flush or a
-	// streaming response stops streaming, and it puts a Write on a
+	// The status is reported by the hop itself through the Outcome, not
+	// observed by wrapping the ResponseWriter: a wrapper puts a Write on a
 	// caller-influenced response body, which CodeQL reads as a reflected-XSS
 	// sink (go/reflected-xss).
 	outcome := &proxy.Outcome{}
@@ -194,8 +193,8 @@ func (in Invocation) Serve(w http.ResponseWriter, r *http.Request) {
 	in.Forward(w, r.WithContext(proxy.WithOutcome(r.Context(), outcome)),
 		in.Path(r), strconv.FormatInt(projectID, 10), strconv.FormatInt(userID, 10))
 
-	// Zero means ModifyResponse never ran, which is a transport failure — the
-	// provider was never reached, so the invocation certainly did not start.
+	// Zero means the provider never answered, which is a transport failure —
+	// it was never reached, so the invocation certainly did not start.
 	if outcome.Status >= 400 || outcome.Status == 0 {
 		Revoke(r.Context(), in.Minter, logger, userID, grant.UUID)
 	}

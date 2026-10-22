@@ -94,7 +94,6 @@ updates:
       - /libs/go/natsconn
       - /libs/go/observability
       - /libs/go/rpclib
-      - /gen/go
       - /libs/proto/gen/go
       - /tools/uictl
       - /conformance/nativeclient

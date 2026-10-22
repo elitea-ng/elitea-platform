@@ -1,13 +1,17 @@
 //! Supervisor data read. Main joins actual signed mode and current original visit.
 use super::DependencyContentClient;
 use crate::{
-    protocol::elitea::runtime::v1::SignedSandboxJobGrantV1,
+    protocol::elitea::runtime::v1::{
+        ReadSandboxWorkspaceFileRequestV1, ReadSandboxWorkspaceManifestRequestV1,
+        SignedSandboxJobGrantV1,
+    },
     sandbox::{request::PreparedJob, workspace::WorkspaceManifest},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use prost::Message as _;
 use ring::digest;
 use serde::Serialize;
+use tonic::{Code, Status};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceContentError {
@@ -87,68 +91,16 @@ impl DependencyContentClient {
             .try_acquire()
             .map_err(|_| WorkspaceContentError::Busy)?;
         let operation = async {
-            let mut response = self
-                .client
-                .post(format!(
-                    "{}/sandbox-workspaces/{}/read-manifest",
-                    self.origin,
-                    manifest.root()
-                ))
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body(proof)?)
-                .send()
+            let bytes = self
+                .rpc()
+                .read_sandbox_workspace_manifest(ReadSandboxWorkspaceManifestRequestV1 {
+                    manifest_sha256: manifest.root().to_owned(),
+                    request_json: body(proof)?,
+                })
                 .await
-                .map_err(|_| WorkspaceContentError::Unavailable)?;
-            if matches!(
-                response.status(),
-                reqwest::StatusCode::UNAUTHORIZED
-                    | reqwest::StatusCode::FORBIDDEN
-                    | reqwest::StatusCode::CONFLICT
-            ) {
-                return Err(WorkspaceContentError::Authority);
-            }
-            if response.status() != reqwest::StatusCode::OK {
-                return Err(WorkspaceContentError::Unavailable);
-            }
-            let expected_digest = format!(
-                "sha-256=:{}:",
-                base64::engine::general_purpose::STANDARD
-                    .encode(digest::digest(&digest::SHA256, &expected).as_ref())
-            );
-            if response
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                != Some("application/json")
-                || response
-                    .headers()
-                    .get("x-elitea-workspace-root")
-                    .and_then(|v| v.to_str().ok())
-                    != Some(manifest.root())
-                || response.content_length() != Some(expected.len() as u64)
-                || response
-                    .headers()
-                    .get("content-digest")
-                    .and_then(|v| v.to_str().ok())
-                    != Some(expected_digest.as_str())
-            {
-                return Err(WorkspaceContentError::Integrity);
-            }
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| WorkspaceContentError::Unavailable)?
-            {
-                if bytes
-                    .len()
-                    .checked_add(chunk.len())
-                    .is_none_or(|n| n > expected.len())
-                {
-                    return Err(WorkspaceContentError::Integrity);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
+                .map_err(|status| refusal(&status))?
+                .into_inner()
+                .manifest_json;
             if bytes != expected {
                 return Err(WorkspaceContentError::Integrity);
             }
@@ -182,74 +134,19 @@ impl DependencyContentClient {
             .slots
             .try_acquire()
             .map_err(|_| WorkspaceContentError::Busy)?;
-        let payload = body(proof)?;
-        let request = self
-            .client
-            .post(format!(
-                "{}/sandbox-workspaces/{}/files/{}/read",
-                self.origin,
-                manifest.root(),
-                file.sha256
-            ))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(payload);
+        let request = ReadSandboxWorkspaceFileRequestV1 {
+            manifest_sha256: manifest.root().to_owned(),
+            content_sha256: file.sha256.clone(),
+            request_json: body(proof)?,
+        };
         let operation = async {
-            let mut response = request
-                .send()
+            let bytes = self
+                .rpc()
+                .read_sandbox_workspace_file(request)
                 .await
-                .map_err(|_| WorkspaceContentError::Unavailable)?;
-            if matches!(
-                response.status(),
-                reqwest::StatusCode::UNAUTHORIZED
-                    | reqwest::StatusCode::FORBIDDEN
-                    | reqwest::StatusCode::CONFLICT
-            ) {
-                return Err(WorkspaceContentError::Authority);
-            }
-            if response.status() != reqwest::StatusCode::OK {
-                return Err(WorkspaceContentError::Unavailable);
-            }
-            if response
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                != Some("application/octet-stream")
-                || response
-                    .headers()
-                    .get("x-elitea-workspace-root")
-                    .and_then(|v| v.to_str().ok())
-                    != Some(manifest.root())
-                || response.content_length() != Some(file.bytes)
-            {
-                return Err(WorkspaceContentError::Integrity);
-            }
-            let expected = format!(
-                "sha-256=:{}:",
-                base64::engine::general_purpose::STANDARD.encode(hex_bytes(&file.sha256)?)
-            );
-            if response
-                .headers()
-                .get("content-digest")
-                .and_then(|v| v.to_str().ok())
-                != Some(expected.as_str())
-            {
-                return Err(WorkspaceContentError::Integrity);
-            }
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| WorkspaceContentError::Unavailable)?
-            {
-                if bytes
-                    .len()
-                    .checked_add(chunk.len())
-                    .is_none_or(|n| n as u64 > file.bytes)
-                {
-                    return Err(WorkspaceContentError::Integrity);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
+                .map_err(|status| refusal(&status))?
+                .into_inner()
+                .content;
             if bytes.len() as u64 != file.bytes
                 || digest::digest(&digest::SHA256, &bytes).as_ref() != hex_bytes(&file.sha256)?
             {
@@ -260,6 +157,16 @@ impl DependencyContentClient {
         tokio::time::timeout(self.deadline, operation)
             .await
             .map_err(|_| WorkspaceContentError::Unavailable)?
+    }
+}
+/// Main's refusal of the caller's authority (including a superseded visit)
+/// is an authority failure; anything else interrupted the transfer.
+fn refusal(status: &Status) -> WorkspaceContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied | Code::Aborted => {
+            WorkspaceContentError::Authority
+        }
+        _ => WorkspaceContentError::Unavailable,
     }
 }
 fn hex_bytes(value: &str) -> Result<[u8; 32], WorkspaceContentError> {

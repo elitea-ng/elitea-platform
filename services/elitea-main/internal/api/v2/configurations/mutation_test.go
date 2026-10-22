@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -78,11 +79,10 @@ func TestCurrentConfigurationMutationRouteBindsExactPathsPermissionsAndDependenc
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := currentReadPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
-	authConfig := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	authConfig := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}
 
 	for name, test := range map[string]struct {
 		mutator     handler.CurrentConfigurationMutator
@@ -90,7 +90,7 @@ func TestCurrentConfigurationMutationRouteBindsExactPathsPermissionsAndDependenc
 		permissions auth.PermissionResolver
 	}{
 		"missing mutator":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":    {mutator: mutator, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":    {mutator: mutator, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"no credential reader": {mutator: mutator, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions":  {mutator: mutator, authConfig: authConfig},
 	} {
@@ -387,8 +387,7 @@ func TestCurrentConfigurationMutationAuthenticatesAndAuthorizesBeforeReadingBody
 			request.Header.Set("Content-Type", "application/json")
 			request.RemoteAddr = "10.0.0.8:43120"
 			if test.authorized {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			response := httptest.NewRecorder()
 			deniedRoute.ServeHTTP(response, request)
@@ -453,20 +452,14 @@ func newCurrentConfigurationMutationRoute(
 ) *handler.CurrentConfigurationMutationRoute {
 	t.Helper()
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
-		if user.ID != "11" || user.UserID != "11" || user.AuthType != "user" {
+		if user.ID != "11" || user.UserID != "11" || user.AuthType != "session" {
 			t.Fatalf("unexpected forwarded principal: %+v", user)
 		}
 		return user, nil
 	})
-	peer := currentReadPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	route, err := handler.NewCurrentConfigurationMutationRoute(
 		mutator,
-		apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
 	)
 	if err != nil {
@@ -486,8 +479,7 @@ func allowCurrentMutationPermission(permission string, userID int64) auth.Permis
 
 func currentMutationRequest(method, path, body string) *http.Request {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request

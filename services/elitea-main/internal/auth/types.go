@@ -37,7 +37,6 @@ type AuthenticationSource uint8
 
 const (
 	AuthenticationSourceUnknown AuthenticationSource = iota
-	AuthenticationSourceForwarded
 	AuthenticationSourceAPIKey
 	AuthenticationSourceToken
 	AuthenticationSourceSession
@@ -150,7 +149,7 @@ func RuntimePrincipalFromContext(ctx context.Context) (User, bool) {
 		return User{}, false
 	}
 	switch source {
-	case AuthenticationSourceForwarded, AuthenticationSourceAPIKey, AuthenticationSourceToken, AuthenticationSourceSession:
+	case AuthenticationSourceAPIKey, AuthenticationSourceToken, AuthenticationSourceSession:
 		return user, true
 	default:
 		return User{}, false

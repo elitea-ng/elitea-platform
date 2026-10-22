@@ -373,7 +373,7 @@ func NewCurrentRoutes(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentRoutes, error) {
-	// PrincipalValidator and ForwardedIdentityVerifier are optional — when nil
+	// PrincipalValidator and FormSessions are optional — when nil
 	// the auth middleware falls back to session-cookie verification, which is
 	// the only credential OIDC-only deployments have (no
 	// ELITEA_AUTH_CONFIG_FILE, hence no FormGraph). Requiring them made these

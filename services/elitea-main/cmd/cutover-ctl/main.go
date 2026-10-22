@@ -52,20 +52,25 @@ func usage() {
 
 Commands:
   budget-status-audit  Scan --paths for budget/quota call sites that handle 429 but not 402
-  sse-flush-check      Assert the gateway streams SSE incrementally for both dialects
+  sse-flush-check      Assert /llm streams SSE incrementally for both dialects, end to end through elitea-main's edge
   cost-parity          Assert gateway nano-USD cost math matches the pylon CostCalculator
   models-parity        Assert gateway /llm/v1/models set-equivalent to legacy for N projects (p99 < M ms)
-  overhead-check       Drive the k6 load script (or parse --summary) and assert gateway-hop p99 < threshold; persists testdata/p99_overhead_benchmark.json
+  overhead-check       Drive the k6 load script at /llm (or parse --summary) and assert gateway-overhead p99 < threshold; persists testdata/p99_overhead_benchmark.json
   budget-check         Assert over-budget returns 402 type=budget_exceeded/code=insufficient_quota + soft-alert within latency window
   cutover-verify       Post-cutover gate BFC.9: assert zero 5xx, no litellm subprocess, zero legacy traffic, 402 block confirmed
 
 Options:
   --paths <roots>      (budget-status-audit) comma-separated roots to scan
-  --gateway-url <url>  (sse-flush-check) gateway base URL (default http://localhost:8083)
+  --base-url <url>     (sse-flush-check, overhead-check) elitea-main public origin serving /llm (default $DEPLOYMENT_URL, else http://localhost:8080)
+  --api-key <token>    (sse-flush-check) personal access token for /llm (default $API_KEY; overhead-check's k6 reads $API_KEY)
+  --project-id <id>    (sse-flush-check, overhead-check) project to bill, sent as X-Project-Id (default: the token owner's personal project)
+  --gateway-url <url>  (budget-check) gateway gRPC listener, https://<host>:<port> (default $LLM_GATEWAY_URL);
+                       (models-parity) elitea-main public origin serving /llm/v1/models (default $DEPLOYMENT_URL, else http://localhost:8080)
   --against <ref>      (cost-parity) reference cost model to compare against (default pylon)
   --min-projects <N>   (models-parity) minimum projects to check (default 5)
   --max-p99-ms <M>     (models-parity) maximum acceptable p99 gateway /v1/models latency (default 200)
-  --projects-file <f>        (models-parity) seeded projects fixture (JSON array); (budget-check) seeded {over_budget, soft_alert, under_budget} fixture
+  --projects-file <f>        (models-parity) seeded projects fixture (JSON array); (budget-check) seeded {over_budget, soft_alert, under_budget} fixture;
+                             (overhead-check) JSON array of {project_id} the load spreads across as X-Project-Id
   --max-p99-overhead-ms <N>  (overhead-check) maximum acceptable gateway-hop p99 latency in ms (default 50)
   --summary <path>           (overhead-check) pre-exported k6 --summary-export JSON; skips running k6 (hermetic mode)
   --script <path>            (overhead-check) k6 load script to drive (default testdata/overhead_loadtest.js)

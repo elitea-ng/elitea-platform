@@ -21,10 +21,11 @@
 #   NATS                `nats` names it. Commodity infrastructure. It is
 #                       also the runtime command bus; there is no Redis.
 #   Object storage      An S3-compatible endpoint, configured under `main.env`.
-#   Ingress             The cluster's own edge. `worker.platformEdge` is NOT it:
-#                       that one is internal, has no route from any gateway, and
-#                       exists only because the worker refuses a plaintext
-#                       platform_origin.
+#   Ingress             The cluster's own edge. elitea-main's platform listener
+#                       (main.runtime.listeners.platformAddress, :9446) is NOT
+#                       it: that one is internal mTLS for the worker, has no
+#                       route from any gateway, and admits only runtime-CA
+#                       client certificates.
 #
 # THE ARTIFACT BUCKET MUST EXIST BEFORE THE FIRST SYNC, and this one bites
 # early, but NOT the way it looks at first read. The readiness probe
@@ -489,11 +490,14 @@ platform:
 # need a CNI that enforces NetworkPolicy (Calico, Cilium, etc.); on one that does
 # not, the objects are inert.
 #
-#   elitea-main     HTTP 8080 admits the platform edge, the provider pods that
-#                   call back directly, main.ingressFrom / extraIngressFrom and
-#                   probeFrom. The runtime listeners admit the worker pods only.
-#   platform edge   443 from the worker, elitea-main and (callbackViaPlatformEdge)
-#                   DeepWiki; egress to elitea-main's HTTP port and cluster DNS.
+#   elitea-main     HTTP 8080 admits main.ingressFrom / extraIngressFrom and
+#                   probeFrom only: no provider pod. The runtime listeners
+#                   (9443-9446) admit the worker pods only; the platform
+#                   listener (9446) also admits the DeepWiki and Inventory pods,
+#                   whose hosts and engines make their model, artifact and
+#                   source-tool calls there over gRPC (ModelService,
+#                   ArtifactObjectService, InternalToolService.InvokeToolkit,
+#                   #1359 U2/U5).
 #   worker          no inbound connections. Worker egress is NOT restricted (the
 #                   worker reaches NATS, PostgreSQL, elitea-main, the sandbox
 #                   supervisors and, through toolkits, external hosts); egress
@@ -506,12 +510,12 @@ platform:
 networkPolicies:
   enabled: true
   # Set true ONLY when `enabled` is false because your own NetworkPolicy already
-  # limits who may reach elitea-main, the worker, the platform edge and the
+  # limits who may reach elitea-main, the worker and the
   # sandbox supervisor. templates/guards.yaml refuses `enabled: false` without
   # it: the chart cannot see your policy, so this is a statement, not a probe.
   externallyManaged: false
   # Optional NetworkPolicyPeer entries admitted on the probe ports of
-  # elitea-main (8080), the platform edge (443) and the sandbox supervisor, for a
+  # elitea-main (8080) and the sandbox supervisor, for a
   # CNI that applies policy to kubelet probes. Kubelet probes are not subject to
   # policy on the CNIs this chart is tested with, so this is normally empty
   # (the same assumption as the NATS chart's networkPolicy).
@@ -668,8 +672,9 @@ main:
     # carrying this deployment's own value, which contains a circular route on
     # its first re-entry. An edge that removes it disarms that detection. The
     # marker is not identity — it grants nothing, and recognising it only
-    # refuses the caller's own request. Both traefik edges carry the same
-    # exception, and edge_identity_strip_test.go holds them together.
+    # refuses the caller's own request. elitea-main's own strip (the compose
+    # edge) carries the same exception, and tests/deployedge holds them
+    # together.
     identityHeadersStrippedByController: false
     stripIdentityHeaders:
       - X-Auth-Type
@@ -1440,7 +1445,10 @@ main:
     ARTIFACT_ATTACHMENT_RETENTION_DAYS: ""
 
     # --- LLM gateway proxy (BF0.9c; issue #463) ---------------------------------
-    # URL of the elitea-llm-gateway service. Empty composes no GatewayProxy, and
+    # URL of the elitea-llm-gateway gRPC listener (#1359): https://<host>:<port>,
+    # no path. elitea-main dials it as dns:///<host>:<port> with round_robin, so
+    # name the HEADLESS Service (llmGateway.service.grpcName, port grpcPort):
+    # each replica is then one address. Empty composes no gateway client, and
     # the /llm path then answers 503 llm_gateway_not_configured.
     #
     # WHY THERE IS NO DEFAULT VALUE HERE, and why that is not the old defect.
@@ -1452,10 +1460,10 @@ main:
     # value is now a stated posture instead of a silent one.
     #
     # A default URL cannot be correct, and would be worse than the empty value:
-    #   1. internal/llmproxy/proxy.go ALWAYS builds an mTLS transport. With no
-    #      readable client certificate, tls.LoadX509KeyPair fails, llmproxy.New
-    #      returns an error, and cmd/elitea-main turns that into a FATAL boot
-    #      error. A default URL with no certificates is a crash loop, not a
+    #   1. internal/llmproxy/gateway_client.go ALWAYS loads mutual TLS material.
+    #      With no readable client certificate, tls.LoadX509KeyPair fails,
+    #      NewGatewayClient returns an error, and cmd/elitea-main turns that
+    #      into a FATAL boot error. A default URL with no certificates is a crash loop, not a
     #      working /llm path.
     #   2. The certificates arrive through
     #      fileConfig.llmGatewayClientMaterial above, which mounts a Secret at
@@ -1472,7 +1480,7 @@ main:
     #
     # Cross-namespace: this must be an FQDN when the gateway is in another
     # namespace, e.g.
-    #   https://elitea-llm-gateway-svc.elitea-gateway.svc.cluster.local:8083
+    #   https://elitea-llm-gateway-grpc.elitea-gateway.svc.cluster.local:8443
     LLM_GATEWAY_URL: ""
 
     # The mTLS material for the hop above. These three are FILE PATHS, not the
@@ -1511,8 +1519,6 @@ main:
     # and would refuse every request, so a facade that came up anyway would be
     # four routes answering 503 while the flag says the feature is on.
     ELITEA_DEEPWIKI_ENABLED: ""
-    # The provider's origin. Must be https: it serves nothing over plain HTTP.
-    ELITEA_DEEPWIKI_BASE_URL: ""
     # Client certificate material for the hop, mounted from a Secret by the
     # operator (see mTLS mounts for the gateway hop, which these mirror).
     # These are PATHS, not key material, so they belong in env and not in
@@ -1521,16 +1527,14 @@ main:
     ELITEA_DEEPWIKI_CLIENT_KEY_FILE: ""
     ELITEA_DEEPWIKI_CA_FILE: ""
     # Overrides the SNI/verification name when the Service DNS name differs
-    # from the certificate's subject. Empty means "use the base URL's host",
+    # from the certificate's subject. Empty means "use the target's host",
     # which is right whenever the certificate was issued for that name.
     ELITEA_DEEPWIKI_SERVER_NAME: ""
     ELITEA_DEEPWIKI_TIMEOUT_SECONDS: ""
-    # The origin the PROVIDER calls back to for artifacts and models. Required
-    # whenever the facade is on: the engine derives the artifact API base by
-    # stripping `/llm/v1` off the api_base it is handed, so this one value is
-    # both, and configuring them apart is not expressible. Set it to the
-    # in-cluster origin of elitea-main, e.g. http://elitea-main:8080.
-    ELITEA_DEEPWIKI_CALLBACK_BASE_URL: ""
+    # (ELITEA_DEEPWIKI_CALLBACK_BASE_URL is retired, #1359 U5: the provider
+    # reaches elitea-main only over gRPC on the platform listener, artifacts
+    # through ArtifactObjectService and models through ModelService. The
+    # render refuses the old key.)
     # How long a minted callback bearer lives. It must outlast the longest
     # generation this deployment expects: a token that dies mid-run makes the
     # engine fail its artifact upload after doing all the work. Default 120.
@@ -1544,13 +1548,14 @@ main:
     # (so the credential is never written into one). Two allowlists that could
     # disagree would mean an invocation that starts and then fails.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
-    # Where elitea-main deletes a project's wiki search indexes when the project
-    # is deprovisioned (#1243): the engine's platform gRPC listener, host:port.
-    # Normally LEFT EMPTY and derived by the chart as <deepwiki.service.name>:
-    # <deepwiki.platformGrpc.port> whenever deepwiki.platformGrpc.clients is
-    # set and this facade is on — the three are one feature. The hop presents
-    # the facade's client certificate (the three files above), so a target
-    # beside a facade that is off is refused, here and at boot.
+    # The provider's one listener, host:port (#1359): the facade's SPI calls
+    # and the project-deprovision deletions (#1243) are gRPC to it. Normally
+    # LEFT EMPTY and derived by the chart as <deepwiki.service.name>:
+    # <deepwiki.platformGrpc.port> whenever deepwiki.enabled and this facade
+    # is on; set it for a provider deployed elsewhere. The hop presents the
+    # facade's client certificate (the three files above), so a target beside
+    # a facade that is off is refused, here and at boot. The old
+    # ELITEA_DEEPWIKI_BASE_URL is refused by name.
     ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: ""
 
     # --- Inventory facade (ADR-0023 H4c) -----------------------------------
@@ -1563,8 +1568,6 @@ main:
     # request, so a facade that came up anyway would be three routes answering
     # 503 while the flag says the feature is on.
     ELITEA_INVENTORY_ENABLED: ""
-    # The provider's origin. Must be https: it serves nothing over plain HTTP.
-    ELITEA_INVENTORY_BASE_URL: ""
     # Client certificate material for the hop, mounted from a Secret by
     # fileConfig.inventoryClientMaterial above. These are PATHS, not key
     # material, so they belong in env and not in `secrets:` below.
@@ -1572,17 +1575,17 @@ main:
     ELITEA_INVENTORY_CLIENT_KEY_FILE: ""
     ELITEA_INVENTORY_CA_FILE: ""
     # Overrides the SNI/verification name when the Service DNS name differs
-    # from the certificate's subject. Empty means "use the base URL's host".
+    # from the certificate's subject. Empty means "use the target's host".
     ELITEA_INVENTORY_SERVER_NAME: ""
     ELITEA_INVENTORY_TIMEOUT_SECONDS: ""
-    # Where elitea-main deletes an Inventory toolkit's graph when the toolkit is
-    # deleted, and every graph of a project when the project is deprovisioned
-    # (#1244): the engine's platform gRPC listener, host:port. Normally LEFT
-    # EMPTY and derived by the chart as <inventory.service.name>:
-    # <inventory.platformGrpc.port> whenever inventory.platformGrpc.clients is
-    # set and this facade is on. The hop presents the facade's client
-    # certificate, so a target beside a facade that is off is refused, here and
-    # at boot.
+    # The provider's one listener, host:port (#1359): the facade's SPI calls
+    # and the toolkit/project graph deletions (#1244) are gRPC to it. Normally
+    # LEFT EMPTY and derived by the chart as <inventory.service.name>:
+    # <inventory.platformGrpc.port> whenever inventory.enabled and this facade
+    # is on; set it for a provider deployed elsewhere. The hop presents the
+    # facade's client certificate, so a target beside a facade that is off is
+    # refused, here and at boot. The old ELITEA_INVENTORY_BASE_URL is refused
+    # by name.
     ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: ""
     # The toolkit-deletion reconciler (#1244): the loop on every elitea-main
     # replica that drains centry.toolkit_deletions — the engine-side deletion
@@ -1702,12 +1705,10 @@ main:
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
-    # The origin the Inventory provider calls back to for artifacts and models.
-    # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
-    # Inventory tools that only read an existing graph still work, and the
-    # three that name a source get the provider's own refusal. Set it to the
-    # platform's own external origin (the same value DeepWiki's takes).
-    ELITEA_INVENTORY_CALLBACK_BASE_URL: ""
+    # (ELITEA_INVENTORY_CALLBACK_BASE_URL is retired, #1359 U5: artifacts go
+    # over ArtifactObjectService on the platform listener, and source
+    # expansion no longer depends on a callback origin. The render refuses the
+    # old key.)
     # How long that bearer lives. Default 120 minutes; it must outlast the
     # longest ingestion this deployment expects.
     ELITEA_INVENTORY_CALLBACK_TOKEN_TTL_MINUTES: ""
@@ -1954,17 +1955,9 @@ main:
       enabled: false
       # ELITEA_RT_V1_AGENT. Its durable consumer is fixed by the stream.
       commandStream: ""
-      # OPTIONAL. The origin elitea-main calls for the next-input-suggestion
-      # policy. Empty is the normal value: the call is a SELF call and this
-      # process serves cleartext, so the origin is derived from its own listener
-      # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>).
-      #
-      # Set it only where another server answers that path (the retired
-      # centry-hybrid stack aimed it at an edge that routed it to legacy Centry). It must then be
-      # an https ORIGIN, with no path, query or fragment, on an address that
-      # TERMINATES TLS. An https origin on elitea-main's own cleartext port is
-      # refused at boot.
-      currentMainBaseUrl: ""
+      # (currentMainBaseUrl is gone, #1359 U5: the worker's internal MCP
+      # calls are elitea.runtime.v1.InternalToolService on the platform gRPC
+      # listener it already dials. The render refuses the old key.)
 
     # Index start, index cancel and index metadata. NEEDS
     # env.ELITEA_CONFIGURATIONS_ENABLED="true": the handlers compose through the
@@ -2037,14 +2030,68 @@ main:
       publishingTtlSeconds: 60
       readyTtlSeconds: 3600
 
-    # Three listeners, three DISTINCT addresses. The agent worker dials all three
+    # Four listeners, four DISTINCT addresses. The agent worker dials all of them
     # on this Service, so the server certificates must carry the Service name.
     # The chart opens the ports on the container and the Service when the runtime
     # is enabled.
+    #
+    # platformAddress (#1359) is elitea-main's internal gRPC port: the worker's
+    # platform_origin (worker.runtime.platformOrigin) and the origin the
+    # DeepWiki and Inventory hosts and engines dial. It serves gRPC ONLY
+    # (elitea.llm.v1.ModelService, elitea.runtime.v1.ArtifactObjectService,
+    # elitea.runtime.v1.InternalToolService) and no HTTP. It reuses the content
+    # listener's keypair and requires a client certificate the runtime CA
+    # signed. It replaced the platform-edge proxy. Not 8080.
+    #
+    # contentAddress serves elitea.runtime.v1.RuntimeContentService, gRPC only
+    # (#1359): the worker's and the sandbox supervisor's input, bundle and
+    # snapshot transfers. It speaks no HTTP; probe it with grpc.health.v1.
     listeners:
       controlAddress: ":9443"
       outputAddress: ":9444"
       contentAddress: ":9445"
+      platformAddress: ":9446"
+
+    # elitea.llm.v1.ModelService on the platform listener (#1359 U2): the
+    # model calls of the agent worker and the DeepWiki/Inventory engines, run
+    # through the same /llm pipeline a browser request takes. It admits only
+    # the workload identities in ELITEA_MODEL_SERVICE_CLIENTS, which the chart
+    # renders (main.env may not set it) from:
+    #   * worker.runtimeSession.expectedIdentity, REQUIRED when worker.enabled;
+    #   * dns:elitea-subapp-callback, the callback client certificate's SAN,
+    #     when a DeepWiki or Inventory engine sidecar runs;
+    #   * extraClients below: callers deployed outside this release (a worker
+    #     fleet of its own, a callback certificate minted with another SAN),
+    #     as "dns:<name>" or "spiffe://..." identities.
+    # elitea-main refuses to start while the list is empty, so the render
+    # refuses that too.
+    modelService:
+      extraClients: []
+
+    # elitea.runtime.v1.ArtifactObjectService on the platform listener (#1359
+    # U5): the artifact reads and writes of the worker (Office toolkits,
+    # indexing artifact sources), the DeepWiki/Inventory hosts (uploads) and
+    # engines (artifact-folder ingest), run in process through the same
+    # artifact routes, authentication and per-bucket access rules a browser
+    # request takes. ELITEA_ARTIFACT_SERVICE_CLIENTS is rendered (main.env may
+    # not set it) from the worker's identity (worker.enabled), the
+    # sub-application callback identity dns:elitea-subapp-callback (DeepWiki
+    # or Inventory enabled) and extraClients below. An empty list leaves the
+    # service unregistered, so every caller is refused.
+    artifactService:
+      extraClients: []
+
+    # elitea.runtime.v1.InternalToolService on the platform listener (#1359
+    # U5): the worker's internal MCP toolkits (the project's applications,
+    # toolkits, configurations, ...), run in process through the same MCP
+    # endpoint an external MCP client calls, and the Inventory engine's
+    # `investigate` source-tool calls (InvokeToolkit, which replaced the HTTP
+    # test_tool route). ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS is rendered from
+    # the worker's identity (worker.enabled), the sub-application callback
+    # identity dns:elitea-subapp-callback (inventory.enabled) and extraClients
+    # below. Empty leaves the service unregistered.
+    internalToolService:
+      extraClients: []
 
     # Where the runtime keys, passwords and certificates come from, and where the
     # service reads them.
@@ -2054,12 +2101,15 @@ main:
     # deploy/scripts/gen-runtime-certs.sh writes:
     #
     #   runtime-ca.crt                the trust root: the client CA of all
-    #                                 three listeners
+    #                                 four listeners
     #   command-signing-key.pem       Ed25519 PKCS#8, signs dispatch envelopes
     #   command-signing-keyring.json  its public half, keyed by signingKeyId
     #   control-server.crt / .key     the control listener keypair
     #   output-server.crt / .key      the output listener keypair
-    #   content-server.crt / .key     the content listener keypair
+    #   content-server.crt / .key     the content AND platform listener keypair
+    #
+    # (main-platform-client.crt / .key, Main's client identity for its retired
+    # self call, is no longer read; #1359.)
     #
     # The server certificates must carry the Service name, because the agent
     # worker dials all three listeners on this Service.
@@ -2668,6 +2718,13 @@ llmGateway:
     # config.go defaults; set explicitly so the deployment is self-documenting.
     GATEWAY_SHUTDOWN_TIMEOUT: "150s"
     GATEWAY_INITIAL_POOL_SIZE: "100"
+    # The GatewayService gRPC listener (#1359): every /llm call from elitea-main
+    # arrives here, over mutual TLS. It must match service.grpcPort.
+    GATEWAY_GRPC_ADDR: ":8443"
+    # The workload identities the gRPC listener admits, from the client
+    # certificate SAN ("dns:<name>" or one spiffe:// URI). The edge-client
+    # Certificate (templates/llmGateway/certificates.yaml) carries dns:elitea-main.
+    GATEWAY_GRPC_CLIENTS: "dns:elitea-main"
     GATEWAY_PROVIDER_CONCURRENCY: "50"
     GATEWAY_LOG_LEVEL: "info"
     # NATS budget-path circuit breaker (§8.5). Trip after N consecutive failures;
@@ -2800,6 +2857,14 @@ llmGateway:
     # public and in-cluster origin that reaches the /llm surface; empty leaves
     # the request-time guard inert (the elitea-main upsert-time guard remains).
     # e.g. "https://dev.elitea.ai/llm/v1,http://elitea-main:8080/llm/v1"
+    #
+    # NOT elitea-main's platform listener (https://elitea-main:9446). The
+    # worker's and the engines' model calls reach /llm there over gRPC
+    # (elitea.llm.v1.ModelService, #1359 U2), not as an HTTP /llm origin: a
+    # credential naming it would be an HTTP call to a gRPC-only listener that
+    # also demands a runtime-CA client certificate, which fails at the
+    # handshake and cannot loop. This list is a string match on HTTP api_base
+    # origins only.
     #
     # ISSUE #467: this MUST be set. The chart refuses to render while it is empty
     # (elitea-llm-gateway.validateGuards in templates/_helpers.tpl), because an
@@ -3059,11 +3124,19 @@ llmGateway:
     #         port: 8000
     egress: []
 
-  # elitea-llm-gateway-svc: mTLS-only ClusterIP (NOT public), port 8083 (design
-  # §9.1). Named explicitly so the edge/runbook references resolve.
+  # Two Services (#1359):
+  #   name/port         ClusterIP on the plaintext HTTP listener. It serves
+  #                     /healthz, /readyz and /metrics only (infrastructure).
+  #   grpcName/grpcPort HEADLESS Service on the mutual-TLS gRPC listener
+  #                     (GatewayService). elitea-main resolves it and balances
+  #                     calls round_robin across the replicas; point
+  #                     main.env.LLM_GATEWAY_URL at it.
+  # Neither is public (design §9.1).
   service:
     name: elitea-llm-gateway-svc
     port: 8083
+    grpcName: elitea-llm-gateway-grpc
+    grpcPort: 8443
     annotations: {}
 
   # HPA on a custom /llm SSE-connection metric (design §9.5) — CPU/memory is a poor
@@ -3093,7 +3166,9 @@ llmGateway:
 
   # mTLS for the elitea-main -> gateway hop (design §9.1). cert-manager issues a
   # server cert (this Deployment mounts it) and an edge client cert (elitea-main
-  # mounts it) from a shared internal CA issuer.
+  # mounts it) from a shared internal CA issuer. REQUIRED (#1359): the gateway
+  # serves /llm only on its mutual-TLS gRPC listener, and refuses to start
+  # without the material. The chart refuses enabled=false.
   mtls:
     enabled: true
     serverSecretName: elitea-llm-gateway-server-tls
@@ -3109,13 +3184,11 @@ llmGateway:
     # ca.crt (mTLS require-and-verify).
     mountPath: /etc/gateway/tls
 
-  # probes: with mtls.enabled (the default) the paths below are NOT used — the
-  # listener requires a verified client certificate, which a kubelet probe cannot
-  # present, so templates/deployment.yaml probes the socket instead. The paths
-  # apply when mtls.enabled is false. So with mTLS on, /readyz never removes a
-  # pod from rotation: the gateway itself refuses /llm spend (503
-  # nats_unavailable) while budget enforcement is unwired, and does not rely on
-  # readiness for it ([human decision] 2026-10-16).
+  # probes: httpGet on the plaintext HTTP listener (#1359), which serves health
+  # and metrics only. /readyz now removes a pod from the headless gRPC Service.
+  # The gateway still refuses /llm spend (503 nats_unavailable) while budget
+  # enforcement is unwired, and does not rely on readiness for it
+  # ([human decision] 2026-10-16).
   probes:
     liveness:
       # Process liveness only (no dependency calls) — issue #242: a NATS blip
@@ -3166,33 +3239,9 @@ llmGateway:
     enabled: false
     minAvailable: 1
 
-  # Opt-in external reachability (issue #241; legacy parity), OFF by default.
-  # CAUTION: the gateway is mTLS-internal by design (service.yaml — "NEVER
-  # public", §9.1); enabling this exposes /llm outside the mTLS-only path the
-  # rest of this chart assumes. Only turn it on if your ingress
-  # controller/Gateway itself terminates and re-verifies mTLS equivalent to
-  # what elitea-main does today — templates/ingress.yaml refuses to render
-  # (helm `fail`) unless acknowledgeMTLSBypass is also set to true, so that
-  # confirmation can't be skipped by accident. Set ingress.gatewayApi: true to
-  # render an HTTPRoute instead of a networking.k8s.io/v1 Ingress; the two are
-  # mutually exclusive.
-  ingress:
-    enabled: false
-    acknowledgeMTLSBypass: false
-    gatewayApi: false
-    className: ""
-    annotations: {}
-    path: /
-    pathType: Prefix
-    hosts: []
-    tls: []
-      # - secretName: elitea-llm-gateway-tls
-      #   hosts:
-      #     - gateway.dev.elitea.ai
-    gateway:
-      name: ""
-      namespace: ""
-      sectionName: ""
+  # The opt-in ingress to the gateway (issue #241) was removed (#1359): the gateway serves
+  # /llm only to elitea-main over mutual-TLS gRPC. The chart refuses
+  # llmGateway.ingress.enabled=true.
 
   nodeSelector: {}
   tolerations: []
@@ -3215,22 +3264,35 @@ deepwiki:
   enabled: false
   replicaCount: 1
 
-  # ADR-0027: the provider's CALLBACK hop — its model calls through the /llm
-  # edge and its artifact uploads, both to main.env
-  # ELITEA_DEEPWIKI_CALLBACK_BASE_URL — over TLS through worker.platformEdge,
-  # as the agent worker reaches elitea-main, instead of cleartext to
-  # elitea-main:8080. Needs worker.enabled and worker.platformEdge.enabled.
-  # When on:
-  #   * an unset main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL becomes
-  #     worker.runtime.platformOrigin (a different explicit value is refused);
-  #   * both containers trust the runtime CA, which signs the edge's
-  #     certificate, through ELITEA_DEEPWIKI_CALLBACK_CA_FILE — the
-  #     runtime-ca.crt key of worker.materialSecretName and NOTHING else from
-  #     that Secret.
-  # The edge terminates TLS and forwards to elitea-main over cleartext; it does
-  # not check client certificates. What this adds is TLS on the pod-to-edge
-  # hop, the same posture the worker has.
-  callbackViaPlatformEdge: false
+  # The provider reaches elitea-main ONLY over gRPC on its platform listener
+  # (main.runtime.listeners.platformAddress, worker.runtime.platformOrigin):
+  #   * the HOST container uploads and reads artifacts over
+  #     elitea.runtime.v1.ArtifactObjectService (#1359 U5) at
+  #     ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL;
+  #   * the ENGINE sidecar makes its model calls over elitea.llm.v1.ModelService
+  #     (#1359 U2) and its artifact-folder reads over ArtifactObjectService, both
+  #     at ELITEA_DEEPWIKI_MODEL_SERVICE_URL (required by the native engine).
+  # Both containers trust the runtime CA (the runtime-ca.crt key of
+  # worker.materialSecretName and NOTHING else from that Secret) and present
+  # callbackClient below, which elitea-main admits as dns:elitea-subapp-callback.
+  # So deepwiki.enabled needs main.runtime.enabled and callbackClient.secretName,
+  # and the render refuses it without them. There is no HTTP callback origin
+  # and no 8080 admission any more.
+  #
+  # callbackViaPlatformListener is gone (#1359 U5): the artifact hop is always
+  # gRPC on the platform listener, so there is nothing left to choose, and the
+  # render refuses the key whatever its value. Its predecessor
+  # callbackViaPlatformEdge (ADR-0027) is refused too.
+  callbackClient:
+    # A Secret with tls.crt / tls.key: a client certificate (extendedKeyUsage
+    # clientAuth) the runtime CA signed. deploy/scripts/gen-runtime-certs.sh
+    # mints one as subapp-callback-client.crt / .key:
+    #
+    #   kubectl create secret generic elitea-deepwiki-callback-client \
+    #     --from-file=tls.crt=subapp-callback-client.crt \
+    #     --from-file=tls.key=subapp-callback-client.key
+    secretName: elitea-deepwiki-callback-client
+    defaultMode: 0440
 
   # The provider pod is TWO containers (ADR-0023 H2): the Go sub-application
   # host, which serves the SPI, composes and uploads, and the Rust-native
@@ -3294,28 +3356,34 @@ deepwiki:
     # Named explicitly, not release-derived: the server certificate's SANs name
     # this Service and elitea-main verifies exactly that name.
     name: elitea-deepwiki-svc
-    port: 8443
+    # No `port` (#1359): the one port is platformGrpc.port below.
     annotations: {}
 
-  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
-  # operations that are not a user's to run, such as deleting everything a
-  # project owns here when the project is deprovisioned. It is a second
-  # listener of the host container, behind the SAME server certificate and
-  # client CA as the SPI (mutual TLS is mandatory), and every call is
-  # authorised by the verified client certificate alone: its subject common
-  # name or a DNS SAN must be in `clients`.
+  # The provider's one listener (#1359): the provider SPI
+  # (elitea.subapp.v1.ProviderService — elitea-main's facade, its descriptor
+  # and health) and the platform operations (elitea.subapp.v1.
+  # PlatformOperations — deletions that are not a user's to run), both gRPC
+  # over mutual TLS behind the server certificate and client CA in `mtls`.
+  # Every call is authorised by the verified client certificate: its subject
+  # common name or a DNS SAN must be in `clients`.
   #
-  #   clients  certificate identities allowed to call it. EMPTY (the default)
-  #            keeps the service OFF: no port is opened, rendered or admitted.
-  #            The facade client certificate this chart issues has the common
-  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
-  #            mtls.enabled (the chart refuses it otherwise).
+  #   clients  certificate identities allowed to call it. Cannot be empty (the
+  #            chart refuses it). The facade client certificate this chart
+  #            issues has the common name elitea-main.
   #   port     the container and Service port, exposed as `platform-grpc`.
   #
-  # The NetworkPolicy admits elitea-main only on both ports.
+  # The NetworkPolicy admits elitea-main only.
   platformGrpc:
-    clients: []
+    clients: [elitea-main]
     port: 9443
+
+  # The admin port: /healthz and /readyz in plain HTTP, no mTLS, for the
+  # kubelet's probes (<PREFIX>ADMIN_ADDR). /readyz fails while the replica
+  # does not hold its invocation-store owner claim (#1359), so the replica
+  # leaves the Service. Not on the Service; the NetworkPolicy admits only
+  # networkPolicies.probeFrom to it.
+  admin:
+    port: 9090
 
   env:
     # FAIL-CLOSED, and the chart refuses to render while it is empty — see
@@ -3342,9 +3410,9 @@ deepwiki:
     ELITEA_DEEPWIKI_SLOTS_MODE: "false"
     ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS: "1"
     ELITEA_DEEPWIKI_SCRATCH_PATH: /var/scratch/deepwiki
-    # The origin elitea-main proxies to. Must agree with
-    # main.env.ELITEA_DEEPWIKI_BASE_URL.
-    ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: https://elitea-deepwiki-svc:8443
+    # The location this host reports in its descriptor: the gRPC listener
+    # elitea-main dials (main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET).
+    ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: grpcs://elitea-deepwiki-svc:9443
 
   # Sensitive values from Kubernetes Secrets. ELITEA_DEEPWIKI_DATABASE_URL
   # defaults to the chart-wide postgresql secret when one is set, exactly as
@@ -3408,16 +3476,14 @@ deepwiki:
       kind: ClusterIssuer
     mountPath: /etc/deepwiki/tls
 
-  # probes: with mtls.enabled (the default) these paths are NOT used — the
-  # listener requires a verified client certificate, which a kubelet probe
-  # cannot present, so the Deployment probes the socket instead.
+  # probes: httpGet on the admin port — liveness /healthz, readiness /readyz
+  # (the gRPC listener requires a client certificate a kubelet probe cannot
+  # present).
   probes:
     liveness:
-      path: /health
       periodSeconds: 10
       failureThreshold: 3
     readiness:
-      path: /ready
       periodSeconds: 5
       failureThreshold: 2
 
@@ -3467,6 +3533,34 @@ inventory:
   enabled: false
   replicaCount: 1
 
+  # The provider reaches elitea-main's platform listener
+  # (main.runtime.listeners.platformAddress, worker.runtime.platformOrigin)
+  # over gRPC:
+  #   * the HOST container uploads and reads graph artifacts over
+  #     elitea.runtime.v1.ArtifactObjectService (#1359 U5) at
+  #     ELITEA_INVENTORY_ARTIFACT_SERVICE_URL;
+  #   * the ENGINE sidecar makes its model calls over elitea.llm.v1.ModelService
+  #     (#1359 U2) and its artifact-folder reads over ArtifactObjectService, at
+  #     ELITEA_INVENTORY_MODEL_SERVICE_URL (required by the native engine).
+  # Both trust the runtime CA (the runtime-ca.crt key of
+  # worker.materialSecretName and NOTHING else from that Secret) and present
+  # the client certificate below, which elitea-main admits as
+  # dns:elitea-subapp-callback. So inventory.enabled needs main.runtime.enabled
+  # and callbackClient.secretName, and the render refuses it without them.
+  callbackClient:
+    # A Secret with tls.crt / tls.key: a client certificate (extendedKeyUsage
+    # clientAuth) the runtime CA signed. deploy/scripts/gen-runtime-certs.sh
+    # mints one as subapp-callback-client.crt / .key:
+    #
+    #   kubectl create secret generic elitea-inventory-callback-client \
+    #     --from-file=tls.crt=subapp-callback-client.crt \
+    #     --from-file=tls.key=subapp-callback-client.key
+    #
+    # Both engines present the same identity, so DeepWiki's Secret
+    # (deepwiki.callbackClient.secretName) can be named here instead.
+    secretName: elitea-inventory-callback-client
+    defaultMode: 0440
+
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
   # env.ELITEA_INVENTORY_RUNNER=sidecar — the Rust-native engine sidecar
@@ -3498,14 +3592,9 @@ inventory:
     # (`legacy`, the Python engine, is refused.)
     runner: native
     socketDir: /run/inventory
-    # A private CA for the callback origin (main.env.ELITEA_INVENTORY_CALLBACK_
-    # BASE_URL), when it is https under a CA the platform roots do not cover.
-    # Names a Secret in this namespace; only `key` is mounted, at `mountPath`,
-    # and ELITEA_INVENTORY_CALLBACK_CA_FILE points at it. Empty: not mounted.
-    callbackCa:
-      secretName: ""
-      key: ca.crt
-      mountPath: /run/elitea-callback-ca
+    # (engine.callbackCa is gone, #1359 U2: the model origin is always the
+    # platform listener, whose runtime CA the chart mounts itself. The render
+    # refuses the old key.)
     resources:
       requests:
         cpu: 250m
@@ -3517,7 +3606,7 @@ inventory:
     # Named explicitly, not release-derived: the server certificate's SANs name
     # this Service and elitea-main verifies exactly that name.
     name: elitea-inventory-svc
-    port: 8443
+    # No `port` (#1359): the one port is platformGrpc.port below.
     annotations: {}
 
   env:
@@ -3535,9 +3624,9 @@ inventory:
     ELITEA_INVENTORY_RUNNER: "sidecar"
     ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
     ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
-    # The origin elitea-main proxies to. Must agree with
-    # main.env.ELITEA_INVENTORY_BASE_URL.
-    ELITEA_INVENTORY_SERVICE_LOCATION_URL: https://elitea-inventory-svc:8443
+    # The location this host reports in its descriptor: the gRPC listener
+    # elitea-main dials (main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET).
+    ELITEA_INVENTORY_SERVICE_LOCATION_URL: grpcs://elitea-inventory-svc:9443
     # The git hosts the ENGINE may clone from. FAIL-CLOSED, and the chart
     # refuses to render a native engine while it is empty. The engine clones
     # repositories itself (a shallow clone per ingestion), so unlike the Python
@@ -3603,27 +3692,31 @@ inventory:
     mountPath: /var/scratch/inventory
     sizeLimit: 20Gi
 
-  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
-  # operations that are not a user's to run - deleting an Inventory toolkit's
-  # graph when the toolkit is deleted (DeleteToolkit), and every graph of a
-  # project when the project is deprovisioned (DeleteProject). They are not
-  # toolkit tools: no user or agent is offered them. It is a second listener of
-  # the host container, behind the SAME server certificate and client CA as the
-  # SPI (mutual TLS is mandatory), and every call is authorised by the verified
-  # client certificate alone: its subject common name or a DNS SAN must be in
-  # `clients`.
+  # The provider's one listener (#1359): the provider SPI
+  # (elitea.subapp.v1.ProviderService — elitea-main's facade, its descriptor
+  # and health) and the platform operations (elitea.subapp.v1.
+  # PlatformOperations — deletions that are not a user's to run), both gRPC
+  # over mutual TLS behind the server certificate and client CA in `mtls`.
+  # Every call is authorised by the verified client certificate: its subject
+  # common name or a DNS SAN must be in `clients`.
   #
-  #   clients  certificate identities allowed to call it. EMPTY (the default)
-  #            keeps the service OFF: no port is opened, rendered or admitted.
-  #            The facade client certificate this chart issues has the common
-  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
-  #            mtls.enabled (the chart refuses it otherwise).
+  #   clients  certificate identities allowed to call it. Cannot be empty (the
+  #            chart refuses it). The facade client certificate this chart
+  #            issues has the common name elitea-main.
   #   port     the container and Service port, exposed as `platform-grpc`.
   #
-  # The NetworkPolicy admits elitea-main only on both ports.
+  # The NetworkPolicy admits elitea-main only.
   platformGrpc:
-    clients: []
+    clients: [elitea-main]
     port: 9443
+
+  # The admin port: /healthz and /readyz in plain HTTP, no mTLS, for the
+  # kubelet's probes (<PREFIX>ADMIN_ADDR). /readyz fails while the replica
+  # does not hold its invocation-store owner claim (#1359), so the replica
+  # leaves the Service. Not on the Service; the NetworkPolicy admits only
+  # networkPolicies.probeFrom to it.
+  admin:
+    port: 9090
 
   # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
   # cert (this Deployment mounts it) and a facade client cert (elitea-main
@@ -3642,16 +3735,14 @@ inventory:
       kind: ClusterIssuer
     mountPath: /etc/inventory/tls
 
-  # probes: with mtls.enabled (the default) these paths are NOT used — the
-  # listener requires a verified client certificate, which a kubelet probe
-  # cannot present, so the Deployment probes the socket instead.
+  # probes: httpGet on the admin port — liveness /healthz, readiness /readyz
+  # (the gRPC listener requires a client certificate a kubelet probe cannot
+  # present).
   probes:
     liveness:
-      path: /health
       periodSeconds: 10
       failureThreshold: 3
     readiness:
-      path: /ready
       periodSeconds: 5
       failureThreshold: 2
 
@@ -4393,10 +4484,17 @@ worker:
     # having been provisioned at all.
     ttl: "2160h"
 
-    # Optional assertion, not an input. When set, the Job fails if the identity
-    # it reads out of the worker's certificate is not this exact string — useful
-    # when the certificate is minted by a pipeline this chart does not own and a
-    # silent re-issue under a different SPIFFE ID would otherwise just work.
+    # The worker certificate's SPIFFE ID (its one URI SAN), e.g.
+    # spiffe://elitea.standalone/ns/default/sa/agent-worker, the default of
+    # deploy/scripts/gen-runtime-certs.sh (RUNTIME_WORKER_SPIFFE_ID).
+    #
+    # REQUIRED while worker.enabled (#1359 U2): it is the identity
+    # elitea-main's ModelService admits for the worker's model calls
+    # (ELITEA_MODEL_SERVICE_CLIENTS), and the chart cannot read the
+    # certificate to find it. It is still an assertion too: the Job fails if
+    # the identity it reads out of the certificate is not this exact string,
+    # so a wrong value fails the install rather than every chat turn, and a
+    # silent re-issue under a different SPIFFE ID is caught.
     expectedIdentity: ""
 
     # The schema arrives with elitea-main's migration, which on a fresh install
@@ -4473,20 +4571,23 @@ worker:
     natsUrl: ""
     natsStream: "ELITEA_RT_V1_AGENT"
     natsConsumer: "elitea-agent-worker-v1"
-    # The three mTLS listeners, dialled through elitea-main's Service. These
-    # names must appear as SANs on control/output/content-server.crt.
+    # The mTLS listeners, dialled through elitea-main's Service. These names
+    # must appear as SANs on control/output/content-server.crt.
     controlTarget: "elitea-main:9443"
     outputTarget: "elitea-main:9444"
+    # contentOrigin keeps the https:// form; the worker dials it as gRPC
+    # (RuntimeContentService, #1359), not HTTP.
     contentOrigin: "https://elitea-main:9445"
-    # The SDK refuses a plaintext platform origin (config.py:187), and
-    # elitea-main serves its product API over cleartext HTTP inside the cluster.
-    # platformEdge below bridges that.
-    platformOrigin: "https://elitea-platform-edge"
+    # elitea-main's platform listener (main.runtime.listeners.platformAddress):
+    # the product API over mutual TLS. The worker presents its runtime client
+    # certificate there, as on the three listeners above. It replaced the
+    # platform-edge proxy (#1359).
+    platformOrigin: "https://elitea-main:9446"
     # The deployment's public base URL (an http(s) origin a browser opens), for
     # links the Rust worker puts in answers such as a chart's Markdown image.
     # Set it to the same value as main.env.DEPLOYMENT_URL. Empty, links are
     # root-relative and the chat UI resolves them against its own origin.
-    # Never platformOrigin: that is the in-cluster edge.
+    # Never platformOrigin: that is the in-cluster platform listener.
     publicBaseUrl: ""
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
@@ -4634,27 +4735,7 @@ worker:
       lease_poll_interval_millis: 10000
       shutdown_timeout_millis: 30000
 
-  # The worker's platform_origin. A one-route Traefik whose only job is to
-  # terminate TLS with a certificate the worker trusts (the runtime CA) and
-  # forward to elitea-main, plus edge-auth on the execution-events stream —
-  # the one route that accepts no credential a client can present.
-  #
-  # It is NOT the public edge. It has no route from the Gateway and is reachable
-  # only in-cluster.
-  platformEdge:
-    enabled: true
-    image:
-      repository: docker.io/library/traefik
-      tag: "v3.4"
-      pullPolicy: IfNotPresent
-    # Service name AND the only SAN on platform-edge.crt. Both must match
-    # runtime.platformOrigin.
-    serviceName: elitea-platform-edge
-    # Secret with keys tls.crt / tls.key — the runtime CA's platform-edge pair.
-    tlsSecretName: elitea-platform-edge-tls
-    mainService: elitea-main
-    mainPort: 8080
-    resources:
+  resources:
       requests:
         cpu: 20m
         memory: 64Mi

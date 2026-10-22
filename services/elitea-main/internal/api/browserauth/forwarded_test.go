@@ -8,59 +8,21 @@ import (
 	"testing"
 )
 
-func TestTrustedProxyResolverNormalizesEdgeAuthSource(t *testing.T) {
+func TestTrustedProxyResolverResolvesClientBehindTrustedHops(t *testing.T) {
 	resolver := newTestTrustedProxyResolver(t)
-	request := forwardedTestRequest("/auth/check?target=rpc&scope=admin")
+	request := forwardedTestRequest("/auth/login")
 	request.RemoteAddr = "10.20.30.40:43120"
 	request.Header.Set("X-Forwarded-For", "198.51.100.8, 10.9.8.7")
 
-	got, err := resolver.Resolve(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := ForwardedRequest{
-		Method:        http.MethodPost,
-		Proto:         "https",
-		Host:          "elitea.example.test",
-		URI:           "/api/v2/configurations?project=7",
-		ClientIP:      "198.51.100.8",
-		Target:        "rpc",
-		TargetPresent: true,
-		Scope:         "admin",
-		ScopePresent:  true,
-	}
-	if got != want {
-		t.Fatalf("Resolve() = %+v, want %+v", got, want)
-	}
 	clientKey, err := resolver.ResolveClientKey(request)
-	if err != nil || clientKey != want.ClientIP {
-		t.Fatalf("ResolveClientKey() = %q, %v; want %q", clientKey, err, want.ClientIP)
-	}
-}
-
-func TestTrustedProxyResolverPreservesAbsentAndEmptyTargetDistinction(t *testing.T) {
-	resolver := newTestTrustedProxyResolver(t)
-
-	absent, err := resolver.Resolve(forwardedTestRequest("/auth/check"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if absent.TargetPresent || absent.Target != "" {
-		t.Fatalf("absent target = %q present=%v", absent.Target, absent.TargetPresent)
-	}
-
-	empty, err := resolver.Resolve(forwardedTestRequest("/auth/check?target="))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !empty.TargetPresent || empty.Target != "" {
-		t.Fatalf("empty target = %q present=%v", empty.Target, empty.TargetPresent)
+	if err != nil || clientKey != "198.51.100.8" {
+		t.Fatalf("ResolveClientKey() = %q, %v; want 198.51.100.8", clientKey, err)
 	}
 }
 
 func TestTrustedProxyResolverUsesNearestUntrustedForwardedHop(t *testing.T) {
 	resolver := newTestTrustedProxyResolver(t)
-	request := forwardedTestRequest("/auth/check")
+	request := forwardedTestRequest("/auth/login")
 	// The left-most value is attacker supplied. Because the next hop is not in
 	// the trusted proxy set, it is the effective client boundary.
 	request.Header.Set("X-Forwarded-For", "203.0.113.99, 198.51.100.44")
@@ -68,6 +30,34 @@ func TestTrustedProxyResolverUsesNearestUntrustedForwardedHop(t *testing.T) {
 	clientKey, err := resolver.ResolveClientKey(request)
 	if err != nil || clientKey != "198.51.100.44" {
 		t.Fatalf("ResolveClientKey() = %q, %v; want nearest untrusted hop", clientKey, err)
+	}
+}
+
+// elitea-main is the compose browser edge (#1359): nothing in front of it, so
+// the socket peer is the browser. A peer outside the trusted set keys as
+// itself, and the X-Forwarded-For it sends is ignored, or every request could
+// name a fresh address and get a fresh login attempt window.
+func TestTrustedProxyResolverKeysDirectClientByPeerAndIgnoresItsForwardedFor(t *testing.T) {
+	resolver := newTestTrustedProxyResolver(t)
+	for _, forwarded := range []string{"203.0.113.1", "203.0.113.2, 10.1.1.1", ""} {
+		request := forwardedTestRequest("/auth/login")
+		request.RemoteAddr = "192.0.2.10:443"
+		if forwarded == "" {
+			request.Header.Del("X-Forwarded-For")
+		} else {
+			request.Header.Set("X-Forwarded-For", forwarded)
+		}
+		clientKey, err := resolver.ResolveClientKey(request)
+		if err != nil || clientKey != "192.0.2.10" {
+			t.Fatalf("ResolveClientKey(XFF %q) = %q, %v; want the peer 192.0.2.10", forwarded, clientKey, err)
+		}
+	}
+
+	request := forwardedTestRequest("/auth/login")
+	request.RemoteAddr = "[2001:db8:9:9::5]:443"
+	request.Header.Set("X-Forwarded-For", "203.0.113.1")
+	if clientKey, err := resolver.ResolveClientKey(request); err != nil || clientKey != "2001:db8:9:9::/64" {
+		t.Fatalf("ResolveClientKey(IPv6 peer) = %q, %v; want its /64", clientKey, err)
 	}
 }
 
@@ -87,58 +77,11 @@ func TestTrustedProxyResolverGroupsIPv6ClientKeysByPrefix64(t *testing.T) {
 		{forwarded: "198.51.100.44", want: "198.51.100.44"},
 		{forwarded: "::ffff:198.51.100.44", want: "198.51.100.44"},
 	} {
-		request := forwardedTestRequest("/auth/check")
+		request := forwardedTestRequest("/auth/login")
 		request.Header.Set("X-Forwarded-For", test.forwarded)
 		clientKey, err := resolver.ResolveClientKey(request)
 		if err != nil || clientKey != test.want {
 			t.Fatalf("ResolveClientKey(%s) = %q, %v; want %q", test.forwarded, clientKey, err, test.want)
-		}
-		// The forwarded identity keeps the full address; only the limiter
-		// key is grouped.
-		forwarded, err := resolver.Resolve(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(test.forwarded, ":") && !strings.HasPrefix(test.forwarded, "::ffff:") &&
-			forwarded.ClientIP == test.want {
-			t.Fatalf("Resolve(%s).ClientIP = %q, want the full address", test.forwarded, forwarded.ClientIP)
-		}
-	}
-}
-
-func TestTrustedProxyResolverVerifiesOnlyConfiguredImmediatePeerForIdentity(t *testing.T) {
-	resolver := newTestTrustedProxyResolver(t)
-	trusted := httptest.NewRequest(http.MethodGet, "/projects/project/default/1", nil)
-	trusted.RemoteAddr = "10.20.30.40:43120"
-	trusted.Header.Set("X-Forwarded-For", "not-part-of-identity-peer-proof")
-	trusted.Header.Set("X-Auth-Type", "user")
-	trusted.Header.Set("X-Auth-ID", "7")
-	// A trusted peer is necessary and never sufficient.
-	if err := resolver.VerifyForwardedIdentityPeer(trusted); !errors.Is(err, ErrInvalidForwardedRequest) {
-		t.Fatalf("unsigned trusted peer error = %v, want %v", err, ErrInvalidForwardedRequest)
-	}
-	if err := resolver.SignIdentityProjection(trusted.Header, http.MethodGet, "/projects/project/default/1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := resolver.VerifyForwardedIdentityPeer(trusted); err != nil {
-		t.Fatalf("signed trusted peer error = %v", err)
-	}
-
-	for _, request := range []*http.Request{
-		nil,
-		func() *http.Request {
-			request := trusted.Clone(trusted.Context())
-			request.RemoteAddr = "192.0.2.10:443"
-			return request
-		}(),
-		func() *http.Request {
-			request := trusted.Clone(trusted.Context())
-			request.RemoteAddr = "not-an-address"
-			return request
-		}(),
-	} {
-		if err := resolver.VerifyForwardedIdentityPeer(request); !errors.Is(err, ErrInvalidForwardedRequest) {
-			t.Fatalf("untrusted peer error = %v, want %v", err, ErrInvalidForwardedRequest)
 		}
 	}
 }
@@ -148,39 +91,28 @@ func TestTrustedProxyResolverRejectsUntrustedOrAmbiguousInput(t *testing.T) {
 		name   string
 		mutate func(*http.Request)
 	}{
-		{name: "untrusted peer", mutate: func(request *http.Request) { request.RemoteAddr = "192.0.2.10:443" }},
-		{name: "missing forwarded method", mutate: func(request *http.Request) { request.Header.Del("X-Forwarded-Method") }},
-		{name: "empty forwarded method", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-Method", "") }},
-		{name: "invalid forwarded method", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-Method", "GET POST") }},
-		{name: "scheme mismatch", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-Proto", "http") }},
-		{name: "host mismatch", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-Host", "attacker.test") }},
-		{name: "absolute uri", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-Uri", "https://attacker.test/") }},
-		{name: "network path uri", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-Uri", "//attacker.test/") }},
+		{name: "unparseable peer", mutate: func(request *http.Request) { request.RemoteAddr = "not-an-address" }},
+		{name: "missing client chain", mutate: func(request *http.Request) { request.Header.Del("X-Forwarded-For") }},
 		{name: "malformed client chain", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-For", "not-an-ip") }},
 		{name: "empty client chain hop", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-For", "198.51.100.8,") }},
-		{name: "duplicate target", mutate: func(request *http.Request) { request.URL.RawQuery = "target=rpc&target=json" }},
-		{name: "malformed query", mutate: func(request *http.Request) { request.URL.RawQuery = "target=%zz" }},
-		{name: "oversized query", mutate: func(request *http.Request) {
-			request.URL.RawQuery = "ignored=" + strings.Repeat("a", maxAuthQueryBytes)
-		}},
-		{name: "too many query values", mutate: func(request *http.Request) {
-			request.URL.RawQuery = strings.Repeat("ignored=value&", maxAuthQueryValues) + "ignored=value"
-		}},
 		{name: "duplicate differently-cased header", mutate: func(request *http.Request) {
-			request.Header["x-forwarded-host"] = []string{"elitea.example.test"}
+			request.Header["x-forwarded-for"] = []string{"198.51.100.9"}
 		}},
 		{name: "oversized forwarded chain", mutate: func(request *http.Request) {
 			request.Header.Set("X-Forwarded-For", strings.Repeat("1", maxForwardedForBytes+1))
+		}},
+		{name: "too many forwarded hops", mutate: func(request *http.Request) {
+			request.Header.Set("X-Forwarded-For", strings.TrimSuffix(strings.Repeat("10.0.0.1,", maxForwardedHops+1), ","))
 		}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resolver := newTestTrustedProxyResolver(t)
-			request := forwardedTestRequest("/auth/check")
+			request := forwardedTestRequest("/auth/login")
 			test.mutate(request)
-			if _, err := resolver.Resolve(request); !errors.Is(err, ErrInvalidForwardedRequest) {
-				t.Fatalf("Resolve() error = %v, want %v", err, ErrInvalidForwardedRequest)
+			if _, err := resolver.ResolveClientKey(request); !errors.Is(err, ErrInvalidForwardedRequest) {
+				t.Fatalf("ResolveClientKey() error = %v, want %v", err, ErrInvalidForwardedRequest)
 			}
 		})
 	}
@@ -195,30 +127,25 @@ func TestTrustedProxyResolverRejectsUnsafeConfiguration(t *testing.T) {
 		{TrustedProxyCIDRs: []string{"10.0.0.0/8"}, PublicOrigin: "https://user@elitea.example.test"},
 	}
 	for _, config := range tests {
-		// A valid secret, so each case is refused for its own defect.
-		config.IdentityProjectionSecret = []byte("0123456789abcdef0123456789abcdef")
 		if _, err := NewTrustedProxyResolver(config); !errors.Is(err, ErrInvalidForwardedRequest) {
 			t.Fatalf("NewTrustedProxyResolver(%+v) error = %v", config, err)
 		}
 	}
 
-	development, err := NewTrustedProxyResolver(TrustedProxyConfig{
-		TrustedProxyCIDRs:        []string{"127.0.0.0/8"},
-		PublicOrigin:             "http://localhost:8080",
-		Development:              true,
-		IdentityProjectionSecret: []byte("0123456789abcdef0123456789abcdef"),
-	})
-	if err != nil || development.publicScheme != "http" {
-		t.Fatalf("development resolver = %+v, %v", development, err)
+	if _, err := NewTrustedProxyResolver(TrustedProxyConfig{
+		TrustedProxyCIDRs: []string{"127.0.0.0/8"},
+		PublicOrigin:      "http://localhost:8080",
+		Development:       true,
+	}); err != nil {
+		t.Fatalf("development resolver: %v", err)
 	}
 }
 
 func newTestTrustedProxyResolver(t *testing.T) *TrustedProxyResolver {
 	t.Helper()
 	resolver, err := NewTrustedProxyResolver(TrustedProxyConfig{
-		TrustedProxyCIDRs:        []string{"10.0.0.0/8"},
-		PublicOrigin:             "https://elitea.example.test",
-		IdentityProjectionSecret: []byte("0123456789abcdef0123456789abcdef"),
+		TrustedProxyCIDRs: []string{"10.0.0.0/8"},
+		PublicOrigin:      "https://elitea.example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -227,12 +154,8 @@ func newTestTrustedProxyResolver(t *testing.T) *TrustedProxyResolver {
 }
 
 func forwardedTestRequest(target string) *http.Request {
-	request := httptest.NewRequest(http.MethodGet, target, nil)
+	request := httptest.NewRequest(http.MethodPost, target, nil)
 	request.RemoteAddr = "10.20.30.40:43120"
-	request.Header.Set("X-Forwarded-Method", http.MethodPost)
-	request.Header.Set("X-Forwarded-Proto", "https")
-	request.Header.Set("X-Forwarded-Host", "elitea.example.test")
-	request.Header.Set("X-Forwarded-Uri", "/api/v2/configurations?project=7")
 	request.Header.Set("X-Forwarded-For", "198.51.100.8")
 	return request
 }

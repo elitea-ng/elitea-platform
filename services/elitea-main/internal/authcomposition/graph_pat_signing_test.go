@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 // DEFECT: the /api/v2/auth/token route signed a new personal access token with
@@ -29,8 +27,7 @@ func TestFormGraphSignsAPATWithTheKeyItValidatesWith(t *testing.T) {
 		context.Background(),
 		config,
 		FormGraphDependencies{
-			PostgreSQL:           pool,
-			MainRoutePublicRules: []forwardapp.PublicRule{},
+			PostgreSQL: pool,
 		},
 		func(material *materializedFiles) {
 			// Copy: the snapshot is wiped before newFormGraph returns.

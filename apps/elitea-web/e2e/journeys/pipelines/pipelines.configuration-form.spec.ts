@@ -109,6 +109,11 @@ async function openConfigurationForm(page: Page, pipeline: CreatedPipeline): Pro
 
 test.describe('pipeline configuration form', () => {
   test('every field the form owns survives a save and a reload', async ({ page }) => {
+    // test.slow() (90 s, as the other create-edit-save-reload journeys in this
+    // folder): on a webkit CI leg with four workers this journey measured
+    // 30-35 s with no single slow call (every API read < 0.3 s), so the
+    // default 30 s budget cut it off mid-reload and it read as a hang.
+    test.slow();
     const name = `${AUTOTEST_PREFIX}cfg-form`;
     const pipeline = await createPipeline(page, name);
     await openConfigurationForm(page, pipeline);

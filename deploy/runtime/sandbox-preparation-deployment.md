@@ -136,7 +136,9 @@ Keep Deno purpose as `execution`. Omit `preparation_network` from execution prof
 The content client verifies Main TLS and downloads the root-bound bundle before offline execution.
 Its DNS identity must equal the Deno audience in the revision 3 content grant.
 The preparation content client uses the preparation audience for publication.
-Both content clients use Main's existing private HTTPS listener on port 9445.
+Both content clients use Main's private content listener on port 9445: gRPC
+(`elitea.runtime.v1.RuntimeContentService`, #1359), with the `origin` kept in
+`https://host:port` form. The grant travels in each request, not a header.
 
 The overlay mounts separate Deno and preparation staging filesystems.
 Each tmpfs has a 256 MiB limit, UID 10001 ownership, and mode 0700.

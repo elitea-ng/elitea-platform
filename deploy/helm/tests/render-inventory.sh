@@ -15,10 +15,11 @@
 #     image) and its OWN fail-closed git allowlist, because it clones
 #     repositories itself. The database URL reaches the engine and the Job,
 #     never the host.
-#   * the facade renders with NO callback origin. That disables source
-#     expansion and mounts the facade anyway, which is a supported deployment:
-#     the graph-read tools work and the three that name a source get the
-#     provider's own refusal.
+#   * there is no callback origin at all (#1359 U5): the host reads and
+#     writes graph artifacts over ArtifactObjectService on elitea-main's
+#     platform listener, and the engine runs its `investigate` source tools
+#     over InternalToolService.InvokeToolkit there, so elitea-main admits the
+#     callback identity to BOTH services and the Inventory pods on 9446 only.
 #
 # Usage: deploy/helm/tests/render-inventory.sh
 # Needs: helm, yq. No cluster, no network.
@@ -33,13 +34,17 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 
 # A complete, correct Inventory install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
+RUNTIME="-f $CHART/values-standalone.yaml"
+# $RUNTIME (the standalone profile's runtime plane) is part of a complete
+# install: the host's artifact calls and the engine sidecar's model and
+# source-tool calls go over gRPC on elitea-main's platform listener (#1359
+# U2/U5).
 COMPLETE="\
+$RUNTIME \
 --set inventory.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls \
 --set main.env.ELITEA_INVENTORY_ENABLED=true \
---set main.env.ELITEA_INVENTORY_BASE_URL=https://elitea-inventory-svc:8443 \
---set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=http://elitea-main:8080 \
 --set main.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
 --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
 --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db \
@@ -258,7 +263,8 @@ refuses() {
   fi
 }
 
-refuses "facade with a plain-http base URL"     --set main.env.ELITEA_INVENTORY_BASE_URL=http://elitea-inventory-svc:8443
+refuses "the retired base URL (#1359)"         --set main.env.ELITEA_INVENTORY_BASE_URL=https://elitea-inventory-svc:8443
+refuses "facade with no provider to dial"       --set inventory.enabled=false
 refuses "facade with no client certificate"     --set main.env.ELITEA_INVENTORY_CLIENT_CERT_FILE=
 refuses "facade with no key"                    --set main.env.ELITEA_INVENTORY_CLIENT_KEY_FILE=
 refuses "facade with no CA"                     --set main.env.ELITEA_INVENTORY_CA_FILE=
@@ -344,15 +350,19 @@ else
   note "containers: $solo_containers"
 fi
 
-echo "== a facade with NO callback origin still mounts =="
-# Inventory's difference from DeepWiki: an empty callback origin disables
-# source expansion rather than failing the boot. The eight graph-read tools
-# still work, so refusing this install would refuse one the code supports.
-if render $COMPLETE --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL= >/dev/null 2>&1; then
-  note "no callback origin renders (expansion off, reads still served)"
-else
-  fail "the chart refuses an install cmd/elitea-main supports: an empty callback origin mounts the facade WITHOUT source expansion and logs which of the two it built"
-fi
+echo "== the retired HTTP callback origin is refused, set or empty (#1359 U5) =="
+# cmd/elitea-main refuses any non-empty value at boot; the chart refuses the
+# key even when empty, because an empty value once meant "source expansion
+# off" and now means nothing.
+for value in http://elitea-main:8080 ""; do
+  if output="$(render $COMPLETE --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=$value 2>&1)"; then
+    fail "accepted: ELITEA_INVENTORY_CALLBACK_BASE_URL='$value'"
+  elif printf '%s' "$output" | grep -q 'ELITEA_INVENTORY_CALLBACK_BASE_URL was retired' && printf '%s' "$output" | grep -q 'docs/UPGRADING.md'; then
+    note "refused with the migration note: ELITEA_INVENTORY_CALLBACK_BASE_URL='$value'"
+  else
+    fail "ELITEA_INVENTORY_CALLBACK_BASE_URL='$value' refused for another reason: $(printf '%s' "$output" | grep Error | tail -1)"
+  fi
+done
 
 # ── The platform gRPC service (elitea.subapp.v1.PlatformOperations) ─────────
 #
@@ -363,14 +373,35 @@ fi
 # elitea-main only. Refused: the allowlist without mutual TLS, a port that
 # collides with the SPI's, and the two settings written by hand.
 
-echo "== the platform gRPC service is off unless clients are named =="
+echo "== the provider serves one port: gRPC over mutual TLS (#1359) =="
 expect() { # expect <what> <got> <want>
   if [ "$2" = "$3" ]; then note "$1"; else fail "$1: got '$2', want '$3'"; fi
 }
-expect "off: no gRPC container port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[0].ports[].name' - | tr '\n' ' ')" "http "
-expect "off: no gRPC env" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[].env[].name' - | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
-expect "off: the Service exposes the SPI only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[].name' - | tr '\n' ' ')" "https "
-expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress | length' -)" "1"
+dep() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-inventory\") | $1" -; }
+expect "two container ports: the gRPC listener and the admin port" "$(dep '.spec.template.spec.containers[0].ports[].name' | tr '\n' ' ')" "platform-grpc admin "
+expect "the admin address" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_ADMIN_ADDR") | .value')" ":9090"
+expect "the admin container port" "$(dep '.spec.template.spec.containers[0].ports[] | select(.name == "admin") | .containerPort')" "9090"
+expect "the default allowlist is elitea-main" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_CLIENTS") | .value')" "elitea-main"
+expect "the listener address" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") | .value')" ":9443"
+# The probes ask the plain-HTTP admin port: the gRPC listener needs a client
+# certificate the kubelet does not have, and readiness must carry the owner
+# claim (#1359), which a TCP accept cannot.
+for probe in livenessProbe readinessProbe; do
+  expect "host $probe: httpGet on the admin port" "$(dep ".spec.template.spec.containers[0].$probe.httpGet.port")" "admin"
+  expect "host $probe: no tcpSocket" "$(dep ".spec.template.spec.containers[0].$probe.tcpSocket")" "null"
+done
+expect "host liveness path" "$(dep '.spec.template.spec.containers[0].livenessProbe.httpGet.path')" "/healthz"
+expect "host readiness path" "$(dep '.spec.template.spec.containers[0].readinessProbe.httpGet.path')" "/readyz"
+expect "the Service exposes the gRPC port only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | .name + ":" + (.port | tostring)' - | tr '\n' ' ')" "platform-grpc:9443 "
+expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9443 "
+
+echo "== the cancellation fan-out: the host dials NATS as elitea-inventory (#1359) =="
+expect "NATS URL" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_NATS_URL") | .value')" "tls://elitea-nats.default.svc.cluster.local:4222"
+for f in CA:ca.crt CERT:tls.crt KEY:tls.key; do
+  expect "NATS ${f%%:*} file in the mount" "$(dep ".spec.template.spec.containers[0].env[] | select(.name == \"ELITEA_INVENTORY_NATS_TLS_${f%%:*}_FILE\") | .value")" "$(dep '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "nats-client-tls") | .mountPath')/${f#*:}"
+done
+expect "the NATS client Secret is mounted" "$(dep '.spec.template.spec.volumes[] | select(.name == "nats-client-tls") | .secret.secretName')" "elitea-inventory-nats-client-tls"
+expect "its Certificate names the SUBAPP user" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Certificate" and .metadata.name == "elitea-inventory-nats-client") | .spec.uris[0]' -)" "spiffe://elitea.internal/nats/elitea-inventory"
 
 echo "== the platform gRPC service is configured, exposed and admitted together =="
 grpc="$(render $COMPLETE --set 'inventory.platformGrpc.clients={elitea-main,elitea-main.ns.svc}' --set inventory.platformGrpc.port=9555)" \
@@ -382,11 +413,14 @@ expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.n
 expect "the engine container gets neither" "$(gp '.spec.template.spec.containers[1].env[].name' | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
 expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
 expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
-expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "8080 9555 "
+expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9555 "
 expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
-refuses "platform clients without mutual TLS" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.mtls.enabled=false
-refuses "a platform port that is the SPI's" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.platformGrpc.port=8080
+refuses "the provider without mutual TLS" --set inventory.mtls.enabled=false
+refuses "an empty allowlist: a listener that admits nobody" --set 'inventory.platformGrpc.clients={}'
+refuses "the retired HTTPS service port" --set inventory.service.port=8443
 refuses "the platform env set by hand beside the values" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.env.ELITEA_INVENTORY_PLATFORM_CLIENTS=elitea-main
+refuses "the admin address set by hand beside the values" --set inventory.env.ELITEA_INVENTORY_ADMIN_ADDR=:9091
+refuses "the admin port on the gRPC port" --set inventory.admin.port=9443
 refuses "an allowlist that does not name elitea-main" --set 'inventory.platformGrpc.clients={someone-else}'
 # The expected name follows the client material. Chart-issued (the default):
 # elitea-main, and a stated main.platformClientName that differs is refused.
@@ -408,7 +442,7 @@ expect "operator material: the allowlist carries the operator's name" "$(printf 
 
 echo "== elitea-main is told where the platform service is =="
 main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
-expect "off: the shipped empty default, nothing derived" "$(main_env "$manifest" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" ""
+expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-svc:9443"
 expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-svc:9555"
 explicit="$(render $COMPLETE --set 'inventory.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET=inventory.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"
@@ -418,6 +452,67 @@ if render --set main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET=elitea-inventory-
 else
   note "refused: a target with the facade off"
 fi
+
+# ── The platform listener: the only way back to elitea-main (#1359 U2/U5) ──
+#
+# BOTH containers trust the runtime CA (that one key of the worker's material
+# Secret) and present inventory.callbackClient. The host dials
+# ArtifactObjectService at ARTIFACT_SERVICE_URL; the engine dials ModelService,
+# ArtifactObjectService and InternalToolService.InvokeToolkit at
+# MODEL_SERVICE_URL. elitea-main admits dns:elitea-subapp-callback to all three
+# services, and the Inventory pods on the platform port and NOT on 8080 (the
+# HTTP test_tool hop is gone).
+
+echo "== the host and the engine reach elitea-main over gRPC on the platform listener =="
+ie() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-inventory\") | $1" -; }
+ienv() { ie ".spec.template.spec.containers[1].env[] | select(.name == \"$1\") | .value"; }
+expect "engine MODEL_SERVICE_URL" "$(ienv ELITEA_INVENTORY_MODEL_SERVICE_URL)" "https://elitea-main:9446"
+expect "engine callback CA" "$(ienv ELITEA_INVENTORY_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "engine callback certificate" "$(ienv ELITEA_INVENTORY_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
+expect "engine callback key" "$(ienv ELITEA_INVENTORY_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
+hostenv() { ie ".spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value"; }
+expect "host ARTIFACT_SERVICE_URL" "$(hostenv ELITEA_INVENTORY_ARTIFACT_SERVICE_URL)" "https://elitea-main:9446"
+expect "host callback CA" "$(hostenv ELITEA_INVENTORY_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "host callback certificate" "$(hostenv ELITEA_INVENTORY_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
+expect "host callback key" "$(hostenv ELITEA_INVENTORY_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
+expect "the host dials no model" "$(hostenv ELITEA_INVENTORY_MODEL_SERVICE_URL)" ""
+for c in 0 1; do
+  expect "container $c mounts" "$(ie ".spec.template.spec.containers[$c].volumeMounts[] | select(.name == \"runtime-ca\" or .name == \"callback-client\") | .mountPath" | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-callback-client "
+done
+expect "only runtime-ca.crt leaves the worker Secret" "$(ie '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
+expect "the callback client comes from its own Secret" "$(ie '.spec.template.spec.volumes[] | select(.name == "callback-client") | .secret.secretName')" "elitea-inventory-callback-client"
+for var in ELITEA_MODEL_SERVICE_CLIENTS ELITEA_ARTIFACT_SERVICE_CLIENTS ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS; do
+  expect "elitea-main's $var admits the callback identity" \
+    "$(main_env "$manifest" $var | tr ',' '\n' | grep -cx 'dns:elitea-subapp-callback')" "1"
+done
+expect "no HTTP callback origin is rendered" "$(main_env "$manifest" ELITEA_INVENTORY_CALLBACK_BASE_URL)" "null"
+inp() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"NetworkPolicy\" and .metadata.name == \"elitea-main-netpol\") | .spec.ingress[] | select(.ports[0].port == $1) | .from[].podSelector.matchLabels.\"app.kubernetes.io/name\"" - | grep -cx elitea-inventory || true; }
+expect "elitea-main admits Inventory on the platform port" "$(inp 9446)" "1"
+expect "elitea-main does NOT admit Inventory on 8080" "$(inp 8080)" "0"
+refuses_with() {
+  local description="$1" text="$2"; shift 2
+  local output
+  if output="$(render "$@" 2>&1)"; then
+    fail "accepted: $description"
+  elif printf '%s' "$output" | grep -q -- "$text"; then
+    note "refused: $description"
+  else
+    fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
+  fi
+}
+refuses_with "Inventory without the runtime plane" "inventory.enabled needs main.runtime.enabled" \
+  ${COMPLETE#"$RUNTIME "}
+refuses_with "Inventory without a callback client Secret" "inventory.enabled needs inventory.callbackClient.secretName" \
+  $COMPLETE --set inventory.callbackClient.secretName=
+# The host's own fixture runner (no sidecar, no model calls) still uploads its
+# graph over ArtifactObjectService, so it needs the runtime plane too.
+refuses_with "a fixture-runner Inventory without the runtime plane" "inventory.enabled needs main.runtime.enabled" \
+  ${COMPLETE#"$RUNTIME "} --set inventory.env.ELITEA_INVENTORY_RUNNER=fixture --set inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET=
+refuses_with "the retired engine.callbackCa" "inventory.engine.callbackCa was removed" \
+  $COMPLETE --set inventory.engine.callbackCa.secretName=private-ca
+for name in ELITEA_INVENTORY_MODEL_SERVICE_URL ELITEA_INVENTORY_ARTIFACT_SERVICE_URL ELITEA_INVENTORY_CALLBACK_CA_FILE ELITEA_INVENTORY_CALLBACK_CERT_FILE ELITEA_INVENTORY_CALLBACK_KEY_FILE; do
+  refuses_with "inventory.env.$name set by hand" "inventory.env sets $name" $COMPLETE --set inventory.env.$name=x
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "render-inventory: $failures assertion(s) failed" >&2

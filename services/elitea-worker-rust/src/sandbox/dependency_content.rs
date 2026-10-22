@@ -1,27 +1,39 @@
 //! Verified package content. Staging is disposable; the recorded root is authoritative.
 //! Package bytes never enter a control RPC, graph checkpoint, or shared queue.
+//!
+//! The supervisor reaches Main's content plane (`RuntimeContentService` on the
+//! private content listener, #1359 U4) over one mTLS gRPC channel. File bytes
+//! ride bounded chunk streams in both directions; metadata is one message.
 use std::os::unix::fs::PermissionsExt as _;
 use std::{
     future::Future,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use prost::Message as _;
-use reqwest::{
-    Client, Response, StatusCode,
-    header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderValue},
-};
 use ring::digest;
 use tokio::{
     fs,
     io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _},
     sync::Semaphore,
 };
+use tokio_stream::{Stream, StreamExt as _};
+use tonic::{
+    Code, Status,
+    transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity},
+};
 
 use crate::protocol::{
-    elitea::runtime::v1::{SandboxJobGrantClaimsV1, SignedSandboxJobGrantV1},
+    elitea::runtime::v1::{
+        FetchSandboxBundleFileRequestV1, GetSandboxBundleRequestV1, PublishSandboxBundleRequestV1,
+        SandboxBundleKindV1, SandboxContentFileHeaderV1, SandboxJobGrantClaimsV1,
+        SignedSandboxJobGrantV1, UploadSandboxBundleFileHeaderV1, UploadSandboxBundleFileRequestV1,
+        fetch_compiled_snapshot_file_response_v1, fetch_sandbox_bundle_file_response_v1,
+        runtime_content_service_client::RuntimeContentServiceClient,
+        upload_sandbox_bundle_file_request_v1,
+    },
     wire::{Schema, scan_message},
 };
 
@@ -42,7 +54,10 @@ const METADATA_LIMIT: usize = 128 * 1024;
 #[cfg(test)]
 const LOCK_NAME: &str = "elitea-python-lock.json";
 const RECORD_NAME: &str = "elitea-python-bundle.json";
-const GRANT_HEADER: &str = "x-elitea-sandbox-bundle-grant";
+/// One upload chunk. The stream never holds more than one in memory.
+const CHUNK_BYTES: usize = 64 * 1024;
+/// Main's content listener caps one gRPC message at 16 MiB in either direction.
+const MAX_MESSAGE_BYTES: usize = 16 << 20;
 
 /// Stable messages contain no response bodies, package content, grants, or private URLs.
 #[derive(Debug, thiserror::Error)]
@@ -64,13 +79,13 @@ pub enum DependencyContentError {
     )]
     Busy,
     #[error(
-        "Shared package storage returned HTTP {status}. Retry the same bundle without resolving packages again."
+        "Shared package storage refused the transfer ({code:?}). Retry the same bundle without resolving packages again."
     )]
-    Unavailable { status: u16 },
+    Unavailable { code: Code },
     #[error("Package transfer timed out. Retry the same bundle without resolving packages again.")]
     Timeout,
     #[error("Package transfer failed. Check connectivity and retry the same bundle.")]
-    Transport(#[source] reqwest::Error),
+    Transport(#[source] Status),
     #[error("Private package staging failed. Check storage space and permissions.")]
     Staging(#[source] std::io::Error),
 }
@@ -112,10 +127,9 @@ impl StagedPythonDependencies {
     }
 }
 
-/// Supervisor-only data plane. TLS, redirect policy, deadlines, and capacity are fixed here.
+/// Supervisor-only data plane. TLS, deadlines, and capacity are fixed here.
 pub struct DependencyContentClient {
-    client: Client,
-    origin: String,
+    client: RuntimeContentServiceClient<Channel>,
     staging: PathBuf,
     slots: Semaphore,
     deadline: Duration,
@@ -124,6 +138,7 @@ pub struct DependencyContentClient {
 
 impl DependencyContentClient {
     /// Construct with the private CA and the supervisor's client certificate and key.
+    /// The channel connects on the first transfer; construct inside the Tokio runtime.
     /// # Errors
     /// Rejects insecure origins, invalid TLS, non-private staging, and unbounded capacity.
     pub fn new(
@@ -136,38 +151,19 @@ impl DependencyContentClient {
     ) -> Result<Self, DependencyContentError> {
         let origin = canonical_origin(origin)?;
         validate_staging(staging, capacity, deadline)?;
-        let client = Client::builder()
-            .https_only(true)
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .tls_built_in_root_certs(false)
-            .add_root_certificate(
-                reqwest::Certificate::from_pem(ca)
-                    .map_err(|_| DependencyContentError::Configuration)?,
-            )
-            .identity(
-                reqwest::Identity::from_pem(certificate_and_key)
-                    .map_err(|_| DependencyContentError::Configuration)?,
-            )
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            // A force-deleted Main Pod must not leave pooled connections
-            // answering nothing until the kernel drops them.
-            .tcp_keepalive(Some(crate::transport::keepalive::TCP_KEEPALIVE_IDLE))
-            .http2_keep_alive_interval(crate::transport::keepalive::HTTP2_KEEPALIVE_INTERVAL)
-            .http2_keep_alive_timeout(crate::transport::keepalive::HTTP2_KEEPALIVE_TIMEOUT)
-            .http2_keep_alive_while_idle(crate::transport::keepalive::KEEPALIVE_WHILE_IDLE)
-            .pool_max_idle_per_host(capacity)
-            .build()
-            .map_err(|_| DependencyContentError::Configuration)?;
+        let channel = content_endpoint(&origin, ca, certificate_and_key)?.connect_lazy();
         Ok(Self {
-            client,
-            origin,
+            client: content_client(channel),
             staging: staging.to_owned(),
             slots: Semaphore::new(capacity),
             deadline,
             exports: std::sync::Mutex::new(cache::ExportCache::default()),
         })
+    }
+
+    /// A handle on the shared channel; clones share its connection.
+    fn rpc(&self) -> RuntimeContentServiceClient<Channel> {
+        self.client.clone()
     }
 
     /// Obtain a fresh root-bound grant for each transfer. Interrupted transfers reuse the root.
@@ -190,16 +186,19 @@ impl DependencyContentClient {
             .try_acquire()
             .map_err(|_| DependencyContentError::Busy)?;
         let operation = async {
-            let authority = grant_header(&grant().await?, root)?;
-            let mut response = self
-                .client
-                .get(format!("{}/sandbox-bundles/{root}", self.origin))
-                .header(GRANT_HEADER, authority)
-                .send()
+            let authority = grant_bytes(&grant().await?, root)?;
+            let metadata = self
+                .rpc()
+                .get_sandbox_bundle(GetSandboxBundleRequestV1 {
+                    kind: SandboxBundleKindV1::Python.into(),
+                    root: root.to_owned(),
+                    signed_grant: authority,
+                })
                 .await
-                .map_err(transport)?;
-            check_response(&response, StatusCode::OK, "application/json", None)?;
-            let metadata = bounded_metadata(&mut response).await?;
+                .map_err(rpc_error)?
+                .into_inner()
+                .bundle_json;
+            bounded_metadata(&metadata)?;
             let bundle = PythonDependencyBundle::parse(&metadata, root)?;
             let directory = tempfile::Builder::new()
                 .prefix("dependencies-")
@@ -207,18 +206,19 @@ impl DependencyContentClient {
                 .tempdir_in(&self.staging)
                 .map_err(DependencyContentError::Staging)?;
             for file in &bundle.files {
-                let authority = grant_header(&grant().await?, root)?;
-                let response = self
-                    .client
-                    .get(format!(
-                        "{}/sandbox-bundles/{root}/files/{}",
-                        self.origin, file.name
-                    ))
-                    .header(GRANT_HEADER, authority)
-                    .send()
+                let authority = grant_bytes(&grant().await?, root)?;
+                let parts = self
+                    .rpc()
+                    .fetch_sandbox_bundle_file(FetchSandboxBundleFileRequestV1 {
+                        kind: SandboxBundleKindV1::Python.into(),
+                        root: root.to_owned(),
+                        name: file.name.clone(),
+                        signed_grant: authority,
+                    })
                     .await
-                    .map_err(transport)?;
-                write_verified_file(response, file, directory.path()).await?;
+                    .map_err(rpc_error)?
+                    .into_inner();
+                write_verified_file(bundle_parts(parts), file, directory.path()).await?;
             }
             let mut metadata = fs::OpenOptions::new()
                 .write(true)
@@ -268,52 +268,102 @@ impl DependencyContentClient {
                     .rewind()
                     .await
                     .map_err(DependencyContentError::Staging)?;
-                let authority = grant_header(&grant().await?, bundle.root())?;
-                let body = reqwest::Body::wrap_stream(file_stream(opened, file.bytes));
-                let form = reqwest::multipart::Form::new()
-                    .part(
-                        "bundle",
-                        reqwest::multipart::Part::bytes(bundle.canonical.clone())
-                            .mime_str("application/json")
-                            .map_err(transport)?,
-                    )
-                    .part(
-                        "file",
-                        reqwest::multipart::Part::stream_with_length(body, file.bytes)
-                            .file_name(file.name.clone())
-                            .mime_str("application/octet-stream")
-                            .map_err(transport)?,
-                    );
-                let response = self
-                    .client
-                    .put(format!(
-                        "{}/sandbox-bundles/{}/files/{}",
-                        self.origin,
-                        bundle.root(),
-                        file.name
-                    ))
-                    .header(GRANT_HEADER, authority)
-                    .multipart(form)
-                    .send()
-                    .await
-                    .map_err(transport)?;
-                check_status(&response, StatusCode::NO_CONTENT)?;
+                let authority = grant_bytes(&grant().await?, bundle.root())?;
+                self.upload_bundle_file(
+                    UploadSandboxBundleFileHeaderV1 {
+                        kind: SandboxBundleKindV1::Python.into(),
+                        root: bundle.root().to_owned(),
+                        name: file.name.clone(),
+                        signed_grant: authority,
+                        bundle_json: bundle.canonical.clone(),
+                    },
+                    opened,
+                    file.bytes,
+                )
+                .await?;
             }
-            let authority = grant_header(&grant().await?, bundle.root())?;
-            let response = self
-                .client
-                .post(format!("{}/sandbox-bundles/{}", self.origin, bundle.root()))
-                .header(GRANT_HEADER, authority)
-                .header(CONTENT_TYPE, "application/json")
-                .body(bundle.canonical.clone())
-                .send()
+            let authority = grant_bytes(&grant().await?, bundle.root())?;
+            self.rpc()
+                .publish_sandbox_bundle(PublishSandboxBundleRequestV1 {
+                    kind: SandboxBundleKindV1::Python.into(),
+                    root: bundle.root().to_owned(),
+                    signed_grant: authority,
+                    bundle_json: bundle.canonical.clone(),
+                })
                 .await
-                .map_err(transport)?;
-            check_status(&response, StatusCode::NO_CONTENT)
+                .map_err(rpc_error)?;
+            Ok(())
         };
         tokio::time::timeout(self.deadline, operation)
             .await
             .map_err(|_| DependencyContentError::Timeout)?
+    }
+
+    /// Stream one verified local file after its header. A local read failure
+    /// ends the stream early, so Main never commits a short file, and is
+    /// reported as the staging failure it is rather than as Main's refusal.
+    async fn upload_bundle_file(
+        &self,
+        header: UploadSandboxBundleFileHeaderV1,
+        file: fs::File,
+        bytes: u64,
+    ) -> Result<(), DependencyContentError> {
+        let failure = Arc::new(Mutex::new(None));
+        let chunks = file_chunks(file, bytes, Arc::clone(&failure)).map(|chunk| {
+            UploadSandboxBundleFileRequestV1 {
+                part: Some(upload_sandbox_bundle_file_request_v1::Part::Chunk(chunk)),
+            }
+        });
+        let first = UploadSandboxBundleFileRequestV1 {
+            part: Some(upload_sandbox_bundle_file_request_v1::Part::Header(header)),
+        };
+        let result = self
+            .rpc()
+            .upload_sandbox_bundle_file(tokio_stream::once(first).chain(chunks))
+            .await;
+        take_read_failure(&failure)?;
+        result.map(|_| ()).map_err(rpc_error)
+    }
+}
+
+/// The mTLS endpoint for Main's content listener: the private CA, the
+/// supervisor's client identity, and the shared keepalive schedule.
+fn content_endpoint(
+    origin: &str,
+    ca: &[u8],
+    certificate_and_key: &[u8],
+) -> Result<Endpoint, DependencyContentError> {
+    // The combined buffer holds the chain and the key; tonic reads the
+    // certificates from the first argument and the key from the second.
+    let tls = ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca))
+        .identity(Identity::from_pem(certificate_and_key, certificate_and_key));
+    let endpoint = Endpoint::from_shared(origin.to_owned())
+        .map_err(|_| DependencyContentError::Configuration)?
+        .tls_config(tls)
+        .map_err(|_| DependencyContentError::Configuration)?
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .tcp_nodelay(true);
+    Ok(crate::transport::keepalive::with_keepalive(endpoint))
+}
+
+fn content_client(channel: Channel) -> RuntimeContentServiceClient<Channel> {
+    RuntimeContentServiceClient::new(channel)
+        .max_decoding_message_size(MAX_MESSAGE_BYTES)
+        .max_encoding_message_size(MAX_MESSAGE_BYTES)
+}
+
+/// Main's refusals by meaning (the content service's status table). A status
+/// that carries a transport source never reached Main.
+fn rpc_error(status: Status) -> DependencyContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied => DependencyContentError::Authority,
+        Code::FailedPrecondition | Code::ResourceExhausted => DependencyContentError::Integrity,
+        _ if std::error::Error::source(&status).is_some() => {
+            DependencyContentError::Transport(status)
+        }
+        code => DependencyContentError::Unavailable { code },
     }
 }
 
@@ -353,17 +403,11 @@ fn validate_staging(
     }
     Ok(())
 }
-fn transport(error: reqwest::Error) -> DependencyContentError {
-    if error.is_timeout() {
-        DependencyContentError::Timeout
-    } else {
-        DependencyContentError::Transport(error.without_url())
-    }
-}
-fn grant_header(
+/// The protobuf encoding of a bundle grant for `root`, after a purpose check.
+fn grant_bytes(
     grant: &SignedSandboxJobGrantV1,
     root: &str,
-) -> Result<HeaderValue, DependencyContentError> {
+) -> Result<Vec<u8>, DependencyContentError> {
     if grant.key_id.is_empty()
         || grant.key_id.len() > 256
         || grant.signature.len() != 64
@@ -383,85 +427,59 @@ fn grant_header(
     {
         return Err(DependencyContentError::Authority);
     }
-    let mut value = HeaderValue::from_str(&STANDARD.encode(grant.encode_to_vec()))
-        .map_err(|_| DependencyContentError::Authority)?;
-    value.set_sensitive(true);
-    Ok(value)
+    Ok(grant.encode_to_vec())
 }
-fn check_status(response: &Response, expected: StatusCode) -> Result<(), DependencyContentError> {
-    if response.status() == expected {
-        return Ok(());
-    }
-    match response.status() {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(DependencyContentError::Authority),
-        StatusCode::UNPROCESSABLE_ENTITY | StatusCode::PAYLOAD_TOO_LARGE => {
-            Err(DependencyContentError::Integrity)
-        }
-        other => Err(DependencyContentError::Unavailable {
-            status: other.as_u16(),
-        }),
-    }
-}
-fn check_response(
-    response: &Response,
-    expected: StatusCode,
-    media: &str,
-    length: Option<u64>,
-) -> Result<(), DependencyContentError> {
-    check_status(response, expected)?;
-    let headers = response.headers();
-    let mut media_values = headers.get_all(CONTENT_TYPE).iter();
-    if media_values.next().is_none_or(|value| value != media)
-        || media_values.next().is_some()
-        || headers.contains_key("content-encoding")
-    {
-        return Err(DependencyContentError::Integrity);
-    }
-    let actual = declared_length(response)?;
-    if length.is_some_and(|length| actual != length)
-        || length.is_none() && actual > METADATA_LIMIT as u64
-    {
+fn bounded_metadata(metadata: &[u8]) -> Result<(), DependencyContentError> {
+    if metadata.is_empty() || metadata.len() > METADATA_LIMIT {
         return Err(DependencyContentError::Integrity);
     }
     Ok(())
 }
-async fn bounded_metadata(response: &mut Response) -> Result<Vec<u8>, DependencyContentError> {
-    let expected = declared_length(response)?;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport)? {
-        if chunk.len() > METADATA_LIMIT.saturating_sub(bytes.len()) {
-            return Err(DependencyContentError::Integrity);
+
+/// One message of a file download stream, whichever RPC carried it.
+enum FilePart {
+    Header(SandboxContentFileHeaderV1),
+    Chunk(Vec<u8>),
+}
+impl From<fetch_sandbox_bundle_file_response_v1::Part> for FilePart {
+    fn from(part: fetch_sandbox_bundle_file_response_v1::Part) -> Self {
+        match part {
+            fetch_sandbox_bundle_file_response_v1::Part::Header(header) => Self::Header(header),
+            fetch_sandbox_bundle_file_response_v1::Part::Chunk(chunk) => Self::Chunk(chunk),
         }
-        bytes.extend_from_slice(&chunk);
     }
-    if bytes.len() as u64 != expected {
-        return Err(DependencyContentError::Integrity);
-    }
-    Ok(bytes)
 }
-fn declared_length(response: &Response) -> Result<u64, DependencyContentError> {
-    let mut values = response.headers().get_all(CONTENT_LENGTH).iter();
-    let length = values
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse().ok())
-        .ok_or(DependencyContentError::Integrity)?;
-    if values.next().is_some() {
-        return Err(DependencyContentError::Integrity);
+impl From<fetch_compiled_snapshot_file_response_v1::Part> for FilePart {
+    fn from(part: fetch_compiled_snapshot_file_response_v1::Part) -> Self {
+        match part {
+            fetch_compiled_snapshot_file_response_v1::Part::Header(header) => Self::Header(header),
+            fetch_compiled_snapshot_file_response_v1::Part::Chunk(chunk) => Self::Chunk(chunk),
+        }
     }
-    Ok(length)
 }
+fn bundle_parts(
+    stream: tonic::Streaming<
+        crate::protocol::elitea::runtime::v1::FetchSandboxBundleFileResponseV1,
+    >,
+) -> impl Stream<Item = Result<Option<FilePart>, Status>> {
+    stream.map(|message| message.map(|message| message.part.map(FilePart::from)))
+}
+
+/// Write one downloaded file: exactly one header first, naming the recorded
+/// length and digest, then chunks that add up to exactly those.
 async fn write_verified_file(
-    mut response: Response,
+    parts: impl Stream<Item = Result<Option<FilePart>, Status>>,
     expected: &BundleFile,
     directory: &Path,
 ) -> Result<(), DependencyContentError> {
-    check_response(
-        &response,
-        StatusCode::OK,
-        "application/octet-stream",
-        Some(expected.bytes),
-    )?;
+    let mut parts = std::pin::pin!(parts);
+    let Some(Some(FilePart::Header(header))) = parts.next().await.transpose().map_err(rpc_error)?
+    else {
+        return Err(DependencyContentError::Integrity);
+    };
+    if header.length != expected.bytes || hex(&header.sha256) != expected.sha256 {
+        return Err(DependencyContentError::Integrity);
+    }
     let mut hash = digest::Context::new(&digest::SHA256);
     let mut length = 0;
     let mut output = fs::OpenOptions::new()
@@ -471,7 +489,10 @@ async fn write_verified_file(
         .open(directory.join(&expected.name))
         .await
         .map_err(DependencyContentError::Staging)?;
-    while let Some(chunk) = response.chunk().await.map_err(transport)? {
+    while let Some(part) = parts.next().await {
+        let Some(FilePart::Chunk(chunk)) = part.map_err(rpc_error)? else {
+            return Err(DependencyContentError::Integrity);
+        };
         length += chunk.len() as u64;
         if length > expected.bytes {
             return Err(DependencyContentError::Integrity);
@@ -533,18 +554,45 @@ async fn open_verified_file(
     }
     Ok(file)
 }
-fn file_stream(
+
+/// The chunks of one opened file, exactly `remaining` bytes. A read failure or
+/// a file that shrank ends the stream and is recorded in `failure`.
+fn file_chunks(
     mut file: fs::File,
     mut remaining: u64,
-) -> impl futures_util::Stream<Item = Result<Vec<u8>, std::io::Error>> {
-    async_stream::try_stream! {
-        let mut buffer = vec![0; 64 * 1024];
+    failure: Arc<Mutex<Option<std::io::Error>>>,
+) -> impl Stream<Item = Vec<u8>> {
+    async_stream::stream! {
+        let mut buffer = vec![0; CHUNK_BYTES];
         while remaining > 0 {
-            let size = usize::try_from(remaining.min(buffer.len() as u64)).map_err(std::io::Error::other)?;
-            let count = file.read(&mut buffer[..size]).await?;
-            if count == 0 { Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Prepared package file changed during upload"))?; }
-            remaining -= count as u64;
-            yield buffer[..count].to_vec();
+            let size = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(CHUNK_BYTES);
+            let error = match file.read(&mut buffer[..size]).await {
+                Ok(0) => std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Prepared package file changed during upload",
+                ),
+                Ok(count) => {
+                    remaining -= count as u64;
+                    yield buffer[..count].to_vec();
+                    continue;
+                }
+                Err(error) => error,
+            };
+            if let Ok(mut slot) = failure.lock() {
+                *slot = Some(error);
+            }
+            break;
         }
+    }
+}
+fn take_read_failure(
+    failure: &Mutex<Option<std::io::Error>>,
+) -> Result<(), DependencyContentError> {
+    match failure.lock().map(|mut slot| slot.take()) {
+        Ok(None) => Ok(()),
+        Ok(Some(error)) => Err(DependencyContentError::Staging(error)),
+        Err(_) => Err(DependencyContentError::Staging(std::io::Error::other(
+            "package upload state is unavailable",
+        ))),
     }
 }

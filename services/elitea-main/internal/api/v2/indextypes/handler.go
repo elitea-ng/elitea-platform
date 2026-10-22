@@ -157,13 +157,12 @@ func NewCurrentIndexTypesRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexTypesRoute, error) {
-	// ForwardedIdentityVerifier is OPTIONAL, PrincipalValidator is not.
+	// Only PrincipalValidator is mandatory.
 	//
-	// The verifier proves that an X-Auth-* request arrived over the
-	// header-stripping ingress; only the Form plane builds one. An OIDC or SAML
-	// install authenticates the same caller through a session cookie or a
-	// bearer token, and apimw.Auth reads those without a verifier. Demanding it
-	// here refused the whole capability to every install that has no Form
+	// This route used to demand the forwarded-identity verifier too (removed
+	// in #1359), which only the Form plane built. An OIDC or SAML install
+	// authenticates the same caller through a session cookie or a bearer
+	// token. Demanding it here refused the whole capability to every install that has no Form
 	// authentication document — and this route is the ONLY handler for its path
 	// now that the prototype fallback is deleted (#394), so the refusal became
 	// a 404 on a path the published contract declares.

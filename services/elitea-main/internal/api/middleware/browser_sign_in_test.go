@@ -65,12 +65,12 @@ func TestBrowserSignInRequiredRefusesTokens(t *testing.T) {
 		authenticate  func(http.Handler) http.Handler
 		want          int
 	}{
-		"bearer header":   {"Authorization", "Bearer elnat_x", authenticateAs(session, auth.AuthenticationSourceSession), http.StatusBadRequest},
-		"api key header":  {"X-API-Key", "k", authenticateAs(session, auth.AuthenticationSourceSession), http.StatusBadRequest},
-		"forwarded token": {"", "", authenticateAs(auth.User{ID: "7", UserID: "7", TokenID: "9", AuthType: "token"}, auth.AuthenticationSourceForwarded), http.StatusBadRequest},
-		"token source":    {"", "", authenticateAs(auth.User{ID: "7", UserID: "7", TokenID: "9", AuthType: "token"}, auth.AuthenticationSourceToken), http.StatusBadRequest},
-		"session":         {"", "", authenticateAs(session, auth.AuthenticationSourceSession), http.StatusTeapot},
-		"forwarded user":  {"", "", authenticateAs(auth.User{ID: "7", UserID: "7", AuthType: "user"}, auth.AuthenticationSourceForwarded), http.StatusTeapot},
+		"bearer header":  {"Authorization", "Bearer elnat_x", authenticateAs(session, auth.AuthenticationSourceSession), http.StatusBadRequest},
+		"api key header": {"X-API-Key", "k", authenticateAs(session, auth.AuthenticationSourceSession), http.StatusBadRequest},
+
+		"token source": {"", "", authenticateAs(auth.User{ID: "7", UserID: "7", TokenID: "9", AuthType: "token"}, auth.AuthenticationSourceToken), http.StatusBadRequest},
+		"session":      {"", "", authenticateAs(session, auth.AuthenticationSourceSession), http.StatusTeapot},
+		"form session": {"", "", authenticateAs(auth.User{ID: "7", UserID: "7", AuthType: "session"}, auth.AuthenticationSourceSession), http.StatusTeapot},
 	} {
 		request := httptest.NewRequest(http.MethodGet, "/x", nil)
 		if c.header != "" {

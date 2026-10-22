@@ -105,17 +105,23 @@ main:
       document:
         schema_version: elitea.auth.form.v2
 
-        # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
-        # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
-        # equal this origin's scheme and host. Name the edge that makes the
-        # edge-auth call.
+        # The browser's origin: the address people open, the same origin as
+        # DEPLOYMENT_URL below. No edge authenticates for elitea-main any more
+        # (#1359), so nothing else is left for this to name; it scopes the
+        # Form session cookie (Secure, host-only).
         #
         # internal/authcomposition/config.go:365-377 also requires it to be
         # https, with NO path and NO query. A trailing "/" is a path and is
         # refused.
-        public_origin: https://elitea-platform-edge
+        public_origin: https://elitea.example.com
 
-        # The pod network. A non-empty list is mandatory.
+        # The proxies whose X-Forwarded-For is believed: the pod network the
+        # cluster Gateway or ingress controller forwards from. Narrow it to that
+        # range. Any peer inside it can name its own client address and so its
+        # own login attempt window, so it must never include an address a
+        # browser reaches elitea-main from directly (a NodePort or LoadBalancer
+        # Service). A peer outside it is keyed by its socket address. A
+        # non-empty list is mandatory.
         trusted_proxy_cidrs:
           - 10.0.0.0/8
           - 172.16.0.0/12

@@ -41,6 +41,10 @@ on:
       # (budget-writeback-guarded-upsert-v1.sql); the gateway half of the
       # parity gate must run on a contract-only change.
       - "libs/proto/contracts/**"
+      # The GatewayService contract and its generated Go code (#1359): the
+      # gateway imports libs/proto/gen/go through a replace.
+      - "libs/proto/elitea/gateway/**"
+      - "libs/proto/gen/go/**"
       # The shipped DDL the gateway's Postgres integration tests apply.
       - "services/elitea-main/migrations/shared/**"
   push:
@@ -58,6 +62,8 @@ on:
       - "deploy/helm/nats-bootstrap/**"
       - "scripts/nats/**"
       - "libs/proto/contracts/**"
+      - "libs/proto/elitea/gateway/**"
+      - "libs/proto/gen/go/**"
       - "services/elitea-main/migrations/shared/**"
 
 concurrency:
@@ -111,6 +117,14 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.9.0
+          # No `golangci-lint config verify`: it validates against a JSON
+          # schema it downloads from golangci-lint.run at run time, so an
+          # outage of that site redded this gate on code nobody had touched
+          # (#1359). The lint run below loads the same .golangci.yml and
+          # refuses a configuration it cannot load (malformed YAML, an
+          # unknown linter or formatter); ci-go.yml's workspace lint applies
+          # the same file without the schema step.
+          verify: false
           # Reads the lint cache everywhere, saves it only on a push to main
           # (the rule in .github/actions/main-write-cache).
           skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}

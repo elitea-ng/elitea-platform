@@ -167,7 +167,9 @@ steps.
 ### DeepWiki and Inventory — canned data, or the real engines
 
 Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
-engine SIDECAR over a shared Unix socket — the socket hop this stack exists
+engine SIDECAR over a shared Unix socket (gRPC, `elitea.engine.v1`, no TLS),
+and elitea-main reaches each host over mTLS gRPC
+(`elitea.subapp.v1.ProviderService` on the host's platform port) — the socket hop this stack exists
 to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
 and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
 with its migration service); Inventory's host runs `RUNNER=sidecar` (the host's
@@ -175,6 +177,18 @@ word for "dial the sidecar socket"; `legacy` is an accepted alias) and its sidec
 `elitea-inventory-engine` (with its own `elitea-inventory-migrate` service).
 Both sidecars serve their `fixture` runner, so `up` shows a populated wiki
 and a populated Inventory graph with no repository and no model.
+
+The way BACK is gRPC on elitea-main's platform listener (`https://elitea-main:9446`,
+#1359): the hosts upload and read artifacts over
+`elitea.runtime.v1.ArtifactObjectService`; the engines make model calls over
+`elitea.llm.v1.ModelService`, read artifact folders over ArtifactObjectService,
+and (Inventory) run their `investigate` source tools over
+`elitea.runtime.v1.InternalToolService.InvokeToolkit`. All of them present the
+sub-application callback certificate (`DNS:elitea-subapp-callback`) that
+`runtime-material` installs (engines: `standalone_runtime_subapp`, uid 10001;
+hosts: `standalone_runtime_subapp_host`, uid 65532). No provider calls
+elitea-main on 8080, and the old `ELITEA_<APP>_CALLBACK_BASE_URL` is refused at
+boot.
 `DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead, and
 `INVENTORY_ENGINE_RUNNER=native` the real Inventory engine (graph in the
 stack's PostgreSQL; it clones repositories itself, admitting the hosts in
@@ -300,8 +314,15 @@ ingest through the agent worker, on the same command stream.
 
 One component is off by default and needs TWO settings, not one. `deepwiki`
 is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
-block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its base URL, callback
-origin, git allowlist and the three client-certificate paths — elitea-main is
+block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its git allowlist and the
+three client-certificate paths, beside the runtime plane (`main.runtime.enabled`)
+and `deepwiki.callbackClient`: the provider calls back only over gRPC on
+elitea-main's platform listener, for its artifacts and models (#1359 U5; there
+is no callback origin any more, and `ELITEA_DEEPWIKI_CALLBACK_BASE_URL` is
+refused). elitea-main reaches the
+provider over gRPC, `elitea.subapp.v1.ProviderService`, at
+`ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET`, which the chart derives; the old
+`ELITEA_DEEPWIKI_BASE_URL` is refused, #1359); elitea-main is
 the only door to it, so a provider nobody can reach is a Deployment doing
 nothing. Both halves refuse to render while half configured
 (`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the
@@ -383,6 +404,14 @@ default: both name addresses that only the operator knows, and a guessed origin
 would guard a name nobody uses and read as armed. The chart REFUSES to render
 while either is empty, so a sync of the committed file reports SyncFailed and
 names the field. It does not install a gateway with a disarmed guard.
+
+`GATEWAY_SELF_LLM_ORIGINS` lists HTTP `/llm` origins only: the public one and
+`http://elitea-main:8080/llm/v1`. Leave elitea-main's platform listener
+(`https://elitea-main:9446`) out. The worker and the DeepWiki/Inventory engines
+reach the model pipeline there over gRPC (`elitea.llm.v1.ModelService`, #1359
+U2), which is not an origin a credential's `api_base` can name: an HTTP call to
+it fails the TLS handshake (gRPC-only, runtime-CA client certificate required)
+and cannot loop.
 
 Fill them in your own GitOps copy of the Application, or with:
 
@@ -1289,7 +1318,9 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   only backend. A cluster that also serves the web app from `/app` needs a rule
   per root-mounted Go route, or the SPA backend swallows them:
   `deploy/gateway-api/httproute.yaml` is the reviewed edge for that shape, and
-  it must stay in step with `deploy/traefik/dynamic.yml`. Both are walked by
+  it must stay in step with elitea-main's compose edge
+  (`internal/api/webedge`, which relays `/app` and `/docs` to elitea-web when
+  `ELITEA_WEB_UPSTREAM` is set; compose only, #1359). Both are checked by
   `services/elitea-main/tests/deployedge/`, so a new root-mounted family fails
   CI until every edge routes it (#568).
 - **One namespace for NATS and the platform.** The Argo CD sample installs

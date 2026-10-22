@@ -44,12 +44,9 @@ func TestProductionRuntimeRoutesAcceptBrowserSession(t *testing.T) {
 		user.Email = "member@example.test"
 		return user, nil
 	})
-	peer := productionRuntimePeerVerifierFunc(func(*http.Request) error {
-		return nil
-	})
 
 	t.Run("session cookie is accepted when a secret is configured", func(t *testing.T) {
-		routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{SessionSecret: secret})
+		routes, err := NewProductionRuntimeRoutes(handler, handler, principal, apimw.AuthConfig{SessionSecret: secret})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +68,7 @@ func TestProductionRuntimeRoutesAcceptBrowserSession(t *testing.T) {
 	t.Run("an edge-only deployment is unchanged", func(t *testing.T) {
 		// Passing "" must behave exactly as before this parameter existed:
 		// no cookie is read, so the same request is rejected.
-		routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{})
+		routes, err := NewProductionRuntimeRoutes(handler, handler, principal, apimw.AuthConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +85,7 @@ func TestProductionRuntimeRoutesAcceptBrowserSession(t *testing.T) {
 	})
 
 	t.Run("a forged session is rejected", func(t *testing.T) {
-		routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{SessionSecret: secret})
+		routes, err := NewProductionRuntimeRoutes(handler, handler, principal, apimw.AuthConfig{SessionSecret: secret})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,11 +162,10 @@ func TestProductionRuntimeRoutesAcceptAServerSideSession(t *testing.T) {
 	principal := productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := productionRuntimePeerVerifierFunc(func(*http.Request) error { return nil })
 
 	// The value the composition root hands over: the /api/v2 group's own
 	// AuthConfig, carrying BOTH cookie readers.
-	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{
+	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, apimw.AuthConfig{
 		SessionSecret: "production-runtime-session-secret",
 		SessionStore:  manager,
 	})

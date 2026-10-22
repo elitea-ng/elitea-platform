@@ -6,6 +6,7 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const CODE_RESULT_AUDIENCE: &str = "elitea.runtime.code-sandbox-whole-result.v1";
+#[cfg(feature = "sandbox-supervisor")]
 pub(crate) const NO_EFFECT_FAILURE_CODE: &str = "recovery_verified_no_effect";
 pub(crate) const MAX_CODE_RECOVERY_WIRE: usize = 1024 * 1024;
 
@@ -99,6 +100,7 @@ pub(crate) enum WholeCodeRecoveryReceipt {
 pub(crate) struct CodeRecoveryError;
 
 impl WholeCodeBinding {
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn canonical_bytes(&self) -> Result<Vec<u8>, CodeRecoveryError> {
         if !self.valid() {
             return Err(CodeRecoveryError);
@@ -175,6 +177,7 @@ impl WholeCodeBinding {
     }
 }
 impl WholeCodeRecoveryReceipt {
+    #[cfg(any(test, feature = "sandbox-supervisor"))]
     pub(crate) fn committed(
         binding: WholeCodeBinding,
         visit: CodeRecoveryVisit,

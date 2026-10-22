@@ -40,12 +40,16 @@ engine's `runner::Runner` implements its `Engine` trait (the six tools in
 `ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
 the protocol below.
 
+gRPC over the Unix socket, no TLS (the socket directory is the only way
+in): `elitea.engine.v1.EngineService`, `libs/proto/elitea/engine/v1/engine.proto`
+(#1359 replaced the former NDJSON-over-HTTP protocol).
+
 ```
-POST /engine/invoke                  {invocation_id, tool, arguments}
-  → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
-    then {"result": {…}} | {"error": {message, error_type, error_category}}
-POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool}
-GET  /engine/health                  {"status": "UP", "runner": …, "active": n, "tools": […]}
+Invoke(invocation_id, tool, arguments_json)
+  → stream: thinking and token events interleaved,
+    then result_json | error {message, error_type, error_category, code}
+Stop(invocation_id)   a cooperative stop → {stopped}
+Health()              {status: "UP", runner, active, tools: […]}
 ```
 
 `tools` lists the tools this engine serves (`runner::ENGINE_TOOLS`). The host
@@ -106,7 +110,7 @@ engine's artifacts are bytes a reader downloads.
 `ELITEA_DEEPWIKI_DATABASE_URL`: the engine has no index storage but
 PostgreSQL. Model settings are per invocation (`llm_settings`,
 `embedding_model`); a request without them is refused with the Python
-messages (`llm_settings.api_base is required`). `GET /engine/health` reports
+messages (`llm_settings.api_base is required`). Health reports
 `runner: native`.
 
 ### The pipeline
@@ -357,14 +361,16 @@ worker child downloads the folder into the job directory where a clone would
 go, and everything after that is unchanged.
 
 * **Contract.** The credential is the invocation's callback bearer, read as
-  Python read it (`extract_artifact_settings`): the platform is
-  `llm_settings.api_base` (or `openai_api_base`) without its
-  `/llm[/api][/vN][/]` suffix, the bearer `api_key` (or `openai_api_key`),
-  the project `organization` (or `openai_organization`, `project_id`). The
-  routes are elitea-main's: `GET {platform}/api/v2/artifacts/objects/{project}/{bucket}?prefix={prefix}/&cursor=…`
-  (paged by `next_cursor`; `objects[].key`, `size_bytes`, `modified_at`) and
-  `GET …/{bucket}/{key}`, each with `Authorization: Bearer`. The project in
-  the URL is the grant's, so only the caller's own buckets are reachable.
+  Python read it (`extract_artifact_settings`): the bearer `api_key` (or
+  `openai_api_key`), the project `organization` (or `openai_organization`,
+  `project_id`). The service is elitea-main's
+  `elitea.runtime.v1.ArtifactObjectService` on the platform listener
+  (`ELITEA_DEEPWIKI_MODEL_SERVICE_URL`, the model calls' mutual-TLS channel,
+  #1359 U5): `ListObjects` page by page (`next_cursor`; `key`,
+  `size_bytes`, `modified_at`) and `GetObject` per object, each with the
+  bearer in its metadata. `llm_settings.api_base` names no host. The project
+  is the grant's, so only the caller's own buckets are reachable; a refusal
+  carries the HTTP status the route decided.
 * **Identity.** sha256 over the listing sorted by key, one
   `{key}\0{size}\0{modified}\n` line per object (Python's `listing_digest`,
   byte for byte), in place of the commit sha: `commit_hash` is the 64-hex
@@ -420,8 +426,8 @@ see [Parity](#parity-with-the-python-engine)) wrote
 (parsing, the client's listing over recorded pages, `collect_objects`,
 `check_caps`, `listing_digest`, the directory and marker of
 `materialise_artifact_source`, the generation wiki id, `extract_artifact_settings`);
-`ingest::artifact::tests` replays it and runs the transfer against a mock
-object API. `tests/native_generate.rs` runs a whole generation over a folder,
+`ingest::artifact::tests` replays it and runs the transfer against a
+scripted `ArtifactObjectService`. `tests/native_generate.rs` runs a whole generation over a folder,
 and the Go host's `native_engine_test.go` reads one through the worker child.
 
 ## Parsers and the code graph (`libs/rust/code-parsers`, `src/graph/`)
@@ -612,7 +618,10 @@ runner), `ask` and deep research use it.
   per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
   BOM is skipped.
 - `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` (else `ELITEA_DEEPWIKI_TLS_CA_FILE`) is trusted in addition to the platform
-  roots. Redirects are refused (the bearer key must not follow one).
+  roots. `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` / `_KEY_FILE`, when set, are
+  the client certificate presented on that hop (elitea-main's internal
+  platform listener requires a runtime-CA one). Redirects are refused (the
+  bearer key must not follow one).
 - Errors: timeouts → `timeout_error`; 429/503 after the retries →
   `service_busy`; 402 → `invalid_input`; 404 → `resource_not_found`;
   other refusals and malformed replies → `inference_failed`. The key is
@@ -1777,7 +1786,9 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
 | `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` | `8191` | at least 256; the embedding window in `cl100k_base` tokens. Set it below the embedding model's context when its tokenizer counts more tokens (a refused window is cut and retried, at extra requests) |
 | `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
-| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (model gateway, artifact API): the runtime CA when the hop is TLS through platform-edge (Helm `deepwiki.callbackViaPlatformEdge`, ADR-0027). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (the platform listener's model and artifact services): the runtime CA when the hop is elitea-main's internal mTLS platform listener (`https://elitea-main:9446`). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` / `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE` | unset | the client certificate chain and key presented on the callback hop; both or neither. The platform listener requires a runtime-CA client certificate |
+| `ELITEA_DEEPWIKI_MODEL_SERVICE_URL` | unset; **required** by `RUNNER=native` | the origin of elitea-main's platform listener (`https://elitea-main:9446`): every model call (`elitea.llm.v1.ModelService`) and every artifact-folder read (`elitea.runtime.v1.ArtifactObjectService`, #1359 U5) goes there over the callback CA and client certificate; `llm_settings.api_base` only names the model route. The native runner refuses to start without it. https only (`http://` to a loopback host for tests) |
 | `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the callback hop when `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` is unset (its meaning before the split) |
 | `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
 | `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |

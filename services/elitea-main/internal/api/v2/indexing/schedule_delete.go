@@ -29,8 +29,7 @@ func NewCurrentIndexScheduleDeleteRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexScheduleDeleteRoute, error) {
-	if deleter == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if deleter == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexScheduleRoute
 	}
 	handler := &currentIndexScheduleDeleteHandler{deleter: deleter}

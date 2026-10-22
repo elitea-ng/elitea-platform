@@ -19,6 +19,7 @@ import (
 
 	platformapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -48,9 +49,7 @@ func TestCurrentAvatarProductionHTTPPostgresParityAndNegativeSecurity(t *testing
 		objectStore,
 		apimw.AuthConfig{
 			PrincipalValidator: nil,
-			ForwardedIdentityVerifier: currentAvatarIntegrationPeerVerifier{
-				trustedRemote: "10.0.0.8:43120",
-			},
+			FormSessions:       authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	); err == nil {
@@ -62,9 +61,7 @@ func TestCurrentAvatarProductionHTTPPostgresParityAndNegativeSecurity(t *testing
 		objectStore,
 		apimw.AuthConfig{
 			PrincipalValidator: currentAvatarPrincipalValidator{},
-			ForwardedIdentityVerifier: currentAvatarIntegrationPeerVerifier{
-				trustedRemote: "10.0.0.8:43120",
-			},
+			FormSessions:       authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -233,8 +230,7 @@ func TestCurrentAvatarProductionHTTPPostgresParityAndNegativeSecurity(t *testing
 				request.Header.Set("Content-Type", contentType)
 			}
 			if test.withoutHeader {
-				request.Header.Del("X-Auth-Type")
-				request.Header.Del("X-Auth-ID")
+				request.Header.Del("Cookie")
 			}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
@@ -253,19 +249,6 @@ func (currentAvatarPrincipalValidator) ValidatePrincipal(
 	return principal, nil
 }
 
-type currentAvatarIntegrationPeerVerifier struct {
-	trustedRemote string
-}
-
-func (verifier currentAvatarIntegrationPeerVerifier) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	if request.RemoteAddr != verifier.trustedRemote {
-		return errors.New("untrusted peer")
-	}
-	return nil
-}
-
 func currentAvatarIntegrationRequest(
 	method string,
 	target string,
@@ -276,8 +259,7 @@ func currentAvatarIntegrationRequest(
 	request := httptest.NewRequest(method, target, body)
 	request.RemoteAddr = remote
 	if userID != "" {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", userID)
+		authtest.SignIn(request, userID)
 	}
 	return request
 }

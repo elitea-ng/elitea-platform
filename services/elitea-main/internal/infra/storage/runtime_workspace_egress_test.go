@@ -9,9 +9,10 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/stretchr/testify/require"
 
@@ -30,9 +31,9 @@ func egressServer(t *testing.T, policies *fakePolicies, egress workspaceruntime.
 func redeemEgress(t *testing.T, server *ContentServer) workspaceruntime.RuntimeContextEgress {
 	t.Helper()
 	response := redeem(t, server, "workspace")
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
 	var decoded EliteaClientTokenContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &decoded))
+	require.NoError(t, json.Unmarshal(response.Body, &decoded))
 	require.NotNil(t, decoded.Workspace)
 	return decoded.Workspace.Egress
 }

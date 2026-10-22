@@ -58,6 +58,7 @@ import (
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webedge"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
@@ -86,7 +87,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	providerproxy "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 func main() {
@@ -437,7 +440,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
 	var principalValidator apimw.PrincipalValidator
-	var forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
+	// formSessions reads the Form plane's session cookie for every route's
+	// apimw.Auth. It replaced the forwarded-identity verifier the X-Auth-*
+	// edge projection needed (#1359), and is assigned exactly where that was:
+	// only inside the authEnabled block below.
+	var formSessions apimw.FormSessionAuthenticator
 	// firstLoginPolicy travels OUT of the authEnabled block below, because the
 	// plane that consumes it is composed further down. `initial_global_admins`
 	// used to reach only the browserauth plane, and internal/api/
@@ -452,7 +459,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The local username/password sign-in. OFF unless explicitly enabled:
 	// a deployment signs people in through OIDC or SAML (and provisions them
 	// through SCIM). The authentication document is still read either way —
-	// the gateway edge, PAT validation and the runtime depend on it.
+	// PAT validation and the runtime depend on it.
 	formSignInEnabled, err := formSignInEnabledFromEnv(os.LookupEnv)
 	if err != nil {
 		return err
@@ -553,27 +560,24 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			InitialGlobalAdmins: authConfig.Identity.InitialGlobalAdmins,
 		}
 		formGraph, err = authcomposition.NewFormGraph(ctx, authConfig, authcomposition.FormGraphDependencies{
-			PostgreSQL:           pool,
-			MainRoutePublicRules: api.CurrentMainRoutePublicRules(),
-			Brand:                brandingResolver,
-			FormSignInEnabled:    formSignInEnabled,
-			NativeTokens:         native.graphTokens(),
+			PostgreSQL:        pool,
+			Brand:             brandingResolver,
+			FormSignInEnabled: formSignInEnabled,
 		})
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
 		}
 		if formGraph.FormSignInEnabled() {
 			logFormUserConfiguration(logger, formGraph.FormUsers())
-			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
+			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes())
+			if err != nil {
+				return fmt.Errorf("mount production Form authentication: %w", err)
+			}
 		} else {
 			logFormSignInDisabled(logger, formGraph.FormUsers())
-			productionAuth, err = api.NewEdgeOnlyProductionAuthRoutes(formGraph.MainEdgeAuth())
-		}
-		if err != nil {
-			return fmt.Errorf("mount production Form authentication: %w", err)
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
-		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
+		formSessions = formGraph.FormSessions()
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
@@ -746,14 +750,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// It is built here, immediately after both browser-authentication planes
 	// are final, because every field it reads is final at this point:
-	// formGraph, principalValidator and forwardedIdentityVerifier are assigned
+	// formGraph, principalValidator and formSessions are assigned
 	// only inside the `authEnabled` block above, and oidcSessionHandler only
 	// inside the single-sign-on block above. Nothing between there and here
 	// assigns any of them.
 	//
 	// Under production Form authentication the set is the graph's token
-	// validator, the forwarded-identity verifier and the browser session
-	// secret; under OIDC-only it is the session cookie plus the LocalValidator
+	// validator, the Form session reader and the browser session secret; under OIDC-only it is the session cookie plus the LocalValidator
 	// for the tokens APPLICATION_SECRET_KEY signs — which is also how a
 	// provider's callback bearer, minted by the same key, is read back on its
 	// upload. See apiGroupAuthConfig for both shapes and why each carries a
@@ -784,7 +787,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	apiGroupAuth := withNativeTokens(apiGroupAuthConfig(
 		formGraph,
 		principalValidator,
-		forwardedIdentityVerifier,
+		formSessions,
 		authsvc.NewPrincipalValidator(pool),
 		sessionTokens,
 		os.Getenv("APPLICATION_SECRET_KEY"),
@@ -853,7 +856,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// Both answered `401 missing authorization header` to a browser holding a
 	// valid session: their AuthConfig carried the forwarded-identity verifier
-	// and no SessionSecret, and deploy/traefik/dynamic.yml strips every
+	// and no SessionSecret, and the browser edge strips every
 	// inbound X-Auth-* header and runs no edgeAuth, so forwarded identity
 	// never arrives and cannot be made to. The avatar route is what renders
 	// the user menu, so the failure was visible on every page.
@@ -903,7 +906,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load current project-info settings: %w", err)
 	}
 	if currentProjectInfoSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
+		(formGraph == nil || principalValidator == nil || formSessions == nil) {
 		return errors.New("ELITEA_PROJECT_INFO_ENABLED requires production authentication")
 	}
 	var currentProjectInfo *projectinfoapi.CurrentProjectInfoRoute
@@ -1406,7 +1409,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose ungated project-context reader: %w", readerErr)
 		}
 		// apiGroupAuth, not a fresh composition from formGraph/
-		// principalValidator/forwardedIdentityVerifier: those are the SAME
+		// principalValidator/formSessions: those are the SAME
 		// inputs apiGroupAuth was already built from above, and the gate on
 		// this block (formGraph != nil || oidcSessionHandler != nil) makes
 		// the two compositions identical in both branches. See
@@ -1427,7 +1430,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	// runtimeConfig was read above, before the Configurations runtime, so the
 	// project vector-store decision could use it.
-	if runtimeConfig.Enabled && (principalValidator == nil || forwardedIdentityVerifier == nil) {
+	if runtimeConfig.Enabled && (principalValidator == nil || formSessions == nil) {
 		return errors.New("ELITEA_RUNTIME_ENABLED requires production authentication")
 	}
 	if err := validateRuntimeComposition(currentConfigurationsConfig, runtimeConfig); err != nil {
@@ -1490,16 +1493,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("read Inventory facade configuration: %w", err)
 	}
 	if inventoryConfig.Enabled {
+		// One hop to the provider, shared by the registrar and the route:
+		// one connection and one certificate reloader, not two.
+		inventoryHop, hopErr := providerproxy.New(inventoryConfig, v2inventory.EnvNames.Target, logger)
+		if hopErr != nil {
+			return fmt.Errorf("build the Inventory facade: %w", hopErr)
+		}
 		// The registrar starts FIRST: it is what learns the provider's own
 		// name, and the gate the route carries reads that name per request.
 		inventoryConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"inventory", inventoryConfig, v2inventory.EnvNames.BaseURL))
-		// The source expander (ADR-0023 H4c I2). Built only where BOTH halves
-		// exist: the Configurations graph that can claim a credential, and a
-		// callback origin the provider can reach back on. Where either is
-		// absent the facade mounts WITHOUT expansion — the eight tools that
+				"inventory", inventoryConfig, v2inventory.EnvNames.Target, inventoryHop.Client()))
+		// The source expander (ADR-0023 H4c I2). Built only where the
+		// Configurations graph that can claim a credential exists (the engine
+		// calls back over the platform gRPC listener, at no configured origin,
+		// since #1359 U5). Where it is absent the facade mounts WITHOUT expansion — the eight tools that
 		// read the graph still work — rather than failing to boot, which is
 		// what a stack with no vault (the E2E one) needs. What is NOT
 		// tolerated is a half-wired expander: NewSources refuses that.
@@ -1508,12 +1517,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if sourcesErr != nil {
 			return fmt.Errorf("read Inventory source configuration: %w", sourcesErr)
 		}
-		switch {
-		case inventorySourceSettings == nil || inventorySourcesConfig.CallbackBaseURL == "":
+		if inventorySourceSettings == nil {
 			logger.Warn("Inventory mounts without source expansion",
-				"settings_resolver", inventorySourceSettings != nil,
-				"callback_base_url", v2inventory.CallbackBaseURLEnv)
-		default:
+				"settings_resolver", false)
+		} else {
 			inventoryToolkits, toolkitsErr := dbrepos.NewCurrentToolkitsRepository(pool)
 			if toolkitsErr != nil {
 				return fmt.Errorf("compose Inventory toolkit reader: %w", toolkitsErr)
@@ -1547,6 +1554,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			legacyrbac.NewPostgresResolver(pool),
 			inventorySources,
 			logger,
+			providerproxy.WithHop(inventoryHop),
 		)
 		if err != nil {
 			return fmt.Errorf("build the Inventory facade: %w", err)
@@ -1614,19 +1622,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Registered before the route is built, for the reason the Inventory
 		// facade gives above: the gate needs the provider's own name, and
 		// only the registrar ever learns it.
+		// One hop to the provider, shared by the registrar and the route, as
+		// for Inventory above.
+		deepwikiHop, hopErr := providerproxy.New(deepwikiConfig.HopConfig(), v2deepwiki.TargetEnv, logger)
+		if hopErr != nil {
+			return fmt.Errorf("compose DeepWiki facade: %w", hopErr)
+		}
 		deepwikiConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"deepwiki", facade.Config{
-					Enabled:        true,
-					BaseURL:        deepwikiConfig.BaseURL,
-					ClientCertFile: deepwikiConfig.ClientCertFile,
-					ClientKeyFile:  deepwikiConfig.ClientKeyFile,
-					CAFile:         deepwikiConfig.CAFile,
-					ServerName:     deepwikiConfig.ServerName,
-					IdentitySecret: deepwikiConfig.IdentitySecret,
-					Timeout:        deepwikiConfig.Timeout,
-				}, v2deepwiki.BaseURLEnv))
+				"deepwiki", deepwikiConfig.HopConfig(), v2deepwiki.TargetEnv, deepwikiHop.Client()))
 
 		// The application-toolkit reader, for the `wikis_query` rewrite: a
 		// query toolkit names a Wikis toolkit, and its OWN code toolkit is
@@ -1678,6 +1683,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			slog.Default(),
 			v2deepwiki.WithHistory(
 				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
+			v2deepwiki.WithHop(deepwikiHop),
 		)
 		if err != nil {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
@@ -1946,7 +1952,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			publicRoutes.Validation,
 			publicRoutes.ExecutionEvents,
 			principalValidator,
-			forwardedIdentityVerifier,
 			// The GROUP's own credential set, handed over whole. A browser's
 			// EventSource sends a cookie and nothing else (#93), and an SDK or
 			// a server-side client follows the run it started with the SAME
@@ -2232,19 +2237,34 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 	}
 
-	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
-	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
-	// the gateway service is reachable.
-	var gatewayProxy http.Handler
-	var gatewayProjectResolver apimw.PersonalProjectResolver
+	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
+	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
+	// surface, the configuration checks, predict_llm and the governance status —
+	// shares it, so an operator configures the gateway hop once. It is nil when
+	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
+	var llmGateway *llmproxy.GatewayClient
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
-		gw, gwErr := llmproxy.New(llmproxy.Config{
-			TargetURL:      gwURL,
+		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
+			Target:         gwURL,
 			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
 			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
 			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
 			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
-			Logger:         logger,
+		})
+		if clientErr != nil {
+			return fmt.Errorf("compose llm gateway client: %w", clientErr)
+		}
+		defer func() { _ = client.Close() }()
+		llmGateway = client
+	}
+
+	// BF0.9c: the browser /llm surface over that client.
+	var gatewayProxy http.Handler
+	var gatewayProjectResolver apimw.PersonalProjectResolver
+	if llmGateway != nil {
+		gw, gwErr := llmproxy.New(llmproxy.Config{
+			Gateway: llmGateway,
+			Logger:  logger,
 			// The analytics reads decide active users and run spend from
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
@@ -2255,24 +2275,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		gatewayProxy = gw
 		gatewayProjectResolver = apimw.NewDBPersonalProjectResolver(pool)
-		slog.Info("llm gateway proxy enabled", "target", gwURL)
+		slog.Info("llm gateway proxy enabled", "target", os.Getenv("LLM_GATEWAY_URL"))
 	}
 
 	// #319: /configurations/check_connection(s) needs a real, minimal round
 	// trip to the provider, which the gateway performs (it owns the SSRF-safe
-	// egress allowlist for a tenant-authored api_base — issue #13). Reuse the
-	// same gateway connection settings as the /llm proxy above so an operator
-	// configures the gateway hop once, not twice.
+	// egress allowlist for a tenant-authored api_base — issue #13). It uses the
+	// shared gateway client above.
 	var configConnectionChecker configurationapi.ConnectionChecker
-	if checker, checkerErr := configurationapi.NewGatewayConnectionCheckerFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-		os.Getenv("GATEWAY_IDENTITY_SECRET"),
-	); checkerErr != nil {
-		return fmt.Errorf("compose configurations check-connection client: %w", checkerErr)
-	} else if checker != nil {
+	if llmGateway != nil {
+		checker := configurationapi.NewGatewayConnectionChecker(llmGateway)
 		// Assigned only when non-nil: boxing a nil *GatewayConnectionChecker
 		// into the ConnectionChecker interface would make
 		// `h.connectionChecker == nil` false (a non-nil interface holding a
@@ -2283,22 +2295,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// #194: POST /elitea_core/predict_llm/prompt_lib/{projectID} runs one
-	// stateless LLM turn through the same gateway hop, configured from the
-	// same four variables. A nil completer is a supported state — the route is
-	// still registered and answers 503 naming LLM_GATEWAY_URL — but it must be
+	// stateless LLM turn through the shared gateway client. A nil completer is
+	// a supported state — the route is still registered and answers 503 naming
+	// LLM_GATEWAY_URL — but it must be
 	// left as a nil INTERFACE, not a boxed nil pointer, or the handler's
 	// `completer == nil` check is false and it calls a method on a nil
 	// receiver instead of reporting "not configured".
 	var predictCompleter predictapi.Completer
-	if completer, completerErr := predictapi.NewGatewayCompleterFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-		os.Getenv("GATEWAY_IDENTITY_SECRET"),
-	); completerErr != nil {
-		return fmt.Errorf("compose predict_llm completion client: %w", completerErr)
-	} else if completer != nil {
+	if llmGateway != nil {
+		completer := predictapi.NewGatewayCompleter(llmGateway)
 		predictCompleter = completer
 		if currentConfigurationsRoot != nil {
 			predictCompleter, err = predictapi.WithDefaultModel(
@@ -2348,18 +2353,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
-	// Same four settings again, for the third and last consumer of the hop, so
-	// an operator configures the gateway once. No identity secret: the gateway
-	// verifies no HMAC on that route.
+	// It uses the shared gateway client; the GovernanceStatus call carries no
+	// identity, because the gateway verifies none on it.
 	var gatewayStatus gateway.StatusReader
-	if statusClient, statusErr := gateway.NewGatewayStatusClientFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-	); statusErr != nil {
-		return fmt.Errorf("compose gateway status client: %w", statusErr)
-	} else if statusClient != nil {
+	if llmGateway != nil {
+		statusClient := gateway.NewGatewayStatusClient(llmGateway)
 		// Assigned only when non-nil, for the reason spelled out above
 		// configConnectionChecker: a nil pointer boxed into this interface is
 		// not nil, and the handler's "not configured" branch would never run.
@@ -2424,13 +2422,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// admin list. The console then shows a rank-and-file user
 			// controls that the server refuses with 403 on each click.
 			Resolver: legacyrbac.NewPostgresResolver(pool),
-			// The runtime deployment authenticates the browser at
-			// /auth/login, which sets `elitea_browser_auth` and projects
-			// the principal as X-Auth-*. Without this verifier the handler has
-			// no way to read that identity, injects an empty permission list,
-			// and the SPA renders a sidebar with no items — see adminui's
-			// ServeSPA. A nil verifier (no form graph) still degrades closed.
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
+			// A Form deployment authenticates the browser at /auth/login,
+			// which sets `elitea_browser_auth`. Without this reader the
+			// handler has no way to read that identity, injects an empty
+			// permission list, and the SPA renders a sidebar with no items —
+			// see adminui's ServeSPA. A nil reader (no form graph) still
+			// degrades closed.
+			FormSessions: formSessions,
 			// The OIDC path's credential after shared migration 0117. The
 			// cookie carries an opaque identifier and no claims, so without
 			// this the HMAC reader below finds nothing and the sidebar is
@@ -2557,7 +2555,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
 	}
 
+	// The compose browser edge (#1359 P2): /app and /docs relayed to the web
+	// container, `/` redirected to /app/. Unset in a cluster.
+	webUpstream, err := webedge.ParseUpstream(os.Getenv(webedge.UpstreamEnv))
+	if err != nil {
+		return fmt.Errorf("configure web edge: %w", err)
+	}
+	if webUpstream != nil {
+		logger.Info("compose browser edge enabled", "web_upstream", webUpstream.String())
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,
 		ProjectCleanupContext:         ctx,
@@ -2601,7 +2610,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SessionSecret:      apiGroupAuth.SessionSecret,
 		PATSigner:          patSigner,
 		Auth: api.AuthDeps{
-			ForwardedIdentityVerifier:  apiGroupAuth.ForwardedIdentityVerifier,
+			FormSessions:               apiGroupAuth.FormSessions,
 			SessionStore:               apiGroupAuth.SessionStore,
 			RejectLegacySessionCookies: apiGroupAuth.RejectLegacySessionCookies,
 			SessionHandler:             oidcSessionHandler,
@@ -2764,13 +2773,26 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// internal/api/v2/notifications/events.go, and by artifact upload/
 	// download deadlines) would stop reaching the real ResponseWriter.
 	srv := newHTTPServer(publicAddress, r)
+	// The internal platform gRPC listener (#1359 D1), when the runtime
+	// configuration opens one.
+	platformSrv, err := newPlatformServer(runtimeConfig, func() ([]runtimegrpc.PlatformService, error) {
+		return platformServices(r, platformClientsFromEnv(os.Getenv), logger)
+	})
+	if err != nil {
+		return fmt.Errorf("configure platform listener: %w", err)
+	}
 
 	slog.Info("starting server", "addr", srv.Addr, "runtime_enabled", runtimeRoot != nil)
+	servers := applicationServers{public: srv}
+	if platformSrv != nil {
+		slog.Info("starting platform gRPC listener", "addr", platformSrv.Addr())
+		servers.platform = platformSrv
+	}
 	var runtimeLifecycleRoot runtimeLifecycle
 	if runtimeRoot != nil {
 		runtimeLifecycleRoot = runtimeRoot
 	}
-	if err := serveApplication(ctx, srv, runtimeLifecycleRoot, 15*time.Second); err != nil {
+	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, 15*time.Second); err != nil {
 		return err
 	}
 	slog.Info("server stopped")

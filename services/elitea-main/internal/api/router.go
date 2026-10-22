@@ -6,6 +6,7 @@ import (
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -65,6 +66,7 @@ import (
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webedge"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
@@ -105,13 +107,14 @@ import (
 // AuthDeps preserves the current-main grouped dependency contract while the
 // parity composition continues to accept the established flat fields.
 type AuthDeps struct {
-	Validator                 apimw.TokenValidator
-	PrincipalValidator        apimw.PrincipalValidator
-	ForwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
-	SessionHandler            *v2auth.SessionHandler
-	OIDCHandler               *v2auth.OIDCHandler
-	SAMLHandler               *v2auth.SAMLHandler
-	SessionSecret             string
+	Validator          apimw.TokenValidator
+	PrincipalValidator apimw.PrincipalValidator
+	// FormSessions reads the Form plane's session cookie (apimw.AuthConfig).
+	FormSessions   apimw.FormSessionAuthenticator
+	SessionHandler *v2auth.SessionHandler
+	OIDCHandler    *v2auth.OIDCHandler
+	SAMLHandler    *v2auth.SAMLHandler
+	SessionSecret  string
 	// SessionStore validates the server-side browser session an
 	// `elitea_session` cookie names (migrations/shared/0117). It reaches every
 	// apimw.AuthConfig this file builds, and it must: a group that dropped it
@@ -142,6 +145,10 @@ type AuthDeps struct {
 // #194 (AI draft generation, tool testing and MCP tool sync have no backend).
 
 type RouterConfig struct {
+	// WebUpstream turns elitea-main into the browser edge of a compose stack
+	// (ELITEA_WEB_UPSTREAM; see internal/api/webedge). Nil in a cluster, where
+	// the Gateway API HTTPRoute routes /app and /docs to elitea-web.
+	WebUpstream        *url.URL
 	Auth               AuthDeps
 	AuthValidator      apimw.TokenValidator
 	PrincipalValidator apimw.PrincipalValidator
@@ -638,8 +645,8 @@ type RouterConfig struct {
 	CurrentModelDefault       http.Handler
 	LLMProxy                  http.Handler
 	LLMProjectResolver        apimw.PersonalProjectResolver
-	// GatewayProxy is the mTLS streaming reverse proxy to elitea-llm-gateway-svc
-	// (BF0.9c). When non-nil, it is mounted at /llm with Auth+Project middleware
+	// GatewayProxy is the /llm surface over elitea-llm-gateway (llmproxy.Proxy,
+	// gRPC over mutual TLS; BF0.9c, #1359). When non-nil, it is mounted at /llm with Auth+Project middleware
 	// in the production router.
 	GatewayProxy           http.Handler
 	GatewayProjectResolver apimw.PersonalProjectResolver
@@ -1099,7 +1106,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 		// config.py:187-199), the SDK appends "/artifacts/s3" to it with no
 		// api_v2_path (elitea-sdk client.py:115 — note every sibling URL on
 		// the lines above it DOES include /api/v2, so the omission is the
-		// contract, not an oversight), and the platform edge forwards the
+		// contract, not an oversight), and the public origin serves the
 		// path verbatim. Mounting this under /api/v2 would reproduce the
 		// original defect: a 404 the SDK swallows into an empty listing,
 		// leaving an index run green having indexed nothing.
@@ -1406,6 +1413,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	}
 
 	r := chi.NewRouter()
+	// The compose browser edge goes first, so the web container's answers
+	// leave untouched (internal/api/webedge). A no-op when WebUpstream is nil.
+	r.Use(webedge.Middleware(cfg.WebUpstream))
 	permissionResolver := legacyrbac.NewPostgresResolver(cfg.Pool)
 
 	// The audit-trail recorder. Built from the same pool the audit READS use,
@@ -1432,6 +1442,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// Mounted here, in front of every route, because the per-handler copies
 	// covered only the routes somebody remembered (see the middleware doc).
 	r.Use(apimw.SecurityHeaders)
+	// No inbound request header is an identity (#1359). Every name an edge,
+	// elitea-main or the LLM gateway ever read as one is deleted here, before
+	// any route runs, so elitea-main no longer depends on an edge to strip
+	// them. See StripClientIdentityHeaders for the one deliberate exception.
+	r.Use(apimw.StripClientIdentityHeaders)
 	// Keep the raw socket peer available to any trust-aware proxy resolver.
 	// Generic RealIP processing before authentication would make X-Real-IP and
 	// X-Forwarded-For caller-controlled trust inputs.
@@ -1439,10 +1454,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Use(apimw.Recover)
 
 	r.Mount("/", health.RoutesWithDeps(cfg.HealthDeps))
-
-	// Traefik edge-auth endpoint (no auth middleware — this IS the auth check)
-	edgeAuth := v2auth.NewEdgeAuthHandler(cfg.AuthValidator)
-	r.Get("/auth", edgeAuth.ServeHTTP)
 
 	// The pack is resolved from three layers (ADR-0024): the product default
 	// under the BRAND_PACK_PATH file under the admin-authored `branding`
@@ -1559,7 +1570,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			Authenticate: apimw.Auth(apimw.AuthConfig{
 				Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
-				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				FormSessions:               cfg.Auth.FormSessions,
 				SessionSecret:              cfg.SessionSecret,
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
@@ -1759,7 +1770,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	authenticate := apimw.Auth(apimw.AuthConfig{
 		Validator:                  cfg.AuthValidator,
 		PrincipalValidator:         cfg.PrincipalValidator,
-		ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+		FormSessions:               cfg.Auth.FormSessions,
 		SessionSecret:              cfg.SessionSecret,
 		SessionStore:               cfg.Auth.SessionStore,
 		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
@@ -1965,7 +1976,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Auth(apimw.AuthConfig{
 			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
-			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+			FormSessions:               cfg.Auth.FormSessions,
 			SessionSecret:              cfg.SessionSecret,
 			SessionStore:               cfg.Auth.SessionStore,
 			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
@@ -4850,8 +4861,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		})
 	})
 
-	// /llm has one composed backend: GatewayProxy, the mTLS reverse proxy to
-	// elitea-llm-gateway-svc (LLM_GATEWAY_URL). The gateway is the only LLM
+	// /llm has one composed backend: GatewayProxy, the gRPC client of
+	// elitea-llm-gateway (LLM_GATEWAY_URL). The gateway is the only LLM
 	// data plane — it pulls per-project credentials and model definitions from
 	// p_{projectID}.configuration itself, so there is no second proxy for Main
 	// to compose and no LiteLLM facade to fall back to (that facade, its
@@ -4884,7 +4895,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Use(apimw.Auth(apimw.AuthConfig{
 				Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
-				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				FormSessions:               cfg.Auth.FormSessions,
 				SessionSecret:              cfg.SessionSecret,
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,

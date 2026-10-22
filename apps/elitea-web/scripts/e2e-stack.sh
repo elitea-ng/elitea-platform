@@ -64,10 +64,33 @@ case "$CMD" in
     # in place and neither hop is signed by a root the other does not trust.
     INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
       bash "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
+    # elitea-main's platform gRPC listener (#1359 U5), where the hosts store
+    # their artifacts: its server certificate and the hosts' callback client
+    # certificate, off the same CA.
+    bash "${REPO_ROOT}/deploy/scripts/gen-platform-listener-certs.sh"
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
     # --wait: wait for every healthcheck to report healthy before returning.
     # elitea-main runs migrations on startup; postgres is its dependency.
-    $COMPOSE_BIN $COMPOSE_F up -d --wait
+    # --remove-orphans drops the `traefik` container a pre-#1359 stack still
+    # runs; it holds E2E_PORT, which elitea-main now publishes itself.
+    # A service that dies before it is healthy fails `up --wait` with only
+    # "container ... exited (1)"; its reason is in its own log, and the
+    # `logs` step's file is an artifact nobody opens first (#1359: elitea-main
+    # refused its platform key and the job log said nothing). So on this
+    # failure print, into the job log, the tail of every service that is not
+    # running or not healthy, then fail as before. Never fatal itself.
+    if ! $COMPOSE_BIN $COMPOSE_F up -d --wait --remove-orphans; then
+      echo "✗ The E2E stack did not come up. Services that are not running and healthy:" >&2
+      $COMPOSE_BIN $COMPOSE_F ps -a >&2 || true
+      # A one-shot that exited 0 (bucket init, NATS bootstrap) is fine.
+      for service in $($COMPOSE_BIN $COMPOSE_F ps -a --format '{{.Service}} {{.State}} {{.ExitCode}} {{.Health}}' 2>/dev/null \
+          | awk '($2 != "running" && $3 != "0") || ($2 == "running" && $4 != "" && $4 != "healthy") { print $1 }' \
+          | sort -u); do
+        echo "=== ${service}: last 80 log lines ===" >&2
+        $COMPOSE_BIN $COMPOSE_F logs --no-color --tail 80 "$service" >&2 || true
+      done
+      exit 1
+    fi
     echo "→ Stack ready."
     ;;
 

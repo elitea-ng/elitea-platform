@@ -16,21 +16,19 @@ use elitea_agent_runtime::host::PlatformWriter;
 use elitea_agent_runtime::toolkits::{
     ArtifactToolAuthority, OfficeToolHost, materialize_configured_toolsets_with_artifact_authority,
 };
-use elitea_connectors::transport::Transport;
 use http::{Request, Response, StatusCode, Version};
 use http_body_util::{BodyExt as _, Full};
 use serde_json::{Map, Value, json};
 use tonic::body::Body;
 
 use super::images_facade::ImagesClient;
-use super::office_host::{ClaimOfficeHost, OfficeRuntime};
+use super::office_host::ClaimOfficeHost;
 use super::office_host_tests::{NoPlatform, ObjectApi};
 use super::openai_compatible_facade::{ModelGatewayTransport, ModelGatewayTransportError};
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::LazyStepbackModel;
 use crate::toolkits::{FrozenToolSnapshot, ToolAdmissionPolicy};
 
-const ORIGIN: &str = "https://platform.internal:9446";
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake";
 
 /// What the gateway saw: route, headers of interest and the body.
@@ -127,10 +125,7 @@ impl Rig {
     async fn with_budget(budget: Option<super::model_text::ModelCallBudget>) -> Self {
         let api = ObjectApi::new();
         let gateway = Gateway::new();
-        let runtime = Arc::new(OfficeRuntime::with_transport(
-            ORIGIN,
-            Arc::clone(&api) as Arc<dyn Transport>,
-        ));
+        let runtime = Arc::new(api.runtime());
         let context = Arc::new(ClaimScopedEliteaContext::fixture(42, "pat-token"));
         let images = ImagesClient::with_transport(
             Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
@@ -237,8 +232,8 @@ async fn generate_image_calls_the_gateway_under_the_claim_and_stores_the_png() {
 #[tokio::test]
 async fn edit_image_sends_the_source_and_mask_as_multipart_fields() {
     let rig = Rig::new().await;
-    rig.api.put("cat.png", b"CAT-BYTES".to_vec());
-    rig.api.put("cat-mask.png", b"MASK-BYTES".to_vec());
+    rig.api.put("cat.png", b"CAT-BYTES");
+    rig.api.put("cat-mask.png", b"MASK-BYTES");
     let out = rig
         .call(
             "edit_image",
@@ -399,10 +394,7 @@ async fn a_2xx_with_an_unusable_or_oversized_reply_may_have_been_billed() {
 async fn object_size_is_the_declared_length_of_a_head() {
     let api = ObjectApi::new();
     api.put("cat.png", vec![7_u8; 1234]);
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let host =
         ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
     assert_eq!(
@@ -423,10 +415,7 @@ async fn object_size_is_the_declared_length_of_a_head() {
 async fn an_unusable_upload_file_name_is_an_invalid_request_and_nothing_is_sent() {
     let api = ObjectApi::new();
     let gateway = Gateway::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let images = ImagesClient::with_transport(
         Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
         Duration::from_secs(5),
@@ -530,10 +519,7 @@ async fn a_direct_call_lists_imagegen_and_refuses_its_write_tools_without_a_roun
 #[tokio::test]
 async fn a_host_without_the_images_client_does_not_serve_the_toolkit() {
     let api = ObjectApi::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        api as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let host =
         ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
     assert!(!host.serves_images());
@@ -564,7 +550,7 @@ async fn image_calls_draw_one_unit_each_from_the_claims_toolkit_budget() {
         json!({"prompt": "two circles", "size": "512x512", "n": 2}),
     )
     .await;
-    rig.api.put("cat.png", b"CAT-BYTES".to_vec());
+    rig.api.put("cat.png", b"CAT-BYTES");
     rig.call(
         "edit_image",
         json!({"image": "/pics/cat.png", "prompt": "make it blue"}),
@@ -650,10 +636,7 @@ async fn stepback_office_and_images_stop_at_the_one_shared_cap() {
     // model and the Office host's model, from the SAME budget.
     let stepback = model(&budget);
     let gateway = Gateway::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        ObjectApi::new() as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(ObjectApi::new().runtime());
     let images = ImagesClient::with_transport(
         Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
         Duration::from_secs(5),

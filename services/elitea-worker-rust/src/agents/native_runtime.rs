@@ -139,6 +139,18 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// The MCP connector of both modes: production's carries the platform
+    /// client identity for the internal MCP builders.
+    #[must_use]
+    pub(crate) fn with_mcp_connector(
+        mut self,
+        connector: Arc<dyn crate::toolkits::McpConnector>,
+    ) -> Self {
+        self.direct = self.direct.with_mcp_connector(Arc::clone(&connector));
+        self.pipeline = self.pipeline.with_mcp_connector(connector);
+        self
+    }
+
     /// Lend the cloud executor's workspace runs to direct agents (ADR-0034);
     /// a pipeline refuses a workspace turn.
     #[must_use]

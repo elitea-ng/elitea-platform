@@ -37,6 +37,6 @@ pub use settings::{
 };
 pub use tokens::count_tokens;
 pub use transport::{
-    BudgetScope, EXECUTION_HEADER, PROJECT_HEADER, Timeouts, Transport, TransportSettings,
-    budget_scope, refusal_code, retryable,
+    BudgetScope, ClientIdentityFiles, EXECUTION_HEADER, PROJECT_HEADER, Timeouts, Transport,
+    TransportSettings, budget_scope, refusal_code, retryable,
 };

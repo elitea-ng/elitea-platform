@@ -98,7 +98,6 @@ func newPATRuntimeRouter(t *testing.T, pool *pgxpool.Pool) (http.Handler, *index
 		http.HandlerFunc(validation.Submit),
 		http.HandlerFunc(events.Stream),
 		principal,
-		indexRBACPeerVerifier{},
 		// The group's own config, as production passes it: the token
 		// validator is what #289 added.
 		apimw.AuthConfig{Validator: patRoutesTokenValidator{}, PrincipalValidator: principal},

@@ -18,8 +18,7 @@ flowchart TB
     Edge -->|"/api, /auth, /llm, MCP ..."| Main["elitea-main"]
     Main -->|"mTLS /llm hop"| GW["elitea-llm-gateway"]
     GW --> Providers["LLM providers"]
-    Worker["elitea-worker (Rust)"] -->|"HTTPS"| PEdge["platform edge (internal)"]
-    PEdge --> Main
+    Worker -->|"gRPC + mTLS :9446"| Main
     Worker -. "mTLS control, output, content" .-> Main
     Worker -->|"mTLS"| Vector["elitea-vector"]
     Vector --> Qdrant[("Qdrant")]
@@ -36,7 +35,7 @@ flowchart TB
 
 | Component | Comes from | Notes |
 |---|---|---|
-| elitea-main, elitea-web, elitea-scheduler, elitea-llm-gateway, elitea-worker, platform edge, elitea-vector, Qdrant, OTel collector | the `elitea` chart | one release, one values file, one version |
+| elitea-main, elitea-web, elitea-scheduler, elitea-llm-gateway, elitea-worker, elitea-vector, Qdrant, OTel collector | the `elitea` chart | one release, one values file, one version |
 | NATS JetStream and its streams | the `nats` and `nats-bootstrap` charts | same release version as `elitea`, same namespace |
 | PostgreSQL 16+ | **you** | an existing server, a managed service, or an operator such as CloudNativePG |
 | S3-compatible bucket (or Azure Blob, GCS) | **you** | must exist before the first install |
@@ -48,7 +47,7 @@ flowchart TB
 Every first-party image and chart is public on `ghcr.io/elitea-ng`, so no image pull secret is needed.
 
 <Note title="You do not need Traefik">
-The chart runs a small Traefik of its own as the worker's **private** platform edge: one Deployment, reachable only from the worker, configured entirely by the chart. You never touch it. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
+The worker and the DeepWiki and Inventory pods reach elitea-main over **gRPC** on a **private** mTLS listener (port 9446) that elitea-main serves itself, admitting only clients with a certificate from the runtime CA, and each gRPC service on it only the workload identities configured for it. It serves no HTTP; check it with gRPC health, not an HTTP probe. There is no internal proxy to run. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
 </Note>
 
 ## Before you start: decide these
@@ -89,7 +88,6 @@ The worker dominates. The figures below are requests for the install on this pag
 | elitea-scheduler | 1 | 50m | 64Mi | — |
 | elitea-llm-gateway | 1 | 250m | 1Gi | — |
 | elitea-worker | 1 | 2 | 4Gi | — |
-| platform edge | 1 | 20m | 64Mi | — |
 | elitea-vector | 2 | 250m | 128Mi | — |
 | Qdrant | 1 (3 for HA) | 500m | 2Gi | 50Gi PVC |
 | OTel collector | 1 | 50m | 128Mi | — |
@@ -290,8 +288,9 @@ server_cert() { # stem, service
   sign "$1" "subjectAltName=$(sans "$2")\n$SERVER_EXT"
 }
 
-# The runtime CA signs elitea-main's runtime listeners, the worker's
-# private edge and identity, and (via cert-manager) elitea-vector.
+# The runtime CA signs elitea-main's runtime listeners (the platform
+# listener on 9446 reuses content-server), the worker's identity, and
+# (via cert-manager) elitea-vector.
 openssl req -x509 -newkey rsa:2048 -nodes -days "$DAYS" \
   -subj "/CN=elitea-runtime-ca" \
   -keyout runtime-ca.key -out runtime-ca.crt \
@@ -300,12 +299,18 @@ openssl req -x509 -newkey rsa:2048 -nodes -days "$DAYS" \
 for stem in control-server output-server content-server; do
   server_cert "$stem" elitea-main
 done
-server_cert platform-edge elitea-platform-edge
 
 # The worker's client certificate: exactly ONE URI SAN, nothing else.
 openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-agent-worker" \
   -keyout agent-worker-client.key -out agent-worker-client.csr 2>/dev/null
 sign agent-worker-client "subjectAltName=URI:$WORKER_ID\n$CLIENT_EXT"
+
+# The DeepWiki and Inventory pods' client certificate for their calls on
+# 9446 (models, artifacts, Inventory's source tools): exactly ONE DNS SAN,
+# elitea-subapp-callback, which elitea-main admits by that name.
+openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-subapp-callback" \
+  -keyout subapp-callback-client.key -out subapp-callback-client.csr 2>/dev/null
+sign subapp-callback-client "subjectAltName=DNS:elitea-subapp-callback\n$CLIENT_EXT"
 rm -f ./*.csr ./*.srl
 
 # The Ed25519 command-signing pair; the keyring holds its public half.
@@ -383,10 +388,11 @@ k create secret generic elitea-worker-material \
   $(f runtime-ca.crt agent-worker-client.crt agent-worker-client.key) \
   $(f command-signing-keyring.json worker-output-spool-key) \
   $(f agent-checkpoint-connection)
-k create secret tls elitea-platform-edge-tls \
-  --cert=platform-edge.crt --key=platform-edge.key
 k create secret tls elitea-runtime-ca \
   --cert=runtime-ca.crt --key=runtime-ca.key
+# Only if you install DeepWiki or Inventory (Step 6, Optional components):
+k create secret generic elitea-deepwiki-callback-client \
+  $(f tls.crt=subapp-callback-client.crt tls.key=subapp-callback-client.key)
 k create secret generic elitea-qdrant-api $(f api-key=qdrant-api-key)
 ```
 
@@ -404,14 +410,14 @@ The key names are part of the contract. The chart and the binaries look files up
 | `elitea-main-auth-material` | `auth-attempt-key`, `auth-pat-signing-key`, `auth-form-users.json` | main | the three must hold different bytes. Rotating the PAT key invalidates every personal access token |
 | `elitea-runtime-material` | runtime CA, Ed25519 private key, keyring, three listener keypairs | main | the keyring's `key_id` must equal `main.runtime.signingKeyId` |
 | `elitea-worker-material` | runtime CA, worker client keypair, keyring, spool key, agent-state DSN | worker, agent-state migration Job, workload-session Job | same CA and keyring as the runtime material |
-| `elitea-platform-edge-tls` | `tls.crt`, `tls.key` | platform edge | issued by the runtime CA for `elitea-platform-edge` |
 | `elitea-runtime-ca` | `tls.crt`, `tls.key` | the `elitea-runtime-ca` Issuer | the runtime CA itself |
+| `elitea-deepwiki-callback-client` | `tls.crt`, `tls.key` | the DeepWiki and Inventory engines | signed by the runtime CA, one DNS SAN `elitea-subapp-callback`; only needed with DeepWiki or Inventory |
 | `elitea-qdrant-api` | `api-key` | elitea-vector, Qdrant | generate once; a value that changes on every sync locks elitea-vector out |
 
 The chart creates the remaining certificate Secrets itself through cert-manager. These include the NATS client certificates, the gateway server and client certificates, and the elitea-vector certificates.
 
 <Accordion title="Coming from an older install script?">
-Scripts written before 4.7 also mint `redis-*` passwords, a Redis server keypair, a `redis-users.acl` file and an `elitea-runtime-redis-material` Secret. Nothing reads any of them now; drop them. The `redis-auth-password` and `runtime-ca.crt` keys in the auth material Secret are ignored too. If your old script put the master key in a separate `elitea-secrets-master` Secret, either keep it there and point **both** `main.secrets.SECRETS_MASTER_KEY` and `llmGateway.secrets.SECRETS_MASTER_KEY` at it, or move it. Two different keys would put two incompatible formats in one table.
+Scripts written before 4.7 also mint `redis-*` passwords, a Redis server keypair, a `redis-users.acl` file and an `elitea-runtime-redis-material` Secret. Nothing reads any of them now; drop them. Scripts written before the platform listener (#1359) also mint a `platform-edge` keypair and an `elitea-platform-edge-tls` Secret, and set `worker.platformEdge`; delete all three. Scripts from the first platform-listener release also mint a `main-platform-client` keypair; elitea-main no longer reads it, so drop it. The `redis-auth-password` and `runtime-ca.crt` keys in the auth material Secret are ignored too. If your old script put the master key in a separate `elitea-secrets-master` Secret, either keep it there and point **both** `main.secrets.SECRETS_MASTER_KEY` and `llmGateway.secrets.SECRETS_MASTER_KEY` at it, or move it. Two different keys would put two incompatible formats in one table.
 </Accordion>
 
 ## Step 5: NATS and its bootstrap
@@ -514,8 +520,10 @@ main:
     S3_ENDPOINT_URL: ""
     S3_FORCE_PATH_STYLE: "false"   # "true" for MinIO, RustFS, Ceph
 
-    # The /llm hop to the gateway: the Service is elitea-llm-gateway-svc
-    LLM_GATEWAY_URL: "https://elitea-llm-gateway-svc:8083"
+    # The /llm hop to the gateway: gRPC over mutual TLS to the headless
+    # Service elitea-llm-gateway-grpc (port 8443). Port 8083 on
+    # elitea-llm-gateway-svc serves health and metrics only.
+    LLM_GATEWAY_URL: "https://elitea-llm-gateway-grpc:8443"
     LLM_GATEWAY_CLIENT_CERT: "/run/elitea-llm-gateway/tls.crt"
     LLM_GATEWAY_CLIENT_KEY: "/run/elitea-llm-gateway/tls.key"
     LLM_GATEWAY_CA_FILE: "/run/elitea-llm-gateway/ca.crt"
@@ -543,9 +551,8 @@ main:
       enabled: true
       secretName: elitea-main-gateway-client-tls   # issued by the chart
       mountPath: /run/elitea-llm-gateway
-    # Production authentication. Required by the runtime plane, personal
-    # access tokens and the worker's private edge, even when nobody signs
-    # in with a password.
+    # Production authentication. Required by the runtime plane and personal
+    # access tokens, even when nobody signs in with a password.
     authConfig:
       enabled: true
       material:
@@ -553,9 +560,9 @@ main:
         secretName: elitea-main-auth-material
       document:
         schema_version: elitea.auth.form.v2
-        # NOT your public hostname: the origin of the edge that makes the
-        # edge-auth call, which is the worker's platform edge.
-        public_origin: https://elitea-platform-edge
+        # Your public origin, the same as DEPLOYMENT_URL: it scopes the
+        # Form session cookie. No edge authenticates for elitea-main.
+        public_origin: https://elitea.example.com
         trusted_proxy_cidrs:
           - 10.0.0.0/8
           - 172.16.0.0/12
@@ -607,8 +614,11 @@ llmGateway:
   replicaCount: 1
   env:
     LLM_BUDGET_EXPECTED_REPLICAS: "1"     # always equal to replicaCount
-    # Every origin that reaches /llm, public and in-cluster. A provider
+    # Every HTTP origin that reaches /llm, public and in-cluster. A provider
     # credential pointing back here is refused, so a loop is impossible.
+    # Not https://elitea-main:9446: the worker and the engines reach the
+    # model pipeline there over gRPC (ModelService), which no credential's
+    # api_base can name.
     GATEWAY_SELF_LLM_ORIGINS: >-
       https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
     GATEWAY_EGRESS_ALLOWLIST: >-
@@ -636,13 +646,13 @@ worker:
     publicBaseUrl: https://elitea.example.com
   # Writes the worker's row in elitea_runtime.workload_sessions after each
   # migration, and a CronJob renews it. Must equal the worker
-  # certificate's SAN.
+  # certificate's SAN. Required: it is also the identity elitea-main's
+  # ModelService admits for the worker's model calls.
   runtimeSession:
     enabled: true
     expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
-  platformEdge:
-    enabled: true
-    tlsSecretName: elitea-platform-edge-tls
+  # platform_origin defaults to https://elitea-main:9446, elitea-main's
+  # mTLS platform listener.
 
 # The vector store the Rust indexing runtime writes to.
 vector:
@@ -732,24 +742,24 @@ deepwiki:
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
   mtls:
     issuerRef: {name: elitea-internal-ca, kind: Issuer}
+  callbackClient:
+    secretName: elitea-deepwiki-callback-client   # from Step 4
 inventory:
   enabled: true
   env:
     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
   mtls:
     issuerRef: {name: elitea-internal-ca, kind: Issuer}
+  callbackClient:
+    secretName: elitea-deepwiki-callback-client   # the same identity
 main:
   env:
     ELITEA_DEEPWIKI_ENABLED: "true"
-    ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki-svc:8443"
-    ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
     ELITEA_DEEPWIKI_CLIENT_CERT_FILE: "/run/elitea-deepwiki/tls.crt"
     ELITEA_DEEPWIKI_CLIENT_KEY_FILE: "/run/elitea-deepwiki/tls.key"
     ELITEA_DEEPWIKI_CA_FILE: "/run/elitea-deepwiki/ca.crt"
     ELITEA_INVENTORY_ENABLED: "true"
-    ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory-svc:8443"
-    ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
     ELITEA_INVENTORY_CLIENT_CERT_FILE: "/run/elitea-inventory/tls.crt"
     ELITEA_INVENTORY_CLIENT_KEY_FILE: "/run/elitea-inventory/tls.key"
@@ -762,6 +772,10 @@ main:
       enabled: true
       secretName: elitea-main-inventory-client-tls   # issued by the chart
 ```
+
+elitea-main reaches each provider over mTLS gRPC on its platform port; the chart derives `ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` / `ELITEA_INVENTORY_PLATFORM_GRPC_TARGET` (`elitea-<app>-svc:9443`). The old `*_BASE_URL` keys are refused. A provider with more than one replica also needs its NATS client certificate (`elitea-deepwiki` / `elitea-inventory`, issued by the chart when NATS TLS is on) so a cancel reaches the replica running the job.
+
+The providers call elitea-main only over gRPC on its private listener (port 9446): the engines' model calls (`elitea.llm.v1.ModelService`), artifact uploads and reads from both containers (`elitea.runtime.v1.ArtifactObjectService`), and Inventory's `investigate` source-tool calls (`elitea.runtime.v1.InternalToolService`). So DeepWiki and Inventory need the runtime plane (`main.runtime.enabled`, already on above) and the `elitea-deepwiki-callback-client` Secret from Step 4, and the chart refuses to render either one without them. The chart mounts that Secret and the runtime CA into both containers of each provider pod, sets `ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL` and `ELITEA_DEEPWIKI_MODEL_SERVICE_URL` (and the `ELITEA_INVENTORY_` pair) to `https://elitea-main:9446`, and adds `dns:elitea-subapp-callback` to the identities elitea-main admits for each service. No provider pod reaches elitea-main on port 8080. The old `ELITEA_DEEPWIKI_CALLBACK_BASE_URL` and `ELITEA_INVENTORY_CALLBACK_BASE_URL` keys and `deepwiki.callbackViaPlatformListener` are refused.
 
 Turn on both halves together. The chart renders `deepwiki.enabled: true` even when elitea-main's facade is off, and you then get a running service that nothing calls.
 </Accordion>
@@ -946,7 +960,7 @@ You can keep an existing Traefik. It needs one Gateway API HTTPRoute for everyth
 4. **Add a model provider.** In the admin console (`/admin/app`), go to **Configuration › LLM Proxy › Providers & models**. Add a credential for OpenAI, Anthropic, Azure OpenAI, Vertex AI, Amazon Bedrock, EPAM AI DIAL or an OpenAI-compatible server (vLLM, Ollama). Then publish the models you want shared, and choose the platform default model on the same tab. [LLM Proxy](/admin/llm-proxy) has the details. A provider whose host is not in `GATEWAY_EGRESS_ALLOWLIST` is refused at request time. On GKE, Vertex AI and AI DIAL can authenticate as the gateway's Google service account instead of with a key; see [Platform models with a service account](/deployment/gcp#platform-models-with-a-service-account).
 5. **Optional: SAML and SCIM.** SAML providers are configured only in the admin console (**Configuration › Authentication**), so sign in through OIDC first. Because OIDC is configured in the values file, the sign-in routes already exist, and a SAML provider added later needs no restart. Give the identity provider the metadata URL `https://elitea.example.com/auth/saml/metadata`. SCIM accepts only a SCIM client credential created on the same page; personal access tokens are refused there. Bind directory groups to a project and a role on the same page. [Authentication](/admin/authentication) describes every field.
 
-Then open a chat, pick a shared model and send a message. That one exchange exercises the edge, elitea-main, NATS, the command bus, the worker, the platform edge, the agent-state database, the LLM gateway and the provider.
+Then open a chat, pick a shared model and send a message. That one exchange exercises the edge, elitea-main, NATS, the command bus, the worker, the platform listener, the agent-state database, the LLM gateway and the provider.
 
 ## Step 9: Verify
 

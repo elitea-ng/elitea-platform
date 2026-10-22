@@ -56,8 +56,8 @@
 {{- if or (not (kindIs "map" $supervisor)) (ne (len $supervisor) 2) (not $supervisor.audience) (not $supervisor.httpsOrigin) -}}
 {{- fail "Code owner supervisors require exactly audience and httpsOrigin" -}}
 {{- end -}}
-{{- if or (not (has $supervisor.audience $runtime.sandboxAudiences)) (hasKey $seen $supervisor.audience) (not (regexMatch "^https://[^/?#@[:space:]]+/?$" $supervisor.httpsOrigin)) -}}
-{{- fail "Code owner supervisors require unique configured audiences and fixed HTTPS origins" -}}
+{{- if or (not (has $supervisor.audience $runtime.sandboxAudiences)) (hasKey $seen $supervisor.audience) (not (regexMatch "^https://[^/?#@:[:space:]]+:[0-9]+/?$" $supervisor.httpsOrigin)) -}}
+{{- fail "Code owner supervisors require unique configured audiences and fixed https://host:port origins (the supervisor gRPC listener)" -}}
 {{- end -}}
 {{- $_ := set $seen $supervisor.audience true -}}
 {{- end -}}

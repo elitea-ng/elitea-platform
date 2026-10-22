@@ -34,6 +34,15 @@ a credential into a ConfigMap.
 {{- $clients = append $clients (dict "identity" "elitea-scheduler" "name" (include "elitea-scheduler.name" .) "fullname" (include "elitea-scheduler.fullname" .) "labels" (include "elitea-scheduler.labels" .)) -}}
 {{- with get (.Values.scheduler.env | default dict) "GATEWAY_NATS_URL" }}{{ $_ := set $urls "scheduler.env.GATEWAY_NATS_URL" . }}{{ end -}}
 {{- end -}}
+{{- /* The sub-application hosts: the cancellation fan-out (#1359), SUBAPP. */ -}}
+{{- if .Values.deepwiki.enabled -}}
+{{- $clients = append $clients (dict "identity" "elitea-deepwiki" "name" (include "elitea-deepwiki.name" .) "fullname" (include "elitea-deepwiki.fullname" .) "labels" (include "elitea-deepwiki.labels" .)) -}}
+{{- with get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_NATS_URL" }}{{ $_ := set $urls "deepwiki.env.ELITEA_DEEPWIKI_NATS_URL" . }}{{ end -}}
+{{- end -}}
+{{- if .Values.inventory.enabled -}}
+{{- $clients = append $clients (dict "identity" "elitea-inventory" "name" (include "elitea-inventory.name" .) "fullname" (include "elitea-inventory.fullname" .) "labels" (include "elitea-inventory.labels" .)) -}}
+{{- with get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_NATS_URL" }}{{ $_ := set $urls "inventory.env.ELITEA_INVENTORY_NATS_URL" . }}{{ end -}}
+{{- end -}}
 {{- if and $clients .Values.nats.service -}}
 {{- $_ := set $urls "the `nats` block (derived)" (include "elitea.natsUrl" .) -}}
 {{- end -}}

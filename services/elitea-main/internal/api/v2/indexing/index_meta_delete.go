@@ -41,8 +41,7 @@ func NewCurrentIndexMetaDeleteRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexMetaDeleteRoute, error) {
-	if deleter == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if deleter == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexMetaDeleteRoute
 	}
 

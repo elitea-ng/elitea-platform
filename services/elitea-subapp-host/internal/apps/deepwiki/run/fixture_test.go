@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -253,7 +254,7 @@ func TestWithoutATransportNothingIsUploadedAndTheResultIsUnchanged(t *testing.T)
 }
 
 func TestTheDefaultFactoryNeedsBothHalvesOfTheTransport(t *testing.T) {
-	factory := run.ArtifactClientFrom("")
+	factory := run.ArtifactClientFrom(artifacts.Callback{Target: "elitea-main:9446"})
 	for _, settings := range []map[string]any{{}, {"api_base": "http://x/llm/v1"}, {"api_key": "k"}} {
 		if client, err := factory(settings); client != nil || err != nil {
 			t.Fatalf("%v: %v %v", settings, client, err)
@@ -263,8 +264,8 @@ func TestTheDefaultFactoryNeedsBothHalvesOfTheTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	http, ok := client.(*run.HTTPArtifactClient)
-	if !ok || http.Settings.BaseURL != "http://elitea-main:8080" || http.Settings.ProjectID != "90200" || http.Settings.APIKey != "minted" {
+	bound, ok := client.(*artifacts.GRPCClient)
+	if !ok || bound.Settings.ProjectID != "90200" || bound.Settings.APIKey != "minted" {
 		t.Fatalf("%+v", client)
 	}
 }
@@ -375,5 +376,21 @@ func TestAForbiddenCloneDestinationIsRefusedBeforeTheToolRuns(t *testing.T) {
 	body, _, err := invokeWithEvents(t, fixtureRunner(client, 0), spi.Family{Name: "main"}, "generate_wiki", request, "")
 	if err == nil || body["error_category"] != "invalid_input" || len(client.uploads) != 0 {
 		t.Fatalf("%v %v", body, err)
+	}
+}
+
+// A fixture host builds no search index, so a project's index deletion
+// removes nothing and is complete. It must ANSWER (not refuse as an
+// engine-less host would): elitea-main's project deprovisioning reaches the
+// fixture host in the E2E stack, and a refusal there leaves the project
+// stuck in deprovisioning.
+func TestTheFixtureAnswersAProjectIndexDeletionWithNothingRemoved(t *testing.T) {
+	runner := run.NewFixtureRunner(spi.Settings{GitAllowlist: "*"}, 0)
+	deletion, err := runner.DeleteProject(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if deletion.ProjectID != 7 || deletion.Incomplete || deletion.LiveBuilds != 0 || deletion.StaleBuildsRemoved != 0 || len(deletion.Wikis) != 0 {
+		t.Fatalf("DeleteProject = %+v, want a complete deletion of nothing", deletion)
 	}
 }

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"io"
 	"net"
-	"net/http"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
@@ -69,20 +69,18 @@ func TestRuntimeListenersServeFromASecretVolume(t *testing.T) {
 		OutputMaxResponseBytes:  1 << 20,
 		ControlGRPC:             testGRPCPolicy(),
 		OutputGRPC:              testGRPCPolicy(),
-		ContentMaxConnections:   16,
-		ContentMaxStreams:       16,
-		ContentReadTimeout:      5 * time.Second,
-		ContentWriteTimeout:     5 * time.Second,
-		ContentIdleTimeout:      5 * time.Second,
-		ContentMaxHeaderBytes:   1 << 16,
+		ContentGRPC:             testGRPCPolicy(),
 		ShutdownTimeout:         5 * time.Second,
 	}, runtimegrpc.PrivateServices{
 		Control: stubControlService{},
 		Output:  stubOutputService{},
-		Content: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			writer.Header().Set("Content-Type", "text/plain")
-			_, _ = io.WriteString(writer, "content listener served "+request.URL.Path)
-		}),
+		Content: []runtimegrpc.PlatformService{{
+			Name:    runtimev1.RuntimeContentService_ServiceDesc.ServiceName,
+			Clients: grpcauth.AnyVerifiedPeer(),
+			Register: func(server grpc.ServiceRegistrar) {
+				runtimev1.RegisterRuntimeContentServiceServer(server, stubContentService{})
+			},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +105,8 @@ func TestRuntimeListenersServeFromASecretVolume(t *testing.T) {
 
 	callControl(t, config.ControlAddress, fixture.clientTLSFor(t, "control.runtime.test"))
 	callOutput(t, config.OutputAddress, fixture.clientTLSFor(t, "output.runtime.test"))
-	callContent(t, config.ContentAddress, fixture.clientTLSFor(t, "content.runtime.test"))
+	// The content plane admits any verified workload identity: one SAN.
+	callContent(t, config.ContentAddress, workloadClientTLS(t, fixture, "worker.runtime.test"))
 
 	// The same listener, and a client certificate from another authority. The
 	// listeners serve, and they serve only what the runtime CA signed.
@@ -199,27 +198,30 @@ func callOutput(t *testing.T, address string, clientTLS *tls.Config) {
 	}
 }
 
+// stubContentService answers with a value only its own handler produces.
+type stubContentService struct {
+	runtimev1.UnimplementedRuntimeContentServiceServer
+}
+
+func (stubContentService) GetEliteaClientToken(context.Context, *runtimev1.GetEliteaClientTokenRequestV1) (*runtimev1.GetEliteaClientTokenResponseV1, error) {
+	return &runtimev1.GetEliteaClientTokenResponseV1{ContextJson: []byte(`"content listener served"`)}, nil
+}
+
 func callContent(t *testing.T, address string, clientTLS *tls.Config) {
 	t.Helper()
-	transport := &http.Transport{TLSClientConfig: clientTLS, Protocols: new(http.Protocols)}
-	transport.Protocols.SetHTTP2(true)
-	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
-	defer client.CloseIdleConnections()
-
-	response, err := client.Get("https://" + address + "/execution-content")
-	if err != nil {
-		t.Fatalf("the content listener did not serve the request: %v", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("the content listener answered %d", response.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != "content listener served /execution-content" {
-		t.Fatalf("the content response did not come from the handler: %q", body)
+	defer func() { _ = connection.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	response, err := runtimev1.NewRuntimeContentServiceClient(connection).GetEliteaClientToken(ctx, &runtimev1.GetEliteaClientTokenRequestV1{})
+	if err != nil {
+		t.Fatalf("the content listener did not serve the call: %v", err)
+	}
+	if string(response.GetContextJson()) != `"content listener served"` {
+		t.Fatalf("the content response did not come from the handler: %q", response.GetContextJson())
 	}
 }
 

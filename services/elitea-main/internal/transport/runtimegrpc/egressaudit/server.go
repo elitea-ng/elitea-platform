@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -22,7 +21,7 @@ import (
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 )
 
 // Bounds of one report: the proxy holds at most 256 hosts per run.
@@ -44,7 +43,7 @@ type Server struct {
 	runtimev1.UnimplementedEgressAuditServiceServer
 
 	reporter Reporter
-	clients  map[string]struct{}
+	clients  grpcauth.Allowlist
 }
 
 // NewServer answers only the identities in clients.
@@ -52,28 +51,17 @@ func NewServer(reporter Reporter, clients []string) (*Server, error) {
 	if reporter == nil {
 		return nil, errors.New("egress audit requires a reporter")
 	}
-	allowed := make(map[string]struct{}, len(clients))
-	for _, client := range clients {
-		client = strings.TrimSpace(client)
-		if !strings.HasPrefix(client, "dns:") && !strings.HasPrefix(client, "spiffe://") {
-			return nil, fmt.Errorf("egress audit client %q is not a dns: or spiffe:// identity", client)
-		}
-		allowed[client] = struct{}{}
-	}
-	if len(allowed) == 0 {
-		return nil, errors.New("egress audit requires at least one client identity")
+	allowed, err := grpcauth.NewAllowlist(clients)
+	if err != nil {
+		return nil, fmt.Errorf("egress audit clients: %w", err)
 	}
 	return &Server{reporter: reporter, clients: allowed}, nil
 }
 
 // ReportRunSummary records one replica's summary of one run.
 func (s *Server) ReportRunSummary(ctx context.Context, request *runtimev1.ReportRunSummaryRequestV1) (*runtimev1.ReportRunSummaryResponseV1, error) {
-	identity, err := workloadauth.VerifiedPeerIdentity(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "A verified client certificate is required.")
-	}
-	if _, ok := s.clients[identity]; !ok {
-		return nil, status.Error(codes.PermissionDenied, "This client may not report egress summaries.")
+	if _, err := s.clients.Authorize(ctx); err != nil {
+		return nil, err
 	}
 	report, err := toReport(request)
 	if err != nil {

@@ -73,7 +73,7 @@ Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via 
 
 | Port | Service | Override |
 |---|---|---|
-| 8084 | Traefik (entry point) | `STANDALONE_PORT` |
+| 8084 | elitea-main, the browser edge (relays `/app` and `/docs` to elitea-web, redirects `/` to `/app/`) | `STANDALONE_PORT` |
 | 8085 | LLM gateway, direct (debug) | `STANDALONE_GATEWAY_PORT` |
 | 15433 | PostgreSQL | `STANDALONE_PG_PORT` |
 | 8090 | llm-mock journal | `STANDALONE_MOCK_PORT` |

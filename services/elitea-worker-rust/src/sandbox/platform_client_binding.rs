@@ -55,12 +55,15 @@ impl PlatformClientBinding {
             && self.max_total_bytes == trusted.max_total_bytes
     }
 
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn max_calls(&self) -> u16 {
         self.max_calls
     }
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn max_total_bytes(&self) -> u32 {
         self.max_total_bytes
     }
+    #[cfg(any(test, feature = "sandbox-supervisor"))]
     pub(crate) fn policy_sha256(&self) -> &str {
         &self.policy_sha256
     }

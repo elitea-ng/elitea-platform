@@ -63,6 +63,9 @@ GATEWAY_NATS_URL
 # --- comparator it read is deleted.
 ELITEA_URL
 LEGACY_LLM_URL
+# cutover-ctl sse-flush-check / overhead-check: the operator's PAT for main's
+# public /llm (#1359), read on the operator's machine, never in the pod.
+API_KEY
 LLM_BUDGET_PROJECTS_FILE
 LLM_PARITY_PROJECTS_FILE
 
@@ -137,3 +140,9 @@ ELITEA_PROMPT_CONTEXT_READS_ENABLED
 # --- operator meant to exclude. The chart must never set it. Delete this line
 # --- when the rejection guard itself goes.
 ELITEA_LITELLM_ALLOW_PROJECT_OWN_LLMS
+
+# --- Compose-only browser edge (#1359 P2, internal/api/webedge). Set, it makes
+# --- elitea-main relay /app and /docs to the web container and redirect `/`,
+# --- the job the deleted compose Traefik did. The chart must NOT set it: in a
+# --- cluster the Gateway API HTTPRoute does that routing and TLS offload.
+ELITEA_WEB_UPSTREAM

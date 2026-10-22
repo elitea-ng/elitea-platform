@@ -5,7 +5,9 @@
 # (e.g. centry's pylon_main already holds 8080).
 #
 # Ports used (all non-default to avoid clashing with centry/dev stacks):
-#   8082 → traefik (E2E entry point)  — set via E2E_PORT env (default 8082)
+#   8082 → elitea-main (E2E entry point, the browser edge) — E2E_PORT
+#          (default 8082). elitea-main relays /app and /docs to elitea-web and
+#          redirects `/` to /app/ (internal/api/webedge); no Traefik (#1359 P2).
 #   9400 → oidc-provider-mock
 #   15432 → postgres                  (separate from centry's 5432)
 #
@@ -197,6 +199,26 @@ services:
 
   # ── Application services ────────────────────────────────────────────────────
 
+  # Installs elitea-main's platform-listener material into a named volume
+  # (#1359 U5). securefile requires a private key to carry owner-only bits
+  # AND be readable by the reading uid (distroless nonroot, 65532); the
+  # generated deploy/certs/platform-server.key is 0644 for the hosts' sake,
+  # and a bind mount cannot change owner or mode per consumer
+  # (deploy/runtime/install-material.sh explains the same split for the
+  # standalone stack). The image is nats-health's, already pulled.
+  platform-material:
+    image: docker.io/library/python:3.12.14-slim-trixie
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - install -o 65532 -g 65532 -m 0600 /src/platform-server.key /dst/platform-server.key
+        && install -o 0 -g 0 -m 0644 /src/platform-server.crt /dst/platform-server.crt
+        && install -o 0 -g 0 -m 0644 /src/ca.crt /dst/ca.crt
+    volumes:
+      - ./certs:/src:ro
+      - e2e_platform_main:/dst
+    restart: "no"
+
   elitea-main:
     image: ghcr.io/eliteaai/elitea-main:${E2E_IMAGE_TAG:-e2e}
     # `image:` alone made compose PULL when the tag was absent locally, and the
@@ -216,9 +238,16 @@ services:
       # `e2e` is byte-identical to the shipping `final` stage (`final` derives
       # from it), so the admin journeys run against the artefact that ships.
       target: e2e
+    # elitea-main IS the browser edge (#1359 P2): E2E_PORT, the port the deleted
+    # Traefik published, now maps straight to its :8080 listener.
+    ports:
+      - "${E2E_PORT:-8082}:8080"
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
+      # Relay /app and /docs to elitea-web and redirect `/` to /app/
+      # (internal/api/webedge). Compose only; the chart never sets it.
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
       # The brand pack's FILE layer (ADR-0024); empty means the journeys brand
       # from the database layer over the product default, as a fresh install
       # does. See docker-compose.standalone-full.yml for the mount recipe.
@@ -240,7 +269,7 @@ services:
       # answers 503, so the native-client journeys
       # (admin.native-clients.spec.ts, settings.devices.spec.ts) could not
       # register a client or sign a device in. It is the browser-facing
-      # origin, traefik on E2E_PORT, the same origin OIDC_REDIRECT_URI uses.
+      # origin, elitea-main on E2E_PORT, the same origin OIDC_REDIRECT_URI uses.
       DEPLOYMENT_URL: "http://localhost:${E2E_PORT:-8082}"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). Empty by default: this stack's E2E seeder
@@ -347,7 +376,7 @@ services:
       # its upload. Everything on this side is the production path; the
       # provider below runs its fixture engine.
       ELITEA_DEEPWIKI_ENABLED: "true"
-      ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki:8080"
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "elitea-deepwiki:9443"
       ELITEA_DEEPWIKI_SERVER_NAME: "elitea-deepwiki"
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
@@ -355,23 +384,39 @@ services:
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
 
-      ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # No ELITEA_DEEPWIKI_CALLBACK_BASE_URL (#1359 U5; elitea-main refuses
+      # it): the hosts store their artifacts through
+      # elitea.runtime.v1.ArtifactObjectService on the platform gRPC listener.
+      # This stack has no runtime plane, and the listener needs none: it opens
+      # on its own, with material from deploy/scripts/
+      # gen-platform-listener-certs.sh off the provider CA. ModelService is
+      # required whenever the listener opens; the fixture runners never call
+      # it.
+      ELITEA_RUNTIME_PLATFORM_ADDRESS: ":9446"
+      # Installed by platform-material (owner 65532, key 0600).
+      ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /run/elitea-platform/platform-server.crt
+      ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /run/elitea-platform/platform-server.key
+      ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: /run/elitea-platform/ca.crt
+      ELITEA_MODEL_SERVICE_CLIENTS: "dns:elitea-subapp-callback"
+      ELITEA_ARTIFACT_SERVICE_CLIENTS: "dns:elitea-subapp-callback"
       # ── The Inventory facade, on the same OIDC-only stack ────────────────
       # Same credential set, same reasoning: the API group's LocalValidator
       # reads back the APPLICATION_SECRET_KEY-signed callback bearer the
       # provider presents on its graph upload.
       ELITEA_INVENTORY_ENABLED: "true"
-      ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory:8080"
+      ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: "elitea-inventory:9443"
       ELITEA_INVENTORY_SERVER_NAME: "elitea-inventory"
       ELITEA_INVENTORY_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_INVENTORY_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_INVENTORY_CA_FILE: /certs/ca.crt
       ELITEA_INVENTORY_IDENTITY_SECRET: "e2e-inventory-identity"
       ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
-      ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
     volumes:
       - ./certs:/certs:ro
+      - e2e_platform_main:/run/elitea-platform:ro
     depends_on:
+      platform-material:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       nats-health:
@@ -415,7 +460,23 @@ services:
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
-      ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
+      ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "grpcs://elitea-deepwiki:9443"
+      # The provider service (elitea.subapp.v1.ProviderService, the SPI) and
+      # the platform service (elitea.subapp.v1.PlatformOperations) on ONE gRPC
+      # listener with mutual TLS (#1359), authorised by the verified client
+      # certificate against PLATFORM_CLIENTS — which is required: the host
+      # serves nothing without it. The certificate elitea-main presents is
+      # CN=elitea-main. Reachable on the compose network only.
+      ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_DEEPWIKI_ADMIN_ADDR: ":9090"
+      # The artifact hop back to elitea-main's platform listener (#1359 U5),
+      # presenting the callback identity elitea-main admits.
+      ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /certs/ca.crt
+      ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /certs/subapp-callback.crt
+      ELITEA_DEEPWIKI_CALLBACK_KEY_FILE: /certs/subapp-callback.key
     volumes:
       - ./certs:/certs:ro
     healthcheck:
@@ -452,7 +513,23 @@ services:
       ELITEA_INVENTORY_TLS_CA_FILE: /certs/ca.crt
       ELITEA_INVENTORY_IDENTITY_SECRET: "e2e-inventory-identity"
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
-      ELITEA_INVENTORY_SERVICE_LOCATION_URL: "https://elitea-inventory:8080"
+      ELITEA_INVENTORY_SERVICE_LOCATION_URL: "grpcs://elitea-inventory:9443"
+      # The provider service (elitea.subapp.v1.ProviderService, the SPI) and
+      # the platform service (elitea.subapp.v1.PlatformOperations) on ONE gRPC
+      # listener with mutual TLS (#1359), authorised by the verified client
+      # certificate against PLATFORM_CLIENTS — which is required: the host
+      # serves nothing without it. The certificate elitea-main presents is
+      # CN=elitea-main. Reachable on the compose network only.
+      ELITEA_INVENTORY_PLATFORM_CLIENTS: "elitea-main"
+      ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_INVENTORY_ADMIN_ADDR: ":9090"
+      # The artifact hop back to elitea-main's platform listener (#1359 U5),
+      # presenting the callback identity elitea-main admits.
+      ELITEA_INVENTORY_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_INVENTORY_CALLBACK_CA_FILE: /certs/ca.crt
+      ELITEA_INVENTORY_CALLBACK_CERT_FILE: /certs/subapp-callback.crt
+      ELITEA_INVENTORY_CALLBACK_KEY_FILE: /certs/subapp-callback.key
     volumes:
       - ./certs:/certs:ro
     healthcheck:
@@ -494,16 +571,6 @@ services:
       retries: 10
       start_period: 5s
 
-  # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────
-  traefik:
-    image: traefik:v3.4
-    ports:
-      - "${E2E_PORT:-8082}:80"
-    volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.e2e.yml:/etc/traefik/dynamic.yml:ro
-    depends_on:
-      elitea-main:
-        condition: service_healthy
-      elitea-web:
-        condition: service_healthy
+volumes:
+  # elitea-main's platform-listener material, written by platform-material.
+  e2e_platform_main:

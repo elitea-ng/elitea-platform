@@ -54,7 +54,8 @@ const (
 // are searched by the literal string.
 var EnvNames = facade.EnvNames{
 	Enabled:        "ELITEA_INVENTORY_ENABLED",
-	BaseURL:        "ELITEA_INVENTORY_BASE_URL",
+	Target:         "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET",
+	RetiredBaseURL: "ELITEA_INVENTORY_BASE_URL",
 	ClientCertFile: "ELITEA_INVENTORY_CLIENT_CERT_FILE",
 	ClientKeyFile:  "ELITEA_INVENTORY_CLIENT_KEY_FILE",
 	CAFile:         "ELITEA_INVENTORY_CA_FILE",
@@ -74,9 +75,9 @@ var ErrInvalidRoute = errors.New("invalid Inventory route")
 // internal/api/v2/deepwiki. production_router.go mounts these strings on the
 // router ROOT — `r.Method(http.MethodGet, SlotsPath, …)` — so a constant
 // without the prefix is a route served at `/inventory/slots/{id}`, which the
-// platform edge does not forward: it routes `/api/v2`. MEASURED on a running
+// public edge of the time did not forward: it routed `/api/v2`. MEASURED on a running
 // stack: the facade answered 200 to a request made directly against
-// elitea-main's port and 404 to the same request through traefik, so every
+// elitea-main's port and 404 to the same request through the edge, so every
 // test in this package passed while no browser and no API client could reach
 // the feature. See TestTheMountedPathsAreReachableThroughTheEdge.
 const (
@@ -100,12 +101,12 @@ func NewRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 	sources *Sources,
-	logger *slog.Logger,
+	logger *slog.Logger, options ...proxy.RouteOption, // proxy.WithHop: share the registrar's hop
 ) (*Route, error) {
 	if !facade.Composable(authConfig, permissions) {
 		return nil, ErrInvalidRoute
 	}
-	hop, err := proxy.New(cfg, EnvNames.BaseURL, logger)
+	hop, err := proxy.ForRoute(cfg, EnvNames.Target, logger, options...)
 	if err != nil {
 		return nil, err
 	}

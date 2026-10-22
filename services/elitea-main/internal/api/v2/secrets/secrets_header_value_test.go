@@ -27,7 +27,7 @@ func TestNewSecretsHeaderValueIsNotTheGuessableDefault(t *testing.T) {
 	if len(raw) != secretsHeaderValueBytes {
 		t.Fatalf("the value carries %d bytes of entropy, want %d", len(raw), secretsHeaderValueBytes)
 	}
-	// A header value crosses the SDK, Traefik and pylon unchanged. Anything
+	// A header value crosses the SDK, the edge and pylon unchanged. Anything
 	// that has to be quoted or folded would arrive as a different string.
 	if strings.ContainsAny(value, " \t\r\n\"\\,;=+/") {
 		t.Fatalf("the value %q holds a character an HTTP header does not carry verbatim", value)

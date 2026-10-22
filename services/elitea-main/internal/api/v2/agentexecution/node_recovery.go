@@ -22,7 +22,7 @@ type CurrentNodeRecoveryUseCase interface {
 }
 
 func NewCurrentNodeRecoveryRoute(useCase CurrentNodeRecoveryUseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (http.Handler, error) {
-	if useCase == nil || authConfig.PrincipalValidator == nil || authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if useCase == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, app.ErrInvalid
 	}
 	router := chi.NewRouter()

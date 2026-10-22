@@ -316,8 +316,8 @@ func TestCurrentNotificationEventsOIDCOnlyAuthRejectsADeactivatedSession(t *test
 // reads (#413).
 //
 // The served row is the part that fails without the fix. Before it,
-// NewCurrentNotificationAPIRoute demanded a ForwardedIdentityVerifier, and
-// only a FormGraph supplies one. An OIDC-only deployment has no FormGraph, so
+// NewCurrentNotificationAPIRoute demanded a forwarded-identity verifier, and
+// only a FormGraph supplied one. An OIDC-only deployment has no FormGraph, so
 // the constructor returned ErrInvalidCurrentNotificationAPIRoute, main.go left
 // CurrentNotifications nil, and production_router.go registered no path. GET
 // /api/v2/notifications/notifications/prompt_lib/1 then answered chi's 404.
@@ -356,7 +356,7 @@ func TestCurrentNotificationListOIDCOnlyAuthServesASessionCookie(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compose current notification API route: %v "+
 					"(an OIDC-only deployment has no FormGraph, so it can "+
-					"supply no ForwardedIdentityVerifier — #413)", err)
+					"supply no Form session reader — #413)", err)
 			}
 
 			request := httptest.NewRequest(

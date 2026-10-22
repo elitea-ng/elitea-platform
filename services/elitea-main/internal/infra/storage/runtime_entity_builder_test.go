@@ -3,16 +3,14 @@ package storage
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
 
 	"github.com/stretchr/testify/require"
 )
@@ -90,14 +88,13 @@ func TestSkillWriteRouteTakesTheProjectFromTheClaimNotTheRequest(t *testing.T) {
 		&builderProjectContextSink{},
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "skills", `{
+	response := serve(server, builderRequest(t, "skills", `{
 		"name": "Daily Standup Summarizer",
 		"description": "Summarizes daily standup notes into action items",
 		"instructions": "Extract blockers, decisions and action items."
 	}`))
 
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	require.Equal(t, int64(4242), sawProject)
 	require.Equal(t, int64(11), sawActor)
 	require.Equal(t, "Daily Standup Summarizer", sawName)
@@ -105,7 +102,7 @@ func TestSkillWriteRouteTakesTheProjectFromTheClaimNotTheRequest(t *testing.T) {
 	require.Equal(t, "Extract blockers, decisions and action items.", sawInstructions)
 
 	var body RuntimeSkillWriteContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	require.NoError(t, json.Unmarshal(response.Body, &body))
 	// The schema discriminator is the first thing the worker compares; a
 	// response that is otherwise perfect and carries the wrong one is refused
 	// there with a message that names nothing.
@@ -133,22 +130,20 @@ func TestSkillWriteRouteRefusesARequestThatNamesAProject(t *testing.T) {
 		&builderProjectContextSink{},
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "skills", `{
+	response := serve(server, builderRequest(t, "skills", `{
 		"name": "Anything", "instructions": "Do something", "project_id": 9
 	}`))
-	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Equal(t, codes.InvalidArgument, response.Code)
 }
 
 func TestSkillWriteRouteRefusesARequestThatNamesAnActor(t *testing.T) {
 	t.Parallel()
 
 	server := newBuilderTestServer(t, builderAuthorizerForProject(4242), nil, &builderProjectContextSink{})
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "skills", `{
+	response := serve(server, builderRequest(t, "skills", `{
 		"name": "Anything", "instructions": "Do something", "actor_id": 9
 	}`))
-	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Equal(t, codes.InvalidArgument, response.Code)
 }
 
 func TestSkillWriteRouteRefusesAnInvalidClaimActorBeforeWriting(t *testing.T) {
@@ -163,11 +158,10 @@ func TestSkillWriteRouteRefusesAnInvalidClaimActorBeforeWriting(t *testing.T) {
 				return RuntimeContextAuthorization{ResourceProjectID: 4242, ActorID: actorID}, nil
 			})
 			server := newBuilderTestServer(t, authorizer, nil, &builderProjectContextSink{})
-			response := httptest.NewRecorder()
-			server.Routes().ServeHTTP(response, builderRequest(t, "skills", `{
+			response := serve(server, builderRequest(t, "skills", `{
 				"name": "Anything", "instructions": "Do something"
 			}`))
-			require.Equal(t, http.StatusServiceUnavailable, response.Code)
+			require.Equal(t, codes.Unavailable, response.Code)
 		})
 	}
 }
@@ -196,9 +190,8 @@ func TestSkillWriteRouteRefusesAnUnstorableDocumentWith422(t *testing.T) {
 				}),
 				&builderProjectContextSink{},
 			)
-			response := httptest.NewRecorder()
-			server.Routes().ServeHTTP(response, builderRequest(t, "skills", body))
-			require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+			response := serve(server, builderRequest(t, "skills", body))
+			require.Equal(t, codes.FailedPrecondition, response.Code)
 		})
 	}
 }
@@ -233,9 +226,8 @@ func TestBuilderRoutesRefuseAnUnauthorizedClaimBeforeWriting(t *testing.T) {
 		{"skills", `{"name": "N", "instructions": "I"}`},
 		{"project-context", `{"content": "C"}`},
 	} {
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, builderRequest(t, route.resource, route.body))
-		require.Equal(t, http.StatusForbidden, response.Code, route.resource)
+		response := serve(server, builderRequest(t, route.resource, route.body))
+		require.Equal(t, codes.PermissionDenied, response.Code, route.resource)
 	}
 	require.Zero(t, contextSink.writeCallCount)
 }
@@ -252,24 +244,23 @@ func TestProjectContextWriteKeepsTheProjectsEnabledFlagWhenUnstated(t *testing.T
 	}
 	server := newBuilderTestServer(t, builderAuthorizerForProject(7), nil, sink)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "project-context", `{
+	response := serve(server, builderRequest(t, "project-context", `{
 		"content": "This project is a Python REST API, now with GraphQL."
 	}`))
 
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	require.Equal(t, int64(7), sink.sawProjectID)
 	require.Equal(t, "This project is a Python REST API, now with GraphQL.", sink.sawContent)
 	require.True(t, sink.sawEnabled, "an update that did not state enabled must keep the stored value")
 
 	var body RuntimeProjectContextWriteContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	require.NoError(t, json.Unmarshal(response.Body, &body))
 	require.Equal(t, RuntimeProjectContextWriteSchemaVersion, body.SchemaVersion)
 	require.False(t, body.Created, "an existing context is updated, never duplicated")
 	require.Equal(t, len(sink.sawContent), body.ContentBytes)
 	// The stored text is deliberately NOT echoed: see
 	// RuntimeProjectContextWriteContext's own doc comment.
-	require.NotContains(t, response.Body.String(), "GraphQL")
+	require.NotContains(t, string(response.Body), "GraphQL")
 }
 
 // A project with no context yet gets one that is IN EFFECT. A context written
@@ -281,14 +272,13 @@ func TestProjectContextWriteEnablesAFirstContextByDefault(t *testing.T) {
 	sink := &builderProjectContextSink{}
 	server := newBuilderTestServer(t, builderAuthorizerForProject(7), nil, sink)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "project-context", `{"content": "First."}`))
+	response := serve(server, builderRequest(t, "project-context", `{"content": "First."}`))
 
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	require.True(t, sink.sawEnabled)
 
 	var body RuntimeProjectContextWriteContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	require.NoError(t, json.Unmarshal(response.Body, &body))
 	require.True(t, body.Created)
 }
 
@@ -303,11 +293,10 @@ func TestProjectContextWriteHonoursAnExplicitEnabledFalse(t *testing.T) {
 	}
 	server := newBuilderTestServer(t, builderAuthorizerForProject(7), nil, sink)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(
+	response := serve(server, builderRequest(
 		t, "project-context", `{"content": "Draft.", "enabled": false}`,
 	))
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	require.False(t, sink.sawEnabled)
 }
 
@@ -320,22 +309,20 @@ func TestProjectContextWriteReportsAStoreFailureAsUnavailable(t *testing.T) {
 	sink := &builderProjectContextSink{writeErr: errors.New("boom")}
 	server := newBuilderTestServer(t, builderAuthorizerForProject(7), nil, sink)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "project-context", `{"content": "C"}`))
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	response := serve(server, builderRequest(t, "project-context", `{"content": "C"}`))
+	require.Equal(t, codes.Unavailable, response.Code)
 }
 
-// The routes must not exist at all where the service was not composed: a
-// listener that answers 404 for a capability it does not serve is honest, while
-// one that answers 503 forever claims the capability and never delivers it.
+// The RPCs must answer Unimplemented where the service was not composed: a
+// listener that says it does not serve a capability is honest, while one that
+// answers Unavailable forever claims the capability and never delivers it.
 func TestBuilderRoutesAreAbsentWithoutTheService(t *testing.T) {
 	t.Parallel()
 
 	server := newBuilderTestServerWithoutBuilders(t)
 	for _, resource := range []string{"skills", "project-context"} {
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, builderRequest(t, resource, `{"content": "C"}`))
-		require.Equal(t, http.StatusNotFound, response.Code, resource)
+		response := serve(server, builderRequest(t, resource, `{"content": "C"}`))
+		require.Equal(t, codes.Unimplemented, response.Code, resource)
 	}
 }
 
@@ -357,9 +344,8 @@ func TestBuilderRoutesRefuseAnOversizedBody(t *testing.T) {
 	)
 
 	huge := `{"name":"N","instructions":"` + strings.Repeat("x", maxRuntimeBuilderRequestBytes+16) + `"}`
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "skills", huge))
-	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+	response := serve(server, builderRequest(t, "skills", huge))
+	require.Equal(t, codes.ResourceExhausted, response.Code)
 }
 
 func builderAuthorizerForProject(projectID int64) AgentRuntimeContextAuthorizer {
@@ -419,18 +405,38 @@ func newBuilderTestServerWithoutBuilders(t *testing.T) *ContentServer {
 	return server
 }
 
-func builderRequest(t *testing.T, resource string, body string) *http.Request {
+// builderRequest prepares one builder or artifact RPC under a well-formed
+// claim. resource names the RPC as the HTTP route it replaced did.
+func builderRequest(t *testing.T, resource string, body string) contentCall {
 	t.Helper()
-	path := "/executions/execution-1/generations/1/runtime-context/" + resource
-	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	request.TLS = &tls.ConnectionState{
-		VerifiedChains: [][]*x509.Certificate{{&x509.Certificate{}}},
-	}
-	request.Header.Set(claimIDHeader, "claim-1")
 	// 32 bytes: parseExecutionClaim requires a sha256-sized fence and answers
-	// 401 for anything else, so a shorter literal would make every assertion
-	// below pass or fail for the wrong reason.
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(make([]byte, sha256.Size)))
-	request.Header.Set("Content-Type", "application/json")
-	return request
+	// Unauthenticated for anything else, so a shorter literal would make every
+	// assertion pass or fail for the wrong reason.
+	ctx := contentClaimContext(context.Background(), nil, "claim-1", make([]byte, sha256.Size))
+	scope := contentScope("execution-1", 1)
+	raw := []byte(body)
+	return func(server *ContentServer) contentResult {
+		switch resource {
+		case "skills":
+			response, err := server.WriteSkill(ctx, &runtimev1.WriteSkillRequestV1{Scope: scope, RequestJson: raw})
+			return resultOf(response.GetResponseJson(), err)
+		case "project-context":
+			response, err := server.WriteProjectContext(ctx, &runtimev1.WriteProjectContextRequestV1{Scope: scope, RequestJson: raw})
+			return resultOf(response.GetResponseJson(), err)
+		case "artifacts/list":
+			response, err := server.ListArtifacts(ctx, &runtimev1.ListArtifactsRequestV1{Scope: scope, RequestJson: raw})
+			return resultOf(response.GetResponseJson(), err)
+		case "artifacts/read":
+			response, err := server.ReadArtifact(ctx, &runtimev1.ReadArtifactRequestV1{Scope: scope, RequestJson: raw})
+			return resultOf(response.GetResponseJson(), err)
+		case "artifacts/write":
+			response, err := server.WriteArtifact(ctx, &runtimev1.WriteArtifactRequestV1{Scope: scope, RequestJson: raw})
+			return resultOf(response.GetResponseJson(), err)
+		case "artifacts/delete":
+			response, err := server.DeleteArtifact(ctx, &runtimev1.DeleteArtifactRequestV1{Scope: scope, RequestJson: raw})
+			return resultOf(response.GetResponseJson(), err)
+		}
+		t.Fatalf("unknown builder resource %q", resource)
+		return contentResult{}
+	}
 }

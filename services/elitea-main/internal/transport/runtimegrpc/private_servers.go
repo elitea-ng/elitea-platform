@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math"
 	"net"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +15,7 @@ import (
 	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -22,6 +23,13 @@ const (
 	maxPrivateConcurrentStreams = 256
 	maxPrivateConnections       = 1024
 )
+
+// ConnectionAgeGraceUnlimited is a MaxConnectionAgeGrace that never cuts a
+// stream: after MaxConnectionAge the server sends GOAWAY, the client opens a
+// new connection for new calls, and the calls already running on the old one
+// finish however long they take (grpc-go's own default, infinity). The
+// policy's limits still bound a listener's shutdown.
+const ConnectionAgeGraceUnlimited = time.Duration(math.MaxInt64)
 
 type GRPCServerPolicy struct {
 	MaxConcurrentStreams  uint32
@@ -48,19 +56,20 @@ type PrivateServerConfig struct {
 	OutputMaxResponseBytes          int
 	ControlGRPC                     GRPCServerPolicy
 	OutputGRPC                      GRPCServerPolicy
-	ContentMaxConnections           int
-	ContentMaxStreams               int
-	ContentReadTimeout              time.Duration
-	ContentWriteTimeout             time.Duration
-	ContentIdleTimeout              time.Duration
-	ContentMaxHeaderBytes           int
-	ShutdownTimeout                 time.Duration
+	// ContentGRPC is the content listener's connection policy. The content
+	// listener is built like the platform listener (newAuthorizedGRPCServer):
+	// the platform message caps, grpc.health.v1, a per-service grpcauth
+	// policy (#1359 U4).
+	ContentGRPC     GRPCServerPolicy
+	ShutdownTimeout time.Duration
 }
 
 type PrivateServices struct {
 	Control runtimev1.RuntimeControlServiceServer
 	Output  runtimev1.ExecutionOutputServiceServer
-	Content http.Handler
+	// Content are the gRPC services of the content listener (#1359 U4:
+	// elitea.runtime.v1.RuntimeContentService), each with its allowlist.
+	Content []PlatformService
 	// VectorIntrospection is optional. When set, it is served on the control
 	// listener, which already requires a verified client certificate; the
 	// service itself admits only its configured client identities (ADR-0031).
@@ -78,13 +87,14 @@ type PrivateServices struct {
 
 // PrivateServerSet owns the three deliberately separate authenticated data
 // paths. It does not expose any of them on the public elitea-main HTTP listener:
-// control gRPC, output gRPC and claim-bound HTTPS each have their own mTLS
-// listener, codec/body bound and lifecycle.
+// control gRPC, output gRPC and the claim-bound content gRPC services each
+// have their own mTLS listener, codec/message bound and lifecycle.
 type PrivateServerSet struct {
 	config        PrivateServerConfig
 	controlServer *grpc.Server
 	outputServer  *grpc.Server
-	contentServer *http.Server
+	contentServer *grpc.Server
+	contentHealth *health.Server
 	listen        func(network, address string) (net.Listener, error)
 	shutdownOnce  sync.Once
 	shutdownDone  chan struct{}
@@ -97,7 +107,7 @@ func NewPrivateServerSet(config PrivateServerConfig, services PrivateServices) (
 }
 
 func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, listen func(string, string) (net.Listener, error)) (*PrivateServerSet, error) {
-	if services.Control == nil || services.Output == nil || services.Content == nil || listen == nil {
+	if services.Control == nil || services.Output == nil || len(services.Content) == 0 || listen == nil {
 		return nil, errors.New("runtime control, output and content services are required")
 	}
 	if config.ControlAddress == "" || config.OutputAddress == "" || config.ContentAddress == "" || config.ControlAddress == config.OutputAddress || config.ControlAddress == config.ContentAddress || config.OutputAddress == config.ContentAddress {
@@ -112,7 +122,7 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 	if err := validateServerTLSConfig(config.ContentTLS); err != nil {
 		return nil, fmt.Errorf("content TLS: %w", err)
 	}
-	if config.ControlMaxRequestBytes <= 0 || config.ControlMaxResponseBytes <= 0 || config.OutputMaxRequestBytes <= 0 || config.OutputMaxResponseBytes <= 0 || config.ContentReadTimeout <= 0 || config.ContentWriteTimeout <= 0 || config.ContentIdleTimeout <= 0 || config.ContentMaxHeaderBytes <= 0 || config.ShutdownTimeout <= 0 {
+	if config.ControlMaxRequestBytes <= 0 || config.ControlMaxResponseBytes <= 0 || config.OutputMaxRequestBytes <= 0 || config.OutputMaxResponseBytes <= 0 || config.ShutdownTimeout <= 0 {
 		return nil, errors.New("runtime listener message and lifecycle limits must be positive")
 	}
 	if err := validateGRPCServerPolicy(config.ControlGRPC); err != nil {
@@ -121,8 +131,8 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 	if err := validateGRPCServerPolicy(config.OutputGRPC); err != nil {
 		return nil, fmt.Errorf("output gRPC policy: %w", err)
 	}
-	if config.ContentMaxConnections <= 0 || config.ContentMaxConnections > maxPrivateConnections || config.ContentMaxStreams <= 0 || config.ContentMaxStreams > maxPrivateConcurrentStreams {
-		return nil, errors.New("content connection limit is invalid")
+	if err := validateGRPCServerPolicy(config.ContentGRPC); err != nil {
+		return nil, fmt.Errorf("content gRPC policy: %w", err)
 	}
 	controlCodec, err := NewDirectionalStrictProtoCodec(config.ControlMaxRequestBytes, config.ControlMaxResponseBytes)
 	if err != nil {
@@ -152,22 +162,16 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 		runtimev1.RegisterEgressAuditServiceServer(controlServer, services.EgressAudit)
 	}
 	runtimev1.RegisterExecutionOutputServiceServer(outputServer, services.Output)
-	contentServer := &http.Server{
-		Handler:           services.Content,
-		TLSConfig:         config.ContentTLS.Clone(),
-		ReadHeaderTimeout: config.ContentReadTimeout,
-		ReadTimeout:       config.ContentReadTimeout,
-		WriteTimeout:      config.ContentWriteTimeout,
-		IdleTimeout:       config.ContentIdleTimeout,
-		MaxHeaderBytes:    config.ContentMaxHeaderBytes,
+	contentServer, contentHealth, err := newAuthorizedGRPCServer(config.ContentTLS, config.ContentGRPC, services.Content)
+	if err != nil {
+		return nil, fmt.Errorf("content listener: %w", err)
 	}
-	// ServeTLS enables HTTP/2 itself and applies this configuration.
-	contentServer.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: config.ContentMaxStreams}
 	return &PrivateServerSet{
 		config:        config,
 		controlServer: controlServer,
 		outputServer:  outputServer,
 		contentServer: contentServer,
+		contentHealth: contentHealth,
 		listen:        listen,
 		shutdownDone:  make(chan struct{}),
 	}, nil
@@ -180,7 +184,7 @@ func validateGRPCServerPolicy(policy GRPCServerPolicy) error {
 	if policy.KeepaliveTime < time.Second || policy.KeepaliveTimeout < time.Second || policy.MaxConnectionIdle < time.Second || policy.MaxConnectionAge < time.Second || policy.MaxConnectionAgeGrace < time.Second {
 		return errors.New("keepalive durations must be at least one second")
 	}
-	if policy.KeepaliveTimeout > policy.KeepaliveTime || policy.MaxConnectionIdle > policy.MaxConnectionAge || policy.MaxConnectionAgeGrace > policy.MaxConnectionAge {
+	if policy.KeepaliveTimeout > policy.KeepaliveTime || policy.MaxConnectionIdle > policy.MaxConnectionAge || (policy.MaxConnectionAgeGrace > policy.MaxConnectionAge && policy.MaxConnectionAgeGrace != ConnectionAgeGraceUnlimited) {
 		return errors.New("keepalive duration ordering is invalid")
 	}
 	return nil
@@ -222,20 +226,16 @@ func (s *PrivateServerSet) Serve(ctx context.Context) error {
 	results := make(chan serveResult, 3)
 	go func() { results <- serveResult{name: "control", err: s.controlServer.Serve(listeners.control)} }()
 	go func() { results <- serveResult{name: "output", err: s.outputServer.Serve(listeners.output)} }()
-	go func() {
-		// ServeTLS configures HTTP/2 when the server TLS configuration advertises
-		// h2. The certificates are already present, so file arguments stay empty.
-		results <- serveResult{name: "content", err: s.contentServer.ServeTLS(listeners.content, "", "")}
-	}()
+	go func() { results <- serveResult{name: "content", err: s.contentServer.Serve(listeners.content)} }()
 
 	var cause error
 	select {
 	case <-ctx.Done():
 		cause = ctx.Err()
 	case result := <-results:
-		if s.shuttingDown.Load() && (result.err == nil || errors.Is(result.err, grpc.ErrServerStopped) || errors.Is(result.err, http.ErrServerClosed)) {
+		if s.shuttingDown.Load() && (result.err == nil || errors.Is(result.err, grpc.ErrServerStopped)) {
 			cause = context.Canceled
-		} else if result.err != nil && !errors.Is(result.err, grpc.ErrServerStopped) && !errors.Is(result.err, http.ErrServerClosed) {
+		} else if result.err != nil && !errors.Is(result.err, grpc.ErrServerStopped) {
 			cause = fmt.Errorf("runtime %s listener failed: %w", result.name, result.err)
 		} else {
 			cause = fmt.Errorf("runtime %s listener stopped unexpectedly", result.name)
@@ -304,7 +304,7 @@ func (s *PrivateServerSet) openListeners() (privateListeners, error) {
 		_ = listeners.control.Close()
 		return privateListeners{}, fmt.Errorf("listen for runtime output: %w", err)
 	}
-	listeners.content, err = s.openBoundedListener(s.config.ContentAddress, s.config.ContentMaxConnections)
+	listeners.content, err = s.openBoundedListener(s.config.ContentAddress, s.config.ContentGRPC.MaxConnections)
 	if err != nil {
 		_ = listeners.output.Close()
 		_ = listeners.control.Close()
@@ -334,21 +334,16 @@ func (l privateListeners) close() {
 }
 
 func (s *PrivateServerSet) shutdownServers(ctx context.Context) error {
+	s.contentHealth.Shutdown()
 	var wait sync.WaitGroup
-	wait.Add(2)
-	go func() {
-		defer wait.Done()
-		gracefulStop(ctx, s.controlServer)
-	}()
-	go func() {
-		defer wait.Done()
-		gracefulStop(ctx, s.outputServer)
-	}()
-	httpErr := s.contentServer.Shutdown(ctx)
-	wait.Wait()
-	if httpErr != nil && !errors.Is(httpErr, context.Canceled) && !errors.Is(httpErr, context.DeadlineExceeded) {
-		return fmt.Errorf("shutdown runtime content listener: %w", httpErr)
+	for _, server := range []*grpc.Server{s.controlServer, s.outputServer, s.contentServer} {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			gracefulStop(ctx, server)
+		}()
 	}
+	wait.Wait()
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("runtime listener shutdown: %w", err)
 	}

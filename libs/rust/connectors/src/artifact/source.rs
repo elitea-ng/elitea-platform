@@ -1,30 +1,28 @@
 //! A folder of the invoking project's artifact bucket as a `ContentSource`
 //! (ADR-0030 decision 3).
 //!
-//! * **List.** The object API, 1 page at a time, following `next_cursor`
-//!   until it is absent. A 404 (on the first page: an unknown or unreadable
-//!   bucket; after a cursor: a listing left partial) is an error naming the
-//!   bucket. Only a successful answer with no objects is an empty listing,
-//!   so an index run never reads a misconfigured bucket as "everything was
+//! * **Store.** The host reaches elitea-main's `ArtifactObjectService` on
+//!   its platform channel and implements [`ArtifactObjects`] over it; a
+//!   refusal comes back as [`Failure::Status`] with the HTTP status the
+//!   service carried, the hop failing as [`Failure::Transport`]. Nothing
+//!   else is reachable through this source.
+//! * **List.** One page at a time, following `next_cursor` until it is
+//!   empty. A 404 (on the first page: an unknown or unreadable bucket;
+//!   after a cursor: a listing left partial) is an error naming the bucket.
+//!   Only a successful answer with no objects is an empty listing, so an
+//!   index run never reads a misconfigured bucket as "everything was
 //!   deleted".
 //! * **Keys.** The object key relative to the folder, held to elitea-main's
 //!   key rules and to the folder it was listed under; one bad key refuses
 //!   the listing. A key ending in `/` is a folder marker, not a document.
-//! * **Version.** The object's `etag` when the platform sends one, else its
+//! * **Version.** The object's `etag` when the store sends one, else its
 //!   `modified_at`. An object with neither is refused: a version that never
 //!   changes would hide every later change.
 //! * **Fetch.** The object's bytes, under the document cap, pinned to the
-//!   listed version. A listed `etag` goes out as `If-Match` (a 412 is
-//!   `SourceError::Changed`); elitea-main's download handler does not honour
-//!   `If-Match` today but answers with the object's current `ETag` and
-//!   `Last-Modified`, so the response is checked against the listed
-//!   `etag` (or `modified_at`) too, and a mismatch is `Changed` rather than
-//!   newer bytes handed back under the old version. A response that
-//!   carries nothing to compare is refused.
-//! * **Egress.** The platform is this deployment's own API, not a third
-//!   party: the external-source allowlist does not govern it. Every request
-//!   is pinned to the platform's exact origin (scheme, host and port) and
-//!   nothing else is reachable through this source.
+//!   listed version: the object the store answers with must carry the
+//!   listed `etag` (or `modified_at`, to the second), and a mismatch is
+//!   `SourceError::Changed` rather than newer bytes handed back under the
+//!   old version. An answer that carries nothing to compare is refused.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -32,41 +30,95 @@ use std::sync::Arc;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::{Map, Value};
 
-use super::client::{ArtifactPlatform, valid_object_key, valid_segment};
+use super::client::{valid_object_key, valid_segment};
 use crate::source::{
-    Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, VersionKind,
-    references, title_of,
+    Failure, Listed, ListingCache, SourceLimits, VersionKind, references, title_of,
 };
-use crate::transport::header::{ETAG, IF_MATCH, LAST_MODIFIED};
-use crate::transport::{HeaderMap, HeaderValue, Request, StatusCode, Transport};
 
 const PROVIDER: &str = "the artifact store";
 
-/// One bucket folder, listed and fetched through the platform object API.
+/// One listed object as the store describes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectEntry {
+    pub key: String,
+    pub size_bytes: u64,
+    /// Empty when the store sent none.
+    pub etag: String,
+    /// RFC 3339; empty when the store sent none.
+    pub modified_at: String,
+}
+
+/// One listing page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectPage {
+    pub objects: Vec<ObjectEntry>,
+    /// Empty on the last page.
+    pub next_cursor: String,
+}
+
+/// One object read: what the store says it is, and its bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchedObject {
+    pub etag: String,
+    pub modified_at: String,
+    pub bytes: Vec<u8>,
+}
+
+/// The invoking project's object store, as the host reaches it (the
+/// bearer and project are the host's; a bucket outside that project is
+/// unreachable).
+#[async_trait::async_trait]
+pub trait ArtifactObjects: Send + Sync {
+    /// One page of `bucket` under `prefix`, resuming at `cursor` (empty:
+    /// the first page).
+    ///
+    /// # Errors
+    ///
+    /// A refusal as [`Failure::Status`] (404: no such bucket), the hop as
+    /// [`Failure::Transport`].
+    async fn list_page(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        cursor: &str,
+    ) -> Result<ObjectPage, Failure>;
+
+    /// The object `key` of `bucket`, refused past `max_bytes`.
+    ///
+    /// # Errors
+    ///
+    /// A refusal as [`Failure::Status`], the hop as [`Failure::Transport`],
+    /// a larger object as [`Failure::TooLarge`].
+    async fn fetch(
+        &self,
+        bucket: &str,
+        key: &str,
+        max_bytes: u64,
+    ) -> Result<FetchedObject, Failure>;
+}
+
+/// One bucket folder, listed and fetched through the host's object store.
 pub struct ArtifactSource {
-    platform: ArtifactPlatform,
+    objects: Arc<dyn ArtifactObjects>,
     bucket: String,
     /// `""` for the whole bucket, else `folder/` (with its slash).
     list_prefix: String,
-    http: SourceHttp,
+    limits: SourceLimits,
     cache: ListingCache,
 }
 
 impl ArtifactSource {
-    /// `bucket` (and, when `prefix` is not empty, its folder `prefix`) of the
-    /// platform's invoking project, every request pinned to the platform's
-    /// own origin and sent through `transport`.
+    /// `bucket` (and, when `prefix` is not empty, its folder `prefix`) of
+    /// the invoking project, read through `objects`.
     ///
     /// # Errors
     ///
     /// The bucket is not one segment, or the folder is not a valid key.
     pub fn new(
-        platform: ArtifactPlatform,
+        objects: Arc<dyn ArtifactObjects>,
         bucket: &str,
         prefix: &str,
-        transport: Arc<dyn Transport>,
     ) -> Result<Self, SourceError> {
-        let http = SourceHttp::pinned_to_origin(platform.base(), transport);
         if !valid_segment(bucket) {
             return Err(SourceError::Unavailable(
                 "the artifact bucket name is not a single path segment".to_owned(),
@@ -79,46 +131,22 @@ impl ArtifactSource {
             ));
         }
         Ok(Self {
-            platform,
+            objects,
             bucket: bucket.to_owned(),
             list_prefix: if folder.is_empty() {
                 String::new()
             } else {
                 format!("{folder}/")
             },
-            http,
+            limits: SourceLimits::default(),
             cache: ListingCache::default(),
         })
     }
 
     #[must_use]
     pub fn with_limits(mut self, limits: SourceLimits) -> Self {
-        self.http = self.http.with_limits(limits);
+        self.limits = limits;
         self
-    }
-
-    #[must_use]
-    pub fn with_backoff(mut self, backoff: Backoff) -> Self {
-        self.http = self.http.with_backoff(backoff);
-        self
-    }
-
-    /// Connect and read-idle timeouts for this source's requests (default:
-    /// 30 s to a response, 60 s without a body byte).
-    #[must_use]
-    pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
-        self.http = self.http.with_timeouts(timeouts);
-        self
-    }
-
-    fn request(&self, key: Option<&str>, query: &[(&str, &str)]) -> Result<Request, Failure> {
-        let mut url = self.platform.objects_url(&self.bucket, key);
-        if !query.is_empty() {
-            url.query_pairs_mut().extend_pairs(query.iter().copied());
-        }
-        self.platform
-            .get(url)
-            .map_err(|error| Failure::Client(error.to_string()))
     }
 
     async fn listing(&self) -> Result<Vec<Listed>, Failure> {
@@ -127,21 +155,17 @@ impl ArtifactSource {
         let mut pages = 0;
         loop {
             pages += 1;
-            self.http.check_pages(pages)?;
-            let mut query = Vec::new();
-            if !self.list_prefix.is_empty() {
-                query.push(("prefix", self.list_prefix.as_str()));
-            }
-            if !cursor.is_empty() {
-                query.push(("cursor", cursor.as_str()));
-            }
-            let request = self.request(None, &query)?;
-            let page = match self.http.json(request).await {
-                Ok((_, page)) => page,
+            self.limits.check_pages(pages)?;
+            let page = match self
+                .objects
+                .list_page(&self.bucket, &self.list_prefix, &cursor)
+                .await
+            {
+                Ok(page) => page,
                 // Never an empty listing: a missing bucket (or one this
                 // project cannot read) would otherwise look like every
                 // document having been deleted.
-                Err(Failure::Status(StatusCode::NOT_FOUND)) => {
+                Err(Failure::Status(status)) if status.as_u16() == 404 => {
                     return Err(Failure::Client(format!(
                         "the bucket '{}' was not found or is not readable{}",
                         self.bucket,
@@ -154,32 +178,28 @@ impl ArtifactSource {
                 }
                 Err(failure) => return Err(failure),
             };
-            let objects = match page.get("objects") {
-                None | Some(Value::Null) => &[][..],
-                Some(Value::Array(objects)) => objects.as_slice(),
-                Some(_) => return Err(Failure::InvalidResponse("objects is not a list")),
-            };
-            for object in objects {
+            for object in &page.objects {
                 if let Some(item) = self.object(object)? {
                     listed.push(item);
-                    self.http.check_count(listed.len())?;
+                    self.limits.check_count(listed.len())?;
                 }
             }
-            match page.get("next_cursor") {
-                None | Some(Value::Null) => return Ok(listed),
-                Some(Value::String(next)) if next.is_empty() => return Ok(listed),
-                Some(Value::String(next)) => cursor.clone_from(next),
-                Some(_) => return Err(Failure::InvalidResponse("next_cursor is not a string")),
+            if page.next_cursor.is_empty() {
+                return Ok(listed);
             }
+            if page.next_cursor == cursor {
+                return Err(Failure::InvalidResponse("the listing repeated its cursor"));
+            }
+            cursor = page.next_cursor;
         }
     }
 
     /// One listed object as a document, `None` for a folder marker.
-    fn object(&self, object: &Value) -> Result<Option<Listed>, Failure> {
-        let key = object
-            .get("key")
-            .and_then(Value::as_str)
-            .ok_or(Failure::InvalidResponse("an object has no key"))?;
+    fn object(&self, object: &ObjectEntry) -> Result<Option<Listed>, Failure> {
+        let key = object.key.as_str();
+        if key.is_empty() {
+            return Err(Failure::InvalidResponse("an object has no key"));
+        }
         if key.ends_with('/') {
             return Ok(None);
         }
@@ -194,19 +214,7 @@ impl ArtifactSource {
                 "an object key breaks the platform's key rules",
             ));
         }
-        let size = match object.get("size_bytes") {
-            Some(Value::Number(number)) => number.as_u64().unwrap_or(0),
-            Some(Value::String(text)) => text.trim().parse().unwrap_or(0),
-            _ => 0,
-        };
-        let text = |name: &str| {
-            object
-                .get(name)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        };
-        let (version, kind) = match (text("etag"), text("modified_at")) {
+        let (version, kind) = match (present(&object.etag), present(&object.modified_at)) {
             (Some(etag), _) => (etag, VersionKind::ETag),
             (None, Some(modified)) => (modified, VersionKind::ModifiedAt),
             (None, None) => {
@@ -219,7 +227,7 @@ impl ArtifactSource {
             Listed::new(
                 relative.to_owned(),
                 version.to_owned(),
-                size,
+                object.size_bytes,
                 key.to_owned(),
             )
             .versioned_by(kind),
@@ -261,22 +269,17 @@ impl ContentSource for ArtifactSource {
             .get(key)
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
         let failed = |failure: Failure| failure.into_source_error(PROVIDER, Some(key));
-        self.http
+        self.limits
             .check_size(listed.reference.size)
             .map_err(failed)?;
-        let mut request = self.request(Some(&listed.handle), &[]).map_err(failed)?;
-        if listed.kind == VersionKind::ETag {
-            let etag = HeaderValue::from_str(&listed.reference.version).map_err(|_| {
-                failed(Failure::InvalidResponse(
-                    "a listed etag is not a header value",
-                ))
-            })?;
-            request.headers_mut().insert(IF_MATCH, etag);
-        }
-        let (headers, bytes) = self.http.raw_with_headers(request).await.map_err(failed)?;
-        pinned_to(listed, &headers).map_err(failed)?;
+        let fetched = self
+            .objects
+            .fetch(&self.bucket, &listed.handle, self.limits.max_document_bytes)
+            .await
+            .map_err(failed)?;
+        pinned_to(listed, &fetched).map_err(failed)?;
         let mut reference = listed.reference.clone();
-        reference.size = bytes.len() as u64;
+        reference.size = fetched.bytes.len() as u64;
         let mut metadata = Map::new();
         metadata.insert("bucket".to_owned(), Value::String(self.bucket.clone()));
         metadata.insert(
@@ -287,37 +290,37 @@ impl ContentSource for ArtifactSource {
             title: title_of(key),
             uri: None,
             reference,
-            bytes,
+            bytes: fetched.bytes,
             metadata,
         })
     }
 }
 
-/// Whether the response is the listed version: its `ETag` equals the
-/// listed one, or its `Last-Modified` is the listed `modified_at` (to the
-/// second, the HTTP date's resolution).
-fn pinned_to(listed: &Listed, headers: &HeaderMap) -> Result<(), Failure> {
-    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
+/// Whether the fetched object is the listed version: its `etag` equals the
+/// listed one, or its `modified_at` is the listed one (to the second).
+fn pinned_to(listed: &Listed, fetched: &FetchedObject) -> Result<(), Failure> {
     match listed.kind {
         VersionKind::Handle => Ok(()),
-        VersionKind::ETag => match header(ETAG) {
-            Some(etag) if etag.trim() == listed.reference.version => Ok(()),
+        VersionKind::ETag => match present(&fetched.etag) {
+            Some(etag) if etag == listed.reference.version => Ok(()),
             Some(_) => Err(Failure::Changed),
             None => Err(Failure::InvalidResponse(
-                "the object answer has no ETag to pin the fetch to",
+                "the object answer has no etag to pin the fetch to",
             )),
         },
         VersionKind::ModifiedAt => {
-            let sent = header(LAST_MODIFIED)
-                .and_then(|value| chrono::DateTime::parse_from_rfc2822(value.trim()).ok())
+            let instant = |value: &str| {
+                chrono::DateTime::parse_from_rfc3339(value).map(|time| time.timestamp())
+            };
+            let sent = present(&fetched.modified_at)
+                .and_then(|value| instant(value).ok())
                 .ok_or(Failure::InvalidResponse(
-                    "the object answer has no Last-Modified to pin the fetch to",
+                    "the object answer has no modified time to pin the fetch to",
                 ))?;
-            let listed_at = chrono::DateTime::parse_from_rfc3339(&listed.reference.version)
-                .map_err(|_| {
-                    Failure::InvalidResponse("a listed modified time is not an RFC 3339 date")
-                })?;
-            if sent.timestamp() == listed_at.timestamp() {
+            let listed_at = instant(&listed.reference.version).map_err(|_| {
+                Failure::InvalidResponse("a listed modified time is not an RFC 3339 date")
+            })?;
+            if sent == listed_at {
                 Ok(())
             } else {
                 Err(Failure::Changed)
@@ -326,46 +329,131 @@ fn pinned_to(listed: &Listed, headers: &HeaderMap) -> Result<(), Failure> {
     }
 }
 
+/// `value` trimmed, `None` when that is empty (the store's "not sent").
+fn present(value: &str) -> Option<&str> {
+    Some(value.trim()).filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::source::fixture::{Reply, Scripted, query};
-    use serde_json::json;
+    use std::sync::Mutex;
 
-    fn platform() -> ArtifactPlatform {
-        ArtifactPlatform::new("https://platform.example", "bearer-fixture", "7").expect("platform")
+    use super::*;
+    use crate::transport::StatusCode;
+
+    /// A store scripted by bucket listing pages (by cursor) and objects.
+    #[derive(Default)]
+    struct Store {
+        pages: BTreeMap<String, Result<ObjectPage, u16>>,
+        objects: BTreeMap<String, FetchedObject>,
+        listed: Mutex<Vec<(String, String, String)>>,
     }
 
-    const LIST: &str = "/api/v2/artifacts/objects/7/docs";
+    impl Store {
+        fn page(mut self, cursor: &str, page: Result<ObjectPage, u16>) -> Self {
+            self.pages.insert(cursor.to_owned(), page);
+            self
+        }
+
+        fn with(mut self, key: &str, etag: &str, modified_at: &str, bytes: &[u8]) -> Self {
+            self.objects.insert(
+                key.to_owned(),
+                FetchedObject {
+                    etag: etag.to_owned(),
+                    modified_at: modified_at.to_owned(),
+                    bytes: bytes.to_vec(),
+                },
+            );
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ArtifactObjects for Store {
+        async fn list_page(
+            &self,
+            bucket: &str,
+            prefix: &str,
+            cursor: &str,
+        ) -> Result<ObjectPage, Failure> {
+            self.listed.lock().expect("lock").push((
+                bucket.to_owned(),
+                prefix.to_owned(),
+                cursor.to_owned(),
+            ));
+            match self.pages.get(cursor) {
+                Some(Ok(page)) => Ok(page.clone()),
+                Some(Err(status)) => Err(Failure::Status(
+                    StatusCode::from_u16(*status).expect("status"),
+                )),
+                None => panic!("unexpected cursor {cursor:?}"),
+            }
+        }
+
+        async fn fetch(
+            &self,
+            _bucket: &str,
+            key: &str,
+            max_bytes: u64,
+        ) -> Result<FetchedObject, Failure> {
+            let object = self
+                .objects
+                .get(key)
+                .cloned()
+                .ok_or(Failure::Status(StatusCode::NOT_FOUND))?;
+            if object.bytes.len() as u64 > max_bytes {
+                return Err(Failure::TooLarge(max_bytes));
+            }
+            Ok(object)
+        }
+    }
+
+    fn entry(key: &str, size: u64, etag: &str, modified_at: &str) -> ObjectEntry {
+        ObjectEntry {
+            key: key.to_owned(),
+            size_bytes: size,
+            etag: etag.to_owned(),
+            modified_at: modified_at.to_owned(),
+        }
+    }
+
+    #[allow(clippy::unnecessary_wraps)] // The shape `Store::page` takes.
+    fn page(objects: Vec<ObjectEntry>, next_cursor: &str) -> Result<ObjectPage, u16> {
+        Ok(ObjectPage {
+            objects,
+            next_cursor: next_cursor.to_owned(),
+        })
+    }
 
     #[tokio::test]
     async fn the_cursor_is_followed_and_etag_or_modified_time_is_the_version() {
-        let transport = Scripted::new(|request, _| {
-            let path = request.url().path();
-            if path == LIST {
-                assert_eq!(query(request, "prefix").as_deref(), Some("guides/"));
-                return match query(request, "cursor").as_deref() {
-                    None => Reply::json(&json!({
-                        "objects": [
-                            {"key": "guides/a.md", "size_bytes": 5, "modified_at": "2026-10-01T00:00:00Z", "etag": "\"e1\""},
-                            {"key": "guides/sub/", "size_bytes": 0, "modified_at": "2026-10-01T00:00:00Z"},
+        let store = Arc::new(
+            Store::default()
+                .page(
+                    "",
+                    page(
+                        vec![
+                            entry("guides/a.md", 5, "\"e1\"", "2026-10-01T00:00:00Z"),
+                            entry("guides/sub/", 0, "", "2026-10-01T00:00:00Z"),
                         ],
-                        "next_cursor": "c2",
-                    })),
-                    Some("c2") => Reply::json(&json!({"objects": [
-                        {"key": "guides/sub/b.pdf", "size_bytes": "9", "modified_at": "2026-10-02T00:00:00Z"},
-                    ]})),
-                    other => panic!("unexpected cursor {other:?}"),
-                };
-            }
-            if path == "/api/v2/artifacts/objects/7/docs/guides/sub/b.pdf" {
-                return Reply::bytes(b"%PDF-1.7\n")
-                    .header("last-modified", "Fri, 02 Oct 2026 00:00:00 GMT");
-            }
-            panic!("unexpected request {path}");
-        });
-        let source =
-            ArtifactSource::new(platform(), "docs", "/guides/", transport.clone()).expect("source");
+                        "c2",
+                    ),
+                )
+                .page(
+                    "c2",
+                    page(
+                        vec![entry("guides/sub/b.pdf", 9, "", "2026-10-02T00:00:00Z")],
+                        "",
+                    ),
+                )
+                .with(
+                    "guides/sub/b.pdf",
+                    "",
+                    "2026-10-02T00:00:00.400Z",
+                    b"%PDF-1.7\n",
+                ),
+        );
+        let source = ArtifactSource::new(store.clone(), "docs", "/guides/").expect("source");
         let listed = source.list().await.expect("listing");
         let keys: Vec<_> = listed
             .iter()
@@ -381,18 +469,16 @@ mod tests {
         let document = source.fetch("sub/b.pdf").await.expect("document");
         assert_eq!(document.bytes, b"%PDF-1.7\n");
         assert_eq!(document.title, "b.pdf");
-        let bearer = transport.requests()[0]
-            .headers()
-            .get("authorization")
-            .cloned()
-            .expect("bearer");
-        assert!(bearer.is_sensitive());
+        assert_eq!(
+            store.listed.lock().expect("lock")[1],
+            ("docs".to_owned(), "guides/".to_owned(), "c2".to_owned())
+        );
     }
 
     #[tokio::test]
     async fn a_404_is_an_error_never_an_empty_listing() {
-        let transport = Scripted::new(|_, _| Reply::status(StatusCode::NOT_FOUND));
-        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
+        let store = Arc::new(Store::default().page("", Err(404)));
+        let source = ArtifactSource::new(store, "docs", "").expect("source");
         let error = source
             .list()
             .await
@@ -403,143 +489,159 @@ mod tests {
         );
 
         // Only a successful answer with no objects is an empty listing.
-        let transport = Scripted::new(|_, _| Reply::json(&json!({"objects": []})));
-        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
+        let store = Arc::new(Store::default().page("", page(Vec::new(), "")));
+        let source = ArtifactSource::new(store, "docs", "").expect("source");
         assert_eq!(source.list().await.expect("empty"), []);
 
-        let transport = Scripted::new(|request, _| match query(request, "cursor") {
-            None => Reply::json(&json!({"objects": [], "next_cursor": "c2"})),
-            Some(_) => Reply::status(StatusCode::NOT_FOUND),
-        });
-        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
-        assert!(source.list().await.is_err());
+        let store = Arc::new(
+            Store::default()
+                .page("", page(Vec::new(), "c2"))
+                .page("c2", Err(404)),
+        );
+        let source = ArtifactSource::new(store, "docs", "").expect("source");
+        let error = source.list().await.expect_err("partial");
+        assert!(error.to_string().contains("mid-listing"), "{error}");
+
+        // Another refusal names its status.
+        let store = Arc::new(Store::default().page("", Err(403)));
+        let source = ArtifactSource::new(store, "docs", "").expect("source");
+        let error = source.list().await.expect_err("refused");
+        assert!(error.to_string().contains("HTTP 403"), "{error}");
     }
 
-    /// A source over one object, listed with `version_field` and fetched
-    /// through `fetch_reply`.
-    async fn pinned(
-        object: Value,
-        fetch_reply: impl Fn(&Request) -> Reply + Send + Sync + 'static,
-    ) -> (Arc<Scripted>, Result<Document, SourceError>) {
-        let transport = Scripted::new(move |request, _| {
-            if request.url().path() == LIST {
-                Reply::json(&json!({"objects": [object.clone()]}))
-            } else {
-                fetch_reply(request)
-            }
-        });
-        let source =
-            ArtifactSource::new(platform(), "docs", "", transport.clone()).expect("source");
+    /// One object listed as `listed`, fetched as `fetched`.
+    async fn pinned(listed: ObjectEntry, fetched: FetchedObject) -> Result<Document, SourceError> {
+        let mut store = Store::default().page("", page(vec![listed.clone()], ""));
+        store.objects.insert(listed.key, fetched);
+        let source = ArtifactSource::new(Arc::new(store), "docs", "").expect("source");
         source.list().await.expect("listing");
-        let fetched = source.fetch("a.md").await;
-        (transport, fetched)
+        source.fetch("a.md").await
     }
 
-    fn etag_object() -> Value {
-        json!({"key": "a.md", "size_bytes": 2, "modified_at": "2026-10-01T00:00:00Z", "etag": "\"v1\""})
+    fn fetched(etag: &str, modified_at: &str, bytes: &[u8]) -> FetchedObject {
+        FetchedObject {
+            etag: etag.to_owned(),
+            modified_at: modified_at.to_owned(),
+            bytes: bytes.to_vec(),
+        }
     }
 
     #[tokio::test]
     async fn a_fetch_is_pinned_to_the_listed_etag() {
-        // Matching ETag: the bytes, with If-Match on the request.
-        let (transport, fetched) = pinned(etag_object(), |_| {
-            Reply::bytes(b"v1").header("etag", "\"v1\"")
-        })
-        .await;
-        assert_eq!(fetched.expect("document").bytes, b"v1");
-        let sent = transport.requests().pop().expect("fetch request");
-        assert_eq!(sent.headers().get("if-match").expect("if-match"), "\"v1\"");
+        let listed = entry("a.md", 2, "\"v1\"", "2026-10-01T00:00:00Z");
+        let document = pinned(listed.clone(), fetched("\"v1\"", "", b"v1"))
+            .await
+            .expect("document");
+        assert_eq!(document.bytes, b"v1");
 
-        // A platform that honours If-Match answers 412.
-        let (_, fetched) = pinned(etag_object(), |_| {
-            Reply::status(StatusCode::PRECONDITION_FAILED)
-        })
-        .await;
-        assert!(matches!(fetched, Err(SourceError::Changed(key)) if key == "a.md"));
-
-        // One that ignores it (elitea-main today) answers the newer bytes
-        // with the newer ETag: refused, not returned.
-        let (_, fetched) = pinned(etag_object(), |_| {
-            Reply::bytes(b"v2").header("etag", "\"v2\"")
-        })
-        .await;
+        // Newer bytes under a newer etag: refused, not returned.
+        let changed = pinned(listed.clone(), fetched("\"v2\"", "", b"v2")).await;
         assert!(
-            matches!(fetched, Err(SourceError::Changed(_))),
-            "{fetched:?}"
+            matches!(&changed, Err(SourceError::Changed(key)) if key == "a.md"),
+            "{changed:?}"
         );
 
-        // No ETag to compare: refused, and not as Changed (re-listing would
+        // No etag to compare: refused, and not as Changed (re-listing would
         // not help).
-        let (_, fetched) = pinned(etag_object(), |_| Reply::bytes(b"v1")).await;
-        let error = fetched.expect_err("unverifiable");
+        let error = pinned(listed, fetched("", "", b"v1"))
+            .await
+            .expect_err("unverifiable");
         assert!(matches!(error, SourceError::Unavailable(_)), "{error}");
     }
 
     #[tokio::test]
     async fn a_fetch_without_an_etag_is_pinned_to_the_modified_time() {
-        let object =
-            json!({"key": "a.md", "size_bytes": 2, "modified_at": "2026-10-01T00:00:00.250Z"});
-        let (transport, fetched) = pinned(object.clone(), |_| {
-            Reply::bytes(b"v1").header("last-modified", "Thu, 01 Oct 2026 00:00:00 GMT")
-        })
-        .await;
-        assert_eq!(fetched.expect("document").bytes, b"v1");
-        let sent = transport.requests().pop().expect("fetch request");
-        assert!(sent.headers().get("if-match").is_none(), "no etag to match");
+        let listed = entry("a.md", 2, "", "2026-10-01T00:00:00.250Z");
+        let document = pinned(listed.clone(), fetched("", "2026-10-01T00:00:00Z", b"v1"))
+            .await
+            .expect("document");
+        assert_eq!(document.bytes, b"v1");
 
-        let (_, fetched) = pinned(object.clone(), |_| {
-            Reply::bytes(b"v2").header("last-modified", "Thu, 01 Oct 2026 00:05:00 GMT")
-        })
-        .await;
+        let changed = pinned(listed.clone(), fetched("", "2026-10-01T00:05:00Z", b"v2")).await;
         assert!(
-            matches!(fetched, Err(SourceError::Changed(_))),
-            "{fetched:?}"
+            matches!(changed, Err(SourceError::Changed(_))),
+            "{changed:?}"
         );
 
-        let (_, fetched) = pinned(object, |_| Reply::bytes(b"v1")).await;
-        assert!(matches!(fetched, Err(SourceError::Unavailable(_))));
+        let error = pinned(listed, fetched("", "", b"v1")).await;
+        assert!(matches!(error, Err(SourceError::Unavailable(_))));
+    }
+
+    #[tokio::test]
+    async fn a_vanished_or_oversized_object_is_reported_by_key() {
+        let listed = entry("a.md", 2, "\"v1\"", "");
+        let store = Store::default().page("", page(vec![listed], ""));
+        let source = ArtifactSource::new(Arc::new(store), "docs", "").expect("source");
+        source.list().await.expect("listing");
+        assert!(matches!(
+            source.fetch("a.md").await,
+            Err(SourceError::NotFound(key)) if key == "a.md"
+        ));
+
+        let listed = entry("a.md", 2, "\"v1\"", "");
+        let store = Store::default().page("", page(vec![listed], "")).with(
+            "a.md",
+            "\"v1\"",
+            "",
+            b"0123456789",
+        );
+        let source = ArtifactSource::new(Arc::new(store), "docs", "")
+            .expect("source")
+            .with_limits(SourceLimits {
+                max_document_bytes: 4,
+                ..SourceLimits::default()
+            });
+        source.list().await.expect("listing");
+        let error = source.fetch("a.md").await.expect_err("too large");
+        assert!(error.to_string().contains("larger than 4 bytes"), "{error}");
     }
 
     #[tokio::test]
     async fn unsafe_or_unversioned_objects_refuse_the_listing() {
         for object in [
-            json!({"key": "guides/../x.md", "size_bytes": 1, "modified_at": "t"}),
-            json!({"key": "other/x.md", "size_bytes": 1, "modified_at": "t"}),
-            json!({"key": "guides/x.md", "size_bytes": 1}),
+            entry("guides/../x.md", 1, "", "t"),
+            entry("other/x.md", 1, "", "t"),
+            entry("guides/x.md", 1, "", ""),
+            entry("", 1, "e", ""),
         ] {
-            let transport =
-                Scripted::new(move |_, _| Reply::json(&json!({"objects": [object.clone()]})));
-            let source =
-                ArtifactSource::new(platform(), "docs", "guides", transport).expect("source");
+            let store = Store::default().page("", page(vec![object], ""));
+            let source = ArtifactSource::new(Arc::new(store), "docs", "guides").expect("source");
             assert!(source.list().await.is_err());
         }
     }
 
     #[tokio::test]
-    async fn the_platform_is_reached_without_any_host_allowlist() {
-        // The platform is this deployment's own API: no external-source
-        // allowlist (public SaaS hosts only, in a shipped chart) governs it.
-        let transport = Scripted::new(|request, _| {
-            assert_eq!(
-                request.url().origin().ascii_serialization(),
-                "https://platform.example"
-            );
-            Reply::json(&json!({"objects": []}))
-        });
-        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
-        assert!(source.list().await.expect("listing").is_empty());
+    async fn the_listing_caps_hold() {
+        let store = Store::default()
+            .page("", page(vec![entry("a", 1, "e", "")], "c2"))
+            .page("c2", page(vec![entry("b", 1, "e", "")], "c3"))
+            .page("c3", page(Vec::new(), ""));
+        let source = ArtifactSource::new(Arc::new(store), "docs", "")
+            .expect("source")
+            .with_limits(SourceLimits {
+                max_pages: 2,
+                ..SourceLimits::default()
+            });
+        let error = source.list().await.expect_err("page cap");
+        assert!(error.to_string().contains("page cap"), "{error}");
+
+        let store = Store::default().page(
+            "",
+            page(vec![entry("a", 1, "e", ""), entry("b", 1, "e", "")], ""),
+        );
+        let source = ArtifactSource::new(Arc::new(store), "docs", "")
+            .expect("source")
+            .with_limits(SourceLimits {
+                max_documents: 1,
+                ..SourceLimits::default()
+            });
+        assert!(source.list().await.is_err());
     }
 
-    #[tokio::test]
-    async fn a_platform_on_a_port_stays_pinned_to_that_exact_origin() {
-        let platform =
-            ArtifactPlatform::new("https://platform.example:8443", "bearer-fixture", "7")
-                .expect("platform");
-        let transport = Scripted::new(|request, _| {
-            assert_eq!(request.url().port(), Some(8443));
-            Reply::json(&json!({"objects": []}))
-        });
-        let source = ArtifactSource::new(platform, "docs", "", transport).expect("source");
-        assert!(source.list().await.expect("listing").is_empty());
+    #[test]
+    fn a_bad_bucket_or_folder_is_refused() {
+        let store: Arc<dyn ArtifactObjects> = Arc::new(Store::default());
+        assert!(ArtifactSource::new(Arc::clone(&store), "a/b", "").is_err());
+        assert!(ArtifactSource::new(store, "docs", "a/../b").is_err());
     }
 }

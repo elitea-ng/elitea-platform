@@ -2,18 +2,16 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"time"
+
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
-	"io"
-	"net/http"
-	"net/url"
-	"strconv"
-	"time"
 )
 
 // HTTPActionRule is operator-owned authority for one exact operation.
@@ -151,64 +149,42 @@ func (s *ContentServer) WithRuntimeHTTPActions(actions *RuntimeHTTPActionService
 	}
 	return s
 }
-func (s *ContentServer) PostHTTPAction(w http.ResponseWriter, r *http.Request) {
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	claim, err := parseExecutionClaim(r)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
-	}
+
+// ExecuteHTTPAction runs one claim-scoped HTTP action invocation.
+func (s *ContentServer) ExecuteHTTPAction(ctx context.Context, request *runtimev1.ExecuteHTTPActionRequestV1) (*runtimev1.ExecuteHTTPActionResponseV1, error) {
 	if s.runtimeHTTPActions == nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-		return
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	data, err := readHTTPActionBody(r)
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
+		return nil, err
 	}
-	var request app.Invocation
-	if app.Decode(data, &request) != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	receipt, err := s.runtimeHTTPActions.Execute(r.Context(), claim, request)
+	defer release()
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		status := http.StatusServiceUnavailable
-		if errors.Is(err, app.ErrInvalid) {
-			status = http.StatusUnprocessableEntity
+		return nil, contentStatus(codes.Unauthenticated)
+	}
+	data := request.GetInvocationJson()
+	if len(data) > app.MaxInvocation {
+		return nil, contentStatus(codes.InvalidArgument)
+	}
+	var invocation app.Invocation
+	if app.Decode(data, &invocation) != nil {
+		return nil, contentStatus(codes.InvalidArgument)
+	}
+	receipt, err := s.runtimeHTTPActions.Execute(ctx, claim, invocation)
+	if err != nil {
+		switch {
+		case errors.Is(err, app.ErrUnauthorized):
+			return nil, contentStatus(codes.PermissionDenied)
+		case errors.Is(err, app.ErrInvalid):
+			return nil, contentStatus(codes.FailedPrecondition)
 		}
-		if errors.Is(err, app.ErrUnauthorized) {
-			status = http.StatusForbidden
-		}
-		http.Error(w, http.StatusText(status), status)
-		return
+		return nil, contentStatus(codes.Unavailable)
 	}
 	body, err := json.Marshal(receipt)
 	if err != nil || len(body) > 3*1024*1024 {
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return
+		return nil, contentStatus(codes.Unavailable)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	setPrivateNoCacheHeaders(w.Header())
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	digest := sha256.Sum256(body)
-	w.Header().Set("Content-Digest", formatSHA256Digest(digest))
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
-}
-
-func readHTTPActionBody(r *http.Request) ([]byte, error) {
-	if r.ContentLength > app.MaxInvocation {
-		return nil, app.ErrInvalid
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, app.MaxInvocation+1))
-	if err != nil || len(body) > app.MaxInvocation {
-		return nil, app.ErrInvalid
-	}
-	return body, nil
+	return &runtimev1.ExecuteHTTPActionResponseV1{ReceiptJson: body}, nil
 }

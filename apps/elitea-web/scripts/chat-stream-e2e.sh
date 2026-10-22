@@ -85,13 +85,13 @@ cleanup() {
   # can be read by its timestamps. #1081's first run failed a chat journey
   # five minutes before the dump; a later run flaked one.
   #
-  # The model gateway and the platform edge are two of them (#1082). The
+  # The model gateway and the platform edge were two of them (#1082). The
   # `IS_ERROR:MOCK: ` flake is a model stream that ends CLEANLY after its first
   # content chunk with no `[DONE]` (worker: `model_gateway.incomplete_stream`)
   # while elitea-main and the mock log nothing. An abort at any hop reaches the
   # worker as an h2 RST_STREAM(INTERNAL_ERROR) through the edge (measured on
-  # traefik v3.4), not as a clean end, so every hop ended its response
-  # normally — and the only exits of the gateway's stream loop that end a
+  # the edge proxy since removed, #1359), not as a clean end, so every hop
+  # ended its response normally — and the only exits of the gateway's stream loop that end a
   # response without `[DONE]` or an error event are its `settleEarly` paths,
   # which log the reason. The edge's access log records how each hop's
   # response ended. Neither log was captured, so the cause could not be named.
@@ -107,7 +107,7 @@ cleanup() {
     write_logs() { sudo -n tee "$stack_logs" >/dev/null; }
   fi
   STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" STANDALONE_LOG_TAIL=all \
-    "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main elitea-llm-gateway platform-edge llm-mock \
+    "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main elitea-llm-gateway llm-mock \
     2>&1 | write_logs || true
   if [ "$KEEP" -eq 0 ]; then
     echo "→ Tearing down ${PROJECT}…"
@@ -176,8 +176,9 @@ done
 
 # ── Assert the stack before driving it (#368) ────────────────────────────────
 #
-# `check` holds the repository's only runtime proof of the #326 edge
-# identity-header strip: it forges an X-Auth-ID and requires 401 or 403, it
+# `check` holds the repository's only runtime proof of the #326 identity-header
+# strip (an edge middleware, and since #1359 elitea-main's own
+# StripClientIdentityHeaders): it forges an X-Auth-ID and requires 401 or 403, it
 # requires a real personal access token on the SAME route to answer 200 and to
 # echo its own user, and it requires a forged header not to override a genuine
 # bearer. Those assertions existed and no continuous-integration job ran them,
@@ -193,7 +194,7 @@ done
 # the `chat-stream-rust` job in .github/workflows/ci-web-e2e.yml starts: on every
 # pull request that touches deploy/**, services/elitea-main/**,
 # apps/elitea-web/**, tools/uictl/**, docker-bake.hcl or that workflow file.
-# Both edge files live under deploy/, so an edit to either one starts it. A pull
+# The compose files live under deploy/, so an edit to one starts it. A pull
 # request that touches none of those paths does not start it — a workflow-only
 # or docs-only change, for instance. The static gates in
 # services/elitea-main/tests/deployedge/ cover that gap: the No Binaries

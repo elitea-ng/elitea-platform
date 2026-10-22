@@ -128,6 +128,11 @@ pub(crate) struct ProductionTransportBundle {
     /// The cloud executor's workspace runs (ADR-0034), when the deployment
     /// names the supervisor's `workspace` profile.
     pub(crate) workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    /// The mTLS channel to elitea-main's platform listener
+    /// (`platform_origin`) the model calls ride: the Office host's artifact
+    /// store and the internal MCP tool categories are served there too
+    /// (#1359 U5).
+    pub(crate) platform_channel: tonic::transport::Channel,
 }
 
 impl ProductionTransportBundle {
@@ -330,6 +335,9 @@ impl ProductionTransportBundle {
             }
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
+        let platform_channel = model_facade
+            .platform_channel()
+            .ok_or(ProductionBootstrapError::InvalidConfiguration)?;
         let model_facade = Arc::new(model_facade);
         // PDF and Office documents go to the extraction sidecar when the
         // deployment names its socket; the dial is lazy, so a sidecar that is
@@ -352,7 +360,7 @@ impl ProductionTransportBundle {
                     trust.ca_pem(),
                     trust.identity_pem(),
                     model_facade.embeddings(),
-                    deployment.platform_origin.clone(),
+                    platform_channel.clone(),
                     elitea_connectors::egress::HostAllowlist::parse(
                         deployment.index_egress_allowlist.as_deref(),
                     ),
@@ -383,6 +391,7 @@ impl ProductionTransportBundle {
             None => None,
         };
         Ok(Self {
+            platform_channel,
             command_authenticator: trust.command_authenticator(),
             spool_master_key: trust.spool_master_key(),
             deployment,

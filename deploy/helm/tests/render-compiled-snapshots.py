@@ -440,8 +440,7 @@ class Installer(unittest.TestCase):
             'command-signing-key.pem auth-attempt-key '
             'auth-pat-signing-key auth-form-users.json vault-master-key '
             'agent-worker-client.crt agent-worker-client.key '
-            'worker-output-spool-key agent-checkpoint-connection '
-            'platform-edge.crt platform-edge.key'
+            'worker-output-spool-key agent-checkpoint-connection'
         ).split()
         for name in names:
             (source / name).write_bytes(b'synthetic-test-material')

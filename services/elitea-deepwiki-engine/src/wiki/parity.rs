@@ -175,10 +175,15 @@ impl StubModel {
         let address = listener
             .local_addr()
             .map_err(|e| invalid(format!("address: {e}")))?;
-        let app = Router::new().fallback(handle).with_state(StubState {
-            recorded: Arc::clone(&recorded),
-            mode,
-        });
+        // The model client calls elitea.llm.v1.ModelService; the stub's
+        // handlers answer it through the same bridge the tests use.
+        let app = elitea_model_rpc::testing::with_model_service(
+            Router::new().fallback(handle).with_state(StubState {
+                recorded: Arc::clone(&recorded),
+                mode,
+            }),
+            "/v1",
+        );
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });

@@ -41,8 +41,7 @@ func NewCurrentIndexMetaRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexMetaRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexMetaRoute
 	}
 

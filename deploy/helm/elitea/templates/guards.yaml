@@ -24,7 +24,7 @@
 {{- end }}
 
 {{- if and (not .Values.networkPolicies.enabled) (not .Values.networkPolicies.externallyManaged) }}
-{{- fail "networkPolicies.enabled is false. The chart's NetworkPolicies are what keep pods without a role off elitea-main, the platform edge, the worker and the sandbox supervisors. If your own NetworkPolicy already does this, say so with networkPolicies.externallyManaged=true." }}
+{{- fail "networkPolicies.enabled is false. The chart's NetworkPolicies are what keep pods without a role off elitea-main, the worker and the sandbox supervisors. If your own NetworkPolicy already does this, say so with networkPolicies.externallyManaged=true." }}
 {{- end }}
 
 {{- if and .Values.networkPolicies.enabled .Values.main.enabled (not .Values.networkPolicies.main.ingressFrom) (not .Values.networkPolicies.main.extraIngressFrom) (not .Values.networkPolicies.main.noExternalIngress) }}
@@ -45,8 +45,17 @@
 {{- end }}
 {{- end }}
 
-{{- if and .Values.networkPolicies.enabled .Values.worker.enabled .Values.worker.platformEdge.enabled (ne .Values.worker.platformEdge.mainService (include "elitea-main.fullname" .)) }}
-{{- fail (printf "worker.platformEdge.mainService is %q, but the platform edge NetworkPolicy admits egress only to this chart's elitea-main pods (Service %q). Point the edge at that Service, or set networkPolicies.enabled=false together with networkPolicies.externallyManaged=true and admit the edge's real upstream in your own policy." .Values.worker.platformEdge.mainService (include "elitea-main.fullname" .)) }}
+{{- /*
+  worker.platformEdge is gone (#1359): elitea-main serves the worker's
+  platform_origin itself, on main.runtime.listeners.platformAddress, with mTLS.
+  A values file that still turns the edge on would otherwise render nothing
+  for it and leave platformOrigin pointing at a Service that no longer exists.
+*/ -}}
+{{- if and .Values.worker.platformEdge .Values.worker.platformEdge.enabled }}
+{{- fail "worker.platformEdge was removed (#1359). elitea-main now serves the worker's platform_origin on its own mTLS platform listener (main.runtime.listeners.platformAddress, default :9446). Remove worker.platformEdge, set worker.runtime.platformOrigin to https://elitea-main:9446, delete the elitea-platform-edge-tls Secret, and see docs/UPGRADING.md." }}
+{{- end }}
+{{- if and .Values.worker.enabled (contains "elitea-platform-edge" (.Values.worker.runtime.platformOrigin | toString)) }}
+{{- fail (printf "worker.runtime.platformOrigin is %q, but the platform-edge Service was removed (#1359). Point it at elitea-main's platform listener: https://elitea-main:9446 (main.runtime.listeners.platformAddress)." .Values.worker.runtime.platformOrigin) }}
 {{- end }}
 
 {{- if and .Values.networkPolicies.main.noExternalIngress .Values.main.enabled .Values.main.ingress.enabled }}

@@ -808,6 +808,12 @@ func (h *Handler) streamObject(w http.ResponseWriter, r *http.Request, ref stora
 	if info.ETag != "" {
 		w.Header().Set("ETag", info.ETag)
 	}
+	// As the HEAD answer carries it: a reader that pins an object's version
+	// (the worker's indexing source, over ArtifactObjectService.GetObject)
+	// reads etag and modified_at from the download itself.
+	if !info.LastModified.IsZero() {
+		w.Header().Set("Last-Modified", info.LastModified.UTC().Format(http.TimeFormat))
+	}
 	if rng != nil {
 		// RFC 7233 makes Content-Range mandatory on a 206. Without it a
 		// browser media element cannot place the bytes in the timeline and

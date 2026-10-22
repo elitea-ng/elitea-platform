@@ -13,21 +13,22 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // TestProxy_StripsClientAuthHeaders asserts that a request carrying spoofed
-// X-Elitea-* identity headers, X-Auth-* Traefik headers, Authorization, Cookie,
+// X-Elitea-* identity headers, X-Auth-* edge headers, Authorization, Cookie,
 // and X-Api-Key reaches the upstream with all of those stripped, and only the
 // edge-signed X-Elitea-* headers present.
 func TestProxy_StripsClientAuthHeaders(t *testing.T) {
 	var gotHeaders http.Header
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
 		_, _ = io.WriteString(w, `{}`)
 	}))
 	defer backend.Close()
 
-	p := proxyTo(t, backend.URL, "sekret")
+	p := proxyTo(t, backend, "sekret")
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", nil)
 

@@ -17,11 +17,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -68,20 +67,17 @@ func TestRuntimeContextServesTheProjectSecretsHeaderToAWorkerThatAsks(t *testing
 		}))
 	server := newIndexRuntimeContextTestServer(t, service)
 
-	request := validRuntimeContextRequest(t, nil)
-	request.ContentLength = 0
-	request.Header.Set(runtimeContextAcceptHeader, runtimeContextFieldSecretsHeader)
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
+	request := validRuntimeContextRequest(t, runtimeContextFieldSecretsHeader)
+	response := serve(server, request)
 
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	// The value is read for the CLAIM's project, not for one the request named.
 	require.Equal(t, []int64{42}, readProjects)
 
-	keys := responseKeys(t, response.Body.Bytes())
+	keys := responseKeys(t, response.Body)
 	require.Contains(t, keys, "secrets_header_value")
 	var decoded EliteaClientTokenContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &decoded))
+	require.NoError(t, json.Unmarshal(response.Body, &decoded))
 	require.Equal(t, value, decoded.SecretsHeaderValue)
 	require.Equal(t, "header.payload.signature", decoded.Token)
 }
@@ -93,13 +89,11 @@ func TestRuntimeContextOmitsTheProjectSecretsHeaderWhenTheWorkerDoesNotAsk(t *te
 	server := newIndexRuntimeContextTestServer(t, service)
 
 	// No accept header: a worker built before the field existed.
-	request := validRuntimeContextRequest(t, nil)
-	request.ContentLength = 0
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
+	request := validRuntimeContextRequest(t)
+	response := serve(server, request)
 
-	require.Equal(t, http.StatusOK, response.Code)
-	keys := responseKeys(t, response.Body.Bytes())
+	require.Equal(t, codes.OK, response.Code)
+	keys := responseKeys(t, response.Body)
 	// The exact three keys such a worker validates, and no fourth.
 	require.Len(t, keys, 3)
 	require.Contains(t, keys, "schema_version")
@@ -115,14 +109,11 @@ func TestRuntimeContextOmitsTheProjectSecretsHeaderForAnotherAcceptedField(t *te
 	service := newSecretsHeaderTokenService(t, stubProjectSecretsHeader("a-real-value"))
 	server := newIndexRuntimeContextTestServer(t, service)
 
-	request := validRuntimeContextRequest(t, nil)
-	request.ContentLength = 0
-	request.Header.Set(runtimeContextAcceptHeader, "some-other-field")
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
+	request := validRuntimeContextRequest(t, "some-other-field")
+	response := serve(server, request)
 
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Len(t, responseKeys(t, response.Body.Bytes()), 3)
+	require.Equal(t, codes.OK, response.Code)
+	require.Len(t, responseKeys(t, response.Body), 3)
 }
 
 func TestRuntimeContextAcceptListIsRead(t *testing.T) {
@@ -134,23 +125,23 @@ func TestRuntimeContextAcceptListIsRead(t *testing.T) {
 		want   bool
 	}{
 		{name: "the exact name", values: []string{"secrets-header-value"}, want: true},
-		{name: "a list", values: []string{"other, secrets-header-value ,more"}, want: true},
+		{name: "a list", values: []string{"other", " secrets-header-value ", "more"}, want: true},
 		{name: "case blind", values: []string{"Secrets-Header-Value"}, want: true},
-		{name: "a second header line", values: []string{"other", "secrets-header-value"}, want: true},
-		{name: "no header", values: nil, want: false},
-		{name: "an empty header", values: []string{""}, want: false},
+		{name: "no fields", values: nil, want: false},
+		{name: "an empty field", values: []string{""}, want: false},
 		{name: "a prefix only", values: []string{"secrets-header"}, want: false},
 		{name: "another name", values: []string{"secrets-header-values"}, want: false},
+		// A comma-joined entry is read as a list, exactly like separate
+		// entries, so neither caller shape silently loses a field.
+		{name: "a comma-joined entry", values: []string{"other, secrets-header-value"}, want: true},
+		{name: "a comma-joined entry without spaces", values: []string{"workspace,secrets-header-value"}, want: true},
+		{name: "a comma-joined prefix only", values: []string{"other,secrets-header"}, want: false},
+		{name: "only commas", values: []string{",,"}, want: false},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			request := httptest.NewRequest(http.MethodPost, "/", nil)
-			for _, value := range test.values {
-				request.Header.Add(runtimeContextAcceptHeader, value)
-			}
-			require.Equal(t, test.want,
-				runtimeContextAccepts(request, runtimeContextFieldSecretsHeader))
+			require.Equal(t, test.want, acceptsField(test.values, runtimeContextFieldSecretsHeader))
 		})
 	}
 }
@@ -177,14 +168,11 @@ func TestRuntimeContextOmitsAnAbsentProjectSecretsHeader(t *testing.T) {
 				func(context.Context, int64) (string, error) { return test.value, test.err }))
 			server := newIndexRuntimeContextTestServer(t, service)
 
-			request := validRuntimeContextRequest(t, nil)
-			request.ContentLength = 0
-			request.Header.Set(runtimeContextAcceptHeader, runtimeContextFieldSecretsHeader)
-			response := httptest.NewRecorder()
-			server.Routes().ServeHTTP(response, request)
+			request := validRuntimeContextRequest(t, runtimeContextFieldSecretsHeader)
+			response := serve(server, request)
 
-			require.Equal(t, http.StatusOK, response.Code)
-			keys := responseKeys(t, response.Body.Bytes())
+			require.Equal(t, codes.OK, response.Code)
+			keys := responseKeys(t, response.Body)
 			require.Len(t, keys, 3)
 			require.Contains(t, keys, "token")
 		})

@@ -14,7 +14,13 @@ it ships to production (ADR-0023):
   named `elitea-internal-ca`, exactly as
   `templates/deepwiki/certificates.yaml` asks for;
 * the engine sidecar runs `deepwiki.engine.runner=fixture`, so a generation
-  completes **without an LLM and without a git host**.
+  completes **without an LLM and without a git host**;
+* the provider's way back is **gRPC on elitea-main's platform listener**
+  (`:9446`, #1359 U5): the host uploads the pages over
+  `elitea.runtime.v1.ArtifactObjectService`, presenting the sub-application
+  callback certificate. That listener belongs to the runtime plane, so
+  elitea-main runs it (`main.runtime.enabled`, the base plane only) on the
+  in-repo NATS chart (`deploy/helm/nats` + `deploy/helm/nats-bootstrap`).
 
 ## Prerequisites
 
@@ -26,7 +32,9 @@ it ships to production (ADR-0023):
   runner.
 * `kind` v0.33+, `kubectl`, `helm` v3/v4, `python3`, `curl`.
 * Network access for the first run only: the cert-manager chart and its
-  images. Everything else is built locally or side-loaded from podman.
+  images, the upstream NATS chart (`helm dependency build deploy/helm/nats`)
+  and the NATS images, which the node pulls. Everything else is built
+  locally or side-loaded from podman.
 * ~8 GB of free disk for the images, and ~4 GB of memory for the podman
   machine.
 * The production-authentication material, which `up` mints through the
@@ -59,7 +67,13 @@ installed cert-manager are reused, and the chart install is a
 4. mints (or reuses) the production-authentication material through the
    repository's own `deploy/scripts/gen-runtime-certs.sh` — idempotent, so a
    tree a compose stack already minted is reused untouched — and puts it into
-   the two Secrets the chart names;
+   the Secrets the chart names: the auth material, the runtime material
+   (`elitea-runtime-material`, the platform listener's keypair and the
+   command-signing keys), `elitea-worker-material` with ONLY `runtime-ca.crt`
+   (all the provider pod reads from it; no worker runs here) and the callback
+   client `elitea-deepwiki-callback-client`
+   (`subapp-callback-client.crt` / `.key`, the same certificate compose
+   mounts);
 5. applies `manifests/infra.yaml` — PostgreSQL (`pgvector/pgvector:0.8.5-pg16-trixie`,
    with `CREATE EXTENSION vector` in its initdb; the data is an `emptyDir`, so
    an image change, such as the Debian 12 to Debian 13 move, starts on a fresh
@@ -68,10 +82,15 @@ installed cert-manager are reused, and the chart install is a
 6. creates the artifact bucket **before** elitea-main starts, because
    `configureObjectStoreRetentionLifecycle` has no tolerance for a missing one
    and it is the Deployment that crash-loops, after the install looked green;
-7. `helm upgrade --install` with `values-kind.yaml`. The chart's own
+7. installs NATS (`deploy/helm/nats`, `values-scale1.yaml` +
+   `values-nats-kind.yaml`, release `elitea-nats`) and its bootstrap Job
+   (`deploy/helm/nats-bootstrap`, which creates the runtime command-bus
+   streams) in the same namespace, because the NATS CA is a namespaced
+   `Issuer` the platform chart's client Certificates are issued from;
+8. `helm upgrade --install` with `values-kind.yaml`. The chart's own
    pre-install hooks run both migrations: elitea-main's `-all-tenants` run and
    the provider's `elitea-deepwiki-engine migrate` (the native image);
-8. applies `seed.sql` — the wiki toolkit, the repository credential the facade
+9. applies `seed.sql` — the wiki toolkit, the repository credential the facade
    resolves through the project vault, the artifact bucket row, and the
    personal access token `verify` authenticates with.
 
@@ -104,7 +123,14 @@ Every check exits non-zero on failure.
    `/api/v2/deepwiki/invocations/1/wikis/generate_wiki/{id}` until
    `Completed`, and lists
    `/api/v2/artifacts/objects/1/wiki-artifacts?prefix=acme--e2e-generated--main/`
-   for the manifest and the pages that landed.
+   for the manifest and the pages that landed. Those pages reached the bucket
+   over ArtifactObjectService on the platform listener, so this check is also
+   the proof of the provider's gRPC artifact hop.
+
+The runtime-plane and NATS steps (#1359 U5) are **unverified locally**: they
+render (`deploy/helm/tests/render-network-policies.sh` renders
+`values-kind.yaml`) and lint, and the `helm-install-smoke.yml` run is what
+proves them on a cluster.
 
 ## How long
 
