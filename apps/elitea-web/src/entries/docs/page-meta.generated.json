@@ -637,7 +637,7 @@
   {
     "slug": "menus/settings/ai-providers",
     "title": "AI Providers",
-    "description": "Configure LLM, embedding, vector storage, image generation, speech recognition, and text-to-speech models for the project."
+    "description": "Configure LLM, embedding, image generation, speech recognition, and text-to-speech models for the project."
   },
   {
     "slug": "menus/settings/analytics-and-usage",

@@ -18,7 +18,7 @@ deploy/scripts/standalone-stack.sh build
 deploy/scripts/standalone-stack.sh up
 ```
 
-A fresh `up` bootstraps the schema, the vector extension, the artifact bucket, RBAC roles, and the worker's runtime authorization automatically. You do not need to run any of the `seed*` subcommands — those exist only for local development and end-to-end testing.
+A fresh `up` bootstraps the schema, the artifact bucket, RBAC roles, and the worker's runtime authorization automatically. You do not need to run any of the `seed*` subcommands — those exist only for local development and end-to-end testing.
 
 The one setting you still set by hand is `GATEWAY_EGRESS_ALLOWLIST` on the LLM gateway service: a comma-separated `host:port` list the gateway checks a saved credential's base URL against before it will proxy to it. It defaults to the compose network's own model services. Add your own model host to it before saving a credential that points there, or the gateway refuses the connection in a way that looks like the model is down.
 

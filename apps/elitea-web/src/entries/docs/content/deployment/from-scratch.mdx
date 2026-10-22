@@ -71,7 +71,7 @@ Write the answers down. Every one ends up in a value or a Secret, and several ar
 <CardGroup cols={2}>
   <Card title="Kubernetes" icon="server">A cluster whose CNI **enforces NetworkPolicy** (Calico, Cilium, and similar). The chart renders default-deny ingress policies and relies on them. `kubectl` and `helm` v3.8 or newer, which can pull OCI charts.</Card>
   <Card title="cert-manager" icon="shield-check">Installed cluster-wide before anything else. The NATS chart, the LLM gateway, elitea-vector and the NATS client identities all render cert-manager `Certificate` objects.</Card>
-  <Card title="PostgreSQL 16 or newer" icon="database">The agent-state migrations use SQL/JSON syntax introduced in 16. The `vector` (pgvector) extension must be installable in the platform database. On a managed service, allowlist it first, for example `azure.extensions` on Azure.</Card>
+  <Card title="PostgreSQL 16 or newer" icon="database">The agent-state migrations use SQL/JSON syntax introduced in 16. No extension is needed: every vector is kept in Qdrant through elitea-vector, not in PostgreSQL.</Card>
   <Card title="Object storage" icon="package">S3-compatible (AWS S3, MinIO, RustFS, Ceph RGW), Azure Blob or GCS. There is no local-disk backend.</Card>
   <Card title="Gateway API" icon="route">The Gateway API CRDs plus an implementation with a `Gateway` that terminates TLS for your hostname. It must support `RequestHeaderModifier`, and `RegularExpression` path matches if you want the MCP endpoint.</Card>
   <Card title="An OIDC provider" icon="key">A confidential client with the redirect URI `https://<host>/auth/oidc/callback`. For GitHub, which has no OIDC sign-in, put Dex in front of it.</Card>
@@ -172,8 +172,6 @@ Run once as an administrator:
 CREATE ROLE elitea_v2 LOGIN PASSWORD '<db-password from Step 4>';
 CREATE DATABASE elitea_v2 OWNER elitea_v2;
 CREATE DATABASE elitea_v2_agentstate OWNER elitea_v2;
-\c elitea_v2
-CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 Then keep the chart's database-preparation hook off, and say that the databases exist:
@@ -187,7 +185,7 @@ dbInit:
 Without `externallyManaged: true` the chart refuses to render. Otherwise the install would look healthy and then fail every agent turn with "The durable agent checkpoint store is unavailable".
 </Tab>
 <Tab title="The chart prepares the rest">
-Create the role and the platform database yourself as above. Then let the `dbInit` hook create the agent-state database and the extension before each install and upgrade. It needs a superuser DSN **for the platform database**:
+Create the role and the platform database yourself as above. Then let the `dbInit` hook create the agent-state database before each install and upgrade. It needs an administrator DSN with the `CREATE DATABASE` right **for the platform database**:
 
 ```bash
 DSN='postgres://postgres:<pw>@pg.internal:5432/elitea_v2?sslmode=require'
@@ -724,7 +722,7 @@ worker:
 It needs the indexing runtime, which the values above already turn on. No Secret is needed.
 </Accordion>
 <Accordion title="DeepWiki and Inventory">
-Each one is a separate Deployment that elitea-main calls over mTLS. It writes its own schema (`deepwiki_build`, `inventory_graph`) into the platform database. The database owner from Step 2 already has the rights it needs, and Inventory also uses the `vector` extension created there.
+Each one is a separate Deployment that elitea-main calls over mTLS. It writes its own schema (`deepwiki_build`, `inventory_graph`) into the platform database. The database owner from Step 2 already has the rights it needs. Their dense vectors go to elitea-vector, so their engines need `vector.enabled` (the chart refuses a `native` runner without it).
 
 Each one also needs a git host allowlist, because cloning is denied by default. Set the same list on the component and on elitea-main. Then create the shared identity Secrets:
 

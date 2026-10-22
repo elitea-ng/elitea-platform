@@ -9,7 +9,7 @@ This walks a Kubernetes install of the `elitea` chart end to end. Read [Producti
 
 <CardGroup cols={2}>
   <Card title="Cluster access" icon="server">A Kubernetes cluster with `helm` v3 and `kubectl` configured against it.</Card>
-  <Card title="PostgreSQL" icon="database">Reachable, with a superuser DSN available for the database-preparation Job (`CREATE DATABASE`, `CREATE EXTENSION vector`).</Card>
+  <Card title="PostgreSQL" icon="database">Reachable, with an administrator DSN available for the database-preparation Job (`CREATE DATABASE`). No extension is needed: vectors are kept in Qdrant through elitea-vector (`vector.enabled`), not in PostgreSQL.</Card>
   <Card title="NATS JetStream" icon="server">The `nats` and `nats-bootstrap` charts, installed first. The platform needs no Redis: the runtime command bus, live updates and presence are on NATS, and the chart refuses values that still set `runtimeRedis`.</Card>
   <Card title="Object storage" icon="package">An S3-compatible bucket, created ahead of the first sync and named by `main.env.STORAGE_CONTAINER`.</Card>
   <Card title="cert-manager" icon="shield-check">Required. The NATS chart, the NATS client identities and the LLM gateway's mTLS hop (on by default) are all cert-manager `Certificate`s. The gateway's issuer (`llmGateway.mtls.issuerRef`, default `ClusterIssuer elitea-internal-ca`) is yours to create.</Card>
@@ -117,7 +117,7 @@ helm template deploy/helm/elitea -f deploy/helm/elitea/values-standalone.yaml \
 
 ## The migration job and DB bootstrap
 
-`elitea-migrate` runs as a pre-install hook; the database may start empty. The `dbInit` Job (hook weight -20) handles `CREATE DATABASE` and `CREATE EXTENSION vector` before migrations run.
+`elitea-migrate` runs as a pre-install hook; the database may start empty. The `dbInit` Job (hook weight -20) handles `CREATE DATABASE` for the agent-state database before migrations run. It creates no extension.
 
 ## First-admin bootstrap
 

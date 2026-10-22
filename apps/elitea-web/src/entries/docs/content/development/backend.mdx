@@ -23,10 +23,10 @@ Tests gated on `ELITEA_TEST_DATABASE_URL` skip themselves (with a message naming
 
 ```bash
 ELITEA_TEST_DATABASE_URL="postgres://elitea:elitea@localhost:${STANDALONE_PG_PORT:-15433}/elitea?sslmode=disable" \
-  go test ./... -run TestPGXProvisionerRealPgVector
+  go test ./migrations/... -run TestMigrationCorpus
 ```
 
-Point it at the standalone stack's PostgreSQL, or any disposable PostgreSQL with the `vector` extension available — most of these tests provision and drop their own per-run database or schema, so they do not need an empty server.
+Point it at the standalone stack's PostgreSQL, or any disposable PostgreSQL (plain PostgreSQL: no extension is needed) — most of these tests provision and drop their own per-run database or schema, so they do not need an empty server.
 
 ## Migrations
 
@@ -104,4 +104,4 @@ cargo test --locked --all-targets --all-features
 
 The toolchain is pinned in `rust-toolchain.toml`; `rustup` picks it up automatically inside the directory. `ci-rust.yml` runs the same command, plus `cargo build --locked --release`.
 
-{/* source: services/elitea-main/internal/infra/pgvector/pgx_integration_test.go:19-23 (ELITEA_TEST_DATABASE_URL skip pattern); services/elitea-main/internal/infra/db/migrate/manifest.go:22-60 (three scopes, checksum, filename regex); services/elitea-main/internal/infra/db/migrate/manifest_test.go:93 (TestEmbeddedHistoriesHaveExpectedHeads); Taskfile.yml:9-30 (build/test/run), 187-200 (migrations:check); services/elitea-main/internal/api/main_public_rules_test.go:31-32 (TestCurrentMainRoutePublicRulesMatchPinnedCatalog); .github/workflows/ci-go.yml:228-234 (oapi-codegen verify step); apps/elitea-web/scripts/check-generated-client.mjs:3-25 (orval regeneration); services/elitea-llm-gateway/go.mod:3 (Go 1.26); deploy/docker-compose.standalone-full.yml:425-433 (GOWORK=off build); services/elitea-worker-rust/rust-toolchain.toml:1-4; .github/workflows/ci-rust.yml:84,143 (cargo build/test --locked) */}
+{/* source: services/elitea-main/cmd/elitea-main/runtime_database_pools_postgres_integration_test.go:18-22 (ELITEA_TEST_DATABASE_URL skip pattern); services/elitea-main/migrations/corpus_postgres_integration_test.go (TestMigrationCorpus*); services/elitea-main/internal/infra/db/migrate/manifest.go:22-60 (three scopes, checksum, filename regex); services/elitea-main/internal/infra/db/migrate/manifest_test.go:93 (TestEmbeddedHistoriesHaveExpectedHeads); Taskfile.yml:9-30 (build/test/run), 187-200 (migrations:check); services/elitea-main/internal/api/main_public_rules_test.go:31-32 (TestCurrentMainRoutePublicRulesMatchPinnedCatalog); .github/workflows/ci-go.yml:228-234 (oapi-codegen verify step); apps/elitea-web/scripts/check-generated-client.mjs:3-25 (orval regeneration); services/elitea-llm-gateway/go.mod:3 (Go 1.26); deploy/docker-compose.standalone-full.yml:425-433 (GOWORK=off build); services/elitea-worker-rust/rust-toolchain.toml:1-4; .github/workflows/ci-rust.yml:84,143 (cargo build/test --locked) */}

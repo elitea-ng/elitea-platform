@@ -831,7 +831,7 @@ export const shots: readonly Shot[] = [
     actions: [{ type: "click", selector: "text=Memory" }],
     persona: "member",
     notes:
-      "Built-in Memory toolkit form (pgvector credential only, no vendor auth) — distinct capture from toolkit-new-generic.",
+      "Built-in Memory toolkit form (no credential, no vendor auth) — distinct capture from toolkit-new-generic.",
   },
   {
     id: "toolkit-new-other-toolkits",

@@ -9,7 +9,7 @@ Read and manage Azure DevOps boards: work items, queries and area/iteration path
 
 - An account at ADO boards with permission to issue an API token or credential, saved in Elitea as a **`ado`** credential (`/credentials/create-credential/<type>`).
 - Or skip the saved credential and paste `token` directly into the toolkit's own settings (inline auth).
-- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+- If you plan to index content for retrieval: an embedding model, configured under AI providers.
 
 ## Connect the toolkit
 
@@ -23,7 +23,7 @@ Under the credential field, choose an existing **ado** credential, or select **C
 </Step>
 
 <Step title="Add indexing settings (optional)">
-If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+If you plan to index this source, set an **embedding model**. Indexes are kept in the platform's vector store, so there is no vector-storage setting to pick. Leave it empty to use the toolkit without indexing.
 </Step>
 
 <Step title="Save">
