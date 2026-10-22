@@ -2638,6 +2638,10 @@ real handlers S15 wires in, not the S7 stub. **S4** — this stage needs the
 RustFS/Azurite/fake-gcs-server emulator wiring S4 builds, and S4 is deferrable
 relative to S1-S11 (it has no critical-path dependents until now), so check it
 was actually done before starting this stage rather than assuming it was.
+> **Since #1386:** `contract_test.go`, its `CONTRACT_AUTH_TOKEN` gate and the
+> legacy `contract` job are gone; `TestMain` lives in `artifact_harness_test.go`
+> and gates only on the artifact-suite env. The text below records S19 as built.
+
 **Read first:** `tests/contract/contract_test.go` (the existing `TestMain` and
 its `CONTRACT_AUTH_TOKEN` gate), `.github/workflows/ci-contract.yml`.
 

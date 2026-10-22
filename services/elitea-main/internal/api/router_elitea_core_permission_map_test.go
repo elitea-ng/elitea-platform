@@ -119,9 +119,9 @@ func gatedPermissions(t *testing.T) []string {
 
 // TestEliteaCoreGatesNameOnlyRealLegacyPermissions is invariant 1.
 //
-// The catalogue is machine-generated from the pylon `check_api` declarations by
-// scripts/security/export_legacy_rbac_catalog.py, so "appears in
-// literal_permissions" means "some pylon handler declares this exact string".
+// The catalogue is a frozen, machine-generated snapshot of the legacy
+// `check_api` declarations, so "appears in literal_permissions" means "some
+// legacy handler declares this exact string".
 // A name that does not is either a typo or an invention, and both ship as a
 // permanent 403.
 func TestEliteaCoreGatesNameOnlyRealLegacyPermissions(t *testing.T) {
@@ -190,13 +190,12 @@ func TestEliteaCoreSeedingMigrationGrantsNothingUngated(t *testing.T) {
 /* ── sources ───────────────────────────────────────────────────────────── */
 
 // legacyDeclaredPermissions reads the machine-generated catalogue's
-// literal_permissions list — every string a pylon `check_api` names.
+// literal_permissions list — every string a legacy `check_api` names.
 func legacyDeclaredPermissions(t *testing.T) map[string]struct{} {
 	t.Helper()
 
-	// The catalogue lives at the REPOSITORY root, not the service root: it is
-	// generated for the whole pylon plugin corpus and is read by
-	// scripts/security/check_legacy_rbac_drift.py too.
+	// The catalogue lives at the REPOSITORY root, not the service root: it was
+	// generated once for the whole legacy plugin corpus and is frozen.
 	path := filepath.Join(repoRootFrom(t), "../..", "testdata/legacy/legacy-rbac-static-catalog.json")
 	raw, err := os.ReadFile(path) //nolint:gosec // fixed, test-local path
 	if err != nil {

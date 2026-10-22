@@ -115,10 +115,14 @@ func ptr(v int64) *int64 { return &v }
 // usdToNano converts a USD/1M price to nano-USD/1M for building fake catalog rows.
 func usdToNano(usd float64) int64 { return int64(math.Round(usd * float64(NanoUSD))) }
 
-func TestCostNano_PylonParityVectors(t *testing.T) {
-	// These mirror pylon test_cost_calculator.py exactly. pylon computes
-	// cost_usd = (tokens / 1e6) * price_per_1M; we compute the nano-USD
-	// equivalent and assert both the nano value AND the USD round-trip.
+// TestCostNano_ReferenceVectors pins costNano to independently computed
+// float-USD reference values. The reference is the plain per-1M formula,
+// cost_usd = (tokens / 1e6) * price_per_1M; each case asserts the nano-USD
+// value AND the USD round-trip, and also that a per-1k divisor (the 1000x
+// denomination bug) would NOT reproduce the reference — so a vector set that
+// cannot tell the two denominations apart fails here rather than passing
+// silently.
+func TestCostNano_ReferenceVectors(t *testing.T) {
 	cases := []struct {
 		name          string
 		inTok, outTok int64
@@ -126,13 +130,13 @@ func TestCostNano_PylonParityVectors(t *testing.T) {
 		wantInNano    int64
 		wantOutNano   int64
 	}{
-		// test_calculate_basic: gpt-4o (2.50/10.00), 1000 in / 500 out.
+		// gpt-4o (2.50/10.00), 1000 in / 500 out.
 		{"basic_gpt4o", 1000, 500, 2.50, 10.00, 2_500_000, 5_000_000},
-		// test_calculate_large_token_count: 1M in / 500k out.
+		// Large token count: 1M in / 500k out.
 		{"large_gpt4o", 1_000_000, 500_000, 2.50, 10.00, 2_500_000_000, 5_000_000_000},
-		// test_calculate_zero_tokens.
+		// Zero tokens: zero under any divisor, so not a 1000x discriminator.
 		{"zero", 0, 0, 2.50, 10.00, 0, 0},
-		// test_cost_precision: gpt-4o-mini (0.15/0.60), 333 in / 666 out.
+		// Precision: gpt-4o-mini (0.15/0.60), 333 in / 666 out.
 		//   0.15/1M*333 = 0.00004995 USD = 49_950 nano; 0.60/1M*666 = 0.0003996 USD = 399_600 nano.
 		{"precision_mini", 333, 666, 0.15, 0.60, 49_950, 399_600},
 	}
@@ -149,11 +153,24 @@ func TestCostNano_PylonParityVectors(t *testing.T) {
 			if gotOut != tc.wantOutNano {
 				t.Errorf("output nano = %d, want %d", gotOut, tc.wantOutNano)
 			}
-			// USD round-trip parity with pylon's rounded-to-6 result.
+			// USD round-trip against the float reference.
 			gotUSD := float64(gotIn+gotOut) / float64(NanoUSD)
 			wantUSD := (float64(tc.inTok)/1e6)*tc.inUSD + (float64(tc.outTok)/1e6)*tc.outUSD
 			if math.Abs(gotUSD-wantUSD) > 1e-9 {
 				t.Errorf("total USD = %.9f, want %.9f", gotUSD, wantUSD)
+			}
+			// The guard's guard: with the per-1k divisor the same vector must
+			// disagree with the reference at micro-USD granularity. If it did
+			// not, this vector could not catch the 1000x bug.
+			if tc.inTok == 0 && tc.outTok == 0 {
+				return
+			}
+			badIn, _ := costNano(tc.inTok, usdToNano(tc.inUSD), 1_000)
+			badOut, _ := costNano(tc.outTok, usdToNano(tc.outUSD), 1_000)
+			wantMicro := int64(math.Round(wantUSD * 1e6))
+			badMicro := int64(math.Round(float64(badIn+badOut) / 1e3))
+			if badMicro == wantMicro {
+				t.Errorf("per-1k divisor reproduces the reference (%d µUSD); the vector does not discriminate the 1000x bug", wantMicro)
 			}
 		})
 	}
@@ -260,7 +277,7 @@ func TestPrice_CatalogHit(t *testing.T) {
 }
 
 func TestPrice_CatalogNullOutputUsesInputTimes3(t *testing.T) {
-	// pylon: output_cost = output or input*3 when output is None.
+	// Reference rule: output_cost = output or input*3 when output is None.
 	db := &fakeDB{rows: map[string]fakeRow{
 		"custom:m": {srcInput: ptr(usdToNano(5.00)), srcOutput: nil},
 	}}

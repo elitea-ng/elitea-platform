@@ -7,7 +7,7 @@ import (
 
 // cutover-ctl is the operator command line for the LLM-path cutover gates.
 //
-// It KEEPS the seven verification subcommands below. Each one drives a real
+// It KEEPS the six verification subcommands below. Each one drives a real
 // deployment or a recorded fixture and reports a pass or a fail: they are the
 // acceptance harness for the LiteLLM-to-Bifrost move (BFC/BF work packages).
 //
@@ -15,11 +15,11 @@ import (
 // `promote-all`, `rollback` and `decommission-check`. Those six were clients
 // of `/internal/cutover` and `/internal/shadow` on elitea-main. #383 deleted
 // the handlers behind both mounts, together with the Redis endpoint-state
-// tracker and the pylon reverse proxy they drove, because no composition root
+// tracker and the legacy-runtime reverse proxy they drove, because no composition root
 // ever populated them: the routes answered 404 in every deployment, so the six
 // subcommands could never have promoted anything. They are removed rather than
 // repaired — the traffic split they managed is finished, and elitea-main no
-// longer proxies to pylon at all.
+// longer proxies to the legacy runtime at all.
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -31,8 +31,6 @@ func main() {
 		cmdBudgetStatusAudit(os.Args[2:])
 	case "sse-flush-check":
 		cmdSSEFlushCheck(os.Args[2:])
-	case "cost-parity":
-		cmdCostParity(os.Args[2:])
 	case "models-parity":
 		cmdModelsParity(os.Args[2:])
 	case "overhead-check":
@@ -53,11 +51,10 @@ func usage() {
 Commands:
   budget-status-audit  Scan --paths for budget/quota call sites that handle 429 but not 402
   sse-flush-check      Assert /llm streams SSE incrementally for both dialects, end to end through elitea-main's edge
-  cost-parity          Assert gateway nano-USD cost math matches the pylon CostCalculator
   models-parity        Assert gateway /llm/v1/models set-equivalent to legacy for N projects (p99 < M ms)
   overhead-check       Drive the k6 load script at /llm (or parse --summary) and assert gateway-overhead p99 < threshold; persists testdata/p99_overhead_benchmark.json
   budget-check         Assert over-budget returns 402 type=budget_exceeded/code=insufficient_quota + soft-alert within latency window
-  cutover-verify       Post-cutover gate BFC.9: assert zero 5xx, no litellm subprocess, zero legacy traffic, 402 block confirmed
+  cutover-verify       Post-cutover gate BFC.9: assert zero 5xx, zero legacy traffic, 402 block confirmed
 
 Options:
   --paths <roots>      (budget-status-audit) comma-separated roots to scan
@@ -66,7 +63,6 @@ Options:
   --project-id <id>    (sse-flush-check, overhead-check) project to bill, sent as X-Project-Id (default: the token owner's personal project)
   --gateway-url <url>  (budget-check) gateway gRPC listener, https://<host>:<port> (default $LLM_GATEWAY_URL);
                        (models-parity) elitea-main public origin serving /llm/v1/models (default $DEPLOYMENT_URL, else http://localhost:8080)
-  --against <ref>      (cost-parity) reference cost model to compare against (default pylon)
   --min-projects <N>   (models-parity) minimum projects to check (default 5)
   --max-p99-ms <M>     (models-parity) maximum acceptable p99 gateway /v1/models latency (default 200)
   --projects-file <f>        (models-parity) seeded projects fixture (JSON array); (budget-check) seeded {over_budget, soft_alert, under_budget} fixture;

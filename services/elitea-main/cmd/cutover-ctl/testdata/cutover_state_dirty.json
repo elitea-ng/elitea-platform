@@ -1,7 +1,6 @@
 {
   "gateway_5xx_count": 0,
-  "litellm_subprocess_present": true,
-  "legacy_svc_traffic_rps": 0.0,
+  "legacy_svc_traffic_rps": 0.25,
   "hard_block_402_confirmed": true,
   "window_minutes": 15
 }

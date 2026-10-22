@@ -488,7 +488,7 @@ jobs:
 
           # A skip that nothing declares FAILS this job. Locally the ledger
           # only reports, so a developer with no PostgreSQL or NATS can still
-          # run `task test`. Same shape as CONTRACT_REQUIRE_PARITY.
+          # run `task test`.
           ELITEA_REQUIRE_DECLARED_SKIPS: "1"
         # One aggregation for CI and for `task test`. The inline loop that used
         # to live here reported the status of its LAST module, and it ended

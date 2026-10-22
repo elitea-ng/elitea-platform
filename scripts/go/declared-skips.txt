@@ -35,7 +35,7 @@
 # ── Another job runs these with the credentials they need ────────────────────
 
 github.com/EliteaAI/elitea-platform/services/elitea-main/tests/integration	*	The `integration` job in ci-go.yml runs this package with INTEGRATION_DATABASE_URL against its own PostgreSQL service.
-github.com/EliteaAI/elitea-platform/services/elitea-main/tests/contract	*	ci-contract.yml runs the legacy-parity fixtures with CONTRACT_AUTH_TOKEN against staging. CONTRACT_REQUIRE_PARITY makes a missing token FAIL there, so the gap cannot hide.
+github.com/EliteaAI/elitea-platform/services/elitea-main/tests/contract	TestArtifactGrantCommitMediaTypeMismatchReturns409	RustFS (the ci-go artifact backend) rejects a presigned PUT that omits the signed Content-Type, so a mismatched object can never be stored and the commit-time 409 path is unreachable there. The test runs to completion against a backend that accepts the PUT.
 
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestEditorLifecyclePostgres	The editor-lifecycle job in ci-go.yml runs nine scenarios on isolated PostgreSQL 18. Its required flag rejects missing configuration.
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestEditorLifecyclePostgresTraceReceiptIdentity	The editor-lifecycle job in ci-go.yml runs nine scenarios on isolated PostgreSQL 18. Its required flag rejects missing configuration.
