@@ -165,6 +165,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	}
 	conn, err := grpc.NewClient(cfg.Target,
 		grpc.WithTransportCredentials(creds),
+		mtlsclient.Balanced(),
 		// A response is counts and ids; nothing legitimate is larger.
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20)),
 	)

@@ -148,6 +148,9 @@ func New(cfg facade.Config, envName string, logger *slog.Logger) (*Proxy, error)
 	}
 	conn, err := grpc.NewClient(cfg.Target,
 		grpc.WithTransportCredentials(creds),
+		// Every call to a host replica in turn (headless Service):
+		// mtlsclient.Balanced says why.
+		mtlsclient.Balanced(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxResponseBytes),
 			grpc.MaxCallSendMsgSize(MaxInvokeBytes+64<<10),
