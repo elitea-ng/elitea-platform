@@ -17,8 +17,9 @@ package projectprovisioning
 //     it fails the project is unchanged and fully usable, and the delete answers
 //     ErrProjectNotRemoved.
 //  2. THE SLOW AND EXTERNAL CLEANUP RUNS FROM THE JOURNAL (runCleanup), after
-//     the commit: the artifact bytes (object store), the tenant schema, and the
-//     project's data in every wired application engine (DeepWiki wiki indexes,
+//     the commit: the artifact bytes (object store), the tenant schema, a
+//     legacy PgVector database where one remains (legacy_vector_database.go),
+//     and the project's data in every wired application engine (DeepWiki wiki indexes,
 //     Inventory graphs, elitea-vector namespaces, over gRPC;
 //     application_data.go). Every step is idempotent and marks
 //     itself done in the journal row. The run is DETACHED from the request: it
@@ -232,14 +233,12 @@ func HandOffCleanup() DeprovisionOption {
 // project id; the identity rows are gone with the decision; the bucket rows are
 // the artifact step's own handle and it lists them itself.
 //
-// ROWS WRITTEN BEFORE #1359 also carry had_vector_store, vector_database,
-// quiet_drop_failures and a done/notes entry for project_pgvector_drop: the
-// per-project PgVector database and its drop step. Decoding ignores those
-// keys, and no step of the list below is named project_pgvector_drop, so an
-// open row whose only undone step was the drop completes on its next run, and
-// one with other steps undone runs those and completes. Nothing drops the old
-// PgVector databases any more: retiring the PgVector server they live on is
-// the operator's (UPGRADING).
+// ROWS WRITTEN BEFORE #1359 also carry vector_database and
+// quiet_drop_failures, which decoding ignores, and had_vector_store, which is
+// read again: it is the evidence that puts the legacy PgVector drop
+// (StepProjectPgvectorDrop, legacy_vector_database.go) on the row. A row that
+// finished that step under an older build has it done and does not run it
+// again.
 type deletionCleanup struct {
 	Done map[string]bool `json:"done"`
 	// Notes holds a message per step: what a step that was marked done without
@@ -265,6 +264,11 @@ type deletionCleanup struct {
 	// for a few seconds after its job rows are gone (application_data.go).
 	ActiveRuns int64     `json:"active_runs,omitempty"`
 	DecidedAt  time.Time `json:"decided_at,omitempty"`
+	// HadVectorStore is the evidence, read by the deciding transaction, that
+	// the project has a legacy PgVector database (legacy_vector_database.go):
+	// it puts the drop step on the row even where no replica can drop it, so
+	// the row cannot complete over the data.
+	HadVectorStore bool `json:"had_vector_store,omitempty"`
 }
 
 // cleanupStep is one idempotent journal step. note is an optional message for a
@@ -285,7 +289,8 @@ type cleanupStep struct {
 // they ran in the deciding transaction.
 //
 // A run takes the provisioner's list (Provisioner.cleanupSteps), which is this
-// plus one step per wired application (application_data.go).
+// plus, where owed, the legacy PgVector drop (legacy_vector_database.go) and
+// one step per wired application (application_data.go).
 func cleanupSteps() []cleanupStep {
 	return []cleanupStep{
 		{name: StepArtifactBuckets, notDone: ErrArtifactsNotRemoved, run: cleanupArtifactBuckets},
@@ -294,15 +299,22 @@ func cleanupSteps() []cleanupStep {
 }
 
 // cleanupSteps is the step list a run of a journal ROW takes: the base steps,
-// then the data of every application the row recorded (#1243, #1244;
-// application_data.go). The application steps come last so a failing engine
+// the legacy PgVector drop when the row or this replica owes it
+// (legacy_vector_database.go), then the data of every application the row
+// recorded (#1243, #1244; application_data.go). The application steps come last so a failing engine
 // never delays the schema, and so the base list's indices
 // are stable for the code and tests that address them.
 func (p *Provisioner) cleanupSteps(cleanup *deletionCleanup) []cleanupStep {
 	if cleanup == nil {
 		return cleanupSteps()
 	}
-	return append(cleanupSteps(), applicationSteps(cleanup.Apps)...)
+	steps := cleanupSteps()
+	// The legacy PgVector drop, when the row or this replica owes it, after
+	// the base steps and before the engines (legacy_vector_database.go).
+	if p.legacyVectorStepOwed(cleanup) {
+		steps = append(steps, legacyVectorStep())
+	}
+	return append(steps, applicationSteps(cleanup.Apps)...)
 }
 
 // decisionSteps are the steps the deciding transaction performs, in the order
@@ -617,6 +629,11 @@ func (p *Provisioner) decideDeletion(ctx context.Context, projectID int64, skipA
 	cleanup := p.recordCleanup()
 	cleanup.ActiveRuns = active
 	cleanup.DecidedAt = time.Now().UTC()
+	// Before the tenant rows cascade: one of the two pieces of evidence is the
+	// tenant's own configuration row.
+	if err := recordLegacyVectorEvidence(ctx, transaction, projectID, cleanup); err != nil {
+		return nil, notRemoved("read legacy PgVector evidence", err)
+	}
 	encoded, err := json.Marshal(cleanup)
 	if err != nil {
 		return nil, notRemoved("encode cleanup", err)

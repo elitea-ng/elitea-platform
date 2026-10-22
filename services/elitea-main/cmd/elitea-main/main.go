@@ -108,6 +108,15 @@ func main() {
 		os.Exit(0)
 	}
 
+	// A one-shot operator command in the same image (legacy_pgvector_orphans.go):
+	// it runs and exits, and never starts the service.
+	if len(os.Args) > 1 && os.Args[1] == legacyOrphansCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runLegacyPgvectorOrphans(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -1709,6 +1718,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// A deleted project's legacy PgVector database (#1359): dropped through
+	// the old store's admin URL, or closed under the operator's retired switch
+	// (legacy_pgvector_config.go). Through a nil INTERFACE without a URL.
+	legacyPgvectorDropper, legacyPgvectorRetired, err := composeLegacyPgvector(logger, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("compose legacy PgVector cleanup: %w", err)
+	}
+	var legacyVectorDatabases projectprovisioning.LegacyVectorDatabases
+	if legacyPgvectorDropper != nil {
+		legacyVectorDatabases = legacyPgvectorDropper
+	}
 	// A deleted Inventory toolkit's graph vectors (#1359): the toolkit cleanup
 	// journal deletes the graph's namespace in elitea-vector after the engine
 	// deleted its rows (api.WithInventoryGraphVectors). A nil INTERFACE without
@@ -2572,6 +2592,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		MemoryDataRecorded:            runtimeConfig.RustIndexing(),
 		ProjectVectorDataRecorded:     vectorStepRecorded,
 		ProjectVectorCleanupAbandoned: vectorCleanupAbandoned,
+		LegacyVectorDatabases:         legacyVectorDatabases,
+		LegacyVectorDatabasesRetired:  legacyPgvectorRetired,
 		AdminUI:                       adminUICfg,
 		Pool:                          pool,
 		Branding:                      brandingResolver,

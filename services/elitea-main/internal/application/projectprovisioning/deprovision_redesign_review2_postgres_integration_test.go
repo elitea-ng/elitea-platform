@@ -306,31 +306,44 @@ func TestDeleteAdoptsTheLeftoversOfAProjectWithNoJournal(t *testing.T) {
 	})
 }
 
-// A journal row written before #1359 still owes the per-project PgVector drop
-// (project_pgvector_drop) and carries had_vector_store. The drop is no step any
-// more: such a row neither fails to decode nor waits on it. A row whose only
-// undone step was the drop completes on its next run; one with another step
-// undone runs that step and completes.
-func TestAJournalRowFromBeforeThePgvectorRetirementCompletes(t *testing.T) {
+// A journal row written before #1359 that still owes the per-project PgVector
+// drop (project_pgvector_drop undone, had_vector_store true) keeps owing it:
+// completing it would claim a deleted project's chunk text and embeddings are
+// gone while its database may still hold them. Without an admin URL the row
+// stays open, failing visibly; with one the drop runs (here against a server
+// that no longer has the database: a no-op, noted) and the row completes. A
+// row with another step undone runs that step beside the drop.
+func TestAJournalRowFromBeforeThePgvectorRetirementStillOwesTheDrop(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	provisioner := newReview2Provisioner(t, pool, nil, nil, nil)
+	unwired := newReview2Provisioner(t, pool, nil, nil, nil)
+	wired := newReview2Provisioner(t, pool, nil, nil, nil, projectprovisioning.WithLegacyVectorDatabases(legacyDropper(t)))
 
 	t.Run("only the drop was left", func(t *testing.T) {
 		const id = 9400
 		openJournalRow(ctx, t, pool, id, `{"had_vector_store":true,"vector_database":"project_9400",`+
 			`"quiet_drop_failures":2,"done":{"artifact_buckets":true,"project_schema":true}}`)
-		completed, err := provisioner.ResumeDeletion(ctx, id)
+		completed, err := unwired.ResumeDeletion(ctx, id)
+		if completed || !errors.Is(err, projectprovisioning.ErrLegacyVectorDatabaseNotDropped) {
+			t.Fatalf("resume without a URL = completed %v, err %v; want the row open", completed, err)
+		}
+		if entry := readJournal(ctx, t, pool, id); entry.Completed || entry.LastError == nil {
+			t.Fatalf("journal = %+v, want open with last_error", entry)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE centry.project_deletions SET next_attempt_at = clock_timestamp() WHERE project_id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		completed, err = wired.ResumeDeletion(ctx, id)
 		if err != nil || !completed {
-			t.Fatalf("resume = completed %v, err %v; want the row closed", completed, err)
+			t.Fatalf("resume with a URL = completed %v, err %v; want the row closed", completed, err)
 		}
 		entry := readJournal(ctx, t, pool, id)
-		if !entry.Completed || entry.LastError != nil || entry.Leased {
-			t.Fatalf("journal = %+v, want completed, no error, unleased", entry)
+		if !entry.Completed || entry.LastError != nil || entry.Leased || !entry.done(projectprovisioning.StepProjectPgvectorDrop) {
+			t.Fatalf("journal = %+v, want completed with the drop done, no error, unleased", entry)
 		}
-		if entry.done("project_pgvector_drop") {
-			t.Fatal("the retired drop was recorded as run")
+		if note := journalNotes(entry)[projectprovisioning.StepProjectPgvectorDrop]; note != "no legacy PgVector database or role to drop" {
+			t.Fatalf("note = %v", note)
 		}
 	})
 
@@ -341,15 +354,16 @@ func TestAJournalRowFromBeforeThePgvectorRetirementCompletes(t *testing.T) {
 		}
 		openJournalRow(ctx, t, pool, id, `{"had_vector_store":true,"vector_database":"project_9401",`+
 			`"done":{"artifact_buckets":true}}`)
-		completed, err := provisioner.ResumeDeletion(ctx, id)
+		completed, err := wired.ResumeDeletion(ctx, id)
 		if err != nil || !completed {
 			t.Fatalf("resume = completed %v, err %v; want the row closed", completed, err)
 		}
 		if schemaExists(ctx, t, pool, id) {
 			t.Fatal("the leftover schema survived")
 		}
-		if entry := readJournal(ctx, t, pool, id); !entry.Completed || !entry.done(projectprovisioning.StepProjectSchema) {
-			t.Fatalf("journal = %+v, want the schema done and the row complete", entry)
+		entry := readJournal(ctx, t, pool, id)
+		if !entry.Completed || !entry.done(projectprovisioning.StepProjectSchema) || !entry.done(projectprovisioning.StepProjectPgvectorDrop) {
+			t.Fatalf("journal = %+v, want the schema and the drop done and the row complete", entry)
 		}
 	})
 }

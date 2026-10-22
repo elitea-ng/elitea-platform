@@ -470,6 +470,13 @@ type RouterConfig struct {
 	// (application_data.go). Ignored when ProjectVectorData is set; the
 	// composition root refuses that pair at boot.
 	ProjectVectorCleanupAbandoned bool
+	// LegacyVectorDatabases drops a deleted project's legacy PgVector database
+	// and role (projectprovisioning/legacy_vector_database.go), composed from
+	// ELITEA_LEGACY_PGVECTOR_ADMIN_URL; LegacyVectorDatabasesRetired is
+	// ELITEA_LEGACY_PGVECTOR_RETIRED=true. With neither, a delete whose
+	// project shows a legacy database keeps its journal row open.
+	LegacyVectorDatabases        projectprovisioning.LegacyVectorDatabases
+	LegacyVectorDatabasesRetired bool
 	// OnToolkitCleanupJournal, when set, is called once with the toolkit
 	// cleanup journal the toolkit handler enqueues into (#1244), after it is
 	// built. The process uses it to start the toolkit-deletion reconciler over
@@ -870,6 +877,15 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	}
 	if cfg.ProjectVectorCleanupAbandoned {
 		options = append(options, projectprovisioning.WithVectorCleanupAbandoned())
+	}
+	// The legacy PgVector database of a deleted project: dropped where an
+	// admin URL is configured, closed where the operator retired the server,
+	// and kept open (logged) where neither is set and the project had one.
+	if cfg.LegacyVectorDatabases != nil {
+		options = append(options, projectprovisioning.WithLegacyVectorDatabases(cfg.LegacyVectorDatabases))
+	}
+	if cfg.LegacyVectorDatabasesRetired {
+		options = append(options, projectprovisioning.WithLegacyVectorDatabasesRetired())
 	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)

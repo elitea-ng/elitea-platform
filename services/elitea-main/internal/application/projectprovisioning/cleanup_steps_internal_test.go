@@ -4,6 +4,7 @@ package projectprovisioning
 // of the per-project PgVector store (#1359).
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -90,23 +91,91 @@ func TestCreateStepsProvisionNoVectorStore(t *testing.T) {
 	}
 }
 
-// A journal row written before #1359 carries the PgVector keys. It decodes,
-// and no step a run takes is the retired drop, so the row cannot wait on it.
+// A journal row written before #1359 carries the PgVector keys. It decodes;
+// had_vector_store is read again and puts the legacy drop on the row, and a
+// row whose drop an older build already finished does not run it again.
 func TestAJournalRowWrittenBeforeThePgvectorRetirementDecodes(t *testing.T) {
-	const legacy = `{"had_vector_store":true,"vector_database":"project_7",` +
-		`"quiet_drop_failures":2,"done":{"artifact_buckets":true,"project_schema":true},` +
-		`"notes":{"project_pgvector_drop":"skipped: no vector store"}}`
+	const open = `{"had_vector_store":true,"vector_database":"project_7",` +
+		`"quiet_drop_failures":2,"done":{"artifact_buckets":true,"project_schema":true}}`
 	var cleanup deletionCleanup
-	if err := json.Unmarshal([]byte(legacy), &cleanup); err != nil {
+	if err := json.Unmarshal([]byte(open), &cleanup); err != nil {
 		t.Fatalf("a pre-#1359 journal row no longer decodes: %v", err)
 	}
 	p := New(nil, nil, nil)
+	if !slices.Contains(stepNames(p.cleanupSteps(&cleanup)), StepProjectPgvectorDrop) || cleanup.Done[StepProjectPgvectorDrop] {
+		t.Fatalf("an open row that recorded a vector store must still owe the legacy drop: %v", stepNames(p.cleanupSteps(&cleanup)))
+	}
+
+	const finished = `{"had_vector_store":true,"done":{"artifact_buckets":true,"project_schema":true,"project_pgvector_drop":true},` +
+		`"notes":{"project_pgvector_drop":"skipped: no vector store"}}`
+	cleanup = deletionCleanup{}
+	if err := json.Unmarshal([]byte(finished), &cleanup); err != nil {
+		t.Fatal(err)
+	}
 	for _, step := range p.cleanupSteps(&cleanup) {
-		if step.name == "project_pgvector_drop" {
-			t.Fatal("the retired PgVector drop is still a journal step")
-		}
 		if !cleanup.Done[step.name] {
-			t.Errorf("step %s is undone on a row whose base steps are all done", step.name)
+			t.Errorf("step %s is undone on a row whose steps are all done", step.name)
 		}
+	}
+}
+
+type fakeLegacyDatabases struct {
+	summary string
+	err     error
+	calls   int
+}
+
+func (f *fakeLegacyDatabases) DropProjectDatabase(context.Context, int64) (string, error) {
+	f.calls++
+	return f.summary, f.err
+}
+
+// The legacy step is on a row's list when the row recorded evidence or this
+// replica can drop (and then the drop is attempted whatever the evidence
+// says); a replica with neither leaves it off, so a fresh install's deletes
+// are unchanged.
+func TestTheLegacyDropIsOwedOnEvidenceOrWhereItCanRun(t *testing.T) {
+	plain := New(nil, nil, nil)
+	if slices.Contains(stepNames(plain.cleanupSteps(&deletionCleanup{})), StepProjectPgvectorDrop) {
+		t.Fatal("a row with no evidence on a replica with no admin URL owes the legacy drop")
+	}
+	if !slices.Contains(stepNames(plain.cleanupSteps(&deletionCleanup{HadVectorStore: true})), StepProjectPgvectorDrop) {
+		t.Fatal("a row with evidence does not owe the legacy drop")
+	}
+	wired := New(nil, nil, nil, WithLegacyVectorDatabases(&fakeLegacyDatabases{}))
+	names := stepNames(wired.cleanupSteps(&deletionCleanup{Apps: []string{"deepwiki"}}))
+	want := []string{StepArtifactBuckets, StepProjectSchema, StepProjectPgvectorDrop, "deepwiki_data"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("steps = %v, want %v (the legacy drop after the base steps, before the engines)", names, want)
+	}
+	// A typed nil is absent.
+	var none *fakeLegacyDatabases
+	if New(nil, nil, nil, WithLegacyVectorDatabases(none)).legacyVectorDatabases != nil {
+		t.Fatal("a typed nil dropper was taken")
+	}
+}
+
+func TestTheLegacyDropStepRunsDropsClosesRetiredOrRefuses(t *testing.T) {
+	ctx := context.Background()
+	evidence := &deletionCleanup{HadVectorStore: true}
+
+	databases := &fakeLegacyDatabases{summary: "dropped legacy PgVector database project_7 and role project_7_user"}
+	note, err := cleanupLegacyVectorDatabase(ctx, New(nil, nil, nil, WithLegacyVectorDatabases(databases)), 7, evidence)
+	if err != nil || note != databases.summary || databases.calls != 1 {
+		t.Fatalf("with a dropper: note=%q err=%v calls=%d", note, err, databases.calls)
+	}
+	databases = &fakeLegacyDatabases{err: errors.New("connection refused")}
+	if _, err := cleanupLegacyVectorDatabase(ctx, New(nil, nil, nil, WithLegacyVectorDatabases(databases)), 7, evidence); err == nil {
+		t.Fatal("a failed drop was reported done")
+	}
+
+	note, err = cleanupLegacyVectorDatabase(ctx, New(nil, nil, nil, WithLegacyVectorDatabasesRetired()), 7, evidence)
+	if err != nil || note != NoteLegacyVectorDatabasesRetired {
+		t.Fatalf("retired: note=%q err=%v", note, err)
+	}
+
+	_, err = cleanupLegacyVectorDatabase(ctx, New(nil, nil, nil), 7, evidence)
+	if err == nil || !strings.Contains(err.Error(), LegacyPgvectorAdminURLEnv) || !strings.Contains(err.Error(), "project_7") {
+		t.Fatalf("no URL, not retired: err=%v, want a failure naming the database and %s", err, LegacyPgvectorAdminURLEnv)
 	}
 }

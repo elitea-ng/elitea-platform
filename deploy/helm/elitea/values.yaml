@@ -1634,6 +1634,15 @@ main:
     # client or env.ELITEA_VECTOR_GRPC_TARGET): a store that is dialled is
     # not abandoned. Empty is "false".
     ELITEA_VECTOR_CLEANUP_ABANDON: ""
+    # The legacy PgVector server is GONE (#1359). A project that predates the
+    # Qdrant move may still own a project_<id> database and project_<id>_user
+    # role on the old PgVector server; a delete drops them through
+    # secrets.ELITEA_LEGACY_PGVECTOR_ADMIN_URL. Without that URL, a delete
+    # whose project shows a legacy database keeps its cleanup journal row open
+    # (logged at Error). "true" says the server was decommissioned with its
+    # databases, and those steps close without a drop. Refused beside the
+    # admin URL. Empty is "false". docs/UPGRADING.md.
+    ELITEA_LEGACY_PGVECTOR_RETIRED: ""
 
     # --- The Inventory facade's source expansion (ADR-0023 H4c I2) ---
     #
@@ -1829,6 +1838,18 @@ main:
     AZURE_STORAGE_KEY:
       secretName: elitea-main-storage-secrets
       key: azure-storage-key
+      optional: true
+    # The admin URL of the legacy PgVector server (#1359): the old store's
+    # bootstrap connection, a role that may drop the project_<id> databases
+    # and project_<id>_user roles it created. Optional: a deployment that
+    # never ran the per-project PgVector store leaves the Secret absent. With
+    # it, a project delete drops the project's legacy database and role, and
+    # `elitea-main legacy-pgvector-orphans` lists and drops the ones older
+    # deletes left (docs/UPGRADING.md). env.ELITEA_LEGACY_PGVECTOR_RETIRED
+    # is the alternative for a server that is gone.
+    ELITEA_LEGACY_PGVECTOR_ADMIN_URL:
+      secretName: elitea-main-legacy-pgvector
+      key: admin-url
       optional: true
     # Issue #11: the gateway now REFUSES TO START without this secret, and it must
     # hold the SAME value on both sides — the edge signs the X-Elitea-* identity

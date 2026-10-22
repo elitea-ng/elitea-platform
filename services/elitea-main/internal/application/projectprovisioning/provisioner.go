@@ -187,6 +187,12 @@ type Provisioner struct {
 	// pending vector step on a replica without a vector remover is closed as
 	// abandoned rather than left pending (application_data.go).
 	vectorCleanupAbandoned bool
+	// legacyVectorDatabases drops a deleted project's legacy PgVector database
+	// and role (WithLegacyVectorDatabases); legacyVectorDatabasesRetired is the
+	// operator's statement that their server is gone. See
+	// legacy_vector_database.go.
+	legacyVectorDatabases        LegacyVectorDatabases
+	legacyVectorDatabasesRetired bool
 
 	// lifecycle is the context whose end means the process is shutting down.
 	// The detached cleanup runs of a delete derive from it, so a shutdown

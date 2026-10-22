@@ -69,19 +69,31 @@ engine's `native` runner, Rust indexing or the memory toolkit needs
   tenant migration `0154_strip_toolkit_pgvector_configuration` deletes the
   key from stored `elitea_tools.settings`.
 * **elitea-main's per-project PgVector store is gone**: no `project_<id>`
-  database or role is created for a new project, and nothing drops the old
-  ones any more (`cmd/pgvector-orphans` is deleted too).
+  database or role is created for a new project (`cmd/pgvector-orphans` is
+  replaced by `elitea-main legacy-pgvector-orphans`, below).
   * With `ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED=false`, project create
     used to provision a `project_<id>` PgVector database. It no longer does,
     and **such a deployment indexes nothing** (it indexed nothing that was
     read since the Python worker went). Index through the Rust worker and
     elitea-vector.
-  * The project delete response no longer carries `database`. The cleanup
-    journal runs `artifact_buckets` and `project_schema` (plus the
-    application data steps and elitea-vector's `DropProject`). A journal row
-    written before the upgrade, with `had_vector_store`, `vector_database`,
-    `quiet_drop_failures` or `project_pgvector_drop`, is decoded without
-    them and completes on its next run.
+  * The project delete response no longer carries `database`.
+  * **A project delete still drops the project's legacy `project_<id>`
+    database and `project_<id>_user` role**, as the cleanup-journal step
+    `project_pgvector_drop`, through the new
+    `ELITEA_LEGACY_PGVECTOR_ADMIN_URL` (the old store's admin connection; a
+    secret). The step is on a delete's journal row when that URL is set, or
+    when the delete found evidence of a legacy database: the project's
+    `elitea-pgvector` configuration row, or the database or role on the
+    platform database's own server. **Without the URL, such a delete keeps
+    its journal row open** (`last_error` set, retried with backoff, logged at
+    Error naming both variables) instead of completing over the data; set
+    `ELITEA_LEGACY_PGVECTOR_RETIRED=true` instead when the server is gone
+    with its databases, and those steps close without a drop. The two
+    variables together are a boot error. A deployment that never ran the
+    store sets neither and sees no change.
+  * A journal row written before the upgrade decodes as before; one that
+    still owes `project_pgvector_drop` (with `had_vector_store`) runs it under
+    the rule above, and one that finished it does not run it again.
 * **Token introspection** (`TokenIntrospectionService`) is also served on
   elitea-main's platform listener (`:9446`) behind the same
   `ELITEA_VECTOR_INTROSPECTION_CLIENTS`, so a stack without the runtime plane
@@ -138,10 +150,50 @@ engine's `native` runner, Rust indexing or the memory toolkit needs
 3. Roll the engines over completely: a replica still on the previous release
    fails dense searches and publishes once the new `0008` has dropped the
    embedding tables.
-4. **Retire the per-project PgVector server yourself**: drop the
-   `project_<id>` databases and `project_<id>_user` roles it holds (nothing in
-   the platform reads them any more; they held toolkit indexes the Python
-   worker wrote). Remove the `pgvector` configuration rows when convenient.
+4. **Drop the per-project PgVector databases.** If the deployment ever ran
+   the per-project PgVector store (pylon, or elitea-main before this
+   release), point elitea-main at that server's admin role, the connection
+   pylon kept in the public project's `elitea-pgvector` configuration (a
+   role that may drop the `project_<id>` databases and `project_<id>_user`
+   roles it created; `postgresql+psycopg://` is accepted):
+
+   ```bash
+   kubectl -n <ns> create secret generic elitea-main-legacy-pgvector \
+     --from-literal=admin-url='postgresql://<admin>:<password>@<pgvector-host>:5432/postgres'
+   ```
+
+   The chart reads it as `main.secrets.ELITEA_LEGACY_PGVECTOR_ADMIN_URL`
+   (Secret `elitea-main-legacy-pgvector`, key `admin-url`, optional); with
+   compose, add `ELITEA_LEGACY_PGVECTOR_ADMIN_URL` to the `elitea-main`
+   service's environment. From then on every project delete drops its own legacy
+   database and role. For projects deleted EARLIER (by pylon, or by a
+   release whose journal skipped the drop), run the one-shot command in the
+   same image, with the same environment (`ELITEA_LEGACY_PGVECTOR_ADMIN_URL`
+   and `DATABASE_URL`):
+
+   ```bash
+   # dry run: prints the platform database, its project count and id range,
+   # and every project_<id> database/role whose project no longer exists
+   kubectl -n <ns> exec deploy/elitea-main -- /elitea-main legacy-pgvector-orphans
+   # drop exactly the N orphans the dry run listed
+   kubectl -n <ns> exec deploy/elitea-main -- \
+     /elitea-main legacy-pgvector-orphans --drop --confirm-count N
+   ```
+
+   An id counts as an orphan only with no `centry.project` row and no open
+   `centry.project_deletions` row, and is re-checked right before its drop.
+   Check the header before `--drop`: a wrong `DATABASE_URL`, or a PgVector
+   server shared with another platform, makes other deployments' databases
+   look orphaned. `--drop` is refused when orphans exceed 20% of the
+   server's `project_<id>` databases (`--max-orphan-fraction`), unless you
+   add `--force-fraction`, and when a platform database has no projects.
+   Once the server is decommissioned, replace the URL with
+   `main.env.ELITEA_LEGACY_PGVECTOR_RETIRED: "true"` (compose: the same
+   variable): projects created before this release keep their
+   `elitea-pgvector` configuration row, and deleting one with neither
+   setting keeps its journal row open. A deployment that never ran the
+   store needs neither. Remove the `pgvector` configuration rows when
+   convenient.
 5. If an engine's `0008` logged that it kept the extension, drop it once
    nothing else uses it.
 6. Compose: nothing beyond the image change for the default stacks;
