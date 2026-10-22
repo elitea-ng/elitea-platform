@@ -88,6 +88,11 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 		aware.AttachManager(s.manager)
 	}
 	s.manager.cancels = s.cancels
+	// Only a runner with slot holders (SlotHolder) has a slot limit; for any
+	// other runner every invocation runs at once, as before.
+	if _, ok := app.Runner.(SlotHolder); ok {
+		s.manager.SetSlots(settings.MaxParallelWorkers)
+	}
 	return s, nil
 }
 
@@ -97,6 +102,13 @@ func (s *Server) Manager() *Manager { return s.manager }
 // Start begins housekeeping and listens for the cancels other replicas fan
 // out; Stop ends every in-flight invocation.
 func (s *Server) Start(ctx context.Context) error {
+	// A stop a sibling recorded on a row reaches the run here too, at the
+	// store's next claim check, when the bus is absent or lost the message.
+	// The bus and the poll take the same path (StopLocal), which only raises
+	// the run's stop flag: a run stopped twice ends once.
+	if watcher, ok := s.manager.Store().(StopWatcher); ok {
+		watcher.WatchStops(func(id string) { s.manager.StopLocal(id) })
+	}
 	if s.cancels != nil {
 		if err := s.cancels.Subscribe(ctx, func(id string) { s.manager.StopLocal(id) }); err != nil {
 			return fmt.Errorf("listen for cancellations: %w", err)
@@ -120,6 +132,17 @@ type ManagerAware interface{ AttachManager(*Manager) }
 // (Manager.SubmitLabelled); nil or empty means no labels.
 type Labeler interface {
 	Labels(call Invoke) map[string]string
+}
+
+// SlotHolder is a runner some of whose invocations take one of the limited
+// slots (<PREFIX>MAX_PARALLEL_WORKERS on each replica) while they run: a
+// DeepWiki wiki generation, say. The server asks before Submit, from the
+// call alone. A slot holder is admitted only while the fleet (or, with an
+// in-memory store, this process) has a free slot, and it waits for a local
+// slot before it runs (Manager.SubmitWith). A runner that does not
+// implement it has no slot limit.
+type SlotHolder interface {
+	HoldsSlot(call Invoke) bool
 }
 
 // Starter is a runner with background work (refreshing what the engine can
@@ -213,8 +236,27 @@ func (s *Server) Readiness(ctx context.Context) (bool, map[string]bool) {
 }
 
 // SlotsDocument is the provider's capacity report.
-func (s *Server) SlotsDocument() map[string]any {
-	return Slots(s.settings, s.manager.InFlight())
+//
+// For a runner with slot holders (SlotHolder) over a store that keeps the
+// fleet (FleetSlotter) it reports the FLEET: the slots of the live replicas
+// that admit work and the slot holders that run on any of them. That is the
+// same rule admission applies, so a can_start the UI reads is a start the
+// fleet admits. With an in-memory store it reports this process's slot
+// holders. For any other runner it reports this process's invocations, as
+// before (the conformance fixtures pin that body).
+func (s *Server) SlotsDocument(ctx context.Context) map[string]any {
+	if _, ok := s.app.Runner.(SlotHolder); !ok {
+		return Slots(s.settings, s.manager.InFlight())
+	}
+	capacity, fleet, err := s.manager.FleetSlots(ctx)
+	if !fleet || s.settings.JobsEnabled {
+		return Slots(s.settings, s.manager.LocalHolders())
+	}
+	if err != nil {
+		s.logger.Warn("could not read the fleet's slots; this replica reports its own", "error", err)
+		return Slots(s.settings, s.manager.LocalHolders())
+	}
+	return FleetSlots(capacity)
 }
 
 // MaxInvokeBytes bounds a request body: large enough for an expanded
@@ -247,13 +289,19 @@ func (s *Server) Accept(ctx context.Context, identity Identity, toolkit, tool st
 	// SetLabel yet would be invisible to a StopMatching in between
 	// (Manager.SubmitLabelled). An unknown toolkit has no family and so no
 	// labels; the run refuses it.
-	var labels map[string]string
-	if labeler, ok := s.app.Runner.(Labeler); ok {
-		if family, err := s.app.Toolkits.Resolve(toolkit); err == nil {
-			labels = labeler.Labels(Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity})
+	var submission Submission
+	if family, err := s.app.Toolkits.Resolve(toolkit); err == nil {
+		invoke := Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity}
+		if labeler, ok := s.app.Runner.(Labeler); ok {
+			submission.Labels = labeler.Labels(invoke)
+		}
+		// Only a call the runner names a slot holder takes a slot. An
+		// unknown toolkit takes none: the run refuses it at once.
+		if holder, ok := s.app.Runner.(SlotHolder); ok {
+			submission.HoldsSlot = holder.HoldsSlot(invoke)
 		}
 	}
-	return s.manager.SubmitLabelled(ctx, toolkit, tool, labels, call)
+	return s.manager.SubmitWith(ctx, toolkit, tool, submission, call)
 }
 
 // AcceptedBody is the body of an accepted invocation.

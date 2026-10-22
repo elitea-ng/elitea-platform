@@ -55,9 +55,15 @@ func AdminHandler(server *Server) http.Handler {
 // that accepted it, start to end, and nothing queues it anywhere else, so the
 // load of a replica is its own in-flight count. A Prometheus scaler divides
 // the sum over the replicas by the slots of one.
+//
+// Admission refuses a slot holder when every slot of the fleet is busy, so
+// the in-flight sum never goes above the fleet's slots: alone it cannot ask
+// for one more replica. The refusal counter is the demand that was turned
+// away; the scaler adds its recent increase to the in-flight sum.
 const (
 	MetricInvocationsInFlight = "elitea_subapp_invocations_in_flight"
 	MetricInvocationSlots     = "elitea_subapp_invocation_slots"
+	MetricSlotRefusals        = "elitea_subapp_slot_refusals_total"
 )
 
 // MetricsText is the admin port's /metrics body, in the Prometheus text
@@ -69,5 +75,7 @@ func (s *Server) MetricsText() string {
 		MetricInvocationsInFlight, MetricInvocationsInFlight, MetricInvocationsInFlight, app, s.manager.InFlight())
 	fmt.Fprintf(&b, "# HELP %s Invocations one replica runs at once: <PREFIX>MAX_PARALLEL_WORKERS, the total its slots report.\n# TYPE %s gauge\n%s{app=%s} %d\n",
 		MetricInvocationSlots, MetricInvocationSlots, MetricInvocationSlots, app, s.settings.MaxParallelWorkers)
+	fmt.Fprintf(&b, "# HELP %s Slot-holding invocations this replica refused because every slot of the fleet was busy.\n# TYPE %s counter\n%s{app=%s} %d\n",
+		MetricSlotRefusals, MetricSlotRefusals, MetricSlotRefusals, app, s.manager.Refusals())
 	return b.String()
 }

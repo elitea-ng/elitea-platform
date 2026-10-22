@@ -24,7 +24,13 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
-const migration = "../../../elitea-deepwiki-engine/migrations/0002_invocations.sql"
+// migrations are the DeepWiki engine's migrations that create and extend the
+// invocation tables, in order: 0002 creates them, 0009 adds the fleet
+// (labels, holds_slot, host_replicas).
+var migrations = []string{
+	"../../../elitea-deepwiki-engine/migrations/0002_invocations.sql",
+	"../../../elitea-deepwiki-engine/migrations/0009_host_fleet.sql",
+}
 
 // testStore creates a throwaway schema, applies the migration into it, and
 // returns a store bound to that schema plus a second connection for
@@ -48,10 +54,6 @@ func testStore(t *testing.T, owner string, options ...spi.StoreOption) (*spi.Pos
 		_, _ = admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
 		admin.Close()
 	})
-	sql, err := os.ReadFile(filepath.Clean(migration))
-	if err != nil {
-		t.Fatalf("the Python package's migration is the schema of record: %v", err)
-	}
 	scoped := dsn
 	if filepath.Ext(scoped) == "" { // a URL: append the search_path option
 		sep := "?"
@@ -66,8 +68,14 @@ func testStore(t *testing.T, owner string, options ...spi.StoreOption) (*spi.Pos
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, string(sql)); err != nil {
-		t.Fatalf("apply the migration: %v", err)
+	for _, migration := range migrations {
+		sql, err := os.ReadFile(filepath.Clean(migration))
+		if err != nil {
+			t.Fatalf("the engine's migration is the schema of record: %v", err)
+		}
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("apply the migration %s: %v", migration, err)
+		}
 	}
 	pool.Close()
 	store, err := spi.NewPostgresStore(ctx, scoped, owner, nil, options...)

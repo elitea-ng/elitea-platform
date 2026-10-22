@@ -181,7 +181,7 @@ async fn database(name: &str) -> Option<PgPool> {
     assert_eq!(
         applied,
         [
-            "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
+            "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"
         ]
         .map(str::to_owned)
         .to_vec()
@@ -360,7 +360,7 @@ async fn migrating_twice_applies_nothing_the_second_time() {
     assert_eq!(
         ledger,
         [
-            "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
+            "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"
         ]
     );
 }
@@ -1035,7 +1035,7 @@ async fn a_database_on_the_released_chain_upgrades_and_backfills() {
 
     assert_eq!(
         store::migrate(&pool).await.expect("the new chain"),
-        ["0008".to_owned()]
+        ["0008".to_owned(), "0009".to_owned()]
     );
     assert!(!has_column(&pool, "entities", "embedding_vector").await);
     assert!(!has_vector_extension(&pool).await, "nothing else used it");
@@ -1147,7 +1147,7 @@ async fn the_extension_stays_while_something_else_uses_it() {
         .expect("a dependent table");
     assert_eq!(
         store::migrate(&pool).await.expect("0008"),
-        ["0008".to_owned()]
+        ["0008".to_owned(), "0009".to_owned()]
     );
     assert!(!has_column(&pool, "entities", "embedding_vector").await);
     assert!(has_vector_extension(&pool).await, "kept for its other user");

@@ -76,6 +76,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0008_entity_vectors_in_qdrant.sql",
         include_str!("../../migrations/0008_entity_vectors_in_qdrant.sql"),
     ),
+    (
+        "0009_host_invocations.sql",
+        include_str!("../../migrations/0009_host_invocations.sql"),
+    ),
 ];
 
 /// The released migrations that were rewritten, with the checksum of every

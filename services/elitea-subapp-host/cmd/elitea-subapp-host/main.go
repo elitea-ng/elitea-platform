@@ -6,7 +6,11 @@
 //	                                retired and refused at start); Inventory's
 //	                                engine runner is sidecar (legacy = alias)
 //	ELITEA_<APP>_ENGINE_SOCKET      the engine sidecar's Unix socket (native, sidecar)
-//	ELITEA_<APP>_DATABASE_URL       the durable invocation store (else in memory)
+//	ELITEA_<APP>_DATABASE_URL       the durable invocation store (else in memory);
+//	                                DeepWiki's tables are unqualified, Inventory's
+//	                                in schema inventory_graph. With it, every
+//	                                replica polls, cancels and stops every run
+//	ELITEA_<APP>_DATABASE_MAX_CONNS the store's pool ceiling
 //	ELITEA_<APP>_TLS_CERTFILE, _TLS_KEYFILE, _TLS_CA_FILE
 //	                                the listener's mutual TLS (required)
 //	ELITEA_<APP>_PLATFORM_CLIENTS   certificate identities allowed to call the
@@ -95,13 +99,23 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("%w: %sPLATFORM_CLIENTS must name the certificate identities allowed to call this host (elitea-main)", spi.ErrConfig, settings.Prefix)
 	}
 	var options []spi.Option
+	var store *spi.PostgresStore
 	if settings.DatabaseURL != "" {
 		// The durable store (ADR-0023 H2b): the rows the engine's migrations
 		// own, shared by every replica. Orphans of a process that is gone are
 		// reconciled before the first call, so no poll answers InProgress for
 		// work nobody is doing. A database that is configured and unreachable
-		// is a boot failure, not a host that silently runs in memory.
-		store, err := spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger, spi.WithMaxConns(settings.DatabaseMaxConns))
+		// is a boot failure, not a host that silently runs in memory. The
+		// tables are in the application's schema (apps.App.StoreSchema):
+		// inventory_graph for Inventory, unqualified for DeepWiki.
+		key, _ := os.LookupEnv("ELITEA_SUBAPP")
+		entry, err := apps.Lookup(key)
+		if err != nil {
+			return err
+		}
+		store, err = spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger,
+			spi.WithMaxConns(settings.DatabaseMaxConns), spi.WithSchema(entry.StoreSchema),
+			spi.WithReplicaSlots(settings.MaxParallelWorkers))
 		if err != nil {
 			return err
 		}
@@ -165,6 +179,16 @@ func run(logger *slog.Logger) error {
 	}()
 	select {
 	case <-ctx.Done():
+		// First, this replica stops offering its slots to the fleet: from
+		// now on fleet admission and the fleet slots report do not count
+		// them, so no new generation is admitted on a replica that goes away.
+		if store != nil {
+			admitCtx, admitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := store.SetAdmitting(admitCtx, false); err != nil {
+				logger.Warn("could not take this replica out of fleet admission", "error", err)
+			}
+			admitCancel()
+		}
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		stopGRPC(grpcServer, shutdownCtx)

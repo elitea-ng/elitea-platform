@@ -197,6 +197,17 @@ func projectDeletionOf(project int32, result map[string]any) *spi.ProjectDeletio
 
 var _ spi.PlatformOps = (*Runner)(nil)
 var _ spi.Labeler = (*Runner)(nil)
+var _ spi.SlotHolder = (*Runner)(nil)
+
+// HoldsSlot names the calls that take one of the generation slots: a wiki
+// generation (generate_wiki of a family other than query), the same test
+// Labels applies. A question, a page read or a deletion takes none. The
+// host admits a generation only while the fleet has a free slot, and the
+// slots report counts the generations, so the UI's can_start and the
+// admission agree.
+func (r *Runner) HoldsSlot(call spi.Invoke) bool {
+	return call.Tool == generateTool && call.Family.Name != "query"
+}
 
 // Labels names the project and wiki a generation publishes into, for the
 // server to put on the invocation AT REGISTRATION (spi.Manager.SubmitLabelled),

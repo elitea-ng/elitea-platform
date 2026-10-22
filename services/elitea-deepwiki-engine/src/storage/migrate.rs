@@ -84,6 +84,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0008_vectors_in_qdrant.sql",
         include_str!("../../migrations/0008_vectors_in_qdrant.sql"),
     ),
+    (
+        "0009_host_fleet.sql",
+        include_str!("../../migrations/0009_host_fleet.sql"),
+    ),
 ];
 
 /// The migrations rewritten after their release, with the exact checksum
@@ -180,7 +184,7 @@ mod tests {
         assert_eq!(
             versions,
             [
-                "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
+                "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"
             ]
         );
     }

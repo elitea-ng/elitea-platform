@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +45,14 @@ import (
 // did terminate (an owner cut off for longer) stays terminated: Update writes
 // only a row this owner still has in flight.
 //
+// The Inventory host keeps the same tables in the Inventory engine's schema
+// (services/elitea-inventory-engine/migrations/0009_host_invocations.sql,
+// WithSchema("inventory_graph")). Both applications' migration 0009 adds
+// what makes the host a fleet (#scaling): the labels a deletion on any
+// replica matches (RunningInvocations), the slot flag that fleet admission
+// counts (Create), and host_replicas, one row for each live replica with
+// its slots (FleetSlots, SetAdmitting).
+//
 // Durable is true, and that is not decoration: /health reports it, and an
 // operator uses it to tell a compliant deployment from a dev one.
 type PostgresStore struct {
@@ -75,12 +84,56 @@ type PostgresStore struct {
 
 	// maxConns is the pool's ceiling (WithMaxConns); zero keeps pgx's.
 	maxConns int
+
+	// schema qualifies every table name (WithSchema); empty leaves the names
+	// unqualified, as DeepWiki's tables are. invocations, events and
+	// replicas are the table names as the statements spell them.
+	schema      string
+	invocations string
+	events      string
+	replicas    string
+
+	// slots is this replica's slot count in host_replicas (WithReplicaSlots);
+	// admitting is whether it takes new work (SetAdmitting). fleetKey is the
+	// transaction lock that serialises fleet admission (Create).
+	slots     int
+	admitting atomic.Bool
+	fleetKey  int64
+
+	// stopWatch is the callback that pollStops hands a stop request to
+	// (WatchStops); nil until a server registers one.
+	stopWatch atomic.Pointer[func(invocationID string)]
 }
 
 // ErrClaimLost refuses a new invocation while this process does not hold its
 // owner liveness lock: siblings may be terminating its rows as orphans, so
 // it must not accept work under that owner.
 var ErrClaimLost = errors.New("invocation store: this process does not hold its owner claim")
+
+// ErrNoSlot refuses a slot-holding invocation (Invocation.HoldsSlot) while
+// every slot of the fleet is taken. The store inserts nothing then. The
+// error that Create returns is a *NoSlotError, which says how many slots the
+// fleet has.
+var ErrNoSlot = errors.New("invocation store: every slot of the fleet is busy")
+
+// NoSlotError is ErrNoSlot with the fleet capacity that was full.
+type NoSlotError struct {
+	// Total is the fleet capacity: the sum of the slots of the live
+	// replicas that admit work.
+	Total int
+}
+
+func (e *NoSlotError) Error() string {
+	return fmt.Sprintf("invocation store: all %d slots of the fleet are busy", e.Total)
+}
+
+// Is makes errors.Is(err, ErrNoSlot) true.
+func (e *NoSlotError) Is(target error) bool { return target == ErrNoSlot }
+
+// fleetLockSeed seeds hashtextextended('fleet-slots:' || schema, seed), the
+// key of the transaction lock that serialises fleet admission. A seed of its
+// own, so the key is not an owner's liveness lock key.
+const fleetLockSeed = 0x53_41_46_31 // "SAF1"
 
 // ownerLockSeed seeds hashtextextended(owner, seed), the 64-bit key of every
 // owner's liveness lock (pg_advisory_lock(bigint)). Sixty-four bits, so two
@@ -104,6 +157,13 @@ const (
 	// and re-takes the lock within that check's timeout (up to one more), so
 	// a sibling waits longer than both before it reads a free lock as death.
 	ownerGraceChecks = 3
+	// replicaLiveChecks is how many claim-check intervals a replica row
+	// stays live after its last upsert. A replica upserts at every check,
+	// so a live replica is never older than one interval.
+	replicaLiveChecks = 3
+	// replicaStaleChecks is the age, in claim-check intervals, at which
+	// reconcile deletes a replica row (a process that died without Close).
+	replicaStaleChecks = 30
 )
 
 // StoreOption tunes a PostgresStore.
@@ -129,6 +189,32 @@ const maxDatabaseConns = 64
 // counted here.
 func WithMaxConns(n int) StoreOption {
 	return func(s *PostgresStore) { s.maxConns = n }
+}
+
+// WithSchema schema-qualifies every table the store reads and writes. The
+// Inventory host passes "inventory_graph", where the Inventory engine's
+// migration 0009 creates the tables; DeepWiki's host passes "" and its
+// tables stay unqualified, as before. NewPostgresStore refuses a name that
+// is not a plain lower-case identifier.
+func WithSchema(name string) StoreOption {
+	return func(s *PostgresStore) { s.schema = name }
+}
+
+// WithReplicaSlots sets the slot count this replica registers in
+// host_replicas: <PREFIX>MAX_PARALLEL_WORKERS. Zero or less registers one.
+func WithReplicaSlots(n int) StoreOption {
+	return func(s *PostgresStore) { s.slots = n }
+}
+
+// schemaName is the identifier WithSchema accepts.
+var schemaName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// qualify returns the table name as a statement spells it.
+func (s *PostgresStore) qualify(table string) string {
+	if s.schema == "" {
+		return table
+	}
+	return pgx.Identifier{s.schema, table}.Sanitize()
 }
 
 // WithOwnerGrace sets how long a claimed owner's lock must stay free, from
@@ -168,6 +254,16 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	for _, option := range options {
 		option(store)
 	}
+	if store.schema != "" && !schemaName.MatchString(store.schema) {
+		return nil, fmt.Errorf("%w: invocation store schema %q is not a plain lower-case identifier", ErrConfig, store.schema)
+	}
+	store.invocations = store.qualify("invocations")
+	store.events = store.qualify("invocation_events")
+	store.replicas = store.qualify("host_replicas")
+	if store.slots <= 0 {
+		store.slots = 1
+	}
+	store.admitting.Store(true)
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("invocation store: %w", err)
@@ -191,6 +287,10 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 		pool.Close()
 		return nil, fmt.Errorf("invocation store: %w", err)
 	}
+	if err := pool.QueryRow(ctx, `SELECT hashtextextended($1, $2)`, "fleet-slots:"+store.schema, fleetLockSeed).Scan(&store.fleetKey); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("invocation store: %w", err)
+	}
 	held, err := store.takeClaim(ctx)
 	if err == nil && !held {
 		err = errors.New("another live process holds this owner id")
@@ -198,6 +298,15 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("invocation store: claim the owner %q: %w", owner, err)
+	}
+	// The replica row is what fleet admission and the fleet slots report
+	// count. A database without the table (the engine has not applied its
+	// migration yet) is a boot failure, as a missing invocations table is.
+	if err := store.upsertReplica(ctx); err != nil {
+		_ = store.claim.Close(ctx)
+		store.claim = nil
+		pool.Close()
+		return nil, fmt.Errorf("invocation store: register the replica: %w", err)
 	}
 	go store.supervise()
 	return store, nil
@@ -241,6 +350,7 @@ func (s *PostgresStore) supervise() {
 			return
 		case <-check.C:
 			s.checkClaim()
+			s.pollStops()
 		case <-reconcile.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.reconcileEvery)
 			if _, err := s.reconcile(ctx, false); err != nil {
@@ -248,6 +358,53 @@ func (s *PostgresStore) supervise() {
 			}
 			cancel()
 		}
+	}
+}
+
+// WatchStops registers stop, which the store calls with the id of each run
+// of THIS owner whose row records a stop request (StopWatcher). The store
+// reads the rows once each claim check, and no more often. That is how a
+// stop that a sibling recorded reaches the run when the cancel bus is
+// absent or dropped the message. stop must be idempotent: the store calls
+// it again at each check until the run ends.
+func (s *PostgresStore) WatchStops(stop func(invocationID string)) {
+	s.stopWatch.Store(&stop)
+}
+
+// pollStops reads this owner's unfinished rows that record a stop request
+// (one query, on the owner index of in-flight rows) and hands each id to
+// the WatchStops callback. It does nothing while the claim is lost: a
+// sibling may be ending those rows.
+func (s *PostgresStore) pollStops() {
+	watch := s.stopWatch.Load()
+	if watch == nil || !s.held.Load() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.claimCheck)
+	defer cancel()
+	rows, err := s.pool.Query(ctx,
+		`SELECT invocation_id FROM `+s.invocations+` WHERE owner = $1 AND finished_at IS NULL AND stop_requested`, s.owner)
+	if err != nil {
+		s.logger.Warn("could not read the stop requests of this replica's runs", "owner", s.owner, "error", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			s.logger.Warn("could not read the stop requests of this replica's runs", "owner", s.owner, "error", err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		s.logger.Warn("could not read the stop requests of this replica's runs", "owner", s.owner, "error", err)
+		return
+	}
+	for _, id := range ids {
+		(*watch)(id)
 	}
 }
 
@@ -265,6 +422,7 @@ func (s *PostgresStore) checkClaim() {
 			    AND granted AND objsubid = 1 AND classid = $1::bigint::oid AND objid = $2::bigint::oid)`,
 			int64(uint64(s.lockKey)>>32), int64(uint32(s.lockKey))).Scan(&held)
 		if err == nil && held {
+			s.refreshReplica(ctx)
 			return
 		}
 		if s.held.Swap(false) {
@@ -282,7 +440,93 @@ func (s *PostgresStore) checkClaim() {
 		s.logger.Error("another session holds this process's owner claim; new invocations stay refused", "owner", s.owner)
 	default:
 		s.logger.Warn("the invocation store re-took its owner claim", "owner", s.owner)
+		s.refreshReplica(ctx)
 	}
+}
+
+// upsertReplica writes this replica's row in host_replicas: its slots,
+// whether it admits work, and now as the time it was last seen.
+func (s *PostgresStore) upsertReplica(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO `+s.replicas+` (owner, slots, admitting, seen_at) VALUES ($1, $2, $3, now())
+		 ON CONFLICT (owner) DO UPDATE SET slots = EXCLUDED.slots, admitting = EXCLUDED.admitting, seen_at = now()`,
+		s.owner, s.slots, s.admitting.Load())
+	return err
+}
+
+// refreshReplica is upsertReplica at a claim check. A failure is logged, and
+// the row goes stale (the fleet stops counting its slots) until a later
+// check writes it.
+func (s *PostgresStore) refreshReplica(ctx context.Context) {
+	if err := s.upsertReplica(ctx); err != nil {
+		s.logger.Warn("could not refresh this replica's row in the fleet registry", "owner", s.owner, "error", err)
+	}
+}
+
+// SetAdmitting records at once whether this replica takes new work. The
+// host calls SetAdmitting(false) when it starts to drain (SIGTERM). From
+// then on the fleet capacity does not count this replica's slots, so no new
+// generation is admitted on the slots of a replica that is going away.
+func (s *PostgresStore) SetAdmitting(ctx context.Context, admitting bool) error {
+	s.admitting.Store(admitting)
+	return s.upsertReplica(ctx)
+}
+
+// liveSeconds is the age, in seconds, below which a replica row is live.
+func (s *PostgresStore) liveSeconds() float64 {
+	return (replicaLiveChecks * s.claimCheck).Seconds()
+}
+
+// capacityQuery reads the fleet capacity and the live replica count.
+func (s *PostgresStore) capacityQuery() string {
+	return `SELECT COALESCE(sum(slots), 0)::int, count(*)::int FROM ` + s.replicas +
+		` WHERE admitting AND seen_at > now() - make_interval(secs => $1)`
+}
+
+// activeQuery counts the unfinished slot-holding invocations.
+func (s *PostgresStore) activeQuery() string {
+	return `SELECT count(*)::int FROM ` + s.invocations + ` WHERE holds_slot AND finished_at IS NULL`
+}
+
+// FleetSlots reads the fleet's slot report (FleetSlotter).
+func (s *PostgresStore) FleetSlots(ctx context.Context) (FleetCapacity, error) {
+	var capacity FleetCapacity
+	if err := s.pool.QueryRow(ctx, s.capacityQuery(), s.liveSeconds()).Scan(&capacity.Total, &capacity.Replicas); err != nil {
+		return FleetCapacity{}, err
+	}
+	if err := s.pool.QueryRow(ctx, s.activeQuery()).Scan(&capacity.Active); err != nil {
+		return FleetCapacity{}, err
+	}
+	return capacity, nil
+}
+
+// RunningInvocations lists every unfinished invocation of the fleet with its
+// labels (FleetLister): what a deletion matches on any replica.
+func (s *PostgresStore) RunningInvocations(ctx context.Context) ([]RunningInvocation, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT invocation_id, toolkit_name, tool_name, labels FROM `+s.invocations+` WHERE finished_at IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var running []RunningInvocation
+	for rows.Next() {
+		var (
+			info   RunningInvocation
+			labels []byte
+		)
+		if err := rows.Scan(&info.ID, &info.Toolkit, &info.Tool, &labels); err != nil {
+			return nil, err
+		}
+		info.Labels = map[string]string{}
+		if len(labels) > 0 {
+			if err := json.Unmarshal(labels, &info.Labels); err != nil {
+				return nil, fmt.Errorf("invocation %s: stored labels are not a string map: %w", info.ID, err)
+			}
+		}
+		running = append(running, info)
+	}
+	return running, rows.Err()
 }
 
 // DSN is the connection string the store was built with.
@@ -294,6 +538,13 @@ func (s *PostgresStore) Close() {
 	s.closeOnce.Do(func() {
 		close(s.stop)
 		<-s.done
+		// The fleet stops counting this replica's slots at once, not when
+		// its row goes stale.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if _, err := s.pool.Exec(ctx, `DELETE FROM `+s.replicas+` WHERE owner = $1`, s.owner); err != nil {
+			s.logger.Warn("could not remove this replica from the fleet registry", "owner", s.owner, "error", err)
+		}
+		cancel()
 		s.claimMu.Lock()
 		if s.claim != nil {
 			_ = s.claim.Close(context.Background())
@@ -311,23 +562,75 @@ func (s *PostgresStore) Owner() string { return s.owner }
 // Durable reports true: a row survives this process.
 func (s *PostgresStore) Durable() bool { return true }
 
-// Create inserts the accepted invocation under this owner, and refuses it
-// with ErrClaimLost while the owner claim is not held.
+// Create inserts the accepted invocation under this owner, with its labels
+// and its slot flag. It refuses the invocation with ErrClaimLost while the
+// owner claim is not held. An invocation that is terminal already (a
+// refusal the manager records at once) is inserted with its result and
+// finished_at.
+//
+// A slot-holding invocation (HoldsSlot) is admitted against the FLEET, in
+// one transaction under the fleet lock. The capacity is the sum of the
+// slots of the live replicas that admit work; the load is the unfinished
+// slot-holding rows. When the load is at the capacity, Create inserts
+// nothing and returns a *NoSlotError (errors.Is ErrNoSlot). The lock makes
+// two replicas that admit at the same moment see each other's row.
 func (s *PostgresStore) Create(ctx context.Context, invocation *Invocation) error {
 	if !s.held.Load() {
 		return ErrClaimLost
 	}
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO invocations (invocation_id, toolkit_name, tool_name, status, owner) VALUES ($1, $2, $3, $4, $5)`,
-		invocation.ID, invocation.Toolkit, invocation.Tool, invocation.Status, s.owner)
-	return err
+	labels := []byte(`{}`)
+	if len(invocation.Labels) > 0 {
+		encoded, err := json.Marshal(invocation.Labels)
+		if err != nil {
+			return err
+		}
+		labels = encoded
+	}
+	var result []byte
+	if invocation.Result != nil {
+		encoded, err := json.Marshal(invocation.Result)
+		if err != nil {
+			return err
+		}
+		result = encoded
+	}
+	insert := `INSERT INTO ` + s.invocations + ` (invocation_id, toolkit_name, tool_name, status, owner, labels, holds_slot, result, finished_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $9::boolean THEN now() END)`
+	arguments := []any{invocation.ID, invocation.Toolkit, invocation.Tool, invocation.Status, s.owner,
+		string(labels), invocation.HoldsSlot, result, invocation.Terminal()}
+	if !invocation.HoldsSlot {
+		_, err := s.pool.Exec(ctx, insert, arguments...)
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, s.fleetKey); err != nil {
+		return err
+	}
+	var capacity, replicas, active int
+	if err := tx.QueryRow(ctx, s.capacityQuery(), s.liveSeconds()).Scan(&capacity, &replicas); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, s.activeQuery()).Scan(&active); err != nil {
+		return err
+	}
+	if active >= capacity {
+		return &NoSlotError{Total: capacity}
+	}
+	if _, err := tx.Exec(ctx, insert, arguments...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // Get reads one row; nil when there is none.
 func (s *PostgresStore) Get(ctx context.Context, toolkit, tool, id string) (*Invocation, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT invocation_id, toolkit_name, tool_name, status, stop_requested, result, created_at, finished_at
-		   FROM invocations WHERE toolkit_name = $1 AND tool_name = $2 AND invocation_id = $3`,
+		   FROM `+s.invocations+` WHERE toolkit_name = $1 AND tool_name = $2 AND invocation_id = $3`,
 		toolkit, tool, id)
 	var (
 		invocation Invocation
@@ -368,7 +671,7 @@ func (s *PostgresStore) Update(ctx context.Context, invocation *Invocation) erro
 		result = encoded
 	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE invocations SET status = $1, stop_requested = stop_requested OR $2, result = $3,
+		`UPDATE `+s.invocations+` SET status = $1, stop_requested = stop_requested OR $2, result = $3,
 		        finished_at = CASE WHEN $4 THEN now() ELSE finished_at END
 		  WHERE invocation_id = $5 AND owner = $6 AND finished_at IS NULL`,
 		invocation.Status, invocation.StopRequest, result, invocation.Terminal(), invocation.ID, s.owner)
@@ -377,15 +680,17 @@ func (s *PostgresStore) Update(ctx context.Context, invocation *Invocation) erro
 
 // RequestStop records a stop request on the row, and nothing else: the
 // replica that owns the run may be writing its terminal body at the same
-// moment (Manager.Cancel).
+// moment (Manager.Cancel). A row that ended already is left as it is: a
+// stop that arrives late (a second cancel, a bus message after the poll)
+// changes nothing on a terminal row.
 func (s *PostgresStore) RequestStop(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE invocations SET stop_requested = true WHERE invocation_id = $1`, id)
+	_, err := s.pool.Exec(ctx, `UPDATE `+s.invocations+` SET stop_requested = true WHERE invocation_id = $1 AND finished_at IS NULL`, id)
 	return err
 }
 
 // AppendEvent stores one thinking event.
 func (s *PostgresStore) AppendEvent(ctx context.Context, id, message string) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO invocation_events (invocation_id, message) VALUES ($1, $2)`, id, message)
+	_, err := s.pool.Exec(ctx, `INSERT INTO `+s.events+` (invocation_id, message) VALUES ($1, $2)`, id, message)
 	return err
 }
 
@@ -393,7 +698,7 @@ func (s *PostgresStore) AppendEvent(ctx context.Context, id, message string) err
 // ONE statement, so the read and the clear cannot interleave with another
 // poller's.
 func (s *PostgresStore) DrainEvents(ctx context.Context, invocation *Invocation) ([]map[string]any, error) {
-	rows, err := s.pool.Query(ctx, `DELETE FROM invocation_events WHERE invocation_id = $1 RETURNING message, id`, invocation.ID)
+	rows, err := s.pool.Query(ctx, `DELETE FROM `+s.events+` WHERE invocation_id = $1 RETURNING message, id`, invocation.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +729,7 @@ func (s *PostgresStore) DrainEvents(ctx context.Context, invocation *Invocation)
 // Prune deletes terminal rows older than the retention; events cascade.
 func (s *PostgresStore) Prune(ctx context.Context, olderThan time.Duration) (int, error) {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM invocations WHERE finished_at IS NOT NULL AND finished_at < now() - make_interval(secs => $1)`,
+		`DELETE FROM `+s.invocations+` WHERE finished_at IS NOT NULL AND finished_at < now() - make_interval(secs => $1)`,
 		olderThan.Seconds())
 	if err != nil {
 		return 0, err
@@ -471,7 +776,7 @@ func (s *PostgresStore) reconcile(ctx context.Context, startup bool) (int, error
 		return 0, err
 	}
 	defer conn.Release()
-	rows, err := conn.Query(ctx, `SELECT DISTINCT owner FROM invocations WHERE finished_at IS NULL AND owner IS DISTINCT FROM $1`, s.owner)
+	rows, err := conn.Query(ctx, `SELECT DISTINCT owner FROM `+s.invocations+` WHERE finished_at IS NULL AND owner IS DISTINCT FROM $1`, s.owner)
 	if err != nil {
 		return 0, err
 	}
@@ -544,13 +849,20 @@ func (s *PostgresStore) reconcile(ctx context.Context, startup bool) (int, error
 	if reconciled > 0 {
 		s.logger.Warn("reconciled invocations orphaned by a process that is gone", "count", reconciled)
 	}
+	// A replica that died without Close leaves its row. The fleet stopped
+	// counting it when it went stale; it is deleted much later, so a replica
+	// that was cut off for some time finds its row again.
+	if _, err := conn.Exec(ctx, `DELETE FROM `+s.replicas+` WHERE seen_at < now() - make_interval(secs => $1)`,
+		(replicaStaleChecks * s.claimCheck).Seconds()); err != nil {
+		return reconciled, err
+	}
 	return reconciled, nil
 }
 
 // terminateOrphans ends every in-flight row of owner (nil: rows with no
 // owner at all) with the restart error.
 func (s *PostgresStore) terminateOrphans(ctx context.Context, owner *string) (int, error) {
-	rows, err := s.pool.Query(ctx, `SELECT invocation_id, tool_name FROM invocations WHERE finished_at IS NULL AND owner IS NOT DISTINCT FROM $1`, owner)
+	rows, err := s.pool.Query(ctx, `SELECT invocation_id, tool_name FROM `+s.invocations+` WHERE finished_at IS NULL AND owner IS NOT DISTINCT FROM $1`, owner)
 	if err != nil {
 		return 0, err
 	}
@@ -572,7 +884,7 @@ func (s *PostgresStore) terminateOrphans(ctx context.Context, owner *string) (in
 		body := ToolError(s.logger, o.id, o.tool, Failf(KindRuntime, "The service restarted while this invocation was running, so it did not complete. Start it again."))
 		encoded, _ := json.Marshal(body)
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE invocations SET status = $1, result = $2, finished_at = now(), owner = $3 WHERE invocation_id = $4 AND finished_at IS NULL`,
+			`UPDATE `+s.invocations+` SET status = $1, result = $2, finished_at = now(), owner = $3 WHERE invocation_id = $4 AND finished_at IS NULL`,
 			statusStopped, encoded, s.owner, o.id); err != nil {
 			return i, err
 		}
@@ -583,6 +895,6 @@ func (s *PostgresStore) terminateOrphans(ctx context.Context, owner *string) (in
 // Count is the number of rows, for tests and health.
 func (s *PostgresStore) Count(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM invocations`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+s.invocations).Scan(&n)
 	return n, err
 }
