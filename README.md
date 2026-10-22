@@ -32,7 +32,7 @@ elitea-platform/
 - [Podman](https://podman.io/docs/installation) with podman-compose
 - [Task](https://taskfile.dev/installation/) (task runner)
 - [Node.js 24+](https://nodejs.org/) (for UI development)
-- [Helm 3.16+](https://helm.sh/docs/intro/install/) (for chart linting)
+- [Helm 4.3+](https://helm.sh/docs/intro/install/) (for chart linting; Helm 3.8+ still renders the chart, as Argo CD does)
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ podman compose -f deploy/docker-compose.yml up --build
 
 elitea-main is the browser edge of the local compose stack, on host port `8080`:
 it serves the API itself, relays `/app` and `/docs` to the SPA container and
-redirects `/` to `/app/` (`ELITEA_WEB_UPSTREAM`; no Traefik). The Helm chart
+redirects `/` to `/app/` (`ELITEA_WEB_UPSTREAM`). The Helm chart
 uses the same edge: its Ingress or HTTPRoute is one `/` route to elitea-main.
 
 Services will be available at:
@@ -284,12 +284,23 @@ go test ./...        # Test everything
 
 ### Helm Deployment
 
-```bash
-helm template my-release deploy/helm/elitea-main/ \
-  -f deploy/helm/elitea-main/values-staging.yaml
+One chart installs everything, NATS JetStream and its bootstrap included
+(`deploy/helm/elitea`, published as `oci://ghcr.io/elitea-ng/charts/elitea`).
+The embedded docs walk a full install (Deployment › Deploy from scratch, and
+Deploy on GKE with Argo CD for Google Cloud):
 
-helm upgrade --install elitea-main deploy/helm/elitea-main/ \
-  -f deploy/helm/elitea-main/values-staging.yaml \
+```bash
+# The three settings the chart refuses to guess.
+REQUIRED=(--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1
+  --set-string llmGateway.egressPosture=public-unrestricted
+  --set networkPolicies.main.noExternalIngress=true)
+
+helm template elitea deploy/helm/elitea -n elitea \
+  -f deploy/helm/elitea/values-staging.yaml "${REQUIRED[@]}"
+
+# No --wait on a first install: the NATS bootstrap is a post-install hook.
+helm upgrade --install elitea deploy/helm/elitea \
+  -f deploy/helm/elitea/values-staging.yaml "${REQUIRED[@]}" \
   -n elitea --create-namespace
 ```
 

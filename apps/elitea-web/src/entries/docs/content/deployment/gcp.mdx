@@ -5,12 +5,14 @@ description: "The Google Cloud choices for a from-scratch install: a GKE cluster
 
 This page is the Google Cloud companion to [Deploy from scratch](/deployment/from-scratch), for chart **4.60.0 or newer**. Follow that guide step by step. Where a step has a GCP-specific answer, this page gives it. The goal is an install where **no static cloud credential exists anywhere**: object storage and the model providers authenticate as Google service accounts through GKE Workload Identity.
 
+The chart ships these answers as one example values file, `values-gke.yaml`: Cloud SQL, keyless GCS, the GKE Ingress, Google's load-balancer ranges in the NetworkPolicy, and secrets from Google Secret Manager through External Secrets, sized for about 4 vCPU and 10 GiB. [Deploy on GKE with Argo CD](/deployment/gke-argocd) installs it as one Argo CD Application, with every precondition and its command.
+
 | From-scratch step | On GCP |
 |---|---|
 | Prerequisites | [GKE cluster](#the-cluster) with Dataplane V2 and Workload Identity |
 | Step 2: PostgreSQL | [Cloud SQL for PostgreSQL 16+](#cloud-sql-for-postgresql), private IP |
 | Step 3: Object storage | [GCS bucket](#gcs-bucket-with-no-keys), Workload Identity, no Secret |
-| Step 7: The edge | [Envoy Gateway behind a Google load balancer](#the-edge), or the GKE Gateway with caveats |
+| Step 7: The edge | [The GKE Ingress](#the-edge) the chart renders, or a Gateway of your own |
 | Step 8: Models | [Vertex AI or AI DIAL with a service account](#platform-models-with-a-service-account), configured in the admin console |
 
 ## The cluster
@@ -21,7 +23,7 @@ Create a GKE Standard or Autopilot cluster with:
 - **Workload Identity Federation for GKE** (`--workload-pool=<PROJECT_ID>.svc.id.goog`). Every keyless path on this page depends on it.
 - **A private cluster**, with Cloud NAT for egress to model providers and to `ghcr.io`, where the images are published.
 - A node pool with at least one node that has **2 free CPUs** for the worker during a rolling update.
-- Optional: a **GKE Sandbox** node pool (`--sandbox type=gvisor`) if you will turn on the cloud executor. GKE installs the `gvisor` RuntimeClass itself, so the `elitea-sandbox-runtime` chart is not needed. See [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes).
+- Optional: a **GKE Sandbox** node pool (`--sandbox type=gvisor`) if you will turn on the cloud executor. GKE installs the `gvisor` RuntimeClass itself, so leave the chart's sandbox-runtime installer (`sandboxRuntime.enabled`) off. See [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes).
 
 Install cert-manager as the from-scratch guide says.
 
@@ -117,24 +119,48 @@ With no Secret and no annotation, the Google client library falls back to the no
 
 ## The edge
 
-The from-scratch Step 7 lists what the edge must do: split paths, **strip identity headers**, keep server-sent event streams open for minutes, accept 150 MiB uploads, and serve the MCP path, which needs a regular-expression match. Two ways to meet that on GKE:
+The public edge is one route, `/` to `elitea-main:8080`: elitea-main relays `/app` and `/docs` to elitea-web, serves its MCP endpoint itself, and deletes client-supplied identity headers before any route runs. From-scratch [Step 7](/deployment/from-scratch#step-7-the-edge) lists what the edge must still do: keep server-sent event streams open for minutes and accept 150 MiB uploads.
 
 <Tabs>
-<Tab title="Envoy Gateway (recommended)">
-Install [Envoy Gateway](https://gateway.envoyproxy.io/) into the cluster and expose its data plane with a `Service` of type `LoadBalancer`, which GKE implements as a passthrough Network Load Balancer. TLS terminates at Envoy, using a certificate from cert-manager (for example, Let's Encrypt through an ACME `ClusterIssuer`) or one you import.
+<Tab title="GKE Ingress (recommended)">
+The chart renders it: the standard Google Cloud external Application Load Balancer, with container-native load balancing straight to the elitea-main pods.
 
-Every route, filter and timeout in the from-scratch Step 7 then applies **unchanged**, including the MCP regex rule. Use the `ingressFrom` selector shown there (`app.kubernetes.io/name: envoy` in `envoy-gateway-system`).
+```yaml
+main:
+  ingress:
+    enabled: true
+    className: gce
+    annotations:
+      kubernetes.io/ingress.global-static-ip-name: elitea-ip   # gcloud compute addresses create elitea-ip --global
+    hosts: [elitea.example.com]
+    tls:
+      - secretName: elitea-tls
+        hosts: [elitea.example.com]
+    certManager:
+      clusterIssuer: <your ClusterIssuer>
+    gke:
+      enabled: true
+      backendConfig:
+        securityPolicy: ""     # a Cloud Armor policy, optional
+      frontendConfig:
+        sslPolicy: ""          # an SSL policy, optional
 
-To use Cloud Armor, put a Google Application Load Balancer in front of this Service as well. The routing rules stay in Envoy either way.
+networkPolicies:
+  main:
+    ingressFrom:               # no ingress pods: Google's front ends connect directly
+      - ipBlock: {cidr: 35.191.0.0/16}
+      - ipBlock: {cidr: 130.211.0.0/22}
+```
+
+`main.ingress.gke` adds a **BackendConfig** (`timeoutSec: 3600`, so a streamed answer outlives the load balancer's 30-second default; an HTTP health check on `/healthz` port 8080; connection draining; the optional Cloud Armor policy) and a **FrontendConfig** (HTTP to HTTPS redirect, the optional SSL policy). `main.ingress.certManager` has cert-manager issue the `tls` Secret the load balancer serves. Add Google's ranges to `ELITEA_TRUSTED_PROXY_CIDRS` too.
+
+Behind a CDN or proxy, issue the origin certificate through that provider's cert-manager issuer (`certManager.issuerKind`, `issuerGroup`) and attach a Cloud Armor policy that admits only the proxy's ranges; [Deploy on GKE with Argo CD](/deployment/gke-argocd#edge-ip-dns-tls-and-an-optional-proxy) has the commands. elitea-main writes a comment into every idle stream after 25 seconds, inside a proxy's idle timeout of about 100 seconds.
 </Tab>
-<Tab title="GKE Gateway (managed)">
-The GKE Gateway controller (`gatewayClassName: gke-l7-global-external-managed`) works, with differences you must handle and then test:
+<Tab title="A Gateway">
+Any Gateway API implementation works with the one route, the managed GKE Gateway (`gke-l7-global-external-managed`) included: render it with `main.ingress.gatewayApi: true`, or apply `deploy/gateway-api/httproute.yaml`.
 
-- **No MCP endpoint.** GKE's HTTPRoute supports `Exact` and `PathPrefix` path matches only. Leave out the `RegularExpression` rule. Everything except Elitea's MCP server works.
-- **Stream timeouts.** The load balancer's backend timeout defaults to 30 seconds. Attach a `GCPBackendPolicy` to the `elitea-main` Service that raises `timeoutSec` to cover a whole model answer, for example 3600.
-- **Health checks.** Attach a `HealthCheckPolicy` that checks `/healthz` on `elitea-main:8080` and `/app/` on `elitea-web:80`.
-- **NetworkPolicy.** There are no gateway pods. Google's front ends connect to the pods directly, so `networkPolicies.main.ingressFrom` must be an `ipBlock` for Google's load-balancer ranges (`35.191.0.0/16`, `130.211.0.0/22`). `ELITEA_TRUSTED_PROXY_CIDRS` must include them too.
-- **Header stripping is mandatory.** Keep the `RequestHeaderModifier` filter of Step 7. After the bullet above, Google's front ends are trusted proxies, so a header that is not stripped becomes a forged identity.
+- **The managed GKE Gateway** has the same 30-second backend default: attach a `GCPBackendPolicy` to the `elitea-main` Service with `timeoutSec` of, for example, 3600, and a `HealthCheckPolicy` on `/healthz` port 8080. It has no gateway pods, so `networkPolicies.main.ingressFrom` is the two `ipBlock`s above.
+- **Envoy Gateway** in the cluster, exposed by a `Service` of type `LoadBalancer`: select its data-plane pods in `ingressFrom` (`app.kubernetes.io/name: envoy` in `envoy-gateway-system`).
 
 Run every check of the from-scratch Step 9 before go-live.
 </Tab>
@@ -228,16 +254,14 @@ Then open a chat as any user, pick a shared model and send a message.
 
 ## Checklist for the values file
 
-On top of the from-scratch values file:
+On top of the from-scratch values file (the chart's `values-gke.yaml` has all of this, plus the edge and `externalSecrets`):
 
 ```yaml
 networkPolicies:
   main:
-    ingressFrom:            # Envoy Gateway; see "The edge" for the GKE Gateway
-      - namespaceSelector:
-          matchLabels: {kubernetes.io/metadata.name: envoy-gateway-system}
-        podSelector:
-          matchLabels: {app.kubernetes.io/name: envoy}
+    ingressFrom:            # the GKE Ingress; see "The edge" for a Gateway
+      - ipBlock: {cidr: 35.191.0.0/16}
+      - ipBlock: {cidr: 130.211.0.0/22}
 
 main:
   serviceAccount:
@@ -246,7 +270,7 @@ main:
   env:
     STORAGE_BACKEND: "gcs"
     STORAGE_CONTAINER: "<project>-elitea-artifacts"
-    ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>"
+    ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>,35.191.0.0/16,130.211.0.0/22"
     ELITEA_ALLOW_PROJECT_OWN_LLMS: "false"
   # remove S3_ACCESS_KEY / S3_SECRET_KEY from main.secrets
 
@@ -258,4 +282,4 @@ llmGateway:
     enabled: true
 ```
 
-{/* source: deploy/helm/elitea/values.yaml (main.env GCS_ENDPOINT, main.serviceAccount, llmGateway.serviceAccount, llmGateway.workloadIdentity, sandboxKubernetes.runtimeClass); deploy/helm/elitea/env-drift-allowlist.txt (GOOGLE_APPLICATION_CREDENTIALS not wired); services/elitea-main/internal/infra/storage/gcs/backend.go (ADC, no presign, lifecycle); services/elitea-llm-gateway/internal/account (workload identity for platform credentials); deploy/helm/elitea-sandbox-runtime/README.md (not needed on GKE). GKE Gateway caveats are GKE product behaviour, not tested by this repository: verify against Google's GKE Gateway documentation for your GKE version. */}
+{/* source: deploy/helm/elitea/values.yaml (main.env GCS_ENDPOINT, main.serviceAccount, llmGateway.serviceAccount, llmGateway.workloadIdentity, sandboxKubernetes.runtimeClass); deploy/helm/elitea/env-drift-allowlist.txt (GOOGLE_APPLICATION_CREDENTIALS not wired); services/elitea-main/internal/infra/storage/gcs/backend.go (ADC, no presign, lifecycle); services/elitea-llm-gateway/internal/account (workload identity for platform credentials); deploy/helm/elitea-sandbox-runtime/README.md (not needed on GKE); deploy/helm/elitea/values-gke.yaml; deploy/helm/elitea/values.yaml (main.ingress.gke, main.ingress.certManager, sandboxRuntime); deploy/helm/tests/render-gke-ingress.sh; docs/UPGRADING.md (GKE Ingress support and SSE keepalives, one edge route). GKE Gateway policies are GKE product behaviour, not tested by this repository: verify against Google's GKE Gateway documentation for your GKE version. */}

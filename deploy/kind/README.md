@@ -30,7 +30,7 @@ it ships to production (ADR-0023):
   It also drops the provider override. That is how
   `.github/workflows/helm-install-smoke.yml` runs this stack on a GitHub
   runner.
-* `kind` v0.33+, `kubectl`, `helm` v3/v4, `python3`, `curl`.
+* `kind` v0.33+, `kubectl`, `helm` 4.3+ (3.8+ also works), `python3`, `curl`.
 * Network access for the first run only: the cert-manager chart and its
   images, and the NATS images, which the node pulls (the upstream NATS chart
   is vendored in `deploy/helm/elitea/charts/nats`). Everything else is built

@@ -223,7 +223,7 @@ helpers. NATS runs the `scratch` image `nats:2.12.0` (no OS), with a
 `nats-health` sidecar for its compose health check. Two documented
 exceptions (owner decisions, 2026-10-06):
 
-- the short-lived `nats-bootstrap` job keeps `natsio/nats-box`, which NATS
+- the short-lived NATS bootstrap Job (`elitea-nats-bootstrap`) keeps `natsio/nats-box`, which NATS
   publishes on Alpine only;
 - the nginx image, `elitea-web`, stays on
   `nginx:stable-alpine`. Its image scan is blocking, and every Debian
@@ -276,6 +276,14 @@ kubectl apply -f deploy/argocd/app-of-apps.yaml
 `kubectl apply -f deploy/argocd/` reaches only that file — kubectl does not
 recurse — which is the intended behaviour: the children are created by ArgoCD.
 
+`deploy/argocd/examples/gke/` is a copyable layout for an operator's own GitOps
+repository on GKE: a root, one `elitea` Application that pulls the published
+OCI chart with `values-gke.yaml` and externalSecrets on, and the bootstrap
+objects applied once by hand (the OCI repository registration, a
+ClusterSecretStore on Google Secret Manager). The root above never renders it;
+the `argocd` job in `helm-lint.yml` validates its Applications against the
+same schema. The embedded docs page "Deploy on GKE with Argo CD" walks it.
+
 The root syncs nothing usable on its own. Two values have no chart default and
 cannot get one, and the platform chart refuses to render without them. Read
 [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
@@ -290,21 +298,26 @@ address. Those copies had already drifted apart.
 
 | Chart (`deploy/helm/`) | ArgoCD Application | Wave | Namespace | Status |
 |---|---|---|---|---|
-| `nats` | `applications/nats.yaml` | -2 | `elitea` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. mTLS-only with its own CA Issuer (#1076), so it shares the platform's namespace. |
-| `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea` | **Production reference.** Idempotent Helm hook Job that owns every stream and KV bucket; HA needs `replicas=3`. |
-| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
-| `elitea-sandbox-runtime` | none (optional, installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Optional node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
+| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform, one release.** elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, the vector store, the DeepWiki and Inventory provider services, and NATS JetStream with its bootstrap Job: the upstream NATS chart 1.3.9 is a dependency vendored in `charts/nats` (`nats.enabled`, on by default; `natsBootstrap.*`; HA with `values-nats-ha.yaml`). The sandbox-runtime installer is a second dependency, off by default (`sandboxRuntime.enabled`; k3s and EKS turn it on, GKE and AKS leave it off). |
+| `elitea-sandbox-runtime` | none (a dependency of `elitea`, or installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. Normally enabled through `elitea`'s `sandboxRuntime`; still published standalone. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
+
+The `nats` and `nats-bootstrap` charts are retired and no longer published;
+docs/UPGRADING.md ("One chart: NATS bundled") moves an install from the three
+Applications to the one.
 
 Components of the `elitea` chart are switched by `<component>.enabled`, and
 `deploy/helm/elitea/values.yaml` holds every one of them. Ordering inside the
-platform is Helm hook ordering, not a sync wave: the migration runs
-`pre-install,pre-upgrade` and Helm blocks the release until it finishes, the
-workload-session Job follows it, and the runtime command bus's JetStream
-streams and durable consumers are created by the `nats-bootstrap` hook
-(docs/runtime-command-bus.md). A failed migration aborts the release, and the previous pods
+platform is Helm hook ordering plus sync waves inside the one Application: the
+migration runs `pre-install,pre-upgrade` (PreSync) and blocks the release
+until it finishes, the workload-session Job follows it, then the NATS server,
+its certificates and the `elitea-nats-bootstrap` Job (a Sync hook) run in wave
+-10, the vector store in -5, the platform in 0 and the worker in 1. The
+bootstrap Job creates the runtime command bus's JetStream streams and durable
+consumers (docs/runtime-command-bus.md). With the Helm CLI the bootstrap is a
+`post-install,post-upgrade` hook, so a FIRST install must not use `--wait`. A failed migration aborts the release, and the previous pods
 keep serving.
 
-Three charts, and that is all of them: `helm lint`, the template matrix and
+Two charts, and that is all of them: `helm lint`, the template matrix and
 `publish.yml` each read `deploy/helm/*/Chart.yaml`, so a fourth chart fails CI
 until somebody templates and publishes it.
 
@@ -577,10 +590,10 @@ Four properties of the published artifact that the in-repo chart does not have:
   `pullPolicy: IfNotPresent`, which means a node holding an older cached
   `latest` layer keeps serving it — the release job stamps the tag at package
   time so the published chart cannot install that way.
-- **`appVersion` tracks the platform release** for that same chart. The two
-  charts that deploy a third-party image (`nats`, `nats-bootstrap`) keep their
-  deliberate upstream pin, because a platform release number means nothing to
-  those images' registries.
+- **`appVersion` tracks the platform release** for that same chart. The
+  bundled NATS dependency keeps its deliberate upstream pins (chart 1.3.9,
+  the `nats` and `natsio/nats-box` images), because a platform release number
+  means nothing to those images' registries.
 - **Charts are cosign-signed**, keyless, exactly as the images are:
 
   ```bash
@@ -616,7 +629,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
-| `ELITEA_EVENTS_NATS_URL` | **derived** from `nats` (`tls://`) | derived | the shared NATS, with JetStream and the bootstrap's assets; main presents its own client certificate (`nats.tls`, #1076) |
+| `ELITEA_EVENTS_NATS_URL` | **derived** from `natsClient` (`tls://`) | derived | the bundled NATS (or yours), with JetStream and the bootstrap's assets; main presents its own client certificate (`natsClient.tls`, #1076) |
 | `ADMIN_UI_STATIC_DIR` | **set** | set | the image ships the bundle at it |
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
@@ -1295,15 +1308,16 @@ the Application values instead. The order is the same.
 
 Stated plainly, because the gap between compose and Helm is where deploys break:
 
-- **No PostgreSQL and no NATS.** No chart here provisions them. (No Redis is
+- **No PostgreSQL.** No chart here provisions it. (No Redis is
   needed at all: `runtimeRedis` is removed and the chart refuses values that
   still set it; see `docs/UPGRADING.md`.) The migration hook fails against a cluster where PostgreSQL does not already
   exist or `postgresql.existingSecret` has not been pointed at it, and
   elitea-main stops at startup when the NATS named by `nats` (its
   `ELITEA_EVENTS_NATS_URL`) is unreachable, has no JetStream, or lacks the
-  presence bucket the `nats-bootstrap` Job creates. The NATS chart in this
-  directory is the reference server; it requires cert-manager (its own CA
-  Issuer, #1076), and every NATS client presents a certificate from it.
+  presence bucket the `elitea-nats-bootstrap` Job creates. NATS itself is
+  bundled in the `elitea` chart (`nats.enabled`); it requires cert-manager
+  (its own CA Issuer, #1076), and every NATS client presents a certificate
+  from it.
   The table in [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
   names both.
   The database itself may be **empty**. `elitea-migrate` embeds the pylon-era
@@ -1323,7 +1337,7 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   (`internal/api/webedge`, turned on by `ELITEA_WEB_UPSTREAM`, which the chart
   sets to the elitea-web Service whenever `web.enabled` is true) and keeps the
   MCP server (`/app/<project id>/mcp`) and its icon file servers under `/app`.
-  No rule names elitea-web, and none needs a RegularExpression match.
+  No rule names elitea-web, and none needs a regular-expression path match.
   `deploy/gateway-api/httproute.yaml` is the same one-rule shape for a Gateway
   managed outside the release. `services/elitea-main/tests/deployedge/` drives
   the routing through the real router and holds the manifest to that shape
@@ -1345,22 +1359,19 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   every idle stream (chat, project events, notifications, `/llm`, MCP
   `tools/call`) at least every 40 seconds, so a proxy idle timeout of about 100
   seconds does not drop one.
-- **One namespace for NATS and the platform.** The Argo CD sample installs
-  NATS, its bootstrap and the platform into `elitea`. That is not a
-  convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer
+- **One namespace for NATS and the platform.** The bundled NATS, its
+  bootstrap and the platform are one release in one namespace. That is not a
+  convenience: the NATS CA is a NAMESPACED cert-manager Issuer
   (`elitea-nats-ca`), and the platform's NATS client Certificates are issued
-  by it, so they must live in its namespace (#1076); the platform chart
-  refuses `nats.namespace` other than its own while `nats.tls.issuerRef` is a
-  namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
+  by it, so they must live in its namespace (#1076); the chart refuses
+  `natsClient.namespace` other than its own while `natsClient.tls.issuerRef`
+  is a namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
   mint a NATS identity — restrict both (`deploy/helm/elitea/NATS.md`, "Who
-  can mint a NATS identity"). To run NATS in another namespace, back a
-  `ClusterIssuer` with a CA used for NATS only, point
-  `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and
-  `security.issuerRef` + `security.ca.create=false` (NATS) at it, set
-  `nats.namespace`, and add the platform's namespace to the NATS chart's
-  `networkPolicy.clients` and, with approver-policy installed, to
-  `security.approverPolicy.clientNamespaces` (otherwise no policy approves
-  the platform's client certificates).
+  can mint a NATS identity"). To run NATS elsewhere, set `nats.enabled:
+  false`, back a `ClusterIssuer` with a CA used for NATS only, and point
+  `natsClient.tls.issuerRef`, `natsClient.service` and `natsClient.namespace`
+  at it; the bootstrap's identities follow (`natsBootstrap.tls.certificate.issuerRef`
+  defaults to the client issuer).
   The mount itself is no longer missing. `LLM_GATEWAY_CLIENT_CERT` and its two
   siblings are *file paths* (`llmproxy.Config.ClientCertFile`), and issue #463
   moved them out of the `secrets:` block — where a `secretKeyRef` had been

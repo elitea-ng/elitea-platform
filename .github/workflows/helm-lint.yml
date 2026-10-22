@@ -852,12 +852,18 @@ jobs:
       # CRDs-catalog), with -strict — so a misspelled spec field fails here
       # instead of silently doing nothing in the cluster. See the note in the
       # template job for why this replaces `kubectl apply --dry-run=client`.
+      # The examples under deploy/argocd/examples/ are copied into operators'
+      # own repositories, so their Applications are held to the same schema.
+      # Their bootstrap/ manifests (an ESO ClusterSecretStore, a repository
+      # Secret) are not: the pinned catalog has no external-secrets.io/v1
+      # schema.
       - name: Validate every Application against the Argo CD CRD schema
         run: |
           kubeconform -strict -summary -verbose \
             -schema-location default \
             -schema-location "$CRD_SCHEMAS" \
-            deploy/argocd/app-of-apps.yaml deploy/argocd/applications/*.yaml
+            deploy/argocd/app-of-apps.yaml deploy/argocd/applications/*.yaml \
+            deploy/argocd/examples/*/root.yaml deploy/argocd/examples/*/applications/*.yaml
 
       # Schema validity is not the failure mode that actually bites. These are:
       # a child that the app-of-apps root will never render, and a source.path
