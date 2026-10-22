@@ -2774,13 +2774,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		// elitea-vector's token introspection (ADR-0031), behind
 		// ELITEA_VECTOR_INTROSPECTION_CLIENTS, runtime on or off. The PAT
-		// validator is the form graph, as on the control listener; assigned
-		// through a nil INTERFACE so an OIDC-only deployment's absent graph
-		// is refused at boot rather than panicking on the first call.
-		var introspectionValidator vectorintrospection.TokenValidator
-		if formGraph != nil {
-			introspectionValidator = formGraph
-		}
+		// validator is the one that reads back what this deployment's
+		// callback minters sign (patSigner's rule): the form graph when there
+		// is one, else the APPLICATION_SECRET_KEY validator (sessionTokens),
+		// which is how a deployment without ELITEA_AUTH_CONFIG_FILE (the dev
+		// compose, OIDC-only) signs its DeepWiki and Inventory bearers. Both
+		// assigned through a nil INTERFACE, so a deployment with neither is
+		// refused at boot rather than panicking on the first call.
+		introspectionValidator := introspectionTokenValidator(formGraph, sessionTokens)
 		return withVectorIntrospection(services, runtimeConfig, runtimeRoot,
 			runtimecomposition.PlatformVectorIntrospection{
 				Validator:     introspectionValidator,
@@ -3291,5 +3292,20 @@ func startPipelineScheduleRunner(
 			logger.Error("the pipeline schedule runner stopped", "err", err)
 		}
 	}()
+	return nil
+}
+
+// introspectionTokenValidator is the PAT validator of elitea-vector's token
+// introspection on the platform listener: the form graph when there is one,
+// else the APPLICATION_SECRET_KEY validator, the pair that reads back what
+// the callback minters sign (patSigner's rule). A nil INTERFACE when neither
+// exists, never a typed nil, so the composition refuses it at boot.
+func introspectionTokenValidator(formGraph *authcomposition.FormGraph, sessionTokens apimw.TokenValidator) vectorintrospection.TokenValidator {
+	if formGraph != nil {
+		return formGraph
+	}
+	if sessionTokens != nil {
+		return sessionTokens
+	}
 	return nil
 }
