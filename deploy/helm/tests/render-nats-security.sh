@@ -3,7 +3,7 @@
 # RENDERED output of the three parts of the elitea chart that have to agree
 # about it:
 #
-#   nats (templates/nats/ + the vendored upstream chart)
+#   nats (templates/nats/ + the upstream chart dependency)
 #                               the server: NATS CA, server certificate,
 #                               TLS + verify_and_map, the permission table,
 #                               the ingress NetworkPolicy, its refusals
@@ -21,8 +21,8 @@
 # one. libs/go/natsconn/natstest runs every service's real code against the
 # rendered config for that (ci-go.yml, ci-gateway.yml).
 #
-# Needs helm and python3 + PyYAML. No network: the upstream nats subchart is
-# vendored in deploy/helm/elitea/charts/nats.
+# Run deploy/helm/elitea/build-deps.sh first (CI does). Needs helm and
+# python3 + PyYAML.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # deploy/

@@ -49,10 +49,10 @@ for shape in "${shapes[@]}"; do
   for src in dir pkg; do
     chart="$CHART"; [ "$src" = pkg ] && chart="${tgz[0]}"
     if ! "$HELM3" template ci "$chart" -n elitea "${args[@]}" > "$work/$name-$src-3.yaml" 2> "$work/err3"; then
-      echo "FAIL: $name ($src): Helm 3 refuses to render"; grep -v 'symbolic link' "$work/err3" | tail -3; fails=$((fails + 1)); continue
+      echo "FAIL: $name ($src): Helm 3 refuses to render"; tail -3 "$work/err3"; fails=$((fails + 1)); continue
     fi
     if ! "$HELM4" template ci "$chart" -n elitea "${args[@]}" > "$work/$name-$src-4.yaml" 2> "$work/err4"; then
-      echo "FAIL: $name ($src): Helm 4 refuses to render"; grep -v 'symbolic link' "$work/err4" | tail -3; fails=$((fails + 1)); continue
+      echo "FAIL: $name ($src): Helm 4 refuses to render"; tail -3 "$work/err4"; fails=$((fails + 1)); continue
     fi
     if python3 - "$work/$name-$src-3.yaml" "$work/$name-$src-4.yaml" <<'PY'
 import sys, yaml

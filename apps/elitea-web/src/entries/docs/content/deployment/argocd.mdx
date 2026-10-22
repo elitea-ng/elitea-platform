@@ -105,6 +105,17 @@ spec:
         - values-gke.yaml               # value files ship inside the chart
 ```
 
+The published chart carries its dependencies (the upstream NATS chart and the sandbox-runtime installer), so an OCI source needs nothing else and is the recommended source. A git source (`path: deploy/helm/elitea`) has no `charts/` (it is never committed): Argo CD runs `helm dependency build` itself from the committed `Chart.lock`, which needs the NATS chart repository reachable from the repo-server and, in an AppProject that restricts `sourceRepos`, listed there:
+
+```yaml
+spec:
+  sourceRepos:
+    - https://github.com/<your-organisation>/<your-fork>   # or this repository
+    - https://nats-io.github.io/k8s/helm/charts/           # the nats dependency
+```
+
+In an air-gapped cluster, mirror the published OCI chart instead.
+
 `deploy/argocd/examples/gke/` has the full Application, the repository registration and an example `ClusterSecretStore`.
 
 ## Image tag promotion

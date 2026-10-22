@@ -187,7 +187,7 @@ Argo CD pulls the chart from `ghcr.io` as an OCI Helm chart. Register the regist
 kubectl apply -f bootstrap/helm-repository.yaml
 ```
 
-Argo CD renders the chart with the Helm 3 it bundles, and the chart supports that (Helm 3.8 or newer). The Argo CD project you deploy into must allow the `elitea` namespace as a destination.
+Argo CD renders the chart with the Helm 3 it bundles, and the chart supports that (Helm 3.8 or newer). The Argo CD project you deploy into must allow the `elitea` namespace as a destination. The OCI chart carries its dependencies (the upstream NATS chart included), so the project needs no other source repository; a git source would also need `https://nats-io.github.io/k8s/helm/charts/` in `sourceRepos` (see [GitOps with Argo CD](/deployment/argocd#source-the-published-chart)).
 
 ### Resource budget
 

@@ -87,6 +87,11 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+  # A git source has no charts/ (it is never committed): the repo-server runs
+  # `helm dependency build` from the committed Chart.lock, so it must reach
+  # https://nats-io.github.io/k8s/helm/charts/, and a project that restricts
+  # sourceRepos must list it. The published OCI chart carries its
+  # dependencies and needs neither (deploy/argocd/examples/gke/).
   source:
     repoURL: https://github.com/elitea-ng/elitea-platform
     targetRevision: main

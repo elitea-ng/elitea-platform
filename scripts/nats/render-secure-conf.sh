@@ -13,8 +13,8 @@
 # nats-server on it, so the permission table under test is the chart's own and
 # not a copy.
 #
-# Needs helm and python3 + PyYAML. No network: the upstream nats subchart is
-# vendored in deploy/helm/elitea/charts/nats.
+# Needs helm and python3 + PyYAML, and network for the upstream nats subchart:
+# it runs deploy/helm/elitea/build-deps.sh (`helm dependency build`) first.
 set -euo pipefail
 
 out="${1:?usage: render-secure-conf.sh OUT_FILE [VALUES_FILE]}"
@@ -24,6 +24,7 @@ HELM="${HELM:-helm}"
 extra=()
 if [ -n "${2:-}" ]; then extra=(-f "$2"); fi
 
+bash "${chart}/build-deps.sh" >/dev/null
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 # The platform's own refusals run on every render, so state the two fields the

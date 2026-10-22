@@ -1,7 +1,7 @@
 # NATS JetStream — the platform's shared NATS
 
-The elitea chart bundles it: the upstream nats chart (`charts/nats`, vendored,
-`nats.enabled: true` by default) plus this chart's own security material
+The elitea chart bundles it: the upstream nats chart (a pinned `Chart.lock`
+dependency, `nats.enabled: true` by default) plus this chart's own security material
 (`templates/nats/`) and the JetStream bootstrap Job (`templates/natsBootstrap/`,
 `natsBootstrap`). `nats.enabled: false` keeps the bring-your-own-NATS contract:
 point `natsClient` at your server, give it the same accounts and identities, and
@@ -372,9 +372,12 @@ nats-box 0.19.7 ships 0.4.0).
 ## Profiles (design §8.1.1)
 
 `values.yaml` (`nats`: security, permission table, scale-1 topology) is always
-applied; the HA file layers the topology on top. `Chart.yaml` pins the upstream
-chart as a dependency and `charts/nats/` carries it, unpacked, so nothing is
-built before an install (`vendor-nats.sh` re-vendors it on a bump).
+applied; the HA file layers the topology on top. `Chart.yaml` and `Chart.lock`
+pin the upstream chart as a dependency. The published OCI chart carries it;
+from a clone, `deploy/helm/elitea/build-deps.sh` (`helm dependency build`)
+fetches it into `charts/`, which is never committed. To bump it: change the
+version in `Chart.yaml`, `helm dependency update deploy/helm/elitea`, commit
+`Chart.lock`.
 
 ### scale-1 — the default
 

@@ -1,25 +1,26 @@
 #!/usr/bin/env node
-// Every dependency a chart declares is satisfied by what sits in its charts/.
+// Every dependency a chart declares resolved into its charts/ as Chart.lock
+// pins it.
 //
 //   node scripts/ci/check-chart-deps.mjs deploy/helm/elitea [more charts...]
 //
-// The elitea chart VENDORS its dependencies (charts/nats unpacked, and
-// charts/elitea-sandbox-runtime a symlink), so neither CI nor a release ever
-// runs `helm dependency build`. `helm dependency list` reports each declared
-// dependency with a STATUS: `ok` (a packed .tgz matches) or `unpacked` (a
-// directory matches) is satisfied; anything else (`missing`, `wrong version`,
-// `misplaced`, a status a later Helm adds) is not. This reads the STATUS
-// column of every row and passes only the two known-good values, instead of
-// grepping for the bad words it knows today: an unknown status fails.
+// Runs after deploy/helm/elitea/build-deps.sh (`helm dependency build`), in
+// helm-lint.yml (every PR) and publish.yml (before `helm package`), so the
+// chart a job renders or ships carries the pinned dependencies. `helm
+// dependency list` reports each declared dependency with a STATUS; this
+// passes only `ok` (an archive in charts/ matches name and version). Anything
+// else fails, including `unpacked` (a directory copy nobody pinned), the
+// statuses known today (`missing`, `wrong version`, `misplaced`) and any a
+// later Helm adds: it reads the STATUS column of every row rather than grep
+// for the bad words it knows.
 //
-// A chart with no dependencies prints no table and passes. Used by
-// helm-lint.yml (every PR) and publish.yml (before `helm package`). Needs
-// only node and helm.
+// A chart with no dependencies prints no table and passes. Needs only node
+// and helm.
 
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export const SATISFIED = new Set(["ok", "unpacked"]);
+export const SATISFIED = new Set(["ok"]);
 
 /** Rows of a `helm dependency list` table: {name, version, repository, status}. */
 export function parseListing(text) {
@@ -47,7 +48,7 @@ export function check(text) {
   if (table && rows.length === 0) problems.push("the dependency table has a header and no rows");
   for (const r of rows) {
     if (!SATISFIED.has(r.status)) {
-      problems.push(`${r.name} ${r.version}: status '${r.status}', want ok or unpacked (run the chart's vendor script)`);
+      problems.push(`${r.name} ${r.version}: status '${r.status}', want ok (run deploy/helm/elitea/build-deps.sh, or helm dependency update and commit Chart.lock after a bump)`);
     }
   }
   return { rows, problems };

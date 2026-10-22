@@ -420,7 +420,7 @@ Scripts written before 4.7 also mint `redis-*` passwords, a Redis server keypair
 
 ## Step 5: NATS
 
-NATS is the platform's bus for live updates, presence, LLM budget counters and the runtime command bus. It runs mTLS-only, with one account per plane, and it is **part of the `elitea` release**: there is nothing to install separately. The chart renders the server (the upstream NATS chart, vendored as a dependency), its CA (`elitea-nats-ca`), its certificates, a NetworkPolicy that admits port 4222 only from the platform's NATS clients, and the `elitea-nats-bootstrap` hook Job that creates every stream, KV bucket and durable consumer. elitea-main refuses to start until they exist; until the Job has run, it restarts and then settles.
+NATS is the platform's bus for live updates, presence, LLM budget counters and the runtime command bus. It runs mTLS-only, with one account per plane, and it is **part of the `elitea` release**: there is nothing to install separately. The chart renders the server (the upstream NATS chart, a pinned dependency that the published chart carries), its CA (`elitea-nats-ca`), its certificates, a NetworkPolicy that admits port 4222 only from the platform's NATS clients, and the `elitea-nats-bootstrap` hook Job that creates every stream, KV bucket and durable consumer. elitea-main refuses to start until they exist; until the Job has run, it restarts and then settles.
 
 The defaults are one node with JetStream on a 10Gi volume. To change them, set the upstream chart's values under `nats` in your values file:
 

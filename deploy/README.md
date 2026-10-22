@@ -298,7 +298,7 @@ address. Those copies had already drifted apart.
 
 | Chart (`deploy/helm/`) | ArgoCD Application | Wave | Namespace | Status |
 |---|---|---|---|---|
-| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform, one release.** elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, the vector store, the DeepWiki and Inventory provider services, and NATS JetStream with its bootstrap Job: the upstream NATS chart 1.3.9 is a dependency vendored in `charts/nats` (`nats.enabled`, on by default; `natsBootstrap.*`; HA with `values-nats-ha.yaml`). The sandbox-runtime installer is a second dependency, off by default (`sandboxRuntime.enabled`; k3s and EKS turn it on, GKE and AKS leave it off). |
+| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform, one release.** elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, the vector store, the DeepWiki and Inventory provider services, and NATS JetStream with its bootstrap Job: the upstream NATS chart 1.3.9 is a `Chart.lock` dependency, built by `deploy/helm/elitea/build-deps.sh` from a clone and carried by the published chart (`nats.enabled`, on by default; `natsBootstrap.*`; HA with `values-nats-ha.yaml`). The sandbox-runtime installer is a second dependency, off by default (`sandboxRuntime.enabled`; k3s and EKS turn it on, GKE and AKS leave it off). |
 | `elitea-sandbox-runtime` | none (a dependency of `elitea`, or installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. Normally enabled through `elitea`'s `sandboxRuntime`; still published standalone. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
 
 The `nats` and `nats-bootstrap` charts are retired and no longer published;
@@ -412,6 +412,7 @@ DSN carries a password, so the chart takes a Secret NAME and every component
 that reads the database reads that one Secret. Prove it after a change:
 
 ```bash
+deploy/helm/elitea/build-deps.sh   # once per clone: the chart's dependencies
 helm template elitea deploy/helm/elitea \
   -f deploy/helm/elitea/values.yaml \
   --set-string postgresql.existingSecret=elitea-main-db \

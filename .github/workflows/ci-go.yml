@@ -31,7 +31,8 @@ on:
       - "deploy/helm/elitea/values.yaml"
       - "deploy/helm/elitea/values-nats-ha.yaml"
       - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/charts/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
       - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # internal/transport/commandbus pins its constants to the command bus
@@ -74,7 +75,8 @@ on:
       - "deploy/helm/elitea/values.yaml"
       - "deploy/helm/elitea/values-nats-ha.yaml"
       - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/charts/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
       - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # internal/transport/commandbus pins its constants to the command bus

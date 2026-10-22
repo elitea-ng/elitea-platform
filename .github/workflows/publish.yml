@@ -687,8 +687,8 @@ jobs:
       matrix:
         include:
           # ONE chart for the platform, NATS JetStream included (the upstream
-          # nats chart is vendored unpacked in its charts/, so packaging needs
-          # no network). It ships every first-party image, so no
+          # nats chart is a Chart.lock dependency, built before packaging and
+          # carried in the package). It ships every first-party image, so no
           # single `image:` names it — `platformImageTag` below stamps the one
           # top-level `image.tag` every component resolves from instead. Without
           # that a chart published at a release number would install `latest`
@@ -850,15 +850,16 @@ jobs:
 
           yq '{"version": .version, "appVersion": .appVersion}' "$CHART"
 
-      # Dependencies are vendored in the chart's charts/ (elitea: the upstream
-      # nats chart, unpacked), so nothing is built or downloaded here: a
-      # `helm dependency build` would add a second copy of the subchart beside
-      # it. Fail instead if charts/ does not satisfy Chart.yaml.
-      - name: Vendored chart dependencies satisfy Chart.yaml
+      # The elitea chart's dependencies (the upstream nats chart and our
+      # elitea-sandbox-runtime) are not committed: build them from Chart.lock,
+      # then prove every one resolved (`ok` only; an unknown status fails too,
+      # scripts/ci/check-chart-deps.mjs). `helm package` puts them in the
+      # published chart, so an OCI install needs nothing built.
+      - name: Build the chart dependencies
         run: |
-          # Every row's STATUS must be ok or unpacked; an unknown status fails
-          # too (scripts/ci/check-chart-deps.mjs, tested in no-binaries.yml).
-          node scripts/ci/check-chart-deps.mjs "deploy/helm/${{ matrix.chart }}"
+          CHART_DIR="deploy/helm/${{ matrix.chart }}"
+          if [ -f "${CHART_DIR}/build-deps.sh" ]; then bash "${CHART_DIR}/build-deps.sh"; fi
+          node scripts/ci/check-chart-deps.mjs "$CHART_DIR"
 
       - name: Package chart
         run: |

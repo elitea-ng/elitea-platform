@@ -74,14 +74,21 @@ got = sorted((d['kind'], d['metadata']['name'], d['metadata'].get('namespace')) 
 assert got == [('ConfigMap', 'x-scripts', 'other'), ('DaemonSet', 'x-installer', 'other'), ('RuntimeClass', 'gvisor', None)], got
 PY
 
-# As the elitea chart's `sandboxRuntime` dependency (charts/elitea-sandbox-runtime
-# links here): off by default; on, the installer goes to its own privileged
+# As the elitea chart's `sandboxRuntime` dependency (file://../elitea-sandbox-runtime,
+# built into charts/ by deploy/helm/elitea/build-deps.sh): off by default; on, the installer goes to its own privileged
 # namespace under its own name, not the platform release's.
 el=(elitea deploy/helm/elitea -n elitea
     --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
     --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
-[ "$(readlink deploy/helm/elitea/charts/elitea-sandbox-runtime)" = "../../elitea-sandbox-runtime" ] \
-  || { echo "deploy/helm/elitea/charts/elitea-sandbox-runtime is not the link to this chart" >&2; exit 1; }
+# The archive build-deps.sh made must be THIS chart as it is now: a stale one
+# would render an installer this test never read.
+sv="$(awk '$1 == "version:" { print $2; exit }' deploy/helm/elitea-sandbox-runtime/Chart.yaml)"
+arc="deploy/helm/elitea/charts/elitea-sandbox-runtime-${sv}.tgz"
+[ -f "$arc" ] || { echo "$arc is missing: run deploy/helm/elitea/build-deps.sh" >&2; exit 1; }
+mkdir -p "$work/arc" && tar -xzf "$arc" -C "$work/arc"
+diff -r -x .helmignore "$work/arc/elitea-sandbox-runtime/templates" deploy/helm/elitea-sandbox-runtime/templates >/dev/null \
+  && cmp -s "$work/arc/elitea-sandbox-runtime/values.yaml" deploy/helm/elitea-sandbox-runtime/values.yaml \
+  || { echo "$arc differs from deploy/helm/elitea-sandbox-runtime: run deploy/helm/elitea/build-deps.sh" >&2; exit 1; }
 helm template "${el[@]}" 2>/dev/null > "$work/el-off.yaml"
 helm template "${el[@]}" --set sandboxRuntime.enabled=true 2>/dev/null > "$work/el-on.yaml"
 helm template "${el[@]}" --set sandboxRuntime.enabled=true --set sandboxRuntime.mode=containerd \

@@ -10,15 +10,15 @@ const HEADER = "NAME                  \tVERSION\tREPOSITORY                     
 const row = (name, status) => `${name.padEnd(22)}\t0.1.0  \thttps://example.invalid/charts\t${status.padEnd(8)}`;
 const table = (...rows) => [HEADER, ...rows, ""].join("\n");
 
-test("ok and unpacked rows pass", () => {
-  const { rows, problems } = check(table(row("nats", "unpacked"), row("elitea-sandbox-runtime", "ok")));
+test("ok rows pass", () => {
+  const { rows, problems } = check(table(row("nats", "ok"), row("elitea-sandbox-runtime", "ok")));
   assert.equal(rows.length, 2);
   assert.deepEqual(problems, []);
 });
 
-test("each known bad status fails, with the dependency named", () => {
-  for (const s of ["missing", "wrong version", "misplaced"]) {
-    const { problems } = check(table(row("nats", "unpacked"), row("elitea-sandbox-runtime", s)));
+test("every status but ok fails, unpacked included, with the dependency named", () => {
+  for (const s of ["missing", "wrong version", "misplaced", "unpacked"]) {
+    const { problems } = check(table(row("nats", "ok"), row("elitea-sandbox-runtime", s)));
     assert.equal(problems.length, 1, s);
     assert.match(problems[0], new RegExp(`elitea-sandbox-runtime .*'${s}'`));
   }

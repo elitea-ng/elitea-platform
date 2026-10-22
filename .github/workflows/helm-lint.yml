@@ -104,6 +104,12 @@ jobs:
         with:
           version: v4.3.1
 
+      # The elitea chart's dependencies (the upstream nats chart and our
+      # elitea-sandbox-runtime) are not committed: build them from Chart.lock
+      # before anything lints, renders or packages the chart.
+      - name: Build the chart dependencies
+        run: bash deploy/helm/elitea/build-deps.sh
+
       # A bare loop takes the status of its LAST iteration, so a broken early
       # chart read as a pass. `bash -e` hides that today by stopping the step on
       # the first failure — but that is a property of the caller, not of the
@@ -418,11 +424,11 @@ jobs:
           bash deploy/helm/tests/render-nats-security.sh
 
       # NATS bundled (owner decision): the elitea chart with nats.enabled on
-      # (the default) and off (bring your own NATS), the vendored subchart
-      # agreeing with Chart.yaml and Chart.lock, and the chart rendering from
-      # its packaged .tgz — the published OCI artifact — exactly as from the
-      # directory.
-      - name: NATS bundled — on, off, vendored, and from the packaged chart
+      # (the default) and off (bring your own NATS), Chart.lock agreeing with
+      # Chart.yaml and every dependency resolving, and the chart rendering
+      # from its packaged .tgz — the published OCI artifact — exactly as from
+      # the directory.
+      - name: NATS bundled — on, off, locked, and from the packaged chart
         run: |
           python3 -c 'import yaml' 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
@@ -647,6 +653,12 @@ jobs:
       - name: Remember the Helm 4 binary
         run: echo "HELM4=$(command -v helm)" >> "$GITHUB_ENV"
 
+      # The elitea chart's dependencies (the upstream nats chart and our
+      # elitea-sandbox-runtime) are not committed: build them from Chart.lock
+      # before anything lints, renders or packages the chart.
+      - name: Build the chart dependencies
+        run: bash deploy/helm/elitea/build-deps.sh
+
       - name: Install kubeconform
         run: |
           curl -sSL -o /tmp/kubeconform.tar.gz \
@@ -654,16 +666,11 @@ jobs:
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
-      # Dependencies are VENDORED (elitea's charts/), never built here: a
-      # `helm dependency build` would download a second copy of the nats
-      # subchart beside the unpacked one and render from whichever Helm picked.
-      # `helm dependency list` proves what is in charts/ satisfies Chart.yaml,
-      # without network.
-      - name: Vendored chart dependencies satisfy Chart.yaml
-        run: |
-          # Every row's STATUS must be ok or unpacked; an unknown status fails
-          # too (scripts/ci/check-chart-deps.mjs, tested in no-binaries.yml).
-          node scripts/ci/check-chart-deps.mjs "deploy/helm/${{ matrix.chart }}"
+      # Every dependency resolved as Chart.lock pins it: every row's STATUS
+      # must be `ok`, and an unknown status fails too
+      # (scripts/ci/check-chart-deps.mjs, tested in no-binaries.yml).
+      - name: Chart dependencies resolve as Chart.lock pins them
+        run: node scripts/ci/check-chart-deps.mjs "deploy/helm/${{ matrix.chart }}"
 
       - name: helm template (default values)
         run: |

@@ -31,10 +31,10 @@ it ships to production (ADR-0023):
   `.github/workflows/helm-install-smoke.yml` runs this stack on a GitHub
   runner.
 * `kind` v0.33+, `kubectl`, `helm` 4.3+ (3.8+ also works), `python3`, `curl`.
-* Network access for the first run only: the cert-manager chart and its
-  images, and the NATS images, which the node pulls (the upstream NATS chart
-  is vendored in `deploy/helm/elitea/charts/nats`). Everything else is built
-  locally or side-loaded from podman.
+* Network access: the cert-manager chart and its images, the NATS images,
+  which the node pulls, and the upstream NATS chart, which `up` fetches with
+  `deploy/helm/elitea/build-deps.sh` (`helm dependency build` from
+  `Chart.lock`). Everything else is built locally or side-loaded from podman.
 * ~8 GB of free disk for the images, and ~4 GB of memory for the podman
   machine.
 * The production-authentication material, which `up` mints through the

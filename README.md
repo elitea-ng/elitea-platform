@@ -295,6 +295,7 @@ REQUIRED=(--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.ex
   --set-string llmGateway.egressPosture=public-unrestricted
   --set networkPolicies.main.noExternalIngress=true)
 
+deploy/helm/elitea/build-deps.sh   # the chart's dependencies, from Chart.lock
 helm template elitea deploy/helm/elitea -n elitea \
   -f deploy/helm/elitea/values-staging.yaml "${REQUIRED[@]}"
 

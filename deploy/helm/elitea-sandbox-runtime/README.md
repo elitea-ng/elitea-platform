@@ -97,7 +97,9 @@ Then set `sandboxKubernetes.runtimeClass.name: gvisor` and the same
 ## As part of the elitea chart
 
 The `elitea` chart carries this chart as its `sandboxRuntime` dependency
-(`deploy/helm/elitea/charts/elitea-sandbox-runtime` is a symlink here), so one
+(`repository: file://../elitea-sandbox-runtime` in its `Chart.yaml`; `helm
+dependency build` packs this directory into its `charts/`, and the published
+`elitea` chart carries it), so one
 `elitea` release can install the platform and the node runtime together:
 
 ```yaml

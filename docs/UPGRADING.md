@@ -120,10 +120,20 @@ Helm 3.8 or newer where Argo CD (or another Helm 3 tool) renders the chart.
 **What changed.**
 
 - The upstream NATS chart (1.3.9, unchanged) is a dependency of the `elitea`
-  chart with `condition: nats.enabled`, **on by default**. It is vendored
-  unpacked in `deploy/helm/elitea/charts/nats`, so an install from git or
-  from `oci://ghcr.io/elitea-ng/charts/elitea` needs no
-  `helm dependency build` and no access to the NATS chart repository.
+  chart with `condition: nats.enabled`, **on by default**, pinned in the
+  committed `Chart.lock`; `charts/` itself is never committed. How each
+  install path gets it:
+  - **The published OCI chart** (`oci://ghcr.io/elitea-ng/charts/elitea`,
+    recommended) carries it: nothing to build.
+  - **An Argo CD git source** (`path: deploy/helm/elitea`): Argo CD runs
+    `helm dependency build` itself. A restricted AppProject must list
+    `https://nats-io.github.io/k8s/helm/charts/` in `sourceRepos`, and the
+    repo-server must reach it.
+  - **The Helm CLI from a clone:** run `deploy/helm/elitea/build-deps.sh`
+    (`helm dependency build` from `Chart.lock`) before `helm install`,
+    `template` or `lint`.
+  - **Air-gapped:** mirror the published OCI chart, which already carries
+    the NATS chart, rather than building from a clone.
 - The NATS CA, server and route certificates, the NetworkPolicy, the alerts
   and the approver policies (the old `nats` wrapper chart) render from
   `templates/nats/`; the stream and KV bootstrap Job (the old

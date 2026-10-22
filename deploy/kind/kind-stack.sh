@@ -303,6 +303,9 @@ install_infra() {
 # below then covers the workloads, which restart until the streams exist.
 install_chart() {
   say "Installing the chart (NATS + elitea-main + the DeepWiki provider)"
+  # From a clone the chart's dependencies are built from Chart.lock first;
+  # the published OCI chart carries them.
+  bash "${REPO_ROOT}/deploy/helm/elitea/build-deps.sh" >/dev/null
   helm --kube-context "kind-${CLUSTER}" upgrade --install "$RELEASE" "${REPO_ROOT}/deploy/helm/elitea" \
     --namespace "$NS" \
     -f "${SCRIPT_DIR}/values-kind.yaml" \

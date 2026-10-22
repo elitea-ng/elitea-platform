@@ -8,34 +8,31 @@ description: >-
   one connection contract.
 type: application
 
-# TWO dependencies, both in charts/ so nothing is built at install time.
+# TWO dependencies, fetched by `helm dependency build` from Chart.lock (both
+# pinned). charts/ is never committed (.gitignore).
 #
-# NATS JetStream is bundled (`nats`,
-# `nats.enabled: true` by default): the upstream nats chart, pinned below,
-# with this chart's own mTLS material (templates/nats/) and the JetStream
-# bootstrap Job (templates/natsBootstrap/) beside it, so one release is the
-# whole platform. `nats.enabled: false` keeps the bring-your-own-NATS
-# contract (`natsClient`).
-#
-# The subchart is committed UNPACKED in charts/nats/ (plain text, so
-# scripts/no-binaries-check.sh stays green), next to Chart.lock. That is the
-# reliable choice for every way this chart is installed:
-#   * `helm install` from a clone needs no `helm dependency build`;
-#   * the published OCI chart carries it (helm package includes charts/);
-#   * Argo CD with a git source renders it as is. Argo CD only runs
-#     `helm dependency build` when a render fails for a MISSING dependency,
-#     which would also need the upstream repository allowed in the AppProject
-#     and reachable from the repo-server — an air-gapped cluster has neither.
-# deploy/helm/tests/render-nats-bundled.sh fails when charts/nats/ and the
-# pinned version disagree. To bump: change `version` below, then
-# deploy/helm/elitea/vendor-nats.sh.
+# NATS JetStream is bundled (`nats`, `nats.enabled: true` by default): the
+# upstream nats chart, pinned below, with this chart's own mTLS material
+# (templates/nats/) and the JetStream bootstrap Job (templates/natsBootstrap/)
+# beside it, so one release is the whole platform. `nats.enabled: false` keeps
+# the bring-your-own-NATS contract (`natsClient`).
 #
 # The sandbox runtime installer (`sandboxRuntime`, off by default) is OUR
-# chart, deploy/helm/elitea-sandbox-runtime: charts/elitea-sandbox-runtime is
-# a symlink to it, so it has one source and is still published on its own.
-# Helm follows the link on render and copies the files on `helm package`;
-# Argo CD accepts it because it stays inside the repository. k3s and EKS turn
-# it on; GKE leaves it off (GKE Sandbox ships the gvisor RuntimeClass).
+# chart, deploy/helm/elitea-sandbox-runtime, referenced by file:// so it has
+# one source and is still published on its own. k3s and EKS turn it on; GKE
+# leaves it off (GKE Sandbox ships the gvisor RuntimeClass).
+#
+# How each install path gets them:
+#   * the published OCI chart carries both as .tgz (helm package includes
+#     charts/): nothing to do. This is the recommended path.
+#   * Argo CD with a git source runs `helm dependency build` itself; a
+#     restricted AppProject must list the nats repository in sourceRepos.
+#   * `helm install` from a clone: deploy/helm/elitea/build-deps.sh first.
+#   * air-gapped: mirror the OCI chart.
+# deploy/helm/tests/render-nats-bundled.sh fails when Chart.lock and
+# Chart.yaml disagree or a dependency does not resolve. To bump nats: change
+# `version` below, `helm dependency update deploy/helm/elitea`, commit
+# Chart.lock.
 version: 0.1.0
 appVersion: "0.1.0"
 

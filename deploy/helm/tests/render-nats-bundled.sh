@@ -2,9 +2,10 @@
 # render-nats-bundled.sh — the upstream NATS chart is a dependency of the
 # elitea chart (one chart, one release). Asserts, on rendered output:
 #
-#   vendored   charts/nats is the chart Chart.yaml and Chart.lock name, at the
-#              same version, so neither `helm install` from git nor an Argo CD
-#              git source needs `helm dependency build` (or network)
+#   locked     Chart.lock pins exactly the dependencies Chart.yaml declares
+#              (name, version, repository); `helm dependency list` reports
+#              every one `ok` (resolved into charts/ by build-deps.sh); and
+#              charts/ is not committed
 #   on         nats.enabled (the default) renders the server, its CA, the
 #              bootstrap Job, and puts all of them in Argo CD wave -10 so the
 #              workloads (wave 0) start after the streams exist
@@ -13,10 +14,12 @@
 #              against your NATS, or be turned off
 #   refusals   nats.enabled with natsClient naming another server; the old
 #              client keys under `nats`
-#   packaged   `helm package` and a render of the .tgz equals the render of
-#              the directory, so the published OCI chart carries the subchart
+#   packaged   `helm package` carries both dependencies, and a render
+#              of the .tgz equals the render of the directory, so the
+#              published OCI chart needs nothing built
 #
-# Needs helm and python3 + PyYAML. No network.
+# Run deploy/helm/elitea/build-deps.sh first (CI does). Needs helm, node,
+# python3 + PyYAML.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # deploy/
@@ -32,30 +35,37 @@ COMMON=(-n elitea
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 
-# ── vendored ────────────────────────────────────────────────────────────────
+# ── locked ──────────────────────────────────────────────────────────────────
 python3 - "$CHART" <<'PY' || fails=$((fails + 1))
 import sys, yaml, pathlib
 c = pathlib.Path(sys.argv[1])
 chart = yaml.safe_load((c / "Chart.yaml").read_text())
 lock = yaml.safe_load((c / "Chart.lock").read_text())
-sub = yaml.safe_load((c / "charts/nats/Chart.yaml").read_text())
-dep = [d for d in chart.get("dependencies", []) if d["name"] == "nats"]
+key = lambda d: (d["name"], str(d["version"]), d["repository"])
+want = [key(d) for d in chart.get("dependencies", [])]
+got = [key(d) for d in lock.get("dependencies", [])]
 ok = True
-if len(dep) != 1:
-    print("FAIL: Chart.yaml declares no single nats dependency"); sys.exit(1)
-dep = dep[0]
-if dep.get("condition") != "nats.enabled":
-    print(f"FAIL: nats dependency condition is {dep.get('condition')!r}, want nats.enabled"); ok = False
-ldep = [d for d in lock.get("dependencies", []) if d["name"] == "nats"]
-if not ldep or ldep[0]["version"] != dep["version"]:
-    print(f"FAIL: Chart.lock nats {ldep and ldep[0]['version']} != Chart.yaml {dep['version']}"); ok = False
-if sub.get("name") != "nats" or sub.get("version") != dep["version"]:
-    print(f"FAIL: vendored charts/nats is {sub.get('name')} {sub.get('version')}, Chart.yaml wants nats {dep['version']} (run deploy/helm/elitea/vendor-nats.sh)"); ok = False
-if list(c.glob("charts/*.tgz")):
-    print("FAIL: a packed subchart sits in charts/ next to the vendored one"); ok = False
-print("ok:   vendored nats", dep["version"]) if ok else None
+if [w[0] for w in want] != ["nats", "elitea-sandbox-runtime"]:
+    print(f"FAIL: Chart.yaml dependencies are {[w[0] for w in want]}, want nats and elitea-sandbox-runtime"); ok = False
+if want != got:
+    print(f"FAIL: Chart.lock pins {got}, Chart.yaml declares {want} (helm dependency update deploy/helm/elitea, commit Chart.lock)"); ok = False
+nats = [d for d in chart["dependencies"] if d["name"] == "nats"]
+if nats and nats[0].get("condition") != "nats.enabled":
+    print(f"FAIL: nats dependency condition is {nats[0].get('condition')!r}, want nats.enabled"); ok = False
+unpacked = [p.name for p in (c / "charts").iterdir() if p.is_dir() or p.is_symlink()] if (c / "charts").exists() else []
+if unpacked:
+    print(f"FAIL: charts/ holds unpacked or linked dependencies {unpacked}; build-deps.sh writes archives only"); ok = False
+print("ok:   Chart.lock matches Chart.yaml", [w[0] + " " + w[1] for w in want]) if ok else None
 sys.exit(0 if ok else 1)
 PY
+if node "$DIR/../scripts/ci/check-chart-deps.mjs" "$CHART" > "$TMP/deps.txt" 2>&1; then
+  echo "ok:   every dependency resolves (helm dependency list: ok)"
+else
+  fail "a dependency does not resolve: $(grep '::error::' "$TMP/deps.txt" | head -3)"
+fi
+if [ -n "$(git -C "$DIR" ls-files -- helm/elitea/charts)" ]; then
+  fail "deploy/helm/elitea/charts/ is committed; it is build output (.gitignore)"
+fi
 
 # ── on / off renders ────────────────────────────────────────────────────────
 "$HELM" template elitea "$CHART" "${COMMON[@]}" > "$TMP/on.yaml"
@@ -149,13 +159,16 @@ tgz=("$TMP"/pkg/elitea-*.tgz)
 # The listing goes to a file: under pipefail, `tar -t | grep -q` fails when
 # grep exits at its match and tar dies of SIGPIPE.
 tar -tzf "${tgz[0]}" > "$TMP/pkg-files.txt"
-if ! grep -qx 'elitea/charts/nats/Chart.yaml' "$TMP/pkg-files.txt"; then
-  fail "the packaged chart does not carry charts/nats"
-fi
-# charts/elitea-sandbox-runtime is a symlink; the package must hold the files.
-if ! grep -qx 'elitea/charts/elitea-sandbox-runtime/templates/daemonset.yaml' "$TMP/pkg-files.txt"; then
-  fail "the packaged chart does not carry the sandboxRuntime subchart's files"
-fi
+# helm package unpacks each dependency into charts/<name>/. The names come
+# from Chart.lock, so a new dependency needs no edit here.
+python3 - "$CHART/Chart.lock" > "$TMP/dep-archives.txt" <<'PY'
+import sys, yaml
+for d in yaml.safe_load(open(sys.argv[1]))["dependencies"]:
+    print(f"elitea/charts/{d['name']}/Chart.yaml")
+PY
+while read -r want; do
+  grep -qx "$want" "$TMP/pkg-files.txt" || fail "the packaged chart does not carry ${want#elitea/}"
+done < "$TMP/dep-archives.txt"
 "$HELM" template elitea "${tgz[0]}" "${COMMON[@]}" > "$TMP/pkg-on.yaml"
 "$HELM" template elitea "${tgz[0]}" "${COMMON[@]}" --set nats.enabled=false \
   --set natsBootstrap.enabled=false --set-string natsClient.service=my-nats > "$TMP/pkg-off.yaml"

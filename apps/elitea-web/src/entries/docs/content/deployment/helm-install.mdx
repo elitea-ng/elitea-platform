@@ -74,7 +74,10 @@ A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined 
 
 One release installs everything, in one namespace. NATS requires TLS and a client certificate from every client (mTLS, no anonymous or password access), and those certificates come from the chart's own NATS CA, a *namespaced* cert-manager `Issuer`, so NATS, its bootstrap and the platform share the release's namespace by construction. **cert-manager must be installed first.**
 
+From a clone, build the chart's dependencies first. The upstream NATS chart and the sandbox-runtime installer are pinned in the committed `Chart.lock`, and `charts/` is never committed:
+
 ```bash
+deploy/helm/elitea/build-deps.sh   # helm dependency build, from Chart.lock
 helm install elitea deploy/helm/elitea \
   -f deploy/helm/elitea/values-standalone.yaml \
   --set postgresql.existingSecret=elitea-main-db \
@@ -84,7 +87,7 @@ helm install elitea deploy/helm/elitea \
   -n elitea --create-namespace
 ```
 
-The published chart installs the same way: `oci://ghcr.io/elitea-ng/charts/elitea --version <version>` in place of the path. Its package carries the same values files (`helm pull --untar` to read them) and the vendored NATS chart, so no `helm dependency build` is needed either way.
+The published chart is the recommended source: `oci://ghcr.io/elitea-ng/charts/elitea --version <version>` in place of the path. Its package carries the same values files (`helm pull --untar` to read them) and both dependencies, so it needs no `helm dependency build`. In an air-gapped network, mirror that OCI chart; do not build from a clone.
 
 The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler, the worker) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value. The stream and KV bootstrap is a `post-install,post-upgrade` hook Job; until it has run, the workloads restart, then settle.
 

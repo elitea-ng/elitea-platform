@@ -16,6 +16,7 @@ Point your ArgoCD `Application` (or `helm upgrade`) at the new published chart v
 </Step>
 <Step title="helm upgrade">
 ```bash
+deploy/helm/elitea/build-deps.sh   # from a clone: the chart's dependencies
 helm upgrade elitea deploy/helm/elitea \
   -f deploy/helm/elitea/values-standalone.yaml \
   --reuse-values \

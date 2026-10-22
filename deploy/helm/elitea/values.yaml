@@ -350,8 +350,8 @@ pgbouncer:
 # NATS JetStream server this chart runs for you (bundled by default), and
 # `natsBootstrap` is the Job that creates every stream and KV bucket in it.
 #
-#   nats.enabled: true   (default) the upstream nats chart (charts/nats,
-#                        vendored, see Chart.yaml) runs as Service
+#   nats.enabled: true   (default) the upstream nats chart (a Chart.lock
+#                        dependency, see Chart.yaml) runs as Service
 #                        `elitea-nats` in this release's namespace, with its
 #                        NATS CA, server certificate, permission table and
 #                        NetworkPolicy (templates/nats/). natsClient's
@@ -432,7 +432,7 @@ natsClient:
 
 # ── The bundled NATS server ────────────────────────────────────────────────
 #
-# The upstream nats chart (charts/nats, 1.3.9, vendored) is a dependency of
+# The upstream nats chart (1.3.9, pinned in Chart.lock) is a dependency of
 # this chart with `condition: nats.enabled`, so every key below except
 # `enabled`, `security`, `networkPolicy` and `alerts` is the upstream chart's
 # own value (its values.yaml documents them). Those four are this chart's:
@@ -6246,7 +6246,7 @@ sandboxImageWarmup:
   imagePullSecrets: []
 
 # The sandbox runtime installer (ADR-0034), the elitea-sandbox-runtime chart
-# carried as a dependency (charts/elitea-sandbox-runtime; its own values go
+# carried as a dependency (file://../elitea-sandbox-runtime; its own values go
 # here, see deploy/helm/elitea-sandbox-runtime/README.md). ON for k3s and EKS,
 # whose nodes have no gVisor; OFF on GKE and AKS, which ship their own
 # RuntimeClass.
