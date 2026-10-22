@@ -4,6 +4,102 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Scaling for every component: Inventory on N replicas, fleet-wide DeepWiki slots, autoscalers on by default
+
+**Affects:** every Kubernetes install of the `elitea` chart, and especially
+installs that set `postgresql.maxConnections` near the old budget, run
+DeepWiki or Inventory without a database, read the DeepWiki slots, scrape
+with a namespace label other than `namespace`, or bundle KEDA
+(`keda.enabled`).
+
+**What changed.**
+
+* **Every autoscaler is on by default** (the Scaling page of the deployment
+  docs has the table). New: elitea-web (CPU, 2 to 6), the LLM gateway (2 to
+  4; `source: auto` falls back to CPU), Inventory (1 to 3), the OTel
+  collector (CPU, 1 to 3), the egress proxy (CPU, 2 to 6, when enabled).
+  `main.autoscaling.maxReplicas` 10 → 8. The worker no longer needs KEDA:
+  `worker.autoscaling.source: auto` uses KEDA's `nats-jetstream` trigger when
+  KEDA is there, else a CPU HPA (`keda` requires KEDA, `cpu` forces the HPA).
+  Every KEDA ScaledObject also has a CPU trigger. A CPU HPA without
+  metrics-server holds `minReplicas`. To keep a fixed count, set
+  `<component>.autoscaling.enabled: false`.
+* **Inventory runs on more than one replica.** The host keeps its
+  invocations in the engine's database (`inventory_graph.invocations`,
+  `invocation_events`, `host_replicas`, engine migration 0009) and receives
+  `ELITEA_INVENTORY_DATABASE_URL` from the engine's secret, with its own pool
+  `ELITEA_INVENTORY_DATABASE_MAX_CONNS` ("2"). The database role must be able
+  to read and write those tables (the migration creates them as that role).
+  More than one replica without a database secret is refused, for DeepWiki
+  too; a fixture install without a database sets
+  `<app>.autoscaling.enabled: false`.
+* **DeepWiki's generation slots are fleet-wide.** Migration 0009 adds
+  `invocations.labels`, `invocations.holds_slot` and `host_replicas`. A
+  generation is admitted only while the running generations are fewer than
+  the slots (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`) of all live replicas.
+  When every slot is busy, the call ends at once with `service_busy` ("All N
+  generation slots are busy"). Before, the slots were advisory and a second
+  generation ran on the same replica anyway. Raise
+  `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` or the replica ceiling if users start
+  generations at the same time. A deletion and a cancel now stop runs on
+  every replica, with or without NATS.
+* **Upgrade order.** The host writes its `host_replicas` row at start. Until
+  the engine sidecar has applied migration 0009, the host restarts; this
+  clears itself when the sidecar's migration runs, as for the invocation
+  tables before.
+* **DeepWiki and Inventory drain for an hour.** `*_DRAIN_TIMEOUT_SECONDS`
+  30 → 3600, `terminationGracePeriodSeconds` 60 → 3630, and a native preStop
+  sleep of 5 s (`<app>.preStop.sleepSeconds`). On SIGTERM a replica stops
+  admitting and finishes its running work; the engine sidecar keeps serving
+  until it is idle. A rollout of these Deployments can therefore take up to
+  an hour while a build runs. The Cluster Autoscaler gives an evicted pod at
+  most 600 s by default; see the Scaling page for
+  `cluster-autoscaler.kubernetes.io/safe-to-evict`.
+* **The connection budget fits the defaults with every autoscaler on.** The
+  worker's AgentState pool is its own setting,
+  `worker.runtime.limits.agentstate_max_connections` (default 8; was
+  `delivery_max_concurrency`, 32), with
+  `agentstate_acquire_timeout_millis` (30 000). The budget counts it, and the
+  new Inventory host pool. The shipped defaults at every ceiling total 568
+  against the default 600 (575 available). `values-standalone.yaml`
+  280 → 420; `values-gke.yaml` stays at 500 (292 used).
+* **The scheduler runs two replicas** (active/active, `RollingUpdate`), with
+  a PDB and spread. It refuses more than two.
+* **Balanced gRPC hops.** elitea-main dials DeepWiki and Inventory through
+  new headless Services (`elitea-deepwiki-grpc`, `elitea-inventory-grpc`)
+  with `round_robin`, and checks the certificate against the old Service
+  name, so the certificates do not change. elitea-vector closes a client
+  connection after `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS` (300) so the
+  clients spread over its replicas. An explicit
+  `ELITEA_<APP>_PLATFORM_GRPC_TARGET` still wins.
+* **The Prometheus queries take the namespace label from
+  `scaling.prometheus.namespaceLabel`** (default `namespace`; `""` drops the
+  matcher) and add `scaling.prometheus.extraMatchers`. An annotation-based
+  scrape that writes `kubernetes_namespace` no longer needs a hand-written
+  `autoscaling.prometheus.query`. DeepWiki's and Inventory's queries now add
+  the generations refused busy (`elitea_subapp_slot_refusals_total`, a new
+  counter on the host's admin port).
+* **KEDA uninstall hook.** With `keda.enabled`, a pre-delete Job
+  (`<release>-keda-cleanup`, the elitea-main image) deletes the release's
+  ScaledObjects and TriggerAuthentications and waits for KEDA to run their
+  finalizers before Helm removes KEDA (`kedaCleanup.timeoutSeconds`, 120).
+  The manual step before `helm uninstall` is no longer needed, except with
+  `--no-hooks` or a delete that skips Helm hooks.
+* **preStop on elitea-vector and the OTel collector** (sleep 5, grace 30).
+
+**What to do.**
+
+1. If you set `postgresql.maxConnections`, render once: the refusal names
+   each component's share. Lower a ceiling or a pool, or raise the number to
+   match your server.
+2. If your Prometheus labels the namespace other than `namespace`, set
+   `scaling.prometheus.namespaceLabel` (and the Prometheus Adapter rule's
+   overrides, if you use the bundled adapter).
+3. If you run DeepWiki or Inventory without a database, set
+   `<app>.autoscaling.enabled: false`.
+4. If a fixed count is a requirement for a component, set
+   `<component>.autoscaling.enabled: false` and its `replicaCount`.
+
 ## Scale-out readiness: optional KEDA and prometheus-adapter, an all-component connection budget, drain and grace periods
 
 **Affects:** every Kubernetes install of the `elitea` chart, and especially

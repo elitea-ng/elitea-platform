@@ -107,7 +107,7 @@
   {
     "slug": "deployment/scaling",
     "title": "Scaling",
-    "description": "What each Elitea component scales on and what it needs first, the PostgreSQL connection budget the chart checks, per-replica capacity caps, the high-availability overlays, disruption budgets and spread, drain and grace periods, and the gateway's expected-replicas rule."
+    "description": "What each Elitea component scales on, its default range and what it needs first, the deliberate singletons and why, how gRPC load spreads over replicas, the PostgreSQL connection budget the chart checks, per-replica capacity, the high-availability overlays, disruption budgets and spread, drain and grace periods, the KEDA uninstall hook, and the gateway's expected-replicas rule."
   },
   {
     "slug": "development/backend",
