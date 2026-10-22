@@ -6,9 +6,9 @@
       "file": "page_content_v3_tone_adjusted.txt",
       "source": "services/elitea-deepwiki/src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
       "symbol": "ENHANCED_CONTENT_GENERATION_PROMPT_V3_TONE_ADJUSTED",
-      "sha256": "466aa2af5879aa03171450a7a4b6bdbb3948fa62b7137fc5da689132aa7a291d",
-      "chars": 19282,
-      "amended": "2026-10-22: one sentence reworded ('Pylon mounts a route as' -> 'a plugin framework mounts a route as'); no longer the Python value byte for byte"
+      "sha256": "e1f2e78c7a4c77a586e59ca6726f3de1ee684150c98566e511ac8fe1fb5623fa",
+      "chars": 19299,
+      "amended": "2026-10-22: one sentence reworded ('Pylon mounts a route as' -> 'a file-path-routed plugin framework mounts a route as'); no longer the Python value byte for byte"
     },
     {
       "file": "target_audience_mixed.txt",

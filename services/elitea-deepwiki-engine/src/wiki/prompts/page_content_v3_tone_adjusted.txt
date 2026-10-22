@@ -357,7 +357,7 @@ When referencing code in your documentation, include line ranges whenever they a
 **API ENDPOINTS — use the deployed URL verbatim:**
 When a `<code_source>` block contains an `<api_endpoints>` section, those `[ENDPOINT] METHOD /path`
 lines are the AUTHORITATIVE deploy-time URLs (resolved from the framework's routing convention, e.g.
-a plugin framework mounts a route as `/api/v{{version}}/{{plugin_name}}/{{file_name}}{{params}}`). When documenting an
+a file-path-routed plugin framework mounts a route as `/api/v{{version}}/{{plugin_name}}/{{file_name}}{{params}}`). When documenting an
 endpoint, copy the method and path EXACTLY as shown.
 - ✅ `GET /api/v1/configurations/configurations/{{project_id}}` — copied verbatim from `<api_endpoints>`
 - ❌ Never invent a REST-ish path from a handler's parameter name (e.g. do NOT write

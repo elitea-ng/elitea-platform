@@ -25,7 +25,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn every_prompt_is_the_recorded_python_value() {
+fn every_prompt_is_the_recorded_value() {
     let manifest: Value =
         serde_json::from_str(include_str!("../src/wiki/prompts/PROMPTS_MANIFEST.json")).unwrap();
     let prompts = manifest["prompts"].as_array().unwrap();

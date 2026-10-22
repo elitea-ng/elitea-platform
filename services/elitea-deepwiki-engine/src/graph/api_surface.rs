@@ -1289,6 +1289,20 @@ fn match_cli(text: &str) -> Option<Vec<ApiSurface>> {
 }
 
 // ── Plugin class APIs ───────────────────────────────────────────────────
+//
+// A heuristic for frameworks that route a class API by its FILE PATH: a
+// class deriving from something ending in `APIBase`, `MethodView` or
+// `Resource`, in a file under `.../api/v<N>/<file>.py`, is served at
+// `/api/v<N>/<file>` and, mounted under a plugin (a `plugins/<name>/` path
+// segment or the repository's metadata.json `name`), at
+// `/api/v<N>/<plugin>/<file>`. It does not read `add_url_rule` or any other
+// explicit registration, so a plain Flask app that registers its views by
+// hand gets a path-derived URL that may not be the deployed one, and any
+// base class whose name merely ends in `Resource` matches. The graph side
+// (`match_plugin_class_api`) skips the plugin-mounted variant when the file
+// IS the plugin name; the page side (`derive_plugin_endpoints`) does not.
+// Kept as found when the Pylon names were removed: behaviour, goldens and
+// both quirks unchanged.
 
 pattern!(
     CLASS_API_BASE,
@@ -1310,7 +1324,7 @@ pattern!(
 );
 pattern!(CLASS_API_PARAM, r"<[^>]+>");
 pattern!(CLASS_API_PARAM_NAMED, r"<(?:[^:>]+:)?(?P<name>[^>]+)>");
-pattern!(PLUGIN_MOUNT, r"^(/api(?:/v\d+\w*)?)/(.+)$");
+pattern!(CLASS_API_MOUNT, r"^(/api(?:/v\d+\w*)?)/(.+)$");
 pattern!(PLUGIN_NAME, r"^[A-Za-z][A-Za-z0-9_\-]*$");
 
 fn plugin_route_from_rel_path(rel_path: &str) -> String {
@@ -1371,7 +1385,7 @@ fn match_plugin_class_api(
     }
     let mut bases = vec![base.clone()];
     if !plugin_name.is_empty()
-        && let Some(mm) = PLUGIN_MOUNT.captures(&base)
+        && let Some(mm) = CLASS_API_MOUNT.captures(&base)
     {
         let rest = group_at(&mm, 2);
         if !rest.starts_with(&format!("{plugin_name}/")) && rest != plugin_name {
@@ -1424,7 +1438,7 @@ pub fn plugin_name_from_metadata_text(text: &str) -> String {
     }
 }
 
-/// `derive_plugin_endpoints`: the deployed REST endpoints of a plugin class
+/// The deployed REST endpoints of a plugin class
 /// API (`/api/v{N}/{plugin}/{file}{url_params}`), for the page writer.
 #[must_use]
 pub fn derive_plugin_endpoints(
@@ -1441,7 +1455,7 @@ pub fn derive_plugin_endpoints(
     }
     let mut deployed = base.clone();
     if !plugin_name.is_empty()
-        && let Some(mm) = PLUGIN_MOUNT.captures(&base)
+        && let Some(mm) = CLASS_API_MOUNT.captures(&base)
         && !group_at(&mm, 2).starts_with(&format!("{plugin_name}/"))
     {
         deployed = format!("{}/{plugin_name}/{}", group_at(&mm, 1), group_at(&mm, 2));
