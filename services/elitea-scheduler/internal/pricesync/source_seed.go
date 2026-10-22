@@ -8,7 +8,7 @@ import (
 	"context"
 )
 
-// seedModelsJSON is the bundled static price seed ported from the pylon-centry
+// seedModelsJSON is the bundled static price seed ported from the legacy centry
 // gateway_access 002_seed_gateway_models migration. It is ALREADY per-1M (it
 // mirrors the gateway_models schema), so SeedSource declares Per1M and the
 // Normalizer applies a ×1 no-op convert. It exists as an airgapped / pinned

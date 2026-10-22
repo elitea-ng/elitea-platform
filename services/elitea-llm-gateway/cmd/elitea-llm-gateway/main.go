@@ -471,7 +471,7 @@ func main() {
 	// The realtime WebSocket route (issue #323 follow-up). Its four options are
 	// all load-bearing and TestMainWiring asserts each of them:
 	//   - WithRealtimeDialer      without it the route answers 501 and the
-	//                             pylon-indexer relay keeps its own LiteLLM.
+	//                             legacy indexer relay keeps its own LiteLLM.
 	//   - WithRealtimeBudgetRecheck  a session is otherwise gated ONCE for its
 	//                             whole life; bifrost's turn-start signal is one
 	//                             the only known caller never sends.

@@ -380,7 +380,7 @@ type Config struct {
 	// cross-site with the ambient credentials of the user. With this empty the
 	// gateway admits only a handshake whose Origin matches its OWN host, or one
 	// that carries no Origin at all — which is every non-browser client,
-	// including the pylon-indexer relay this route exists for. A browser origin
+	// including the legacy indexer relay this route exists for. A browser origin
 	// must be named here on purpose.
 	RealtimeAllowedOrigins []string
 

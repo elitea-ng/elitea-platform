@@ -2,7 +2,7 @@
 // audio session that the gateway gates, meters and bills exactly like every
 // other /llm route (issue #323 follow-up).
 //
-// WHY THIS FILE EXISTS. pylon-indexer's realtime ASR relay
+// WHY THIS FILE EXISTS. The legacy indexer's realtime ASR relay
 // (indexer_asr_realtime.py) opens a WebSocket to `/v1/realtime?model=…&intent=
 // transcription` and pumps PCM16 audio at it. The retired LiteLLM proxy answered
 // that path. Nothing replaced it, so that image keeps a LiteLLM process of its
@@ -545,7 +545,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 	// stream. Both apply the SAME handshake and Origin checks.
 	clientSock, clientSubprotocol, aerr := RealtimeAcceptorFrom(r.Context())(w, r, RealtimeAcceptOptions{
 		// The caller may ask for a subprotocol or for none. RFC 6455 always
-		// allows the empty one, which is what the pylon relay uses. The
+		// allows the empty one, which is what the legacy relay uses. The
 		// provider's own subprotocol is not known yet — the dial happens after
 		// this — so the gateway offers the ONE subprotocol this surface uses.
 		Subprotocols: realtimeSubprotocols(realtimeSubprotocol),
@@ -618,7 +618,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 
 // realtimeSubprotocol is the ONE WebSocket subprotocol this surface uses.
 // OpenAI and Azure both negotiate "realtime"; RFC 6455 always allows the empty
-// one, which is what the pylon relay asks for. It is a constant rather than a
+// one, which is what the legacy relay asks for. It is a constant rather than a
 // value read from the provider because the client socket is now accepted BEFORE
 // the provider is dialled, so the provider's answer is not known yet. A
 // provider that negotiates something else still works — the two sides of a
@@ -1694,7 +1694,7 @@ func (s *realtimeSession) billTurn(raw []byte, ev *schemas.BifrostRealtimeEvent)
 	//
 	// THE TURN IS NOT BILLED WHEN THEY DO, and that is the whole point. Only the
 	// seconds and character arms refuse a rate the catalogue did not supply; the
-	// TOKEN arm falls back to the pylon default table like every other route. So
+	// TOKEN arm falls back to the legacy default table like every other route. So
 	// a model admitted on a per-second rate alone, reporting tokens, used to
 	// reach tokenCost and bill the invented 1.0/3.0 USD-per-1M fallback. H2
 	// exists because a socket the tenant holds open has no natural bound, and

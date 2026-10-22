@@ -2,7 +2,7 @@
 // (issue #323).
 //
 // WHY THIS FILE EXISTS. The retired LiteLLM proxy served /v1/audio/speech and
-// /v1/audio/transcriptions, and pylon-indexer's voice paths call them directly
+// /v1/audio/transcriptions, and the legacy indexer's voice paths call them directly
 // (indexer_tts.py, indexer_asr_whisper.py). Nothing replaced those two routes
 // when LiteLLM was removed, so the indexer kept a LiteLLM process of its own to
 // answer them. That process is a SECOND LLM data plane: it applies no budget,
@@ -18,7 +18,7 @@
 // TWO DELIBERATE LIMITS, both stated here rather than discovered later:
 //
 //  1. Neither route streams. The speech route answers one complete audio body.
-//     The pylon TTS client reads the response with `iter_content`, so a unary
+//     The legacy TTS client reads the response with `iter_content`, so a unary
 //     body still arrives as a stream of chunks to it; what it loses is
 //     first-byte latency, not audio. A streaming speech route needs the same
 //     detached-drain billing machinery the chat stream has, and that is a
@@ -61,7 +61,7 @@ import (
 // is dispatched, delivered and billed as zero, and counted here.
 //
 // The TOKEN basis is NOT catalog-only, and this counter does NOT see it. It
-// falls back to the pylon default table exactly like every other route on this
+// falls back to the legacy default table exactly like every other route on this
 // gateway — longstanding, disclosed behaviour (internal/cost/cost.go: "The token
 // basis never fails"). So an audio response that reports TOKENS can bill a
 // figure the gateway invented. That is a different defect from this one —
@@ -79,7 +79,7 @@ const MetricAudioUnpriced = "gateway_audio_unpriced_total"
 // did not come from the catalog.
 //
 // gpt-4o-transcribe reports tokens and publishes a token price upstream; a
-// deployment whose catalog has not synced still bills, from the pylon default
+// deployment whose catalog has not synced still bills, from the legacy default
 // table or from the ultimate 1.0/3.0 USD-per-1M fallback. The amount is non-zero
 // and plausible, so nothing else on this path reports it: MetricAudioUnpriced
 // cannot fire because a price WAS produced, and MetricAudioNonTokenBasis cannot
@@ -246,7 +246,7 @@ func (h *Handler) audioModelPriced(ctx context.Context, provider, model string, 
 // Speech handles POST /llm/v1/audio/speech (text-to-speech).
 //
 // The success body is the raw audio the provider returned, NOT JSON. That is
-// the OpenAI contract and the one the pylon TTS client reads. Errors stay
+// the OpenAI contract and the one the legacy TTS client reads. Errors stay
 // OpenAI-shaped JSON like every other route (spec §2.5).
 func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	var req openai.OpenAISpeechRequest

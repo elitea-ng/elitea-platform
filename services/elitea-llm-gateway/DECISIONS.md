@@ -852,12 +852,12 @@ in a release note.**
 
 - **[2026-08-20, issue #323] The gateway serves `/llm/v1/audio/speech`,
   `/audio/transcriptions` and `/audio/translations`.** *Finding:* the retired
-  LiteLLM proxy served the first two, and `pylon-indexer`'s voice paths call
+  LiteLLM proxy served the first two, and the legacy indexer's voice paths call
   them by absolute URL (`indexer_tts.py`, `indexer_asr_whisper.py`). Nothing
   replaced them, so that image kept a LiteLLM process of its own to answer them
   — a SECOND LLM data plane that applies no budget, bills nothing, and resolves
   credentials from a registry (`runtime_interface_litellm`, in the deleted
-  pylon_main) that the platform no longer writes. The model registry it reads is
+  legacy main service) that the platform no longer writes. The model registry it reads is
   therefore empty, so those calls already fail. *Decision:* implement the two
   routes here, on the same order every /llm route follows — decode, `mapModel`,
   `checkBudget`, dispatch, `updateUsage` — so the audio path is governed like
@@ -865,7 +865,7 @@ in a release note.**
 
   | Limit | Why |
   |---|---|
-  | Neither route streams | A streaming speech route needs the detached-drain billing machinery the chat stream has. The pylon TTS client reads the body with `iter_content`, so a unary body still arrives chunked to it; it loses first-byte latency, not audio. |
+  | Neither route streams | A streaming speech route needs the detached-drain billing machinery the chat stream has. The legacy TTS client reads the body with `iter_content`, so a unary body still arrives chunked to it; it loses first-byte latency, not audio. |
   | A response the catalog carries no rate for bills zero | `cost.Calculator` now prices three bases — tokens, seconds and characters (migration 0086) — but only from the catalog. There is no default per-second or per-character price and there must not be one: an invented rate reaches the authoritative budget counter as if it were measured. A model with no catalog audio rate is UNPRICED. The condition is counted on `gateway_audio_unpriced_total` and logged, not hidden. 2026-10-04: a project WITH a budget is refused such a model before dispatch (501 `audio_unpriced`, `gateway_audio_refused_unpriced_model_total`). The browser voice client calls these routes per utterance and per sentence, so bill-zero was an unbounded hole under a budget. A project without a budget keeps bill-zero-and-count. |
 
   **Two follow-up decisions, both from the adversarial review of this change:**
@@ -978,7 +978,7 @@ in a release note.**
 ## Realtime sessions
 - **[2026-08-20] The gateway serves `/llm/v1/realtime`** (`internal/llmproxy/
   realtime.go`). *Finding:* the audio routes removed two of the three reasons
-  pylon-indexer still runs a LiteLLM process of its own; the third is
+  the legacy indexer still runs a LiteLLM process of its own; the third is
   `indexer_asr_realtime.py`, which opens a WebSocket to
   `/v1/realtime?model=…&intent=transcription` and pumps PCM16 audio at it. That
   process is a SECOND LLM data plane: no budget, no billing, credentials from a
@@ -1099,7 +1099,7 @@ in a release note.**
   EMPTY by default, which is the library's same-origin rule and not "no policy":
   a handshake is admitted when its `Origin` matches the gateway's own host, or
   when it carries no `Origin` at all — which is every non-browser client,
-  including the pylon relay this route exists for. An operator widens it, per
+  including the legacy relay this route exists for. An operator widens it, per
   origin, through `LLM_REALTIME_ALLOWED_ORIGINS`, and `logRealtimeMode` states
   the resulting mode at startup so a widened policy is never silent.
   **Still open, and it is NOT in this module:** the edge (elitea-main) performs

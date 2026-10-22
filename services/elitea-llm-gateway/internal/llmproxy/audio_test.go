@@ -1,7 +1,7 @@
 // audio_test.go — the /llm/v1/audio surface (issue #323).
 //
 // These tests assert the wire shape the CALLERS need, not the shape this
-// package finds convenient. The callers are pylon-indexer's voice paths, which
+// package finds convenient. The callers are the legacy indexer's voice paths, which
 // were written against the retired LiteLLM proxy:
 //
 //   - indexer_tts.py POSTs JSON to /v1/audio/speech and reads the response body

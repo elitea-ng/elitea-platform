@@ -21,7 +21,7 @@ type Tool func(ctx context.Context, arguments map[string]any, tc *spi.Context) (
 
 // Runner is the legacy handler's invoke path over a table of tools: the
 // wikis_query rewrite, the parameter merge, the egress check, the call, the
-// success check, composition, and the upload the pylon worker used to do
+// success check, composition, and the upload the legacy worker used to do
 // and nothing on the Go platform did (the port gap the Python shell closed
 // and this inherits).
 type Runner struct {

@@ -10,7 +10,7 @@
 //     after each response.
 //
 // The load-bearing invariant (§8.8, guards the 1000× / 1e6 costing bug): prices
-// are per-1M tokens. The pylon reference (gateway_analytics.CostCalculator)
+// are per-1M tokens. The legacy reference (gateway_analytics.CostCalculator)
 // computes cost as (tokens / 1_000_000) * price_per_1M in USD; this package
 // produces the exact int64 nano-USD equivalent so the two agree end-to-end
 // (pre-flight gate BFF.2 / spec §7 s8):
@@ -22,7 +22,7 @@
 //
 // The package reads prices from Postgres (source of truth) with a short
 // in-process TTL cache on the hot path (§8.8, line 448), and falls back to the
-// same default price table pylon uses (identical values, identical ordered
+// same default price table the legacy runtime uses (identical values, identical ordered
 // prefix match) so an un-catalogued model is priced consistently with the
 // legacy path rather than dropped.
 //
@@ -100,7 +100,7 @@ const (
 
 // DefaultCacheTTL is the in-process price-cache lifetime on the cost hot path
 // (design §8.8: "a 5-minute in-process cache on the cost hot path"). It matches
-// the pylon CostCalculator's 5-minute pricing cache.
+// the legacy CostCalculator's 5-minute pricing cache.
 const DefaultCacheTTL = 5 * time.Minute
 
 // Price is a resolved set of per-1,000,000-unit prices in nano-USD, plus its
@@ -139,7 +139,7 @@ type Price struct {
 	AudioFromCatalog bool
 
 	// Source is where the TOKEN price came from: sourceCatalog (gateway_models),
-	// sourceDefault (a matched entry in the pylon default table), or
+	// sourceDefault (a matched entry in the legacy default table), or
 	// sourceFallback (the ultimate 1.0/3.0 USD default). The audio rates have
 	// their own provenance flag, AudioFromCatalog, because they have only one
 	// source.
@@ -151,7 +151,7 @@ type Price struct {
 	Source string
 
 	// OutputDerived is true when the catalog row had NO output price and
-	// OutputNanoPer1M is the pylon input x 3 estimate (tokenPricesFromRow).
+	// OutputNanoPer1M is the legacy input x 3 estimate (tokenPricesFromRow).
 	//
 	// Issue #6719 is why it is a field. An image model publishes its output
 	// price as a per-IMAGE-TOKEN rate, and the price sync read only the
@@ -259,7 +259,7 @@ type pgxRow interface {
 // modelPriceSQL reads the per-1M prices for one (provider, model) and scales
 // them to nano-USD exactly in SQL. NUMERIC(20,8) × 1e9 is an integer (≤8
 // fractional digits), so the ::bigint cast is exact — no float ever touches the
-// money path. NULL costs scan into the *int64 pointers as nil (pylon treats a
+// money path. NULL costs scan into the *int64 pointers as nil (the legacy runtime treats a
 // row with a NULL input cost as "not usable" and falls back to defaults).
 //
 // The four audio columns (migration 0086) are NUMERIC(20,8) and nullable, and
@@ -401,7 +401,7 @@ func (c *Calculator) Cost(ctx context.Context, provider, model string, inputToke
 // an empty Basis and a zero total. The caller must count that as UNPRICED and
 // must not read it as a request that cost nothing.
 // FromCatalog reports whether the rate that ACTUALLY PAID came from
-// gateway_models, rather than from the pylon default table or the ultimate
+// gateway_models, rather than from the legacy default table or the ultimate
 // fallback.
 //
 // It exists so a caller can tell a real price from a fabricated one without
@@ -418,7 +418,7 @@ func (c Cost) FromCatalog() bool { return c.Source == sourceCatalog }
 const (
 	// SourceCatalog means the rate came from gateway_models.
 	SourceCatalog = sourceCatalog
-	// SourceDefault means the rate came from the pylon default price table.
+	// SourceDefault means the rate came from the legacy default price table.
 	SourceDefault = sourceDefault
 	// SourceFallback means the rate came from the ultimate 1.0/3.0 USD-per-1M
 	// default: the gateway knows nothing about this model and priced it anyway.
@@ -547,7 +547,7 @@ func (c *Calculator) Price(ctx context.Context, provider, model string) Price {
 	price, ok := c.lookupCatalog(ctx, provider, model)
 	if !ok {
 		// Not in the catalog (or a NULL/absent input price, or a DB error):
-		// fall back to the pylon default table, exactly as the legacy path does.
+		// fall back to the legacy default table, exactly as the legacy path does.
 		price = defaultPrice(model)
 	}
 
@@ -571,7 +571,7 @@ func (c *Calculator) Price(ctx context.Context, provider, model string) Price {
 // lookupCatalog reads (provider, model) from gateway_models. ok is false when
 // there is no DB, the row is absent, the query errors, or the row carries
 // NEITHER a usable token price NOR any audio rate — in every such case the
-// caller falls back to the default table (this mirrors pylon, which uses the DB
+// caller falls back to the default table (this mirrors the legacy runtime, which uses the DB
 // row only when input_cost_per_1m_tokens is not None and otherwise drops to its
 // default table).
 //
@@ -690,7 +690,7 @@ func (c *Calculator) reportLookupFailure(provider, model string, err error) {
 }
 
 // tokenPricesFromRow resolves the token price pair from the two token columns.
-// ok is false when the input price is NULL, or when the pylon input*3 output
+// ok is false when the input price is NULL, or when the legacy input*3 output
 // default would overflow int64. derived is true when out is that input*3
 // estimate rather than a catalog price.
 //
@@ -707,7 +707,7 @@ func tokenPricesFromRow(inputNano, outputNano *int64) (in, out int64, derived, o
 	if outputNano != nil {
 		return *inputNano, *outputNano, false, true
 	}
-	// pylon default when output price is absent: input * 3. Guard against
+	// legacy default when output price is absent: input * 3. Guard against
 	// silent int64 overflow (which would produce an output price of 0 instead
 	// of the correct fallback) for a corrupt/absurd catalog row.
 	if *inputNano > math.MaxInt64/3 {
