@@ -29,7 +29,13 @@
 //! dense branch reads the wiki's `active_generation`, embedding model and
 //! dimension in the snapshot, searches only that generation, and keeps the
 //! hits whose node the snapshot holds, so it ranks the vectors of the
-//! nodes it answers with. The distance changed from L2 to cosine with the
+//! nodes it answers with. A publish that commits while the search runs
+//! deletes the generation being searched once it committed (its sweep):
+//! after the search the branch reads the wiki's `active_generation` again,
+//! outside the snapshot, and when it moved on the whole read starts again
+//! in a new snapshot (at most [`READ_ATTEMPTS`] times), so a read never
+//! answers from a half-deleted generation. Still active after the search
+//! means no sweep had started on it, so its answer is whole. The distance changed from L2 to cosine with the
 //! move; for the unit-length vectors embedding models answer, both rank
 //! alike (`|a-b|^2 = 2 - 2cos`). When elitea-vector cannot be reached the
 //! branch is skipped with a warning and the search answers lexically.
@@ -55,6 +61,31 @@ pub const DEFAULT_VEC_POOL: usize = 30;
 
 /// The opening statement of every read.
 pub(crate) const READ_SNAPSHOT: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+
+/// The snapshots a read with a dense branch opens at most: one, and one
+/// more each time a publish replaced the generation it searched.
+pub const READ_ATTEMPTS: usize = 3;
+
+/// A read whose wiki was republished during every attempt.
+pub(crate) fn republished_meanwhile(key: &WikiKey) -> StorageError {
+    StorageError::Busy(format!(
+        "wiki '{}' was re-indexed during every attempt to search it; ask again",
+        key.wiki_id()
+    ))
+}
+
+/// Whether `generation` is still the wiki's active one, read outside any
+/// snapshot (the latest committed state).
+async fn still_active(pool: &PgPool, key: &WikiKey, generation: &str) -> Result<bool> {
+    let active: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT active_generation FROM wikis WHERE project_id = $1 AND wiki_id = $2",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .fetch_optional(pool)
+    .await?;
+    Ok(active.flatten().as_deref() == Some(generation))
+}
 
 /// A branch's score fields. Only the fields of the branch (and, for a
 /// fused hit, `combined_score`) are set: Python's `Hit.scores` dict holds
@@ -276,11 +307,24 @@ impl IndexReader {
     /// [`crate::storage::StorageError::Vector`] for a vector whose dimension
     /// differs from the stored ones.
     pub async fn search_dense(&self, embedding: &[f64], k: usize) -> Result<Vec<Hit>> {
-        let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits =
-            search_dense(&mut tx, &self.key, self.dense.as_ref(), embedding, k, None).await?;
-        tx.commit().await?;
-        Ok(hits)
+        for _ in 0..READ_ATTEMPTS {
+            let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
+            let hits = search_dense(
+                &mut tx,
+                &self.pool,
+                &self.key,
+                self.dense.as_ref(),
+                embedding,
+                k,
+                None,
+            )
+            .await?;
+            tx.commit().await?;
+            if let Some(hits) = hits {
+                return Ok(hits);
+            }
+        }
+        Err(republished_meanwhile(&self.key))
     }
 
     /// FTS + dense, fused: hits carry `combined_score`. An absent or empty
@@ -295,19 +339,25 @@ impl IndexReader {
         embedding: Option<&[f64]>,
         params: &Hybrid,
     ) -> Result<Vec<Hit>> {
-        let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_hybrid(
-            &mut tx,
-            &self.key,
-            self.dense.as_ref(),
-            query,
-            embedding,
-            params,
-            None,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(hits)
+        for _ in 0..READ_ATTEMPTS {
+            let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
+            let hits = search_hybrid(
+                &mut tx,
+                &self.pool,
+                &self.key,
+                self.dense.as_ref(),
+                query,
+                embedding,
+                params,
+                None,
+            )
+            .await?;
+            tx.commit().await?;
+            if let Some(hits) = hits {
+                return Ok(hits);
+            }
+        }
+        Err(republished_meanwhile(&self.key))
     }
 
     /// Row counts and the statistics of each branch. `vector_count` is the
@@ -624,18 +674,23 @@ pub(crate) async fn active_vectors(
 ///
 /// Without a dense store, or when the store cannot be reached, the branch
 /// answers nothing (the latter with a warning): the caller's search goes on
-/// lexically. Hits whose node the snapshot does not hold (a generation
-/// being replaced) are dropped.
+/// lexically. Hits whose node the snapshot does not hold are dropped.
+///
+/// `None`: the generation searched is no longer the wiki's active one (read
+/// from `pool`, outside the snapshot), so a publish's sweep may have deleted
+/// some of its points during the search; the caller starts the read again
+/// in a new snapshot.
 pub(crate) async fn search_dense(
     tx: &mut PgConnection,
+    pool: &PgPool,
     key: &WikiKey,
     dense: Option<&DenseIndex>,
     embedding: &[f64],
     k: usize,
     expected_model: Option<&str>,
-) -> Result<Vec<Hit>> {
+) -> Result<Option<Vec<Hit>>> {
     let Some(active) = active_vectors(tx, key).await? else {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     };
     if let Some(expected) = expected_model {
         let stored = active.model.trim();
@@ -648,7 +703,7 @@ pub(crate) async fn search_dense(
         }
     }
     let Some(store) = dense else {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     };
     #[allow(clippy::cast_possible_truncation)] // f64 -> f32, as pgvector's float4
     let query: Vec<f32> = embedding.iter().map(|v| *v as f32).collect();
@@ -664,10 +719,19 @@ pub(crate) async fn search_dense(
                 %error,
                 "elitea-vector is unavailable; answering with the lexical search only"
             );
-            return Ok(Vec::new());
+            return Ok(Some(Vec::new()));
         }
         Err(error) => return Err(StorageError::Vector(error.to_string())),
     };
+    if !still_active(pool, key, &active.generation).await? {
+        tracing::info!(
+            wiki = key.wiki_id(),
+            project = key.project_id(),
+            generation = %active.generation,
+            "the wiki was republished during the search; searching again"
+        );
+        return Ok(None);
+    }
     let ids: Vec<&str> = found.iter().map(|hit| hit.node_id.as_str()).collect();
     let held: std::collections::HashSet<String> = sqlx::query_scalar(
         "SELECT node_id FROM wiki_nodes WHERE project_id = $1 AND wiki_id = $2 AND node_id = ANY($3)",
@@ -693,27 +757,42 @@ pub(crate) async fn search_dense(
             )
         })
         .collect();
-    hits(tx, key, scored).await
+    hits(tx, key, scored).await.map(Some)
 }
 
-/// `PostgresBackend.search_hybrid`.
+/// `PostgresBackend.search_hybrid`. `None` as [`search_dense`].
+#[allow(clippy::too_many_arguments)] // the snapshot, the pool, the key and the search
 pub(crate) async fn search_hybrid(
     tx: &mut PgConnection,
+    pool: &PgPool,
     key: &WikiKey,
     dense: Option<&DenseIndex>,
     query: &str,
     embedding: Option<&[f64]>,
     params: &Hybrid,
     expected_model: Option<&str>,
-) -> Result<Vec<Hit>> {
+) -> Result<Option<Vec<Hit>>> {
     let fts = search_fts(tx, key, query, params.fts_pool).await?;
     let dense = match embedding {
         Some(vector) if !vector.is_empty() => {
-            search_dense(tx, key, dense, vector, params.vec_pool, expected_model).await?
+            match search_dense(
+                tx,
+                pool,
+                key,
+                dense,
+                vector,
+                params.vec_pool,
+                expected_model,
+            )
+            .await?
+            {
+                Some(dense) => dense,
+                None => return Ok(None),
+            }
         }
         _ => Vec::new(),
     };
-    Ok(rrf_fuse(
+    Ok(Some(rrf_fuse(
         &fts,
         &dense,
         &Fusion {
@@ -722,7 +801,7 @@ pub(crate) async fn search_hybrid(
             rrf_constant: RRF_CONSTANT,
             limit: params.limit,
         },
-    ))
+    )))
 }
 
 #[cfg(test)]

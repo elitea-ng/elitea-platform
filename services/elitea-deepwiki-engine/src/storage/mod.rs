@@ -94,7 +94,8 @@ pub enum StorageError {
     #[error("{0}")]
     Vector(String),
     /// A deletion gave up waiting for a publish of the same wiki (the
-    /// bounded advisory-lock wait). Nothing was deleted; the caller retries.
+    /// bounded advisory-lock wait), or a search found the wiki republished
+    /// during each of its attempts. Nothing was changed; the caller retries.
     #[error("{0}")]
     Busy(String),
     /// A DSN that does not parse. The text is never part of the message:

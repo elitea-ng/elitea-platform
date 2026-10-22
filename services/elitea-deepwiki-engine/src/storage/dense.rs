@@ -570,7 +570,10 @@ impl DenseIndex {
                     })
                     .collect())
             }
-            Backend::Memory(store) => store.search(key, generation, space, vector, limit as usize),
+            Backend::Memory(store) => {
+                store.pass_search_gate().await;
+                store.search(key, generation, space, vector, limit as usize)
+            }
         }
     }
 
@@ -660,6 +663,8 @@ struct MemoryState {
     unavailable: bool,
     fail_deletes: bool,
     calls: Vec<&'static str>,
+    /// [`MemoryDense::pause_next_search`]'s pair: `(arrived, release)`.
+    search_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 /// An in-process dense store with exact cosine scoring, for the tests and
@@ -693,6 +698,26 @@ impl MemoryDense {
     /// (`true`), or works again (`false`); the other calls are served.
     pub fn fail_deletes(&self, fail: bool) {
         self.lock().fail_deletes = fail;
+    }
+
+    /// Hold the next search before it reads the points: it signals the
+    /// first returned `Notify` when it got there and waits for the second.
+    /// A test makes a publish (and its sweep) happen in the middle of a
+    /// reader's query with it.
+    #[must_use]
+    pub fn pause_next_search(&self) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let arrived = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        self.lock().search_gate = Some((arrived.clone(), release.clone()));
+        (arrived, release)
+    }
+
+    async fn pass_search_gate(&self) {
+        let gate = self.lock().search_gate.take();
+        if let Some((arrived, release)) = gate {
+            arrived.notify_one();
+            release.notified().await;
+        }
     }
 
     /// The calls made, by name, in order.

@@ -594,6 +594,76 @@ async fn an_abandoned_first_build_has_its_vectors_deleted_eventually() {
     assert_eq!(store.generations(&other_key), [] as [(String, usize); 0]);
 }
 
+/// A publish that commits while a reader searches the generation it
+/// replaces sweeps that generation before the reader's search runs: the
+/// reader notices the wiki moved on and searches again in a new snapshot,
+/// so it answers with the new version's vectors, never with an empty
+/// (half-deleted) dense branch. Both the bare dense search and the read
+/// surface's hybrid search.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reader_whose_generation_is_swept_mid_query_searches_again() {
+    let Some(pool) = common::fresh_database("publish_swept_reader").await else {
+        return;
+    };
+    let wiki = "acme--swept-reader--main";
+    let key = common::key(wiki);
+    let (space, store) = common::dense_space(&pool, "publisher");
+    publish_version(&space, wiki, "alpha", 6).await;
+    let db = UnifiedDb::new(pool.clone(), key.clone()).with_dense(common::dense(&store));
+
+    for (round, tag) in [(0, "beta"), (1, "alpha")] {
+        let (arrived, release) = store.pause_next_search();
+        let reader = {
+            let db = db.clone();
+            tokio::spawn(async move {
+                if round == 0 {
+                    db.reader()
+                        .search_dense(&[1.0; DIM], 4)
+                        .await
+                        .expect("dense")
+                        .into_iter()
+                        .map(|hit| hit.node_id)
+                        .collect::<Vec<_>>()
+                } else {
+                    // No lexical match: every hit is the dense branch's.
+                    db.search_hybrid(
+                        "zzzunmatched",
+                        Some(&[1.0; DIM]),
+                        &Scope::default(),
+                        &Hybrid::default(),
+                    )
+                    .await
+                    .expect("hybrid")
+                    .into_iter()
+                    .filter(|row| row.scores.vec_distance.is_some())
+                    .map(|row| row.node.node_id)
+                    .collect::<Vec<_>>()
+                }
+            })
+        };
+        // The reader read the old generation in its snapshot and is about to
+        // search it; a publish replaces it and sweeps it now.
+        arrived.notified().await;
+        let before = store.generations(&key);
+        assert_eq!(before.len(), 1);
+        publish_version(&space, wiki, tag, 5).await;
+        assert!(
+            !store.generations(&key).contains(&before[0]),
+            "the publish's sweep did not delete the replaced generation"
+        );
+        release.notify_one();
+        let found = reader.await.expect("reader");
+        assert!(
+            !found.is_empty(),
+            "round {round}: the reader answered without its dense branch"
+        );
+        assert!(
+            found.iter().all(|id| id.starts_with(&format!("{tag}/"))),
+            "round {round}: {found:?}"
+        );
+    }
+}
+
 /// When elitea-vector cannot be reached the hybrid search answers with the
 /// lexical branch alone, and says so in the log; it does not fail.
 #[tokio::test(flavor = "multi_thread")]

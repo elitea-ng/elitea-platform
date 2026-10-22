@@ -266,18 +266,29 @@ impl UnifiedDb {
         scope: &Scope,
         params: &Hybrid,
     ) -> Result<Vec<HybridRow>> {
-        let mut tx = self.snapshot().await?;
         let key = self.key();
-        let mut hits = search::search_hybrid(
-            &mut tx,
-            key,
-            self.reader.dense(),
-            query,
-            embedding,
-            params,
-            self.expected_model.as_deref(),
-        )
-        .await?;
+        let mut attempt = 0;
+        let (mut tx, mut hits) = loop {
+            attempt += 1;
+            let mut tx = self.snapshot().await?;
+            match search::search_hybrid(
+                &mut tx,
+                self.reader.pool(),
+                key,
+                self.reader.dense(),
+                query,
+                embedding,
+                params,
+                self.expected_model.as_deref(),
+            )
+            .await?
+            {
+                Some(hits) => break (tx, hits),
+                // Republished during the search: a new snapshot.
+                None if attempt < search::READ_ATTEMPTS => tx.commit().await?,
+                None => return Err(search::republished_meanwhile(key)),
+            }
+        };
         let filtered = scope.path_prefix.as_deref().is_some_and(|p| !p.is_empty())
             || scope.cluster_id.is_some();
         if filtered {
