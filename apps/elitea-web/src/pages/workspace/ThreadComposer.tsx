@@ -77,21 +77,29 @@ function latestMeter(turn: WorkspaceTurn) {
   return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
 }
 
+/**
+ * What the "/" menu offers besides the host commands: the custom commands and the project's own skills (after the
+ * agent's), both the local host's only (`local`: none for the cloud copy). The project's skills are read once the
+ * composer got focus (which also prewarms the send).
+ */
+function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: number, local: boolean, skills: readonly ComposerSkill[], prewarm: () => void) {
+  const customCommands = useCustomCommands(ipc, workspaceId, local);
+  const [focused, setFocused] = useState(false);
+  const projectSkills = useProjectSkills(projectId, focused && local, skills);
+  const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
+  const onFocus = (): void => {
+    setFocused(true);
+    prewarm();
+  };
+  return { customCommands, offered, onFocus };
+}
+
 export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
-  // A custom command is the local host's: none for the cloud copy.
-  const customCommands = useCustomCommands(ipc, workspaceId, !cloudMode);
-  // The project's own skills: read once the composer is used, applied by the local host only.
-  const [focused, setFocused] = useState(false);
-  const projectSkills = useProjectSkills(projectId, focused && !cloudMode, skills);
-  const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
-  const onFocus = (): void => {
-    setFocused(true);
-    session.prewarm();
-  };
+  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, !cloudMode, skills, session.prewarm);
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,

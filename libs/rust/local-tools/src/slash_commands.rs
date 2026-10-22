@@ -697,7 +697,7 @@ mod tests {
             ".claude/commands/bad name.md".to_owned(),
             "not a valid command name".to_owned()
         )));
-        assert!(list(None, None).commands.is_empty());
+        assert_eq!(list(None, None).commands.len(), 0);
     }
 
     #[test]
@@ -750,13 +750,13 @@ mod tests {
         assert_eq!(names(&listing), [("mine", Source::User)]);
         assert_eq!(listing.skipped[0].0, "shared.md");
         fs::set_permissions(user.path(), fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(list(None, Some(user.path())).commands.is_empty());
+        assert_eq!(list(None, Some(user.path())).commands.len(), 0);
         // The folder itself reached through a symlink is not read either.
         fs::set_permissions(user.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let other = tempfile::tempdir().unwrap();
         let link = other.path().join("commands");
         std::os::unix::fs::symlink(user.path(), &link).unwrap();
-        assert!(list(None, Some(&link)).commands.is_empty());
+        assert_eq!(list(None, Some(&link)).commands.len(), 0);
     }
 
     #[test]
@@ -873,7 +873,7 @@ mod tests {
         // An unclosed block is not front matter: all of it is the template.
         let open = parse("---\nmodel: x\nDo it.");
         assert_eq!(open.template, "---\nmodel: x\nDo it.");
-        assert!(open.ignored.is_empty());
+        assert_eq!(open.ignored, [] as [String; 0]);
         // A long description is cut; control characters become spaces.
         let long = parse(&format!(
             "---\ndescription: a\u{7}{}\n---\n",
@@ -900,7 +900,10 @@ mod tests {
         let expanded = expand(command, "now");
         assert_eq!(expanded, template.replace("$ARGUMENTS", "now"));
         assert!(!marker.exists(), "nothing ran");
-        assert!(parse("plain text, mail me@example.com").ignored.is_empty());
+        assert_eq!(
+            parse("plain text, mail me@example.com").ignored,
+            [] as [String; 0]
+        );
     }
 
     #[test]

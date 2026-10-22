@@ -16,6 +16,8 @@ const COMMANDS: CustomCommand[] = [
   command('rebase', 'user'),
   // A host command's name: never offered.
   command('help', 'workspace'),
+  command('model', 'user'),
+  command('compact', 'workspace'),
 ];
 
 const SKILLS: ComposerSkill[] = [
@@ -44,7 +46,9 @@ describe('slashMenu', () => {
       'host /plan',
       'host /undo',
       'host /agent',
+      'host /model',
       'host /clear',
+      'host /compact',
       'host /help',
       'workspace /frontend:lint',
       'workspace /review',
@@ -94,6 +98,8 @@ describe('invokedCustomCommand', () => {
     expect(invokedCustomCommand('please /review', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/Review x', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/help', COMMANDS)).toBeNull();
+    expect(invokedCustomCommand('/model gpt-5', COMMANDS)).toBeNull();
+    expect(invokedCustomCommand('/compact', COMMANDS)).toBeNull();
     expect(invokedCustomCommand('/review', [])).toBeNull();
   });
 });
