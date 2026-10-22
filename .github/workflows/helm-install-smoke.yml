@@ -148,7 +148,7 @@ jobs:
         # that RENDERED it; the runner image's bundled helm is whatever it is.
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: The runtime-material minting needs python3 'cryptography'
         # deploy/scripts/gen-runtime-certs.sh mints Ed25519 keys with it and

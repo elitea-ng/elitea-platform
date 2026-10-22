@@ -49,6 +49,25 @@ jobs:
         run: |
           bash scripts/ci/check-rust-toolchain.sh
           bash scripts/ci/check-rust-toolchain-test.sh
+      # One Helm in CI (v4, every azure/setup-helm step) plus the one Helm 3
+      # render Argo CD needs (helm-lint.yml, id helm3). Dependabot bumps the
+      # action but never its `version:` input; dependency-scanning.yml runs
+      # the same check with --latest every day, so a newer Helm turns it red.
+      # The test step counts its scenarios: a suite that collects nothing
+      # exits 0.
+      - name: One Helm version across CI, and the Helm 3 render
+        run: |
+          set -euo pipefail
+          node scripts/ci/check-helm-version.mjs
+          expected="$(grep -c '^test(' scripts/ci/check-helm-version.test.mjs)"
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-helm-version.test.mjs 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::check-helm-version.test.mjs holds ${expected} scenario(s); node --test passed ${ran:-none} (exit ${status})"
+            exit 1
+          fi
       # Every tracked shell file must at least parse. That is worth little on
       # its own, and it is worth having for EVERY tracked shell file: launchers
       # used to get this check one at a time, and the set they belong to grew

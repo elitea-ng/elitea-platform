@@ -96,7 +96,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       # A bare loop takes the status of its LAST iteration, so a broken early
       # chart read as a pass. `bash -e` hides that today by stopping the step on
@@ -621,7 +621,12 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
+
+      # The Helm 4 binary, for the Helm 3 parity steps at the end of this job
+      # (their setup-helm puts Helm 3 first on PATH).
+      - name: Remember the Helm 4 binary
+        run: echo "HELM4=$(command -v helm)" >> "$GITHUB_ENV"
 
       - name: Install kubeconform
         run: |
@@ -769,6 +774,30 @@ jobs:
             -schema-location default \
             -schema-location "$CRD_SCHEMAS" \
             "/tmp/${{ matrix.chart }}-toggles.yaml"
+
+      # Helm 3 still renders the chart, and renders the same objects. CI
+      # lints, installs and publishes with Helm 4, but Argo CD renders with
+      # the Helm 3 it bundles, so a template only Helm 4 accepts would break
+      # every Argo CD install with this workflow green. The Helm 3 pin is the
+      # latest 3.x patch (scripts/ci/check-helm-version.mjs holds both pins).
+      # Last in the job: from here on `helm` is Helm 3.
+      - name: Set up Helm 3 (the Argo CD renderer)
+        id: helm3
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.22.1
+
+      - name: Helm 3 lints, and renders what Helm 4 renders
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          helm version --short
+          helm lint "deploy/helm/${{ matrix.chart }}"
+          if [ "${{ matrix.chart }}" = elitea ]; then
+            HELM3="$(command -v helm)" bash deploy/helm/tests/render-helm3-parity.sh
+          else
+            helm template ci-release "deploy/helm/${{ matrix.chart }}" ${{ matrix.values }} ${{ matrix.toggles }} >/dev/null
+          fi
 
   argocd:
     name: ArgoCD Applications

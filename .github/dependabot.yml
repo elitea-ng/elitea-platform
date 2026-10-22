@@ -76,6 +76,10 @@ multi-ecosystem-groups:
     open-pull-requests-limit: 1
 
 updates:
+  # Bumps `uses:` refs only. The Helm a step installs is azure/setup-helm's
+  # `version:` input, which this never reads: scripts/ci/check-helm-version.mjs
+  # holds those pins together, and dependency-scanning.yml fails daily when a
+  # newer Helm 4 or Helm 3 is out.
   - package-ecosystem: github-actions
     # `/` covers .github/workflows only; each composite action under
     # .github/actions/ is its own directory to dependabot (they held

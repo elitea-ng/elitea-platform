@@ -417,7 +417,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: Provision the secured NATS permission tests
         env:
