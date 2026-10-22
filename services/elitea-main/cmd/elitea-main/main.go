@@ -1554,7 +1554,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			legacyrbac.NewPostgresResolver(pool),
 			inventorySources,
 			logger,
-			v2inventory.WithHop(inventoryHop),
+			providerproxy.WithHop(inventoryHop),
 		)
 		if err != nil {
 			return fmt.Errorf("build the Inventory facade: %w", err)

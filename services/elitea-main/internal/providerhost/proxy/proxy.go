@@ -99,6 +99,32 @@ func OutcomeFrom(ctx context.Context) *Outcome {
 	return outcome
 }
 
+// RouteOption tunes how a facade route gets its hop.
+type RouteOption func(*routeOptions)
+
+type routeOptions struct{ hop *Proxy }
+
+// WithHop has the route forward over an already built hop: the one the
+// composition root also hands the provider registrar, so a facade holds one
+// connection (and one certificate reloader) to its provider, not two. A nil
+// hop is no option: the route builds its own.
+func WithHop(hop *Proxy) RouteOption {
+	return func(o *routeOptions) { o.hop = hop }
+}
+
+// ForRoute is the hop a facade route forwards over: the one WithHop handed
+// it, or a new one built from cfg as New does.
+func ForRoute(cfg facade.Config, envName string, logger *slog.Logger, options ...RouteOption) (*Proxy, error) {
+	var chosen routeOptions
+	for _, option := range options {
+		option(&chosen)
+	}
+	if chosen.hop != nil {
+		return chosen.hop, nil
+	}
+	return New(cfg, envName, logger)
+}
+
 // New builds the hop. envName names the setting that carries the target, so
 // a refusal says which variable an operator must fix. The material is loaded
 // now (a missing file is a construction error) and re-read when its files

@@ -184,7 +184,7 @@ func TestWithHopForwardsOverTheGivenHop(t *testing.T) {
 	elsewhere := cfg
 	elsewhere.Target = "127.0.0.1:1"
 	built, err := inventory.NewRoute(elsewhere, authConfig(),
-		permissions(inventory.ReadPermission), nil, silent(), inventory.WithHop(hop))
+		permissions(inventory.ReadPermission), nil, silent(), proxy.WithHop(hop))
 	if err != nil {
 		t.Fatal(err)
 	}

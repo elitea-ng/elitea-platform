@@ -24,24 +24,16 @@ type Proxy struct {
 	hop *proxy.Proxy
 }
 
-// NewProxy builds the hop from the facade's configuration.
-func NewProxy(cfg Config, logger *slog.Logger) (*Proxy, error) {
-	return newProxyOver(cfg, nil, logger)
-}
-
-// newProxyOver is NewProxy over built, when the composition root built the
-// hop already (WithHop); nil builds one.
-func newProxyOver(cfg Config, built *proxy.Proxy, logger *slog.Logger) (*Proxy, error) {
+// NewProxy builds the hop from the facade's configuration, or takes the one
+// proxy.WithHop hands it (the composition root's, shared with the registrar).
+func NewProxy(cfg Config, logger *slog.Logger, options ...proxy.RouteOption) (*Proxy, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("%w: not enabled", ErrInvalidProxy)
 	}
-	if built != nil {
-		return &Proxy{hop: built}, nil
-	}
-	hop, err := proxy.New(cfg.hop(), TargetEnv, logger)
+	hop, err := proxy.ForRoute(cfg.hop(), TargetEnv, logger, options...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidProxy, err)
 	}

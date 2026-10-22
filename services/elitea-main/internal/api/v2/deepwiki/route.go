@@ -83,7 +83,7 @@ func NewRoute(
 		option(&settings)
 	}
 
-	proxy, err := newProxyOver(cfg, settings.hop, logger)
+	proxy, err := NewProxy(cfg, logger, providerproxy.WithHop(settings.hop))
 	if err != nil {
 		return nil, err
 	}
@@ -168,9 +168,7 @@ type routeOptions struct {
 	hop     *providerproxy.Proxy
 }
 
-// WithHop forwards over an already built hop to the provider: the one the
-// composition root also hands the provider registrar, so the facade holds
-// one connection (and one certificate reloader) to its provider, not two.
+// WithHop is providerproxy.WithHop for this facade's options.
 func WithHop(hop *providerproxy.Proxy) Option {
 	return func(o *routeOptions) { o.hop = hop }
 }
