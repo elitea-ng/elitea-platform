@@ -1,5 +1,16 @@
 # Current index `task_id` restamp parity
 
+> **Superseded (#1359).** The mechanism below is gone. Its consumer went with
+> the per-project PgVector store, and the writer
+> (`persistCurrentIndexMetaTaskRestampIntent` and
+> `NodeEventFrame.CurrentIndexMetaTaskRestampSource`) was removed after it: a
+> NodeEvent no longer records a restamp intent. Index metadata now lives in
+> the index registry (ADR-0030), and the Rust worker sends no
+> `agent_index_data_status` callback. The `index_meta_task_restamp_*` columns of
+> `elitea_runtime.index_ingest_jobs` (migration 0049) are kept, and the index v2
+> cutover preflight still counts `PENDING` rows. This document is kept as the
+> record of what the Python path did.
+
 ## Current baseline evidence
 
 The current behavior spans two repositories:
