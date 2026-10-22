@@ -553,9 +553,8 @@ jobs:
       # submodule whose palettes it read: default.pack.json,
       # palette.augment.d.ts and client-core's defaultPack.gen.ts are
       # hand-maintained source now, held by the brand pack's own tests.
-      - name: Generated artifacts — route export drift (parity/new-app-routes.json)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: node scripts/export-routes.mjs --check
+      # export-routes.mjs and parity/new-app-routes.json fed only uictl's
+      # --new-routes diff, so they went too.
       - name: Generated artifacts — hue preview drift (parity/brand-hue-preview.html)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/gen-hue-preview.mjs --check
