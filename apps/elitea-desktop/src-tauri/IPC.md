@@ -330,20 +330,32 @@ model of the project than the agent's (`reasoning_effort` with it, for a
 model whose catalogue row says `supports_reasoning`), and keeps it as the
 thread's model: a later turn without `model` runs on it too, across
 restarts (the session's state, `elitea.model.v1`; a cancelled turn's choice
-is dropped with the turn, and a session re-seeded from the server starts
-on the agent's model again). Choosing the agent's own model without an
+is dropped with the turn, while a trim of the session's oldest turns and a
+re-seed from the server keep it). Choosing the agent's own model without an
 effort of its own goes back to the agent's model. The choice drives the
 turn's model requests only — the model name and effort `/llm` gets, the
-edit tools (`EditProfile` by model name) and the context limits (the
-catalogue's, never the version's frozen ones) — and never changes the
-agent version on the server; the agent's `max_tokens` is cut to the chosen
-model's `max_output_tokens`. It is checked before the local turn starts,
+edit tools (`EditProfile` by model name) and the context limits (another
+model's from the catalogue; an effort chosen for the agent's own model
+keeps the version's frozen ones) — and never changes the agent version on
+the server; the agent's `max_tokens` is cut to the chosen model's
+`max_output_tokens`. A reasoning effort goes to `/llm` without a
+temperature (the gateway refuses the two together); for a chosen model
+whose catalogue row says `supports_reasoning: false` the effort is not
+sent at all and the agent's temperature is (a catalogue that cannot answer:
+as chosen). It is checked before the local turn starts,
 against the project's chat models (`GET /configurations/models/{project_id}?section=llm&include_shared=true`,
 on the turn's credentials, kept a minute): a model the catalogue does not
 list is refused `model_unavailable`; when the catalogue cannot answer the
 choice goes to the gateway, which governs every request (a model the
 project may not use fails the turn with `model_gateway.forbidden`, shown
-and committed as a failed turn). An agent version whose `llm_settings` has
+and committed as a failed turn). The thread's kept choice is checked the
+same way when a turn names no `model`: one the catalogue no longer lists is
+dropped (cleared from the session) and the turn runs on the agent's model,
+with a `status` `starting` `message` that says so and `running`'s
+`model.chosen: false` — the turn is not refused. A refused choice
+(`model_pinned`, `model_override_disabled`, `model_unavailable`) says
+nothing about the agent version: the version the session keeps stays kept
+and is not read again. An agent version whose `llm_settings` has
 `pin_model: true` refuses any other model with `model_pinned`, and a
 workspace whose settings say `allow_model_override: false` refuses it with
 `model_override_disabled` (a kept choice is then not applied: the turn runs
@@ -357,7 +369,12 @@ is committed as one `thinking_steps` entry in the runtime's shape (`type:
 "ChatGeneration"`, `thinking` cut at 32 KiB, `timestamp_start`,
 `timestamp_finish`, `message.response_metadata.model_name`; at most 512
 steps and 2 MiB in all, the rest is not committed), so the web app shows it
-on the answer (`listMessageTraces`). The session keeps it as the step's
+on the answer (`listMessageTraces`); once a step does not fit the 2 MiB, no
+later step is committed (no gaps), and a cut step ends in `…` within its
+32 KiB. The thread history keeps at most 1 MiB of a turn's `thinking_delta`
+text, a budget of its own beside the turn's 4 MiB of events: past it the
+reasoning is not stored (each `thinking_end` still is), and the turn is not
+marked `events_truncated` for it. The session keeps it as the step's
 `Part::Thinking`; it is sent back to the provider only for a family that
 requires it (`openai_compatible: false` in the catalogue: signed blocks on
 the Anthropic route, which does not exist yet, issue 1227), never on the
@@ -600,7 +617,8 @@ conversation (its id or its UUID) its turns started with: reads, deletes and
 the bounds below all count them together. A refused start is not
 recorded. Bounds: a string in one event is cut at 16 KiB, a turn's events
 at 4 MiB (past it only `status`, `error` and `done` are kept and
-`events_truncated` is set), a stored diff at 64 KiB (1 MiB per turn), and a
+`events_truncated` is set), its `thinking_delta` text at 1 MiB apart (past
+it dropped, the turn not marked), a stored diff at 64 KiB (1 MiB per turn), and a
 thread keeps its newest 200 turns within 32 MiB.
 
 The store is `threads.sqlite` in the app data directory (owner-only, like

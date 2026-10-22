@@ -108,22 +108,6 @@ impl ReasoningReplay {
     }
 }
 
-/// The reasoning replay of `model_name` in the catalogue of `project_id`
-/// (unknown, or a catalogue that cannot answer: [`ReasoningReplay::Never`]).
-pub async fn replay(
-    api: &PlatformApi,
-    kept: &Catalogues,
-    project_id: i64,
-    model_name: &str,
-) -> ReasoningReplay {
-    let catalogue = read(api, kept, project_id).await;
-    ReasoningReplay::of(
-        catalogue
-            .as_deref()
-            .and_then(|catalogue| catalogue.find(model_name)),
-    )
-}
-
 /// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
 /// for the project: it describes no model). Any other (401, 403, 408, 429,
 /// a 5xx) may answer differently on the next turn.

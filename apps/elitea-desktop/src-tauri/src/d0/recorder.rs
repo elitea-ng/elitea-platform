@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use elitea_agent_runtime::text::clip_bytes;
 use elitea_local_tools::workspace::{Intent, Workspace};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -112,6 +113,9 @@ struct State {
     /// `thinking_steps`), and the bytes of it kept.
     thinking: Vec<Value>,
     thinking_bytes: usize,
+    /// A step did not fit [`MAX_THINKING_TOTAL_BYTES`]: no later one is
+    /// committed either (the committed reasoning has no gaps).
+    thinking_full: bool,
     commands: Vec<Value>,
     paths: Vec<String>,
     enforcement: Option<String>,
@@ -136,15 +140,14 @@ pub(crate) fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// `text` within `max` bytes: cut at a character boundary, the ellipsis
+/// that marks the cut included.
 fn truncate(text: &str, max: usize) -> String {
+    const MARK: &str = "…";
     if text.len() <= max {
         return text.to_owned();
     }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
+    format!("{}{MARK}", clip_bytes(text, max.saturating_sub(MARK.len())))
 }
 
 impl Recorder {
@@ -227,16 +230,19 @@ impl Recorder {
     /// `ChatGeneration`, `thinking`, the step's times, and its model in
     /// `message.response_metadata.model_name`), bounded by
     /// [`MAX_THINKING_BYTES`], [`MAX_THINKING_STEPS`] and
-    /// [`MAX_THINKING_TOTAL_BYTES`].
+    /// [`MAX_THINKING_TOTAL_BYTES`]: past either of the last two no later
+    /// step is committed.
     pub fn thinking_step(&self, thinking: &str, model_name: &str, started: &str, finished: &str) {
         if thinking.is_empty() {
             return;
         }
         let thinking = truncate(thinking, MAX_THINKING_BYTES);
         self.with(|state| {
-            if state.thinking.len() >= MAX_THINKING_STEPS
+            if state.thinking_full
+                || state.thinking.len() >= MAX_THINKING_STEPS
                 || state.thinking_bytes + thinking.len() > MAX_THINKING_TOTAL_BYTES
             {
+                state.thinking_full = true;
                 return;
             }
             state.thinking_bytes += thinking.len();
@@ -517,6 +523,43 @@ pub(crate) fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileCh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_text_stays_within_its_bound_ellipsis_included() {
+        assert_eq!(truncate("short", 10), "short");
+        let cut = truncate(&"x".repeat(MAX_THINKING_BYTES + 10), MAX_THINKING_BYTES);
+        assert_eq!(cut.len(), MAX_THINKING_BYTES);
+        assert!(cut.ends_with('…'));
+        // Never inside a character: "é" is two bytes.
+        let cut = truncate(&"é".repeat(10), 8);
+        assert!(cut.len() <= 8, "{cut}");
+        assert_eq!(cut, "éé…");
+    }
+
+    #[test]
+    fn thinking_past_the_total_stops_without_gaps() {
+        let recorder = Recorder::default();
+        let step = "t".repeat(MAX_THINKING_BYTES * 2);
+        // A short step, then whole ones until less than a whole one is left.
+        recorder.thinking_step("first", "m", "a", "b");
+        let fit = MAX_THINKING_TOTAL_BYTES / MAX_THINKING_BYTES;
+        for _ in 1..fit {
+            recorder.thinking_step(&step, "m", "a", "b");
+        }
+        assert_eq!(recorder.thinking_steps().len(), fit);
+        // Each step is cut within its bound.
+        assert!(
+            recorder
+                .thinking_steps()
+                .iter()
+                .all(|s| s["thinking"].as_str().unwrap().len() <= MAX_THINKING_BYTES)
+        );
+        // The step that does not fit, and every later one however small,
+        // stay out.
+        recorder.thinking_step(&step, "m", "a", "b");
+        recorder.thinking_step("small", "m", "a", "b");
+        assert_eq!(recorder.thinking_steps().len(), fit);
+    }
 
     #[test]
     fn changes_are_diffed_against_before_images() {

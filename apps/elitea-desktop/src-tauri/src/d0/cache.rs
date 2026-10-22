@@ -17,8 +17,8 @@
 //!   platform refuses for it (`404`, `422`), is looked up again and the
 //!   start retried once.
 //!
-//! The model catalogue's context limits of each model (#1217) are kept the
-//! same way; a lookup that failed is not kept, so the next turn asks again.
+//! The model catalogue's context limits of each model (#1217), and its
+//! reasoning family (#1228), are kept the same way; a lookup that failed is not kept, so the next turn asks again.
 //! The catalogue of chat models a turn's chosen model is checked against
 //! (#1228) is kept for a minute per project (`super::catalogue`).
 //!
@@ -28,10 +28,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use elitea_agent_runtime::request::ModelContextLimits;
-
 use super::api::{AnsweringParticipant, ResolvedVersion};
 use super::catalogue::Catalogues;
+use super::context::ModelFacts;
 
 /// An agent version as one session read it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -77,7 +76,7 @@ const MAX_ENTRIES: usize = 256;
 pub struct TurnCaches {
     versions: Mutex<HashMap<VersionKey, CachedVersion>>,
     participants: Mutex<HashMap<ParticipantKey, AnsweringParticipant>>,
-    limits: Mutex<HashMap<LimitsKey, ModelContextLimits>>,
+    limits: Mutex<HashMap<LimitsKey, ModelFacts>>,
     /// The projects' chat models (#1228), each kept for a minute.
     pub catalogues: Catalogues,
 }
@@ -135,12 +134,12 @@ impl TurnCaches {
     }
 
     #[must_use]
-    pub fn limits(&self, key: &LimitsKey) -> Option<ModelContextLimits> {
+    pub fn limits(&self, key: &LimitsKey) -> Option<ModelFacts> {
         locked(&self.limits).get(key).copied()
     }
 
-    pub fn keep_limits(&self, key: LimitsKey, limits: ModelContextLimits) {
-        bounded_insert(&mut locked(&self.limits), key, limits);
+    pub fn keep_limits(&self, key: LimitsKey, facts: ModelFacts) {
+        bounded_insert(&mut locked(&self.limits), key, facts);
     }
 
     /// Sign-out, a new sign-in, another deployment: nothing of the last

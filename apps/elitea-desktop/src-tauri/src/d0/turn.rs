@@ -62,7 +62,7 @@ use super::api::{
 };
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
-use super::catalogue;
+use super::catalogue::{self, Catalogue};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted, ModelChoice};
@@ -1345,7 +1345,9 @@ impl AgentHost {
     /// picked skills (one of this version's own, as the platform answered
     /// it to this person) and the rest of the runtime's instruction
     /// admission (the project context, the catalogue's bounds). `run_agent`
-    /// admits the same definition again under the real ids.
+    /// admits the same definition again under the real ids. The model the
+    /// person chose is applied apart ([`Self::requested_model`]): its
+    /// refusals say nothing about the version, which stays cached.
     fn admit(
         &self,
         request: &TurnRequest,
@@ -1354,10 +1356,6 @@ impl AgentHost {
         let admitted = definition::admit(resolved, &local_tool_names())
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
             .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
-        let admitted = match &request.model {
-            Some(choice) => self.chosen_model(&request.workspace_id, admitted, choice)?,
-            None => admitted,
-        };
         let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
         InstructionPlan::admit(&execution_request(
             request,
@@ -1395,37 +1393,80 @@ impl AgentHost {
         Ok(chosen)
     }
 
+    /// `admitted` on the model the request chose, if any (#1228), checked
+    /// against the project's chat models `models` (when they could be
+    /// read): `model_pinned`, `model_override_disabled`, `model_unavailable`.
+    fn requested_model(
+        &self,
+        request: &TurnRequest,
+        admitted: Admitted,
+        models: Option<&Catalogue>,
+    ) -> Result<Admitted, TurnError> {
+        match &request.model {
+            Some(choice) => catalogued(
+                self.chosen_model(&request.workspace_id, admitted, choice)?,
+                models,
+            ),
+            None => Ok(admitted),
+        }
+    }
+
     /// The thread's model for this turn, kept in its session (#1228): the
     /// request's choice is kept when it changed; a request without one
     /// runs on the kept choice, unless the agent now pins its model or the
     /// workspace turned the choice off (then on the agent's, as admitted).
+    /// A kept choice is checked against the project's chat models like a
+    /// requested one: one they no longer list is dropped (the thread is back
+    /// on the agent's model, and a `status` notice says so). With the
+    /// catalogue the turn read, if any.
     async fn thread_model(
         &self,
         request: &TurnRequest,
+        api: &PlatformApi,
+        events: &TurnEvents,
         admitted: Admitted,
         memory: &SessionPlan,
-    ) -> Admitted {
+        models: Option<Arc<Catalogue>>,
+    ) -> (Admitted, Option<Arc<Catalogue>>) {
         let kept = memory.model_choice().await;
-        match &request.model {
-            Some(choice) => {
-                let keep = admitted.model_chosen.then_some(choice);
-                if kept.as_ref() != keep {
-                    memory.keep_model_choice(keep).await;
-                }
-                admitted
+        if let Some(choice) = &request.model {
+            let keep = admitted.model_chosen.then_some(choice);
+            if kept.as_ref() != keep {
+                memory.keep_model_choice(keep).await;
             }
-            None => match kept {
-                Some(kept) => self
-                    .chosen_model(&request.workspace_id, admitted.clone(), &kept)
-                    .unwrap_or_else(|error| {
-                        log::info!(
-                            "the thread's model choice does not apply to this turn: {}",
-                            error.code
-                        );
-                        admitted
-                    }),
-                None => admitted,
-            },
+            return (admitted, models);
+        }
+        let Some(kept) = kept else {
+            return (admitted, models);
+        };
+        let chosen = match self.chosen_model(&request.workspace_id, admitted.clone(), &kept) {
+            Ok(chosen) if chosen.model_chosen => chosen,
+            Ok(_) => return (admitted, models),
+            Err(error) => {
+                log::info!(
+                    "the thread's model choice does not apply to this turn: {}",
+                    error.code
+                );
+                return (admitted, models);
+            }
+        };
+        let models = match models {
+            Some(models) => Some(models),
+            None => catalogue::read(api, &self.caches.catalogues, request.project_id).await,
+        };
+        match catalogued(chosen, models.as_deref()) {
+            Ok(chosen) => (chosen, models),
+            Err(_) => {
+                memory.keep_model_choice(None).await;
+                events.status(
+                    Phase::Starting,
+                    Some(&format!(
+                        "The model {} is no longer one of this project's chat models, so this thread is back on the agent's model.",
+                        kept.name
+                    )),
+                );
+                (admitted, models)
+            }
         }
     }
 
@@ -1548,12 +1589,13 @@ impl AgentHost {
         if let Some(cached) = self.caches.version(&version_key)
             && let Ok(admitted) = definition::admit(&cached.resolved, &local_tool_names())
         {
-            context::model_limits(
+            context::model_facts(
                 &api,
                 &self.caches,
                 request.project_id,
                 &admitted.model.model_name,
                 &admitted.version_details,
+                None,
             )
             .await;
         }
@@ -1697,19 +1739,7 @@ impl AgentHost {
         // A chosen model the project's catalogue does not list is refused
         // before anything starts; one it could not answer for is left to the
         // gateway, which governs every request.
-        if admitted.model_chosen
-            && models
-                .as_ref()
-                .is_some_and(|models| models.find(&admitted.model.model_name).is_none())
-        {
-            return Err(TurnError::new(
-                "model_unavailable",
-                format!(
-                    "The model {} is not one of this project's chat models.",
-                    admitted.model.model_name
-                ),
-            ));
-        }
+        let admitted = self.requested_model(request, admitted, models.as_deref())?;
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
@@ -1858,7 +1888,11 @@ impl AgentHost {
                 if resolved.project_context_withheld && !resolved_withheld {
                     events.status(Phase::Starting, Some(CONTEXT_WITHHELD));
                 }
-                readmitted
+                let (readmitted, invoked) = readmitted;
+                (
+                    self.requested_model(request, readmitted, models.as_deref())?,
+                    invoked,
+                )
             }
             Some(Err(error)) => {
                 self.caches.forget_version(&version_key);
@@ -1867,7 +1901,9 @@ impl AgentHost {
         };
         events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
-        let admitted = self.thread_model(request, admitted, &memory).await;
+        let (admitted, models) = self
+            .thread_model(request, &api, events, admitted, &memory, models)
+            .await;
         Ok(Prepared {
             conversation,
             conversation_uuid: answering.conversation_uuid,
@@ -1889,6 +1925,7 @@ impl AgentHost {
                 std::env::home_dir().as_deref(),
             ),
             mentioned: checked,
+            models,
         })
     }
 
@@ -1915,6 +1952,7 @@ impl AgentHost {
             mut memory,
             folder,
             mentioned,
+            models,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -1957,6 +1995,7 @@ impl AgentHost {
             &folder,
             &turn_context,
             &mentioned,
+            models.as_deref(),
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -2358,6 +2397,7 @@ impl AgentHost {
         folder: &str,
         turn_context: &TurnContext,
         mentioned: &[String],
+        models: Option<&Catalogue>,
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
@@ -2374,15 +2414,18 @@ impl AgentHost {
             .map(|tool| tool.name.to_owned())
             .collect();
         // The model's context limits (the frozen ones, else the catalogue's,
-        // kept for the app's session) are read beside them. The frozen ones
-        // are the agent's model's: a chosen model's come from the catalogue.
+        // kept for the app's session) and its family (whether reasoning goes
+        // back to the provider) are read beside them, from the catalogue the
+        // turn already read if any (one read per turn at most). The frozen
+        // ones are the agent's model's: another model's come from the
+        // catalogue (an effort chosen for the agent's own keeps them).
         let unfrozen = Map::new();
-        let frozen_from = if admitted.model_chosen {
-            &unfrozen
-        } else {
+        let frozen_from = if admitted.on_own_model() {
             &admitted.version_details
+        } else {
+            &unfrozen
         };
-        let (index, mut facts, (limits, replay)) = tokio::join!(
+        let (index, mut facts, model_facts) = tokio::join!(
             async {
                 match &self.deps.index {
                     Some(registry) => registry.for_turn(&request.workspace_id).await,
@@ -2397,27 +2440,16 @@ impl AgentHost {
                 local_offered,
                 mentioned,
             ),
-            // Then the model's family (whether reasoning goes back to the
-            // provider), from the catalogue the limits just read.
-            async {
-                let limits = context::model_limits(
-                    api,
-                    &self.caches,
-                    request.project_id,
-                    &admitted.model.model_name,
-                    frozen_from,
-                )
-                .await;
-                let replay = catalogue::replay(
-                    api,
-                    &self.caches.catalogues,
-                    request.project_id,
-                    &admitted.model.model_name,
-                )
-                .await;
-                (limits, replay)
-            },
+            context::model_facts(
+                api,
+                &self.caches,
+                request.project_id,
+                &admitted.model.model_name,
+                frozen_from,
+                models,
+            ),
         );
+        let context::ModelFacts { limits, replay } = model_facts;
         // The runtime's planner, offered to every workspace turn (a coding
         // agent needs its checklist), plan mode included: it changes only
         // the session's plan state (#1225).
@@ -3483,6 +3515,9 @@ struct Prepared {
     /// The turn's checked `@` references: project detection looks in
     /// their folders too.
     mentioned: Vec<String>,
+    /// The project's chat models, when the turn read them (a chosen or
+    /// kept model is checked against them).
+    models: Option<Arc<Catalogue>>,
 }
 
 /// The body of `local_turn_commit`, encoded with its `tool_calls` in the
@@ -3584,6 +3619,26 @@ async fn run_once(
         }
     }
     Ok(RunEnd::Answered)
+}
+
+/// A chosen model against the project's chat models (#1228): refused
+/// (`model_unavailable`) when they do not list it, fitted to its row when
+/// they do ([`Admitted::fit_reasoning`]), as chosen when they could not be
+/// read (the gateway governs every request).
+fn catalogued(chosen: Admitted, models: Option<&Catalogue>) -> Result<Admitted, TurnError> {
+    let Some(models) = models.filter(|_| chosen.model_chosen) else {
+        return Ok(chosen);
+    };
+    match models.find(&chosen.model.model_name) {
+        Some(model) => Ok(chosen.fit_reasoning(Some(&model.row))),
+        None => Err(TurnError::new(
+            "model_unavailable",
+            format!(
+                "The model {} is not one of this project's chat models.",
+                chosen.model.model_name
+            ),
+        )),
+    }
 }
 
 /// The model a turn runs on, as its `status` `running` event names it.

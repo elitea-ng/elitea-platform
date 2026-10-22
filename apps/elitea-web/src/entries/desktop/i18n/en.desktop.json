@@ -651,7 +651,9 @@
   "workspace.model.effort.medium": "Medium",
   "workspace.model.effort.none": "No reasoning",
   "workspace.model.fixed": "This agent runs on its own model here: it pins its model, or this folder’s settings keep it.",
+  "workspace.model.loading": "The models are still loading. Try again in a moment.",
   "workspace.model.none": "No other models in this project",
+  "workspace.model.unknown": "This project has no chat model named “{{name}}”.",
   "workspace.thinking.done": "Thinking · {{chars}} characters",
   "workspace.thinking.streaming": "Thinking…"
 }

@@ -13,7 +13,8 @@
  * once a model call reported its occupancy; `/compact` marks the next send.
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
- * (`/model` opens it, `/model <name>` sets it).
+ * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
+ * a catalogue still loading is said above the composer and sets nothing).
  */
 import { lazy, Suspense } from 'react';
 
@@ -66,7 +67,7 @@ function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: Sess
   if (cloudMode || !model.offered) return {};
   return {
     modelPicker: <ModelChip current={model.current} effort={model.effort} models={model.models} onChoose={model.choose} chipRef={chipRef} />,
-    onModelCommand: (name) => model.choose({ name }),
+    onModelCommand: model.command,
   };
 }
 
@@ -84,6 +85,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
     onSend: async (prompt, mentions, picked) => {
+      model.dismissNotice();
       const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
@@ -92,11 +94,12 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   };
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const meter = cloudMode ? undefined : latestMeter(turn);
+  const modelNotice = cloudMode ? null : model.notice;
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
     <>
       <HandoffBanner handoff={handoff} />
-      <SessionNotices error={firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} />
+      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} />
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}

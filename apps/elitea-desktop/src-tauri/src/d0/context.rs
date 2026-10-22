@@ -50,7 +50,7 @@ use serde_json::{Map, Value};
 
 use super::api::PlatformApi;
 use super::cache::{LimitsKey, TurnCaches};
-use super::catalogue;
+use super::catalogue::{self, Catalogue, ReasoningReplay};
 use super::events::{ContextMeter, TurnEvents};
 use super::recorder::{Recorder, ToolCalls};
 use super::session::AGENT_AUTHOR;
@@ -73,45 +73,78 @@ pub const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 /// author; this one names who wrote it).
 pub const MARKER_AUTHOR: &str = "elitea_context_compaction";
 
-/// The context limits of the turn's model (module docs). Never fails: a
+/// What a turn knows of its model from the catalogue: its context limits
+/// and whether its reasoning goes back to the provider (#1228).
+#[derive(Clone, Copy, Debug)]
+pub struct ModelFacts {
+    pub limits: ModelContextLimits,
+    pub replay: ReasoningReplay,
+}
+
+/// The facts of the turn's model (module docs), with at most one catalogue
+/// read: `in_hand` is the catalogue the turn already read (to check a chosen
+/// model), else the kept facts, else one read. Frozen limits read nothing:
+/// the family then comes from `in_hand` or the kept facts, else is
+/// [`ReasoningReplay::Never`] (no read for it alone). Never fails: a
 /// catalogue that cannot be read is the fallback, not a refused turn.
-pub async fn model_limits(
+pub async fn model_facts(
     api: &PlatformApi,
     caches: &TurnCaches,
     project_id: i64,
     model_name: &str,
     details: &Map<String, Value>,
-) -> ModelContextLimits {
-    if let Some(frozen) = details
-        .get("model_context_limits")
-        .and_then(|value| serde_json::from_value::<ModelContextLimits>(value.clone()).ok())
-        .filter(valid)
-    {
-        return frozen;
-    }
+    in_hand: Option<&Catalogue>,
+) -> ModelFacts {
     let key = api.credentials().identity().map(|identity| LimitsKey {
         identity,
         project_id,
         model_name: model_name.to_owned(),
     });
-    if let Some(cached) = key.as_ref().and_then(|key| caches.limits(key)) {
-        return cached;
+    let kept = key.as_ref().and_then(|key| caches.limits(key));
+    let from_hand = in_hand.map(|catalogue| facts_of(catalogue, model_name));
+    if let Some(frozen) = details
+        .get("model_context_limits")
+        .and_then(|value| serde_json::from_value::<ModelContextLimits>(value.clone()).ok())
+        .filter(valid)
+    {
+        let replay = from_hand.or(kept).map(|facts| facts.replay);
+        return ModelFacts {
+            limits: frozen,
+            replay: replay.unwrap_or_default(),
+        };
+    }
+    if let Some(facts) = from_hand.or(kept) {
+        if let (Some(key), None) = (key, kept) {
+            caches.keep_limits(key, facts);
+        }
+        return facts;
     }
     // A definitive answer is kept, whatever it said (a model it does not
     // describe stays on the fallback for the session); a transient one is
     // asked again next turn.
-    // The project's own model wins over a shared one.
     let Some(catalogue) = catalogue::read(api, &caches.catalogues, project_id).await else {
-        return FALLBACK_LIMITS;
+        return ModelFacts {
+            limits: FALLBACK_LIMITS,
+            replay: ReasoningReplay::Never,
+        };
     };
-    let limits = catalogue
-        .find(model_name)
-        .and_then(|model| limits_of(&model.row))
-        .unwrap_or(FALLBACK_LIMITS);
+    let facts = facts_of(&catalogue, model_name);
     if let Some(key) = key {
-        caches.keep_limits(key, limits);
+        caches.keep_limits(key, facts);
     }
-    limits
+    facts
+}
+
+/// `model_name`'s facts in `catalogue` (the project's own model wins over a
+/// shared one; one it does not describe: the fallback).
+fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
+    let model = catalogue.find(model_name);
+    ModelFacts {
+        limits: model
+            .and_then(|model| limits_of(&model.row))
+            .unwrap_or(FALLBACK_LIMITS),
+        replay: ReasoningReplay::of(model),
+    }
 }
 
 /// A catalogue row's limits (`context_window`, `max_output_tokens`,
@@ -184,7 +217,7 @@ pub struct ProviderBudget {
     pub model: ModelRequest,
     pub budget: RequestContextBudget,
     /// As the transport sends history (#1228).
-    pub replay: super::catalogue::ReasoningReplay,
+    pub replay: ReasoningReplay,
 }
 
 impl ModelRequestBudget for ProviderBudget {

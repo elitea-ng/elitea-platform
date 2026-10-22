@@ -762,6 +762,7 @@ describe('WorkspaceSessionPage', () => {
         earlier: [],
         busy: false,
         startError: null,
+        startErrorCode: null,
         start: () => Promise.resolve(started),
         prewarm: () => undefined,
         retryCommit: () => Promise.resolve(),

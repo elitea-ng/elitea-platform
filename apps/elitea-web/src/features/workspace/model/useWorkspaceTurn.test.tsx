@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent, TurnStartRequest } from '@/shared/desktop/workspaceIpc';
+import { WorkspaceIpcError, type AgentEvent, type TurnStartRequest } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { useWorkspaceTurn } from './useWorkspaceTurn';
@@ -208,6 +208,25 @@ describe('useWorkspaceTurn', () => {
     expect(started).toBe(false);
     expect(result.current.startError).toBe('no agent runtime');
     expect(result.current.busy).toBe(false);
+  });
+
+  it('keeps the host’s code of a refused start, and forgets it with the next start', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    let refuse = true;
+    const startTurn = ipc.startTurn.bind(ipc);
+    ipc.startTurn = (request) => (refuse ? Promise.reject(new WorkspaceIpcError('model_unavailable', 'not in this project')) : startTurn(request));
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(async () => {
+      await result.current.start(REQUEST);
+    });
+    expect(result.current.startErrorCode).toBe('model_unavailable');
+    expect(result.current.startError).toBe('not in this project');
+    refuse = false;
+    await act(async () => {
+      await result.current.start(REQUEST);
+    });
+    expect(result.current.startErrorCode).toBeNull();
   });
 
   describe('retryCommit', () => {

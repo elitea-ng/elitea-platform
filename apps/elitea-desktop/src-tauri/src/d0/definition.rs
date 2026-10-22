@@ -308,11 +308,7 @@ impl Admitted {
             None
         });
         self.model.model_name.clone_from(&choice.name);
-        self.model.reasoning_effort = effort;
-        // The gateway refuses a temperature next to a reasoning effort.
-        if effort.is_some_and(|e| e != ReasoningEffort::None) {
-            self.model.temperature = None;
-        }
+        self.set_effort(effort);
         self.edit_profile = EditProfile::select(
             &self.model.model_name,
             agent_edit_format(&self.version_details),
@@ -320,6 +316,57 @@ impl Admitted {
         self.model_chosen = true;
         Ok(self)
     }
+
+    /// The turn runs on the agent version's own model (no choice, or one of
+    /// an effort only): the version's frozen model facts still apply.
+    #[must_use]
+    pub fn on_own_model(&self) -> bool {
+        self.version_details
+            .get("llm_settings")
+            .and_then(|settings| settings.get("model_name"))
+            .and_then(Value::as_str)
+            == Some(self.model.model_name.as_str())
+    }
+
+    /// A chosen model the project's catalogue describes (`row`, its chat
+    /// model row): one it says cannot reason (`supports_reasoning: false`)
+    /// is sent no reasoning effort, and so the agent's temperature again.
+    /// No row (the catalogue could not answer), a row that says nothing, or
+    /// the agent's own model: as chosen.
+    #[must_use]
+    pub fn fit_reasoning(mut self, row: Option<&Value>) -> Self {
+        let cannot_reason = row
+            .and_then(|row| row.get("supports_reasoning"))
+            .is_some_and(|value| value == &Value::Bool(false));
+        if self.model_chosen && cannot_reason && self.model.reasoning_effort.is_some() {
+            self.set_effort(None);
+        }
+        self
+    }
+
+    /// `effort` for the turn's model, and the temperature that goes with it:
+    /// none next to an effort applied (the gateway refuses the two
+    /// together), else the agent's own.
+    fn set_effort(&mut self, effort: Option<ReasoningEffort>) {
+        self.model.reasoning_effort = effort;
+        self.model.temperature = if effort.is_some_and(|e| e != ReasoningEffort::None) {
+            None
+        } else {
+            self.version_details
+                .get("llm_settings")
+                .and_then(Value::as_object)
+                .and_then(frozen_temperature)
+        };
+    }
+}
+
+/// `llm_settings.temperature`, as the agent sets it.
+#[allow(clippy::cast_possible_truncation)] // a temperature is 0..=2
+fn frozen_temperature(settings: &Map<String, Value>) -> Option<f32> {
+    settings
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
 }
 
 fn invalid_model() -> Refusal {
@@ -346,11 +393,7 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
         .and_then(Value::as_u64)
         .filter(|tokens| *tokens > 0 && !auto)
         .and_then(|tokens| u32::try_from(tokens).ok());
-    #[allow(clippy::cast_possible_truncation)] // a temperature is 0..=2
-    let temperature = settings
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .map(|value| value as f32);
+    let temperature = frozen_temperature(settings);
     let reasoning_effort = settings
         .get("reasoning_effort")
         .and_then(Value::as_str)

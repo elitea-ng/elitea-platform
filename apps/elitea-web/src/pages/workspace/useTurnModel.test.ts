@@ -1,9 +1,12 @@
+import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { TurnView } from '@/features/workspace/model/turnReducer';
 import type { AgentEvent, StoredTurn } from '@/shared/desktop/workspaceIpc';
 
-import { agentModel, chatModels, latestTurnModel } from './useTurnModel';
+import type { TurnModel } from '@/shared/desktop/turnModel';
+
+import { agentModel, chatModels, latestTurnModel, resolveModelName, shownModel, useModelChoice } from './useTurnModel';
 
 const EMPTY: TurnView = { phase: null, items: [], approvals: [] };
 const running = (seq: number, name: string, chosen = true): AgentEvent => ({
@@ -57,5 +60,60 @@ describe('useTurnModel helpers', () => {
     expect(latestTurnModel({ view: EMPTY, earlier: [] }, recorded)?.name).toBe('newest');
     expect(latestTurnModel({ view: EMPTY, earlier: [{ turnId: 'a', view: { ...EMPTY, model: { name: 'live', chosen: false, pinned: false } } }] }, recorded)?.name).toBe('live');
     expect(latestTurnModel({ view: EMPTY, earlier: [] }, { kind: 'none' })).toBeUndefined();
+  });
+
+  it('shows a latest turn’s model only when it was a kept choice, else the selected agent’s own', () => {
+    const own = { name: 'agent-model', effort: 'low' as const, pinned: false };
+    const kept: TurnModel = { name: 'chosen-model', reasoning_effort: 'high', chosen: true, pinned: false };
+    const agents: TurnModel = { name: 'other-agents-model', chosen: false, pinned: true };
+    expect(shownModel(undefined, kept, own)).toEqual({ current: 'chosen-model', effort: 'high' });
+    expect(shownModel(undefined, agents, own)).toEqual({ current: 'agent-model', effort: 'low' });
+    expect(shownModel(undefined, undefined, own)).toEqual({ current: 'agent-model', effort: 'low' });
+    expect(shownModel({ name: 'picked' }, kept, own)).toEqual({ current: 'picked', effort: undefined });
+  });
+
+  it('matches a /model name to the catalogue’s spelling, any case, and refuses unknown names and an unloaded list', () => {
+    const models = [{ name: 'GPT-5', supportsReasoning: true }];
+    expect(resolveModelName(models, 'gpt-5')).toEqual({ name: 'GPT-5' });
+    expect(resolveModelName(models, 'gpt')).toEqual({ notice: 'This project has no chat model named “gpt”.' });
+    expect(resolveModelName(undefined, 'GPT-5')).toEqual({ notice: 'The models are still loading. Try again in a moment.' });
+  });
+});
+
+describe('useModelChoice', () => {
+  const models = [{ name: 'GPT-5', supportsReasoning: true }];
+
+  it('sets a listed /model name in the catalogue’s spelling', () => {
+    const { result } = renderHook(() => useModelChoice(models, null));
+    act(() => result.current.command('gpt-5'));
+    expect(result.current.choice).toEqual({ name: 'GPT-5' });
+    expect(result.current.notice).toBeNull();
+  });
+
+  it('keeps the choice and says why when /model names no listed model', () => {
+    const { result } = renderHook(() => useModelChoice(models, null));
+    act(() => result.current.choose({ name: 'GPT-5', reasoning_effort: 'low' }));
+    act(() => result.current.command('nope'));
+    expect(result.current.choice).toEqual({ name: 'GPT-5', reasoning_effort: 'low' });
+    expect(result.current.notice).toBe('This project has no chat model named “nope”.');
+    act(() => result.current.dismissNotice());
+    expect(result.current.notice).toBeNull();
+  });
+
+  it('refuses /model while the models are still loading', () => {
+    const { result } = renderHook(() => useModelChoice(undefined, null));
+    act(() => result.current.command('GPT-5'));
+    expect(result.current.choice).toBeUndefined();
+    expect(result.current.notice).toBe('The models are still loading. Try again in a moment.');
+  });
+
+  it('drops the choice when the host refuses a start model_unavailable, and only then', () => {
+    const { result, rerender } = renderHook(({ code }: { code: string | null }) => useModelChoice(models, code), { initialProps: { code: null as string | null } });
+    act(() => result.current.choose({ name: 'GPT-5' }));
+    rerender({ code: 'workspace_busy' });
+    expect(result.current.choice).toEqual({ name: 'GPT-5' });
+    rerender({ code: null });
+    rerender({ code: 'model_unavailable' });
+    expect(result.current.choice).toBeUndefined();
   });
 });

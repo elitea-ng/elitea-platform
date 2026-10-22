@@ -38,6 +38,8 @@ export interface WorkspaceTurn {
    */
   busy: boolean;
   startError: string | null;
+  /** The host's `code` for `startError` (e.g. `model_unavailable`); `null` with it. */
+  startErrorCode: string | null;
   /** Resolves `true` once the host started the turn; `false` when it refused (see `startError`). */
   start(request: TurnStartRequest): Promise<boolean>;
   /** Let the host read ahead for a turn to this agent (fire and forget: a failure only means the turn reads it itself). */
@@ -61,10 +63,13 @@ const FORGOTTEN: TurnDonePayload = { committed: false, conversation_id: '', mess
 /** Cancel answers after which the turn is not running any more. */
 const PAST_RUNNING = new Set(['turn_not_cancellable', 'turn_unknown', 'turn_expired']);
 
+/** A rejected host command: what to show, and the host's `code` for it. */
+const toRefusal = (error: unknown): { message: string; code: string } => ({ message: describeWorkspaceError(error), code: toWorkspaceIpcError(error).code });
+
 export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
   const [state, dispatch] = useReducer(turnReducer, initialTurnsState);
   const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<{ message: string; code: string } | null>(null);
   const ready = useRef<Promise<unknown>>(Promise.resolve());
   /** The newest `commit_failed` seq heard per turn: tells a refused retry the host reported from one it did not. */
   const commitFailures = useRef(new Map<string, number>());
@@ -93,7 +98,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
 
   const start = useCallback(
     async (request: TurnStartRequest): Promise<boolean> => {
-      setStartError(null);
+      setRefusal(null);
       setStarting(true);
       try {
         await ready.current;
@@ -101,7 +106,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
         dispatch({ type: 'begin', turnId: started.turn_id });
         return true;
       } catch (error) {
-        setStartError(describeWorkspaceError(error));
+        setRefusal(toRefusal(error));
         return false;
       } finally {
         setStarting(false);
@@ -144,7 +149,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     try {
       await ipc.cancelTurn(turnId);
     } catch (error) {
-      setStartError(describeWorkspaceError(error));
+      setRefusal(toRefusal(error));
       if (PAST_RUNNING.has(toWorkspaceIpcError(error).code)) await resync();
     }
   }, [ipc, turnId, resync]);
@@ -157,7 +162,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
       try {
         await (feedback === undefined ? ipc.respondApproval(requestId, decision) : ipc.respondApproval(requestId, decision, feedback));
       } catch (error) {
-        setStartError(describeWorkspaceError(error));
+        setRefusal(toRefusal(error));
       }
     },
     [ipc, turnId],
@@ -167,7 +172,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
 
   const clear = useCallback(() => {
     if (busy) return;
-    setStartError(null);
+    setRefusal(null);
     dispatch({ type: 'reset' });
   }, [busy]);
 
@@ -194,12 +199,12 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
         // (a newer seq) still brings it back.
         if (commitFailures.current.get(retried) === before) {
           dispatch({ type: 'commit-saved', turnId: retried });
-          setStartError(describeWorkspaceError(error));
+          setRefusal(toRefusal(error));
         }
       }
     },
     [ipc],
   );
 
-  return { view, turnId, earlier, busy, startError, start, prewarm, retryCommit, cancel, answer, clear, adopt };
+  return { view, turnId, earlier, busy, startError: refusal?.message ?? null, startErrorCode: refusal?.code ?? null, start, prewarm, retryCommit, cancel, answer, clear, adopt };
 }

@@ -31,7 +31,8 @@
 //!
 //! Bounds: one event's strings are cut at [`MAX_EVENT_STRING`] bytes, a
 //! turn's events at [`MAX_TURN_EVENT_BYTES`] (past it only `status`, `error`
-//! and `done` are kept, and the turn is marked `events_truncated`), a turn's
+//! and `done` are kept, and the turn is marked `events_truncated`), its
+//! reasoning apart at [`MAX_TURN_THINKING_BYTES`] (past it, dropped), a turn's
 //! stored diffs at [`MAX_DIFF_BYTES`] each and [`MAX_CHANGES_BYTES`] in all,
 //! and a thread keeps its newest [`MAX_TURNS_PER_THREAD`] turns within
 //! [`MAX_THREAD_BYTES`].
@@ -81,6 +82,12 @@ pub const SCHEMA_VERSION: i64 = 2;
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
 pub const MAX_TURN_EVENT_BYTES: usize = 4 * 1024 * 1024;
+/// One turn's stored reasoning (`thinking_delta` text, #1228): a budget of
+/// its own, outside [`MAX_TURN_EVENT_BYTES`], so a long-thinking model never
+/// crowds the answer and the tool steps out. Past it further reasoning is
+/// not stored (each block's `thinking_end` still is, with its length), and
+/// the turn is not marked `events_truncated` for it.
+pub const MAX_TURN_THINKING_BYTES: usize = 1024 * 1024;
 /// One changed file's stored diff.
 pub const MAX_DIFF_BYTES: usize = 64 * 1024;
 /// All of one turn's stored diffs; later files keep their counts, not their diff.
@@ -1509,6 +1516,8 @@ enum TapState {
 struct Recording {
     turn: NewTurn,
     bytes: usize,
+    /// The reasoning text kept, against [`MAX_TURN_THINKING_BYTES`].
+    thinking_bytes: usize,
     capped: bool,
     /// Ops the writer's queue had no room for, oldest first (text merged).
     backlog: VecDeque<Op>,
@@ -1555,6 +1564,7 @@ impl TurnTap {
         let mut recording = Box::new(Recording {
             turn: turn.clone(),
             bytes: 0,
+            thinking_bytes: 0,
             capped: false,
             backlog: VecDeque::new(),
         });
@@ -1631,18 +1641,28 @@ impl TurnTap {
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if recording.capped || recording.bytes + delta.len() > MAX_TURN_EVENT_BYTES {
+            if event.kind == "thinking_delta" {
+                // A budget of its own; past it the reasoning is not kept.
+                if recording.capped
+                    || recording.thinking_bytes + delta.len() > MAX_TURN_THINKING_BYTES
+                {
+                    recording.thinking_bytes = MAX_TURN_THINKING_BYTES;
+                    return;
+                }
+                recording.thinking_bytes += delta.len();
+            } else if recording.capped || recording.bytes + delta.len() > MAX_TURN_EVENT_BYTES {
                 Self::cap(store, recording);
+                return;
             } else {
                 recording.bytes += delta.len();
-                let op = Op::Text {
-                    turn_id,
-                    seq: event.seq,
-                    kind: event.kind,
-                    text: delta.to_owned(),
-                };
-                Self::queue(store, recording, op);
             }
+            let op = Op::Text {
+                turn_id,
+                seq: event.seq,
+                kind: event.kind,
+                text: delta.to_owned(),
+            };
+            Self::queue(store, recording, op);
             return;
         }
         let essential = matches!(event.kind, "status" | "error" | "done");
@@ -2467,6 +2487,55 @@ mod tests {
         assert!(turn.events_truncated);
         assert_eq!(turn.state, "done", "the ending is always kept");
         assert!(turn.events.len() < usize::try_from(seq).unwrap());
+    }
+
+    #[test]
+    fn reasoning_has_a_budget_of_its_own() {
+        let (_root, store) = store();
+        let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        let chunk = "r".repeat(MAX_EVENT_STRING);
+        let mut seq = 0;
+        // Half again the reasoning budget, then answer and tool steps that
+        // fit the turn's own budget only when the reasoning is not counted.
+        for _ in 0..(MAX_TURN_THINKING_BYTES * 3 / 2 / MAX_EVENT_STRING) {
+            tap.emit(event("t1", seq, "thinking_delta", json!({"text": chunk})));
+            seq += 1;
+        }
+        tap.emit(event("t1", seq, "thinking_end", json!({"chars": 1})));
+        seq += 1;
+        let steps = (MAX_TURN_EVENT_BYTES - MAX_TURN_THINKING_BYTES) / (MAX_EVENT_STRING + 256);
+        for _ in 0..steps {
+            tap.emit(event(
+                "t1",
+                seq,
+                "tool_call",
+                json!({"call_id": format!("c{seq}"), "tool": "t", "args_summary": "a".repeat(MAX_EVENT_STRING), "remote": false}),
+            ));
+            seq += 1;
+        }
+        tap.emit(event(
+            "t1",
+            seq,
+            "text_delta",
+            json!({"text": "the answer"}),
+        ));
+        tap.emit(event("t1", seq + 1, "done", json!({"committed": true})));
+        let turn = &store.thread(&owner(1), "w1", "42").unwrap()[0];
+        assert!(!turn.events_truncated, "reasoning never truncates the turn");
+        let thinking: usize = turn
+            .events
+            .iter()
+            .filter(|e| e.kind == "thinking_delta")
+            .map(|e| e.payload["text"].as_str().unwrap().len())
+            .sum();
+        assert_ne!(thinking, 0);
+        assert!(thinking <= MAX_TURN_THINKING_BYTES, "{thinking}");
+        let count = |kind: &str| turn.events.iter().filter(|e| e.kind == kind).count();
+        assert_eq!(count("thinking_end"), 1);
+        assert_eq!(count("tool_call"), steps);
+        assert_eq!(count("text_delta"), 1);
+        assert_eq!(turn.state, "done");
     }
 
     #[test]
