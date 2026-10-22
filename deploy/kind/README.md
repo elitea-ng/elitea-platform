@@ -74,10 +74,10 @@ installed cert-manager are reused, and the chart install is a
    client `elitea-deepwiki-callback-client`
    (`subapp-callback-client.crt` / `.key`, the same certificate compose
    mounts);
-5. applies `manifests/infra.yaml` — PostgreSQL (`pgvector/pgvector:0.8.5-pg16-trixie`,
-   with `CREATE EXTENSION vector` in its initdb; the data is an `emptyDir`, so
-   an image change, such as the Debian 12 to Debian 13 move, starts on a fresh
-   `initdb` and needs no collation repair) and an S3-compatible
+5. applies `manifests/infra.yaml` — PostgreSQL (plain `postgres:18`, Debian 13,
+   with `CREATE EXTENSION pgcrypto` in its initdb and no pgvector; the data is
+   an `emptyDir`, so an image change starts on a fresh `initdb` and needs no
+   collation repair) and an S3-compatible
    object store (rustfs) — and the four other Secrets the chart names by name;
 6. creates the artifact bucket **before** elitea-main starts, because
    `configureObjectStoreRetentionLifecycle` has no tolerance for a missing one

@@ -196,6 +196,15 @@ spec:
               value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.crt
             - name: ELITEA_INVENTORY_CALLBACK_KEY_FILE
               value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.key
+            {{- if and .Values.vector.enabled (not (hasKey $engineEnv "ELITEA_INVENTORY_VECTOR_URL")) }}
+            # The native runner's entity vectors (ADR-0031): this chart's
+            # elitea-vector, with the invocation's callback token over the
+            # callback material above (runtime CA both ways). The native
+            # runner refuses to start without it
+            # (elitea-inventory.validateGuards refuses the render first).
+            - name: ELITEA_INVENTORY_VECTOR_URL
+              value: {{ include "elitea-vector.origin" . | quote }}
+            {{- end }}
             {{- end }}
             # ELITEA_INVENTORY_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).

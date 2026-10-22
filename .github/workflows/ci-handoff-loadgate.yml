@@ -45,9 +45,9 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        # The same image as ci-go.yml's test job: the repos package's
-        # TestMain builds its migrated template with CREATE EXTENSION vector.
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        # Plain PostgreSQL 18 (Debian 13), the server every deployment runs:
+        # the repos package's migrated template needs no extension.
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

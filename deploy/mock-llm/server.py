@@ -129,12 +129,10 @@ EMBEDDING_MODEL = os.environ.get("MOCK_LLM_EMBEDDING_MODEL", "E2E-MOCK-EMBEDDING
 # already cut to — `elitea-sdk/tests/tools/index/fixtures/rag_corpus_embeddings.sql`
 # (text-embedding-ada-002) stores 1536-element vectors — so a corpus dumped by
 # the SDK's own fixtures and one produced here are dimensionally interchangeable.
-# Nothing in the platform PINS a width: the table the Go writer creates declares
-# `embedding vector` with no dimension modifier
-# (internal/infra/pgvector/index_meta_writer.go:660) and langchain_postgres
-# leaves `embedding_length` unset, so pgvector accepts any consistent width and
-# a mismatch would surface only as an operator error between two differently
-# sized vectors in the SAME collection. Overridable so a test can prove the
+# Nothing in the platform PINS a width: elitea-vector creates one Qdrant
+# collection per embedding space (model slug and dimension) on demand, so any
+# consistent width is accepted, and a width that changes under one model
+# surfaces as a refused write to that space, not as a silent mix. Overridable so a test can prove the
 # width actually travels end to end rather than being assumed.
 EMBEDDING_DIMENSIONS = int(os.environ.get("MOCK_LLM_EMBEDDING_DIMENSIONS", "1536"))
 MAX_EMBEDDING_DIMENSIONS = 4096

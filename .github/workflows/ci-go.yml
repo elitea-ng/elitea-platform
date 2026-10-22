@@ -291,6 +291,14 @@ jobs:
         # sets ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST below, which turns that
         # guard into a t.Fatal. Losing the image here fails the job; it can
         # never turn it green with zero execution.
+        #
+        # The LAST pgvector image in CI (#1359 moved every deployment to plain
+        # postgres:18): elitea-main still carries the legacy per-project
+        # pgvector path (internal/infra/pgvector, the projectprovisioning
+        # project_pgvector step, cmd/pgvector-orphans) and the integration
+        # tests that CREATE EXTENSION vector. It goes, with the `integration`
+        # job's image below and ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST, when
+        # that code does.
         image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: postgres
@@ -596,6 +604,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
+        # pgvector: tests/integration enables the extension before it
+        # migrates (see the `test` job's note on the last pgvector users).
         image: pgvector/pgvector:0.8.5-pg18-trixie
         env:
           POSTGRES_USER: elitea
@@ -645,7 +655,9 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        # Plain PostgreSQL 18 (Debian 13): the compiled-snapshot tests need no
+        # extension.
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

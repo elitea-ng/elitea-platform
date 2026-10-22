@@ -30,7 +30,11 @@ BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
       --set deepwiki.enabled=true
-      --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com)
+      --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com
+      # The native engine keeps its vectors in elitea-vector (ADR-0031): the
+      # chart refuses a native runner without it. 3 replicas: render-vector.sh.
+      --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key
+      --set main.autoscaling.maxReplicas=3)
 
 failures=0
 fail() { printf 'FAIL: %s\n' "$1" >&2; failures=$((failures + 1)); }

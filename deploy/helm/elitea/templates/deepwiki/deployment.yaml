@@ -218,6 +218,16 @@ spec:
             - name: ELITEA_DEEPWIKI_CALLBACK_KEY_FILE
               value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.key
             {{- end }}
+            {{- if and (include "elitea-deepwiki.modelCalls" .) .Values.vector.enabled (not (hasKey $nativeEnv "ELITEA_DEEPWIKI_VECTOR_URL")) }}
+            # The native runner's dense vectors (ADR-0031): this chart's
+            # elitea-vector, with the invocation's callback token over the
+            # callback material above. The runtime CA signs elitea-vector's
+            # certificate, and elitea-vector trusts it for the callback client
+            # identity. The native runner refuses to start without it
+            # (elitea-deepwiki.validateGuards refuses the render first).
+            - name: ELITEA_DEEPWIKI_VECTOR_URL
+              value: {{ include "elitea-vector.origin" . | quote }}
+            {{- end }}
             # ELITEA_DEEPWIKI_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}

@@ -66,9 +66,8 @@
 #   down         tear down (add -v yourself to drop volumes)
 #
 # ── Operator quick start (no seeders) ───────────────────────────────────────
-# Schema bootstrap, the agentstate database, the vector extension, the
-# artifact bucket, RBAC roles, a per-user PAT and a personal project are all
-# automatic — the `db-init`, `elitea-migrate`, `elitea-agentstate-migrate`,
+# Schema bootstrap, the agentstate database, the artifact bucket, RBAC
+# roles, a per-user PAT and a personal project are all automatic — the `db-init`, `elitea-migrate`, `elitea-agentstate-migrate`,
 # `rustfs-bucket-init` and `runtime-session-init` compose services, plus
 # first-login provisioning in cmd/elitea-main, do them. None of the seed*
 # subcommands above are required to reach a working, logged-in stack:
@@ -265,8 +264,9 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # ── Collation version repair ────────────────────────────────────────────────
 #
 # PostgreSQL records the C library's collation version per database. When the
-# image's glibc changes (pgvector/pgvector:*-pg18 moved from Debian 12 to
-# `-trixie`, glibc 2.36 to 2.41), text indexes built under the old rules can
+# image's glibc changes (the stack's PostgreSQL image, then
+# pgvector/pgvector:*-pg18, moved from Debian 12 to `-trixie`, glibc 2.36 to
+# 2.41), text indexes built under the old rules can
 # be out of order, and the server logs "database ... has a collation version
 # mismatch". The repair is REINDEX DATABASE, then ALTER DATABASE ... REFRESH
 # COLLATION VERSION, for each database that reports a mismatch.

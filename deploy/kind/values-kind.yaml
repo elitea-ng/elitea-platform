@@ -27,10 +27,10 @@ postgresql:
 # are exactly that install, so nothing is overridden here.
 
 # ── Off: nothing here is on the DeepWiki path ────────────────────────────────
-# dbInit creates the agent-state database and the vector extension for the
-# WORKER, which this install does not run. `externallyManaged: true` is the
-# statement templates/guards.yaml asks for, and it is true: the postgres
-# manifest's initdb script creates the extension.
+# dbInit creates the agent-state database for the WORKER, which this install
+# does not run. `externallyManaged: true` is the statement
+# templates/guards.yaml asks for, and it is true: nothing here needs that
+# database, and the postgres manifest's initdb script creates pgcrypto.
 dbInit:
   enabled: false
   externallyManaged: true

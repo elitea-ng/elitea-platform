@@ -140,7 +140,7 @@
 {{- end }}
 
 {{- if and .Values.worker.enabled (not .Values.dbInit.enabled) (not .Values.dbInit.externallyManaged) }}
-{{- fail "worker.enabled=true with dbInit.enabled=false needs dbInit.externallyManaged=true. templates/dbInit/job.yaml is what creates the agent-state database (dbInit.agentStateDatabase) and the vector extension the worker's LangGraph checkpointer opens; with it disabled and no evidence the database exists some other way, the release installs cleanly, every pod reports Ready, and the worker fails per-execution with \"The durable agent checkpoint store is unavailable\" — an install-green-fail-later shape identical to the ones the other guards above exist to remove. Set dbInit.enabled=true, or set dbInit.externallyManaged=true after confirming the database and extension already exist." }}
+{{- fail "worker.enabled=true with dbInit.enabled=false needs dbInit.externallyManaged=true. templates/dbInit/job.yaml is what creates the agent-state database (dbInit.agentStateDatabase) the worker's LangGraph checkpointer opens; with it disabled and no evidence the database exists some other way, the release installs cleanly, every pod reports Ready, and the worker fails per-execution with \"The durable agent checkpoint store is unavailable\" — an install-green-fail-later shape identical to the ones the other guards above exist to remove. Set dbInit.enabled=true, or set dbInit.externallyManaged=true after confirming the database already exists." }}
 {{- end }}
 
 {{- /*

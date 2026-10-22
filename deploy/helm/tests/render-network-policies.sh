@@ -58,7 +58,11 @@ SUPERVISOR=(--set sandboxKubernetes.enabled=true
   --set 'sandboxKubernetes.supervisor.profiles[1].file=rust.json'
   --set 'sandboxKubernetes.supervisor.profiles[1].port=9447'
   --set sandboxKubernetes.supervisor.image=registry/supervisor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+# The native engines keep their vectors in elitea-vector (ADR-0031): the
+# chart refuses a native runner without one. An external one, named by URL,
+# keeps this chart's own vector policies out of the sets asserted below.
 DEEPWIKI=(--set deepwiki.enabled=true
+  --set deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL=https://vector.elsewhere.invalid:9470
   --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com
   --set main.fileConfig.deepwikiClientMaterial.enabled=true
   --set main.fileConfig.deepwikiClientMaterial.secretName=elitea-main-deepwiki-client-tls
@@ -68,6 +72,7 @@ DEEPWIKI=(--set deepwiki.enabled=true
   --set main.env.ELITEA_DEEPWIKI_CLIENT_KEY_FILE=/run/elitea-deepwiki/tls.key
   --set main.env.ELITEA_DEEPWIKI_CA_FILE=/run/elitea-deepwiki/ca.crt)
 INVENTORY=(--set inventory.enabled=true
+  --set inventory.env.ELITEA_INVENTORY_VECTOR_URL=https://vector.elsewhere.invalid:9470
   --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com
   --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db
   --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.key=url

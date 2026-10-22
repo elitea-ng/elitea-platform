@@ -35,12 +35,19 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # A complete, correct Inventory install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
 RUNTIME="-f $CHART/values-standalone.yaml"
+# The native engine keeps its entity vectors in elitea-vector (ADR-0031), so the
+# chart refuses a native runner without one. A complete install names an
+# external elitea-vector here: this chart's own (vector.enabled) needs the
+# runtime plane, which the refusal cases below turn off one at a time, and it
+# is asserted on its own at the end ("the engine reaches elitea-vector").
+VECTOR="--set inventory.env.ELITEA_INVENTORY_VECTOR_URL=https://vector.elsewhere.invalid:9470"
 # $RUNTIME (the standalone profile's runtime plane) is part of a complete
 # install: the host's artifact calls and the engine sidecar's model and
 # source-tool calls go over gRPC on elitea-main's platform listener (#1359
 # U2/U5).
 COMPLETE="\
 $RUNTIME \
+$VECTOR \
 --set inventory.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls \
@@ -513,6 +520,32 @@ refuses_with "the retired engine.callbackCa" "inventory.engine.callbackCa was re
 for name in ELITEA_INVENTORY_MODEL_SERVICE_URL ELITEA_INVENTORY_ARTIFACT_SERVICE_URL ELITEA_INVENTORY_CALLBACK_CA_FILE ELITEA_INVENTORY_CALLBACK_CERT_FILE ELITEA_INVENTORY_CALLBACK_KEY_FILE; do
   refuses_with "inventory.env.$name set by hand" "inventory.env sets $name" $COMPLETE --set inventory.env.$name=x
 done
+
+# ── The engine reaches elitea-vector (ADR-0031) ──────────────────────────────
+#
+# The native engine keeps its entity vectors in elitea-vector and refuses to start
+# without ELITEA_INVENTORY_VECTOR_URL. With this chart's elitea-vector the chart
+# derives it from the Service; with neither that nor an explicit value the
+# render is refused; an explicit value wins.
+
+echo "== the engine reaches elitea-vector =="
+CHART_VECTOR="--set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key --set main.autoscaling.maxReplicas=3"
+engine_vector_url() {
+  printf '%s' "$1" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[] | select(.name == "engine") | .env[] | select(.name == "ELITEA_INVENTORY_VECTOR_URL") | .value' -
+}
+with_chart_vector="$(render ${COMPLETE/"$VECTOR"/} $CHART_VECTOR --set inventory.env.ELITEA_INVENTORY_RUNNER=sidecar)" \
+  || fail "the native engine beside this chart's elitea-vector does not render: $with_chart_vector"
+expect "derived from this chart's elitea-vector" "$(engine_vector_url "$with_chart_vector")" "https://elitea-vector:9470"
+explicit_vector="$(render $COMPLETE $CHART_VECTOR --set inventory.env.ELITEA_INVENTORY_RUNNER=sidecar)" \
+  || fail "an explicit elitea-vector beside this chart's does not render: $explicit_vector"
+expect "an explicit elitea-vector wins" "$(engine_vector_url "$explicit_vector" | sort -u)" "https://vector.elsewhere.invalid:9470"
+refuses_with "a native engine with no elitea-vector" "vector.enabled is false and inventory.env.ELITEA_INVENTORY_VECTOR_URL is unset" \
+  ${COMPLETE/"$VECTOR"/} --set inventory.env.ELITEA_INVENTORY_RUNNER=sidecar
+if fixture_novector="$(render ${COMPLETE/"$VECTOR"/} --set inventory.env.ELITEA_INVENTORY_RUNNER=sidecar --set inventory.engine.runner=fixture 2>&1)"; then
+  expect "the fixture runner needs no elitea-vector" "$(engine_vector_url "$fixture_novector")" ""
+else
+  fail "a fixture engine with no elitea-vector does not render: $fixture_novector"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "render-inventory: $failures assertion(s) failed" >&2

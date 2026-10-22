@@ -7,8 +7,10 @@ name: CI — DeepWiki native engine
 #
 #   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
 #   * the crate's tests, which run the sidecar on a REAL Unix socket and
-#     the index storage against a REAL PostgreSQL with pgvector (the
-#     `postgres` service): the retrieval parity gate over the P0 fixtures,
+#     the index storage against a REAL, plain PostgreSQL (the `postgres`
+#     service; no pgvector — the dense vectors are in elitea-vector, #1359,
+#     and the upgrade test stands in for the extension the released
+#     migrations created): the retrieval parity gate over the P0 fixtures,
 #     the publish transaction under concurrent readers, the reconciliation
 #     and the migration ledger, Phase 2's store over the build space, and
 #     the native runner end to end (tests/native_generate.rs: the worker
@@ -103,10 +105,12 @@ jobs:
     # About 23 minutes with a warm cache; a change to a shared crate or a
     # lockfile invalidates the cache and the cold build needs more than 30.
     timeout-minutes: 45
-    # The index storage tests' database (ADR-0026 decision 5).
+    # The index storage tests' database (ADR-0026 decision 5). Plain
+    # PostgreSQL, the major and Debian 13 base every deployment runs: a fresh
+    # install needs no extension (#1359).
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16
+        image: postgres:18
         env:
           POSTGRES_USER: deepwiki
           POSTGRES_PASSWORD: deepwiki

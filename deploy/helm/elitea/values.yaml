@@ -314,10 +314,11 @@ nats:
 
 # ── Database preparation ────────────────────────────────────────────────────
 #
-# The two things elitea-migrate cannot do for itself, because both need rights
+# The one thing elitea-migrate cannot do for itself, because it needs a right
 # the migrating role does not have: CREATE DATABASE for the agent-state store
-# the worker's checkpointer opens, and CREATE EXTENSION vector for the index
-# plane's unqualified DDL.
+# the worker's checkpointer opens. No `vector` extension: nothing in the
+# platform needs pgvector (#1359) — every dense vector is in Qdrant behind
+# elitea-vector, so plain PostgreSQL is enough.
 #
 # The pylon-era schema is NOT here. elitea-migrate embeds 001_initial.sql and
 # applies it itself when the database does not carry it, so a fresh install
@@ -327,7 +328,7 @@ dbInit:
   enabled: true
 
   # Set true ONLY when the agent-state database named by `agentStateDatabase`
-  # below (and the `vector` extension) were already created by something
+  # below was already created by something
   # outside this chart, and you are turning `enabled` off to avoid redoing it.
   # This is the guard's escape hatch (templates/guards.yaml): worker.enabled
   # with dbInit.enabled=false and this still false is refused at render time,
@@ -339,7 +340,7 @@ dbInit:
   # silently assuming them.
   externallyManaged: false
 
-  # Needs CREATE DATABASE and CREATE EXTENSION, which the application role
+  # Needs CREATE DATABASE, which the application role
   # usually lacks — hence its own secret rather than reusing `postgresql`.
   # Point it at the operator's superuser DSN for the PLATFORM database; the
   # agent-state database is created beside it on the same server.
@@ -3529,7 +3530,8 @@ deepwiki:
 # then fails.
 #
 # It has its OWN database schema, like DeepWiki (ADR-0027): the Rust engine
-# keeps each graph in the inventory_graph schema (pgvector extension needed) and
+# keeps each graph in the inventory_graph schema (no extension: the entity
+# vectors are in elitea-vector, so the native runner needs vector.enabled) and
 # a pre-install migrate Job from the engine image creates it. The engine also
 # clones repositories itself, so it carries its own git allowlist.
 inventory:
@@ -3671,9 +3673,10 @@ inventory:
   # engine image (templates/inventory/migrate-job.yaml). Rendered only with a
   # sidecar and a database secret. Database privileges: the chart creates no
   # role. The Job runs as the role in ELITEA_INVENTORY_DATABASE_URL, which
-  # needs CREATE on the database (the inventory_graph schema) and permission to
-  # CREATE EXTENSION vector (migration 0004), or the extension pre-created by an
-  # administrator.
+  # needs CREATE on the database (the inventory_graph schema). No extension:
+  # a fresh install creates none, and on a database an earlier release
+  # migrated, migration 0008 drops the `vector` extension when this role owns
+  # it and nothing else uses it (otherwise it is left for an administrator).
   migrate:
     enabled: true
     backoffLimit: 3
@@ -4077,7 +4080,10 @@ vector:
   # on how many Qdrant collections exist. RECOMMENDED IN PRODUCTION: list the
   # models you run. Empty (the default) allows any space up to
   # ELITEA_VECTOR_MAX_COLLECTIONS, which is only a soft cap: concurrent
-  # creators can overshoot it by their number.
+  # creators can overshoot it by their number. The list covers EVERY caller:
+  # the worker's indexes and memories, and the DeepWiki and Inventory engines'
+  # embedding models (one space serves both families, emb_* and inv_*), so a
+  # model either engine embeds with must be listed too.
   # Example: ["text-embedding-3-small:1536", "bge-m3:1024"]
   allowedSpaces: []
 

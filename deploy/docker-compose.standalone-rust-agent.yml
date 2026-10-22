@@ -17,10 +17,11 @@ services:
       # one durable); the native worker serves them from this change on.
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
-      # The registry, not the per-project pgvector index_meta rows, holds
-      # index metadata (ADR-0031 V1); nothing is migrated, indexes created
-      # under the Python path are not visible here, and new projects get no
-      # project_pgvector database.
+      # The registry holds index metadata (ADR-0031 V1) and the vectors are in
+      # Qdrant behind elitea-vector. Nothing is migrated from the legacy
+      # Python path (its per-project index_meta rows and project databases):
+      # indexes created there are not visible here, and new projects get no
+      # per-project vector database.
       ELITEA_INDEXING_RUNTIME: "rust"
 
   elitea-worker:
