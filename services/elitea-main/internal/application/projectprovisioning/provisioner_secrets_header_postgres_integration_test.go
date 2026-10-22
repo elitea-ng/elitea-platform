@@ -3,7 +3,7 @@ package projectprovisioning_test
 // The project's `X-SECRET` value (#408), at the two levels that own it.
 //
 // A project vault with no `secrets_header_value` accepts the literal string
-// "secret" on the version-details route, because pylon's check_secret_header
+// "secret" on the version-details route, because the legacy check_secret_header
 // reads `secrets.get("secrets_header_value", "secret")` and the Go port
 // reproduces that fallback. Every project the Go provisioner created was in
 // that state: EnsureProjectVault creates an EMPTY vault.

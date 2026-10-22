@@ -151,8 +151,8 @@ ENTRYPOINT ["/elitea-main"]
 # `/nonexistent` is deliberate and stays that way. In deploy/centry-hybrid the
 # edge router sent only /healthz and a short list of API paths to
 # elitea-main; `/admin/app` falls through the `current-platform` PathPrefix(`/`)
-# router to pylon_main, which serves the legacy admin_ui plugin. This image is
-# not an admin server, so it carries no admin bundle.
+# router to the legacy main runtime, which serves the legacy admin_ui plugin.
+# This image is not an admin server, so it carries no admin bundle.
 FROM runtime AS hybrid
 
 ENV ADMIN_UI_STATIC_DIR=/nonexistent

@@ -11,12 +11,12 @@
 //
 // The contract is deliberately narrow. There is no cache, no invalidation and no
 // process-level state: each call is one indexed query on a table with a handful
-// of rows, and the alternative — the reference's design, where a pylon reads the
-// value into module state at plugin load and needs a restart signal to pick up a
-// change — is exactly why every field on that page carried `requires_restart`
-// and why this platform has no restart signal to offer. Reading per request is
-// what lets the admin page's save take effect on the next call instead of on the
-// next deployment.
+// of rows, and the alternative — the reference's design, where each runtime
+// process reads the value into module state at plugin load and needs a restart
+// signal to pick up a change — is exactly why every field on that page carried
+// `requires_restart` and why this platform has no restart signal to offer.
+// Reading per request is what lets the admin page's save take effect on the next
+// call instead of on the next deployment.
 package platformconfig
 
 import (
@@ -101,7 +101,7 @@ const (
 	// KeyAnalyticsEnabled ported from the withheld `observability` section's
 	// `analytics_enabled` field (config_schemas.go's "Observability, Runtime and
 	// Admin Panel are GONE too" note) — the one field on that section that was
-	// never Pylon-plugin-shaped. It gates both the Settings > Analytics tab
+	// never legacy-plugin-shaped. It gates both the Settings > Analytics tab
 	// (via PlatformSettings, in eliteacore/platform_flags.go) and the
 	// `/analytics*` HTTP surface (internal/api/router.go's
 	// requireAnalyticsEnabled).

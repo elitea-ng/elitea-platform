@@ -5,7 +5,7 @@ import (
 )
 
 // ContextManagement is the user-level `default_context_management` block —
-// pylon's social/models/pd/users.py ContextManagementModel, plus
+// the legacy social/models/pd/users.py ContextManagementModel, plus
 // `enable_context_editing`, which that model omits but
 // `set_context_strategy` reads out of the same dict
 // (legacy/plugins/elitea_core/utils/context_analytics.py) and which
@@ -23,7 +23,7 @@ type ContextManagement struct {
 	EnableContextEditing   *bool       `json:"enable_context_editing,omitempty"`
 }
 
-// Summarization is the user-level `default_summarization` block — pylon's
+// Summarization is the user-level `default_summarization` block — the legacy
 // SummarizationModel, field for field.
 type Summarization struct {
 	EnableSummarization   *bool    `json:"enable_summarization,omitempty"`
@@ -142,11 +142,12 @@ func (u UserDefaults) Validate() *FieldError {
 // strategy yet) — it is unmarshalled OVER the defaults-resolved value, so a
 // key the stored document does not carry keeps the user's answer rather than
 // snapping back to a constant. That is the whole reason this is a raw
-// unmarshal and not a struct merge: strategies written by pylon, and by
-// earlier versions of this route, do not all carry the same key set.
+// unmarshal and not a struct merge: strategies written by the legacy runtime,
+// and by earlier versions of this route, do not all carry the same key set.
 //
-// The user-defaults half is pylon's `set_context_strategy` mapping, including
-// its flattening of three summarization fields into `summary_llm_settings`.
+// The user-defaults half is the legacy `set_context_strategy` mapping,
+// including its flattening of three summarization fields into
+// `summary_llm_settings`.
 func Resolve(stored []byte, defaults UserDefaults) Strategy {
 	strategy := DefaultStrategy()
 

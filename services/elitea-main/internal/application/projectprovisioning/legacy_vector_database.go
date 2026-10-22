@@ -3,12 +3,12 @@ package projectprovisioning
 // The legacy PgVector database of a deleted project (#1359).
 //
 // Until #1359 a project could own a database, project_<id>, and a login role,
-// project_<id>_user, on the PgVector server: pylon provisioned them for every
-// project, and this service did too for a while (the project_pgvector step).
-// Nothing reads them any more, since every vector is in Qdrant behind
-// elitea-vector, but they still hold the project's chunk text and embeddings.
-// A delete that forgot them would leave a deleted tenant's content in
-// PostgreSQL for ever, so the journal keeps one step that drops them:
+// project_<id>_user, on the PgVector server: the legacy runtime provisioned
+// them for every project, and this service did too for a while (the
+// project_pgvector step). Nothing reads them any more, since every vector is in
+// Qdrant behind elitea-vector, but they still hold the project's chunk text and
+// embeddings. A delete that forgot them would leave a deleted tenant's content
+// in PostgreSQL for ever, so the journal keeps one step that drops them:
 // StepProjectPgvectorDrop, the name the step had before, so a row written by
 // an older build that already finished it (done) is not run again.
 //

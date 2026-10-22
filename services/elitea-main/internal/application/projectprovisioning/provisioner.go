@@ -1,6 +1,6 @@
 // Package projectprovisioning creates a project and its tenant, which is the
-// one capability that kept legacy pylon on the critical path (#333). A
-// pylon-free deployment could serve the projects it already had; it could not
+// one capability that kept the legacy runtime on the critical path (#333). A
+// deployment without it could serve the projects it already had; it could not
 // take a new one.
 //
 // The reference is legacy/plugins/projects/utils/project_steps.py. This package
@@ -13,8 +13,9 @@
 // centry.project on a connection it takes from the pool itself, and opens its
 // own transaction to apply the corpus. So the project row must be COMMITTED
 // before the tenant corpus can be applied to it, and no single transaction can
-// span both. pylon has the same shape for a different reason (it commits after
-// every step), so the compensation model is a port rather than an invention.
+// span both. The legacy runtime has the same shape for a different reason (it
+// commits after every step), so the compensation model is a port rather than an
+// invention.
 //
 // THE INVARIANT THAT MATTERS. `create_success` is written TRUE only after every
 // step succeeded. It is not decoration: cmd/elitea-migrate's `-all-tenants`
@@ -49,12 +50,13 @@ type TenantMigrator interface {
 	ApplyTenant(ctx context.Context, projectID int64) error
 }
 
-// ErrNameRequired reports an empty project name. pylon's ProjectCreatePD
+// ErrNameRequired reports an empty project name. The legacy ProjectCreatePD
 // declares `name: constr(min_length=1)`, so an empty name is a 400 there too.
 var ErrNameRequired = errors.New("projectprovisioning: project name is required")
 
-// ErrOwnerRequired reports a missing or non-positive owner. pylon takes the
-// owner from `g.auth.id` and never from the request body; so does the handler.
+// ErrOwnerRequired reports a missing or non-positive owner. The legacy runtime
+// takes the owner from `g.auth.id` and never from the request body; so does the
+// handler.
 var ErrOwnerRequired = errors.New("projectprovisioning: owner id must be positive")
 
 // Limits carries the per-project ceilings written to centry.project_quota.
@@ -74,7 +76,8 @@ type Limits struct {
 }
 
 // DefaultLimits are ProjectCreatePD's field defaults, transcribed exactly.
-// A caller that omits a limit gets the same ceiling pylon would have given it.
+// A caller that omits a limit gets the same ceiling the legacy runtime would
+// have given it.
 func DefaultLimits() Limits {
 	return Limits{
 		DataRetentionLimit:     1_000_000_000,
@@ -93,17 +96,17 @@ func DefaultLimits() Limits {
 // Request is one project-create instruction. Name and OwnerID are mandatory.
 type Request struct {
 	Name string
-	// Plugins is stored verbatim on centry.project.plugins. pylon defaults it
+	// Plugins is stored verbatim on centry.project.plugins. Legacy defaults it
 	// to the empty list and never validates the entries.
 	Plugins []string
 	// OwnerID is the authenticated caller. It is never read from a request body.
 	OwnerID int64
 	// AdminEmails receive membership in the new project, with AdminRoles.
-	// pylon's ProjectAdmin step does exactly this and skips silently when the
-	// list is empty.
+	// The legacy ProjectAdmin step does exactly this and skips silently when
+	// the list is empty.
 	AdminEmails []string
 	// AdminRoles are the project roles AdminEmails are granted. The HTTP
-	// handler hardcodes {"admin"}, as pylon's AdminAPI.post does.
+	// handler hardcodes {"admin"}, as the legacy AdminAPI.post does.
 	AdminRoles []string
 	Limits     Limits
 }
@@ -340,9 +343,10 @@ func (p *Provisioner) Provision(ctx context.Context, request Request) (Result, e
 		result.Steps = append(result.Steps, status)
 	}
 
-	// The completion marker, written last and on its own. pylon sets
-	// create_success outside the step list too, for the same reason: it is not a
-	// provisioning action, it is the assertion that provisioning finished.
+	// The completion marker, written last and on its own. The legacy runtime
+	// sets create_success outside the step list too, for the same reason: it is
+	// not a provisioning action, it is the assertion that provisioning
+	// finished.
 	//
 	// If this write fails the tenant is fully built but unmarked, and every
 	// reader that filters on create_success would ignore it — a project that
@@ -379,15 +383,15 @@ func (p *Provisioner) markCreated(ctx context.Context, projectID int64) error {
 // surviving tenant. project_schema creates the schema and THEN applies the
 // corpus; when the corpus fails, the schema is already there while the step
 // reports failure. Compensating only the steps that reported success left that
-// schema behind, which the integration test caught. pylon appends each step to
-// its progress list BEFORE calling create for the same reason, so this matches
-// the reference as well as being correct. Every remove is written to tolerate a
-// step that never ran.
+// schema behind, which the integration test caught. The legacy runtime appends
+// each step to its progress list BEFORE calling create for the same reason, so
+// this matches the reference as well as being correct. Every remove is written
+// to tolerate a step that never ran.
 //
-// Unlike pylon's rollback loop — which has no per-step try/except, so the first
-// undo that raises aborts every remaining undo and discards the progress report
-// — every compensation here is isolated. One failing undo cannot strand the
-// rest.
+// Unlike the legacy rollback loop — which has no per-step try/except, so the
+// first undo that raises aborts every remaining undo and discards the progress
+// report — every compensation here is isolated. One failing undo cannot strand
+// the rest.
 //
 // THE SCHEMA DROP IS THE EXCEPTION, AND IT RUNS LAST (#374). Reverse order puts
 // project_schema before project_model, so the schema went first and the row
@@ -481,7 +485,7 @@ func (p *Provisioner) removeTenantSchemaWhenTheRowIsGone(
 	return status
 }
 
-// provisionState carries values between steps. It replaces pylon's mutable
+// provisionState carries values between steps. It replaces the legacy mutable
 // `context` kwargs bag, which is the source of two defects this port does not
 // reproduce: a step that returns a scalar instead of a dict silently fails to
 // populate the next step's argument, and a compensation invoked before its
@@ -508,9 +512,9 @@ func (s *provisionState) tenantSchema() string {
 
 // safeStepMessage is what the caller is told about a failed step.
 //
-// pylon puts `str(exception)` in the status `msg`, which crosses a trust
-// boundary with a raw database error in it. AGENTS.md forbids that, and the
-// cause is logged with the project id instead. The step NAME is the part a
+// The legacy runtime puts `str(exception)` in the status `msg`, which crosses a
+// trust boundary with a raw database error in it. AGENTS.md forbids that, and
+// the cause is logged with the project id instead. The step NAME is the part a
 // caller can act on, and it is preserved exactly.
 func safeStepMessage(step string) string {
 	return "step " + step + " did not complete"

@@ -8,8 +8,8 @@ package main
 //
 //   - ELITEA_LEGACY_PGVECTOR_ADMIN_URL: the admin URL of the server the old
 //     per-project store provisioned on (its bootstrap connection: the public
-//     project's `elitea-pgvector` configuration in pylon). A project delete
-//     then drops the project's legacy database and role, and
+//     project's `elitea-pgvector` configuration in the legacy runtime). A
+//     project delete then drops the project's legacy database and role, and
 //     `elitea-main legacy-pgvector-orphans` can find the ones older deletes
 //     left. A secret: it carries a password.
 //   - ELITEA_LEGACY_PGVECTOR_RETIRED=true: the operator's statement that the

@@ -217,8 +217,8 @@ func TestEnsureIsIdempotent(t *testing.T) {
 // A project row left behind with `create_success = false` is worse than no row
 // at all: the resolver's first branch matches on the NAME, so its owner would
 // be handed a project id no tenant schema backs, and no later attempt would
-// ever replace it. pylon repairs the same state by deleting and recreating
-// (fix_create_personal_projects).
+// ever replace it. The legacy runtime repairs the same state by deleting and
+// recreating (fix_create_personal_projects).
 func TestEnsureRepairsAnUnfinishedPersonalProject(t *testing.T) {
 	ctx := context.Background()
 	pool := newPersonalProjectPool(t)
@@ -431,7 +431,7 @@ func TestEnsureSkipsIdentitiesThatMustNotOwnAPersonalProject(t *testing.T) {
 // reported success while /social/author went on answering "" for good.
 //
 // Reachable two ways, one cause: `POST /projects` takes the name as free text
-// and reserves nothing, and pylon-era data carries `project_user_<uid>` rows
+// and reserves nothing, and legacy-era data carries `project_user_<uid>` rows
 // whose role assignments are gone.
 func TestEnsureIgnoresAProjectOfTheSameNameTheCallerIsNotAMemberOf(t *testing.T) {
 	ctx := context.Background()

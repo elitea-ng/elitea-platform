@@ -2,7 +2,8 @@ package projectprovisioning
 
 // The step pipeline, and the port/drop disposition issue #333 asks for.
 //
-// pylon's sequence (legacy/plugins/projects/utils/project_steps.py:319-332) is:
+// The legacy sequence (legacy/plugins/projects/utils/project_steps.py:319-332)
+// is:
 //
 //     project_model → project_schema → project_permissions → system_user →
 //     system_token → project_secrets → minio_buckets → rabbit_vhost →
@@ -16,9 +17,9 @@ package projectprovisioning
 //                        them, so a project provisioned without this step would
 //                        report "no such project" on its own settings page.
 //   project_schema       create_tenant_schema('p_<id>') then the tenant corpus.
-//                        pylon runs CreateSchema + create_all inside its one
-//                        step; this is the same two halves.
-//   project_permissions  The per-project roles. pylon writes ROLES ONLY and no
+//                        The legacy runtime runs CreateSchema + create_all
+//                        inside its one step; this is the same two halves.
+//   project_permissions  The per-project roles. Legacy writes ROLES ONLY and no
 //                        auth_core__project_role_permission rows, so permission
 //                        resolution falls back to the central default-mode
 //                        grants by role NAME. legacyrbac.projectPermissions()
@@ -39,18 +40,19 @@ package projectprovisioning
 //
 //   rabbit_vhost         AGENTS.md forbids the Arbiter transport, and this
 //                        platform's durable worker transport is NATS JetStream.
-//                        pylon itself skips this step unless ARBITER_RUNTIME is
-//                        "rabbitmq", so dropping it is parity with a
-//                        non-Arbiter deployment rather than a behaviour
-//                        change. This is the drop the issue asked to confirm.
+//                        The legacy runtime itself skips this step unless
+//                        ARBITER_RUNTIME is "rabbitmq", so dropping it is
+//                        parity with a non-Arbiter deployment rather than a
+//                        behaviour change. This is the drop the issue asked to
+//                        confirm.
 //   influx_databases     No component of this platform reads or writes InfluxDB.
-//                        pylon gates the step on CENTRY_USE_INFLUX, which is
-//                        false by default, so it is already inert on a stock
-//                        deployment.
+//                        The legacy runtime gates the step on
+//                        CENTRY_USE_INFLUX, which is false by default, so it is
+//                        already inert on a stock deployment.
 //
 // NOT PORTED, from an event:
 //
-//   project_created      pylon fires this event AFTER it commits
+//   project_created      the legacy runtime fires this event AFTER it commits
 //                        create_success (project_steps.py:369), and two
 //                        listeners consume it. One creates the project's
 //                        pgvector credentials
@@ -110,7 +112,7 @@ const (
 
 // systemProjectRole is the project role the per-project system identity holds.
 //
-// pylon's `auth.get_roles(mode='default')` returns `system` alongside admin/
+// The legacy `auth.get_roles(mode='default')` returns `system` alongside admin/
 // editor/viewer, so its `admin_add_role` creates a `system` project role as a
 // side effect. This repository names the role explicitly here instead.
 //
@@ -135,7 +137,7 @@ const (
 const systemProjectRole = "system"
 
 // systemTokenName is the PAT name GetActiveProjectSystemPAT matches on
-// (`token.name = 'api'`). pylon's SystemToken step uses the same literal.
+// (`token.name = 'api'`). The legacy SystemToken step uses the same literal.
 const systemTokenName = "api"
 
 type step struct {
@@ -151,11 +153,11 @@ func createSteps() []step {
 		{name: StepProjectPermissions, create: createProjectPermissions, remove: removeProjectPermissions},
 		{name: StepSystemUser, create: createSystemUser, remove: removeSystemUser},
 		{name: StepSystemToken, create: createSystemToken, remove: removeSystemToken},
-		// project_secrets sits where pylon puts it: after system_token and
-		// before the bucket step. The position is load-bearing in the OTHER
-		// direction — compensation walks this list in reverse — but nothing in the vault depends on a later step, and no
-		// later step reads the vault, so the placement is parity rather than a
-		// constraint.
+		// project_secrets sits where the legacy runtime puts it: after
+		// system_token and before the bucket step. The position is load-bearing
+		// in the OTHER direction — compensation walks this list in reverse —
+		// but nothing in the vault depends on a later step, and no later step
+		// reads the vault, so the placement is parity rather than a constraint.
 		{name: StepProjectSecrets, create: createProjectSecrets, remove: removeProjectSecrets},
 		{name: StepArtifactBuckets, create: createArtifactBuckets, remove: removeArtifactBuckets},
 		{name: StepProjectAdmin, create: createProjectAdmin, remove: removeProjectAdmin},
@@ -166,11 +168,12 @@ func createSteps() []step {
 
 // createProjectModel writes the project row and its two companion rows.
 //
-// pylon commits after each of the three inserts. This does all three in ONE
-// transaction, which is a strict improvement available here and not there: the
-// three rows are in the same database, so either the project exists with its
-// quota and statistics or it does not exist at all. There is no state in which
-// /projects/quota answers 404 for a project the list endpoint returns.
+// The legacy runtime commits after each of the three inserts. This does all
+// three in ONE transaction, which is a strict improvement available here and
+// not there: the three rows are in the same database, so either the project
+// exists with its quota and statistics or it does not exist at all. There is no
+// state in which /projects/quota answers 404 for a project the list endpoint
+// returns.
 func createProjectModel(ctx context.Context, p *Provisioner, state *provisionState) error {
 	transaction, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -180,7 +183,8 @@ func createProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 
 	plugins := state.request.Plugins
 	if plugins == nil {
-		// TEXT[] NOT NULL-by-default column; pylon defaults the field to [].
+		// TEXT[] NOT NULL-by-default column; the legacy runtime defaults the
+		// field to [].
 		plugins = []string{}
 	}
 
@@ -236,7 +240,7 @@ INSERT INTO centry.project_quota (
 	}
 
 	// dast_scans and sast_scans are left to their column defaults (-1), exactly
-	// as pylon leaves them; every counter defaults to 0.
+	// as the legacy runtime leaves them; every counter defaults to 0.
 	if _, err := transaction.Exec(ctx, `
 INSERT INTO centry.statistic (project_id, start_time)
 VALUES ($1, (now() AT TIME ZONE 'utc'))`,
@@ -598,8 +602,9 @@ func removeProjectSchema(ctx context.Context, p *Provisioner, state *provisionSt
 // auth_core__project_role_permission row is written: doing so would suppress
 // legacyrbac's central fallback and cut the project off from the corpus grants.
 func createProjectPermissions(ctx context.Context, p *Provisioner, state *provisionState) error {
-	// Every central default-mode role name, plus `system`. pylon derives the
-	// list from auth.get_roles(mode='default'), which includes `system` there.
+	// Every central default-mode role name, plus `system`. The legacy runtime
+	// derives the list from auth.get_roles(mode='default'), which includes
+	// `system` there.
 	//
 	// The UNION is kept although shared/0088 now seeds a central `system` role
 	// and the SELECT above it therefore returns the name already. It is
@@ -626,12 +631,12 @@ ON CONFLICT (project_id, name) DO NOTHING`,
 // removeProjectPermissions deletes the project's roles and the token bindings
 // that name it.
 //
-// pylon's counterpart is a no-op, which leaves orphan auth_core__project_role
-// and auth_core__project_user_role rows behind after a project is deleted — its
-// own deletion path has the same hole. Compensating properly here is a
-// deliberate correction: the rows describe a project that will not exist, and
-// auth_core__project_user_role cascades from the role, so one delete clears
-// both.
+// The legacy counterpart is a no-op, which leaves orphan
+// auth_core__project_role and auth_core__project_user_role rows behind after a
+// project is deleted — its own deletion path has the same hole. Compensating
+// properly here is a deliberate correction: the rows describe a project that
+// will not exist, and auth_core__project_user_role cascades from the role, so
+// one delete clears both.
 //
 // The binding delete is the same invariant one level up (ADR-0018,
 // spec-llm-project-scope §7.3): a binding must not outlive membership. Removing
@@ -639,7 +644,8 @@ ON CONFLICT (project_id, name) DO NOTHING`,
 // eliteacore.UsersDelete. Removing the whole project takes every membership
 // with it through the role cascade, so it must take every binding too.
 // elitea_identity.token_project_binding.project_id carries no foreign key —
-// centry.project is pylon-owned as well — so nothing deletes these rows for us.
+// centry.project is legacy-owned as well — so nothing deletes these rows for
+// us.
 //
 // Both statements run in one transaction. Half a teardown leaves bindings that
 // name a project no longer there, which is the state this function exists to
@@ -704,10 +710,11 @@ func createSystemUser(ctx context.Context, p *Provisioner, state *provisionState
 	email := systemUserEmail(state.projectID)
 	name := systemUserName(state.projectID)
 
-	// pylon probes for an existing user first and skips creation. ON CONFLICT
-	// does the same thing without the race, and without the defect pylon's
-	// early return carries (it returns a bare int rather than a dict, so the
-	// next step loses its argument and re-provisioning fails outright).
+	// The legacy runtime probes for an existing user first and skips creation.
+	// ON CONFLICT does the same thing without the race, and without the defect
+	// the legacy early return carries (it returns a bare int rather than a
+	// dict, so the next step loses its argument and re-provisioning fails
+	// outright).
 	var userID int64
 	if err := p.pool.QueryRow(ctx, `
 WITH created AS (
@@ -781,10 +788,10 @@ func createSystemToken(ctx context.Context, p *Provisioner, state *provisionStat
 	if state.systemUserID == 0 {
 		return errors.New("system user was not created")
 	}
-	// pylon reuses the first existing token rather than minting a second. The
-	// same rule, expressed as a conditional insert so that a re-run converges.
-	// No expiry: GetActiveProjectSystemPAT accepts a NULL `expires`, and pylon
-	// leaves the argument commented out.
+	// The legacy runtime reuses the first existing token rather than minting a
+	// second. The same rule, expressed as a conditional insert so that a re-run
+	// converges. No expiry: GetActiveProjectSystemPAT accepts a NULL `expires`,
+	// and the legacy runtime leaves the argument commented out.
 	if _, err := p.pool.Exec(ctx, `
 INSERT INTO public.auth_core__token (uuid, expires, user_id, name)
 SELECT $1, NULL, $2, $3
@@ -835,20 +842,23 @@ func deleteSystemToken(ctx context.Context, db execer, systemUserID int64) error
 // The model picker asks that route for its catalogue, so a project with no
 // vault rows presented to its owner as "the product has no models". A customer
 // given a new project could not pick a model and so could not start a chat
-// turn, which made project creation incomplete for a pylon-free deployment.
+// turn, which made project creation incomplete for a deployment without the
+// legacy runtime.
 //
 // THAT CHAIN IS NOW BROKEN AT ITS FIRST LINK, and this step is not what holds
 // it. An absent vault is a distinct answer (storage.ErrVaultAbsent) and each
 // reader that consults the vault for a DEFAULT reads it as "never set", so a
 // project with no vault answers 200. Do not read the step as the thing that
 // keeps the model picker working, and do not delete it on the strength of that:
-// it stays because pylon provisions the vault with the project, and because it
-// keeps every vault minted by the one minter (api/v2/secrets.Handler).
+// it stays because the legacy runtime provisions the vault with the project,
+// and because it keeps every vault minted by the one minter
+// (api/v2/secrets.Handler).
 //
 // The vault is created empty and is then given ONE value: the project's
-// `secrets_header_value` (#408). pylon additionally stores an approle blob in
-// centry.project.secrets_json; that column stays dead here, its only occurrence
-// in Go being the sqlc struct field, so this reproduces the half with a reader.
+// `secrets_header_value` (#408). The legacy runtime additionally stores an
+// approle blob in centry.project.secrets_json; that column stays dead here, its
+// only occurrence in Go being the sqlc struct field, so this reproduces the
+// half with a reader.
 //
 // The write is delegated rather than reimplemented. secrets.Handler is the only
 // code that mints a vault key, and it alone knows whether SECRETS_MASTER_KEY
@@ -865,7 +875,7 @@ func createProjectSecrets(ctx context.Context, p *Provisioner, state *provisionS
 		return fmt.Errorf("create project secrets vault: %w", err)
 	}
 	// The `X-SECRET` value (#408). The vault is created empty, and an empty
-	// vault is what made the value guessable: pylon's check_secret_header
+	// vault is what made the value guessable: the legacy check_secret_header
 	// reads `secrets.get("secrets_header_value", "secret")`, so a project that
 	// never set one accepts the literal string "secret" on the version-details
 	// route. Writing a random value here removes that state for every project
@@ -1008,7 +1018,7 @@ func (p *Provisioner) liveBucketCount(ctx context.Context, projectID int64) (int
 
 // createProjectAdmin gives the project's administrators membership.
 //
-// NARROWED FROM THE REFERENCE, deliberately. pylon's
+// NARROWED FROM THE REFERENCE, deliberately. The legacy
 // `add_user_to_project_or_create` CREATES an account — in Keycloak and in
 // auth_core — for an address it does not recognise, with a hardcoded temporary
 // password. Minting an identity as a side effect of creating a project is not a
@@ -1059,7 +1069,8 @@ func createProjectAdmin(ctx context.Context, p *Provisioner, state *provisionSta
 	}
 
 	for _, email := range state.request.AdminEmails {
-		// Matched case-insensitively, as pylon lowercases before comparing.
+		// Matched case-insensitively, as the legacy runtime lowercases before
+		// comparing.
 		tag, err := p.pool.Exec(ctx, `
 INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
 SELECT $1, account.id, role.id

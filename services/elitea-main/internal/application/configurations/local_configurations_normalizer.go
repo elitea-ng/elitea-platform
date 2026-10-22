@@ -20,8 +20,8 @@ const (
 // does not handle SDK/provider types or PUT's separate shallow coercion rules.
 //
 // The source boundary is:
-//   - pylon_main/plugins/configurations/models/pd/registry.py:131-183
-//   - pylon_main/plugins/configurations/models/pd/configuration.py:124-175
+//   - legacy/plugins/configurations/models/pd/registry.py:131-183
+//   - legacy/plugins/configurations/models/pd/configuration.py:124-175
 type CurrentLocalConfigurationCreateNormalizer struct{}
 
 func currentLocalConfigurationType(typeName string) bool {
@@ -538,7 +538,7 @@ func currentLocalConfigurationFieldError(field string) error {
 	return currentMutationFieldError(CurrentConfigurationMutationInvalid, field)
 }
 
-// Source: pylon_main/plugins/configurations/models/pd/service_prompt_keys.py:8-21.
+// Source: legacy/plugins/configurations/models/pd/service_prompt_keys.py:8-21.
 func currentLocalServicePromptKey(value string) bool {
 	switch value {
 	case "code_assistant", "decision_assistant", "edit_application_draft", "generate_application_draft",

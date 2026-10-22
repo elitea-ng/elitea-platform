@@ -12,7 +12,7 @@ import (
 )
 
 func TestParseAttachmentFilepathKeepsTheConversationPrefixInTheName(t *testing.T) {
-	// pylon's parse_filepath (utils/attachments.py:33-39) strips ONE leading
+	// The legacy parse_filepath (utils/attachments.py:33-39) strips ONE leading
 	// slash then splits on the FIRST remaining one. The upload endpoint keys
 	// objects `{conversationUUID}/{filename}`, so the uuid is part of the
 	// object's name, not part of the bucket and not something to trim.
@@ -93,9 +93,9 @@ func TestCurrentTurnAttachmentsNumbersItemsFromOneAndScaffoldsContent(t *testing
 		t.Fatalf("item ids are not derived from the question id: %+v", attachments)
 	}
 
-	// The scaffold is pylon's document shape: an ARRAY of chunks with exactly
-	// one text chunk naming bucket, filename and filepath. Not an empty array
-	// — that would claim content was computed and found to be none.
+	// The scaffold is the legacy document shape: an ARRAY of chunks with
+	// exactly one text chunk naming bucket, filename and filepath. Not an empty
+	// array — that would claim content was computed and found to be none.
 	// map[string]any, not map[string]string: a document chunk also carries the
 	// extraction marker, which is a nested object (see
 	// attachmentExtractionMarkerKey).
@@ -119,8 +119,8 @@ func TestCurrentTurnAttachmentsNumbersItemsFromOneAndScaffoldsContent(t *testing
 }
 
 // TestAttachmentHeaderMakesNoPromiseTheRuntimeCannotKeep pins the removal of
-// pylon's note. It told the model that the full text was already embedded and
-// that file-reading tools were available; on the native runtime neither was
+// the legacy note. It told the model that the full text was already embedded
+// and that file-reading tools were available; on the native runtime neither was
 // true, and the model answered about a PDF it had never read.
 func TestAttachmentHeaderMakesNoPromiseTheRuntimeCannotKeep(t *testing.T) {
 	ref := CurrentTurnAttachmentRef{Bucket: "chat-attachments", Name: testConversationUUID + "/Unknown.pdf"}

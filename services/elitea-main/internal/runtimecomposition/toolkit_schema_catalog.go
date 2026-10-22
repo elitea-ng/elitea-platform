@@ -194,11 +194,11 @@ func (s *CurrentToolkitSchemaSnapshot) EntryCount() int {
 //
 // This is the registry the admin Configuration page's guardrail fields need to
 // offer as choices — the `enum_source: toolkit_names` the reference schema
-// declares. pylon answered it from `elitea_core.toolkit_schemas`, an in-process
-// dict populated at plugin load; this snapshot is the same registry, pinned to
-// the exact SDK revision the workers are admitted to run, which makes it a
-// BETTER source rather than a substitute: an operator cannot be offered a
-// toolkit name the workers would not recognise.
+// declares. The legacy runtime answered it from `elitea_core.toolkit_schemas`,
+// an in-process dict populated at plugin load; this snapshot is the same
+// registry, pinned to the exact SDK revision the workers are admitted to run,
+// which makes it a BETTER source rather than a substitute: an operator cannot
+// be offered a toolkit name the workers would not recognise.
 func (s *CurrentToolkitSchemaSnapshot) ToolkitTypes() []string {
 	if s == nil {
 		return nil

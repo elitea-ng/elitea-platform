@@ -30,16 +30,16 @@ import (
 )
 
 const (
-	// AttachmentKindImage / AttachmentKindDocument are two of pylon's three
-	// `attachment_type` values. The third, "text", is deliberately not
-	// reachable here — see AttachmentKind.
+	// AttachmentKindImage / AttachmentKindDocument are two of the legacy
+	// runtime's three `attachment_type` values. The third, "text", is
+	// deliberately not reachable here — see AttachmentKind.
 	AttachmentKindImage    = "image"
 	AttachmentKindDocument = "document"
 
 	// maxCurrentTurnAttachments bounds how many item+payload row pairs one
-	// admission may add to its own transaction. It is NOT a pylon rule —
-	// pylon iterates `attachments_info` unbounded — it is a bound on this
-	// transaction's size: the start body cap is 512 KiB
+	// admission may add to its own transaction. It is NOT a legacy rule —
+	// the legacy runtime iterates `attachments_info` unbounded — it is a bound
+	// on this transaction's size: the start body cap is 512 KiB
 	// (internal/api/v2/agentexecution/route.go), and a filepath costs ~20
 	// bytes, so an unbounded loop would admit a request asking for ~25k
 	// inserts inside the same transaction that holds the runtime
@@ -69,12 +69,12 @@ const (
 	//     }
 	//
 	// The key is present ONLY on `document` chunks. An image never carries it
-	// (pylon's ImageToModelProcessor sets no such flag —
+	// (the legacy ImageToModelProcessor sets no such flag —
 	// utils/attachments.py:183-225), so "key absent" means "nothing to do",
 	// which is the reading a worker gets right by default.
 	//
-	// WHY A MARKER EXISTS AT ALL. Pylon flags the same thing, but it never has
-	// to persist the flag: DocumentToModelProcessor returns
+	// WHY A MARKER EXISTS AT ALL. The legacy runtime flags the same thing, but
+	// it never has to persist the flag: DocumentToModelProcessor returns
 	// `needs_content_extraction: True` alongside the content list
 	// (utils/attachments.py:313-321) and rpc/chat_all.py:340-374 consumes it in
 	// the SAME python process, moments later, from the object it just built.
@@ -127,7 +127,7 @@ type CurrentTurnAttachment struct {
 	Content        json.RawMessage
 }
 
-// ParseAttachmentFilepath splits `/{bucket}/{name}` the way pylon's
+// ParseAttachmentFilepath splits `/{bucket}/{name}` the way the legacy
 // parse_filepath does (legacy/plugins/elitea_core/utils/attachments.py:33-39):
 // strip ONE leading slash, then split on the FIRST remaining slash.
 //
@@ -151,17 +151,18 @@ func ParseAttachmentFilepath(filepath string) (CurrentTurnAttachmentRef, bool) {
 	return CurrentTurnAttachmentRef{Bucket: bucket, Name: name}, true
 }
 
-// AttachmentKind is pylon's `attachment_type`, which is NOT a MIME type: the
+// AttachmentKind is the legacy `attachment_type`, which is NOT a MIME type: the
 // column holds one of exactly "text", "image" or "document"
 // (utils/attachments.py:140-169 / :223 / :313 — the processor's own "type").
 //
 // "text" is unreachable from here on purpose, and that is a real difference
-// from pylon rather than an omission. Pylon picks TextToModelProcessor only
-// after it has already FETCHED the file's text (the processor raises without
-// `text` in additional_params), i.e. the classification is a by-product of
-// content extraction. This admission path extracts nothing (see
-// attachmentContentScaffold), so a text/code file is classified "document" —
-// the same value pylon gives it when extraction has not happened yet.
+// from the legacy runtime rather than an omission. It picks
+// TextToModelProcessor only after it has already FETCHED the file's text (the
+// processor raises without `text` in additional_params), i.e. the
+// classification is a by-product of content extraction. This admission path
+// extracts nothing (see attachmentContentScaffold), so a text/code file is
+// classified "document" — the same value the legacy runtime gives it when
+// extraction has not happened yet.
 //
 // The image/svg carve-out is shared with, not copied from, the upload path:
 // internal/api/v2/conversations/attachments.go's isImageAttachment delegates
@@ -210,9 +211,9 @@ func addressableObjectKey(key string) bool {
 // whether a file is read as prose must not vary by base image.
 //
 // `.svg` is deliberately ABSENT: it is an image by MIME and a document here,
-// which is pylon's own carve-out (utils/attachments.py:140-169) — it is markup,
-// so its text is worth extracting and it is not something a vision model
-// should be handed.
+// which is the legacy runtime's own carve-out (utils/attachments.py:140-169) —
+// it is markup, so its text is worth extracting and it is not something a
+// vision model should be handed.
 var attachmentImageExtensions = map[string]struct{}{
 	".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".webp": {},
 	".bmp": {}, ".tif": {}, ".tiff": {}, ".heic": {}, ".heif": {},
@@ -448,7 +449,7 @@ const minInlineAttachmentImageBytes = 4 << 10
 
 // attachmentImageChunk is the `{"type":"image_url"}` chunk both workers already
 // admit (`_ADMITTED_CHUNK_TYPES` / the `image_url` arm of
-// `validate_input_attachments`), in pylon's own ImageToModelProcessor shape
+// `validate_input_attachments`), in the legacy ImageToModelProcessor shape
 // (utils/attachments.py:183-225).
 //
 // It carries NO marker: the marker means "this file still needs reading", and
@@ -463,13 +464,13 @@ func attachmentImageChunk(dataURL string) map[string]any {
 // attachmentHeaderNote is the one sentence the header makes about the file's
 // content, and it must be TRUE on every runtime.
 //
-// It replaced pylon's three lines ("File content may be EMBEDDED in the next
-// message chunk ... the full text is already included ... File reading tools
-// are available if needed"). Those claimed a complete text and a file-reading
-// tool that the native runtime did not have, so a model shown only this header
-// answered about a PDF it had never read. Both workers now ALWAYS follow the
-// header with either the content (marked complete or partial) or a note that
-// says why the file could not be read
+// It replaced the legacy runtime's three lines ("File content may be EMBEDDED
+// in the next message chunk ... the full text is already included ... File
+// reading tools are available if needed"). Those claimed a complete text and a
+// file-reading tool that the native runtime did not have, so a model shown only
+// this header answered about a PDF it had never read. Both workers now ALWAYS
+// follow the header with either the content (marked complete or partial) or a
+// note that says why the file could not be read
 // (services/elitea-worker-rust/src/agents/attachments.rs,
 // services/elitea-worker-python/src/elitea_worker/agents/attachments.py), so
 // this sentence only points at that chunk and makes no promise of its own.
@@ -477,7 +478,7 @@ const attachmentHeaderNote = "NOTE: The next message chunk holds this file's con
 	"read it, or a note that says which part could not be read and why. " +
 	"Do not describe content that you were not shown."
 
-// attachmentContentScaffold is the creation-time `content` chunk, in pylon's
+// attachmentContentScaffold is the creation-time `content` chunk, in the legacy
 // shape (utils/attachments.py:288-320, DocumentToModelProcessor.process): a
 // JSON ARRAY of chunks, of which exactly one exists at creation time, naming
 // the bucket, the filename and the filepath.
@@ -485,15 +486,15 @@ const attachmentHeaderNote = "NOTE: The next message chunk holds this file's con
 // WHAT IS DELIBERATELY MISSING, so that nothing downstream mistakes this for a
 // complete payload:
 //
-//   - The extracted document TEXT. Pylon appends it as a SECOND chunk from a
-//     separate processing step that runs after the items are created
-//     (rpc/chat_all.py:369-377), reading each file through the SDK. That step
-//     runs in the WORKER, not here: an admission transaction must not perform
-//     IO against object storage while holding the runtime execution rows.
-//     Which chunks it must do that for is not something the worker can infer
-//     from the text, so the scaffold says so explicitly — see
+//   - The extracted document TEXT. The legacy runtime appends it as a SECOND
+//     chunk from a separate processing step that runs after the items are
+//     created (rpc/chat_all.py:369-377), reading each file through the SDK.
+//     That step runs in the WORKER, not here: an admission transaction must not
+//     perform IO against object storage while holding the runtime execution
+//     rows. Which chunks it must do that for is not something the worker can
+//     infer from the text, so the scaffold says so explicitly — see
 //     attachmentExtractionMarkerKey below.
-//   - For an image, pylon's ImageToModelProcessor also emits an `image_url`
+//   - For an image, the legacy ImageToModelProcessor also emits an `image_url`
 //     chunk (utils/attachments.py:183-225) carrying base64 bytes. Producing it
 //     requires reading the object, so an image gets the same single text chunk
 //     here.
@@ -501,7 +502,7 @@ const attachmentHeaderNote = "NOTE: The next message chunk holds this file's con
 // The scaffold is NOT an empty array. An empty array is what a caller writes
 // when it has computed the content and found none; this is a partial payload
 // that names where the file lives, and a later extraction step appending to it
-// is exactly what pylon does.
+// is exactly what the legacy runtime does.
 func attachmentContentScaffold(
 	ref CurrentTurnAttachmentRef,
 	kind, itemID string,
@@ -647,12 +648,12 @@ func currentTurnAttachmentsWithImages(
 //
 // WHY CONCATENATED AND FLAT, rather than one entry per file. This value has
 // exactly one consumer — the worker splices it into the human message's
-// multimodal content list — and one meaning to match: pylon builds the current
-// turn's message the same way its chat-history projection builds a prior turn's
-// (utils/chat_history.py:67-73 EXTENDS an attachment item's content list into
-// the group's content array). Nesting per-file would make the current turn and
-// every earlier turn two different shapes for the same thing, and the model
-// sees them side by side in one request.
+// multimodal content list — and one meaning to match: the legacy runtime builds
+// the current turn's message the same way its chat-history projection builds a
+// prior turn's (utils/chat_history.py:67-73 EXTENDS an attachment item's
+// content list into the group's content array). Nesting per-file would make the
+// current turn and every earlier turn two different shapes for the same thing,
+// and the model sees them side by side in one request.
 //
 // It is built from the CurrentTurnAttachment values the caller already holds —
 // the same slice the admission transaction is about to write — rather than

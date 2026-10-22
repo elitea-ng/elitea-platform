@@ -71,7 +71,7 @@ func TestResolveHonoursAStoredFalse(t *testing.T) {
 	}
 }
 
-// pylon's set_context_strategy flattens three summarization defaults into
+// The legacy set_context_strategy flattens three summarization defaults into
 // summary_llm_settings.
 func TestResolveFlattensTheSummarizationDefaults(t *testing.T) {
 	name := "gpt-4o-mini"
