@@ -71,9 +71,9 @@ const (
 
 // checkIndexingRuntimeEnv reads ELITEA_INDEXING_RUNTIME. Unset, empty and
 // "rust" are accepted. Anything else, in particular the retired "python"
-// (whose per-project pgvector index_meta store no worker reads any more), is
-// refused at startup: Rust-written indexes are invisible to that store, so a
-// deployment still pinned to it must be told rather than switched silently.
+// (whose per-project index_meta store is gone with #1359), is refused at
+// startup: a deployment still pinned to it must be told rather than switched
+// silently.
 func checkIndexingRuntimeEnv(lookup LookupEnv) error {
 	if lookup == nil {
 		return errors.New("runtime environment lookup is required")
@@ -181,8 +181,9 @@ type Config struct {
 
 	// VectorIntrospectionClients are the client certificate identities
 	// admitted to elitea.vector.v1.TokenIntrospectionService on the control
-	// listener (ELITEA_VECTOR_INTROSPECTION_CLIENTS, ADR-0031). Empty leaves
-	// the service unregistered.
+	// listener and on the platform listener (ELITEA_VECTOR_INTROSPECTION_CLIENTS,
+	// ADR-0031). Read with the runtime on or off; with it off the platform
+	// listener must be open. Empty leaves the service unregistered on both.
 	VectorIntrospectionClients []string
 	// EgressAuditClients are the egress proxy's client certificate
 	// identities admitted to elitea.runtime.v1.EgressAuditService on the
@@ -244,9 +245,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		if value, _ := lookup("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"); value != "" && value != "false" {
 			return Config{}, errors.New("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED requires ELITEA_RUNTIME_ENABLED=true")
 		}
-		if value, _ := lookup(VectorIntrospectionClientsEnv); strings.TrimSpace(value) != "" {
-			return Config{}, errors.New(VectorIntrospectionClientsEnv + " requires ELITEA_RUNTIME_ENABLED=true: the service is served on the runtime control listener")
-		}
 		if value, _ := lookup(EgressAuditClientsEnv); strings.TrimSpace(value) != "" {
 			return Config{}, errors.New(EgressAuditClientsEnv + " requires ELITEA_RUNTIME_ENABLED=true: the service is served on the runtime control listener")
 		}
@@ -258,7 +256,18 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-		return Config{PlatformAddress: address, PlatformTLS: platformTLS}, nil
+		// elitea-vector's token introspection needs no runtime plane either:
+		// with the runtime off it is served on the platform listener alone,
+		// so that listener must be open.
+		vectorClients, err := vectorIntrospectionClients(lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		if len(vectorClients) > 0 && address == "" {
+			return Config{}, errors.New(VectorIntrospectionClientsEnv +
+				" requires ELITEA_RUNTIME_ENABLED=true or ELITEA_RUNTIME_PLATFORM_ADDRESS: the service is served on the runtime control listener or the platform listener")
+		}
+		return Config{PlatformAddress: address, PlatformTLS: platformTLS, VectorIntrospectionClients: vectorClients}, nil
 	case "true":
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_ENABLED must be true or false")
@@ -476,21 +485,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 
 // RustIndexing reports that the deployment indexes at all, which since the
 // Python worker's removal always means natively: index ingest dispatch is on,
-// the index registry holds the metadata, elitea-vector holds the vectors, and
-// the project pgvector database is never provisioned or read.
+// the index registry holds the metadata and elitea-vector holds the vectors.
 func (c Config) RustIndexing() bool {
 	return c.IndexIngestDispatchEnabled
-}
-
-// ProjectVectorStoreProvisioned reports whether a created project gets a
-// pgvector role, database and `pgvector_configuration` (the provisioner's
-// project_pgvector step). Under the Rust indexing runtime it does not
-// (ADR-0031 decision 5): there is nothing to provision for, and requiring a
-// pgvector bootstrap would keep the per-project database the runtime retires.
-// The composition root then hands the provisioner no vector store, and the step
-// is skipped.
-func (c Config) ProjectVectorStoreProvisioned() bool {
-	return !c.RustIndexing()
 }
 
 func (c Config) Validate() error {

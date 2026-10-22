@@ -534,6 +534,9 @@ func writeCurrentConfigurationMutationServiceError(w http.ResponseWriter, err er
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Invalid configuration", field)
 		case configurationapp.CurrentConfigurationMutationUnknownType:
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Unknown configuration type", field)
+		case configurationapp.CurrentConfigurationMutationRetiredType:
+			writeCurrentConfigurationMutationError(
+				w, http.StatusBadRequest, configurationapp.RetiredPgvectorConfigurationMessage, field)
 		case configurationapp.CurrentConfigurationMutationNormalizationRequired:
 			writeCurrentConfigurationMutationError(
 				w,

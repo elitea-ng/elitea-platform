@@ -55,8 +55,8 @@
  * whose `Index` button dispatches a job that dies in the worker, with the
  * answer sitting unread in the same schema the form was built from, is the
  * "absence reads as correctness" failure in its user-facing form. The list
- * is dropped with it: the read goes to the project's PgVector store, which
- * for an unrunnable type has never been written to, so it can only ever
+ * is dropped with it: the read goes to the index registry, which for an
+ * unrunnable type has never been written to, so it can only ever
  * confirm the emptiness the sentence already explains.
  *
  * NOT hidden, though — see `../lib/helpers/indexesTabVisibility.ts` for why

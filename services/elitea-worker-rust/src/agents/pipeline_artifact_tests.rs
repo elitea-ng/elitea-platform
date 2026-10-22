@@ -91,8 +91,7 @@ fn artifact_pipeline_request(definition: &str) -> super::super::request::AgentEx
                 "bucket": "test",
                 "selected_tools": selected_tools,
                 "available_tools": selected_tools,
-                "embedding_model": "text-embedding-3-small",
-                "pgvector_configuration": {"private": false, "elitea_title": "elitea-pgvector"}
+                "embedding_model": "text-embedding-3-small"
             }
         }]),
     );

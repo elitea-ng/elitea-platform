@@ -40,6 +40,9 @@ const TOKEN_EXPIRED: &str = "token-expired";
 const TOKEN_SHORT: &str = "token-short";
 /// Project A's `DeepWiki` callback token (source `deepwiki` only).
 const TOKEN_A_WIKI: &str = "token-a-wiki";
+/// Inventory callback tokens of projects A and B (source `inventory` only).
+const TOKEN_A_INV: &str = "token-a-inv";
+const TOKEN_B_INV: &str = "token-b-inv";
 /// Memory callers (worker claim tokens with the `memory` source): two users of
 /// project A, the first again in a shared conversation, a claim naming no
 /// user, and the first user's id in project B.
@@ -228,6 +231,15 @@ fn wiki_grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
     }
 }
 
+/// An Inventory engine callback token: the entity-vector writer and reader.
+fn inventory_grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
+    TokenGrant {
+        kind: pb::TokenKind::EngineCallback,
+        sources: vec![pb::Source::Inventory],
+        ..grant(project_id, expires_at_unix)
+    }
+}
+
 fn oracle() -> Arc<dyn Introspector> {
     oracle_with_clock(Arc::new(unix_now))
 }
@@ -243,6 +255,14 @@ fn oracle_with_clock(clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Arc<dyn Intro
         (TOKEN_EXPIRED.to_owned(), grant(PROJECT_A, now - 1)),
         (TOKEN_SHORT.to_owned(), grant(PROJECT_A, now + 3)),
         (TOKEN_A_WIKI.to_owned(), wiki_grant(PROJECT_A, now + 3600)),
+        (
+            TOKEN_A_INV.to_owned(),
+            inventory_grant(PROJECT_A, now + 3600),
+        ),
+        (
+            TOKEN_B_INV.to_owned(),
+            inventory_grant(PROJECT_B, now + 3600),
+        ),
         (
             TOKEN_ALICE.to_owned(),
             memory_grant(PROJECT_A, "user:11", true, now + 3600),
@@ -590,6 +610,7 @@ impl Harness {
                     filter,
                     limit: 100,
                     score_threshold: None,
+                    offset: 0,
                 },
             ))
             .await
@@ -1163,6 +1184,7 @@ async fn range_presence_and_nested_conditions_match_like_qdrant() {
                     filter: Some(filter.clone()),
                     limit: 100,
                     score_threshold: None,
+                    offset: 0,
                 },
             ))
             .await
@@ -2411,7 +2433,7 @@ async fn an_existing_collection_without_indexes_gets_them_on_write_and_on_read()
 async fn the_collection_cap_refuses_a_new_space_but_not_an_existing_one() {
     let url = require_qdrant!();
     let mut h = harness_custom(oracle, |url| {
-        let present = emb_collections(url);
+        let present = owned_collections(url);
         (
             CollectionSettings {
                 max_collections: present + 1,
@@ -2466,10 +2488,10 @@ async fn the_collection_cap_refuses_a_new_space_but_not_an_existing_one() {
     .expect("an existing space is not a new collection");
 }
 
-/// The `emb_*` collections Qdrant holds now, counted the way the service
-/// counts them. `harness_custom`'s closure is synchronous, so this runs the
+/// The collections the service owns (`emb_*` and `inv_*`) that Qdrant holds
+/// now, counted the way the service counts them. `harness_custom`'s closure is synchronous, so this runs the
 /// async call on a helper thread.
-fn emb_collections(url: &str) -> usize {
+fn owned_collections(url: &str) -> usize {
     let qdrant = raw_qdrant(url);
     std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
@@ -2484,9 +2506,7 @@ fn emb_collections(url: &str) -> usize {
                     .collections
                     .into_iter()
                     .filter(|collection| {
-                        collection.name.starts_with("emb_")
-                            && elitea_vector::layout::Space::from_collection(&collection.name)
-                                .is_some()
+                        elitea_vector::layout::Space::from_collection(&collection.name).is_some()
                     })
                     .count()
             })
@@ -4486,4 +4506,639 @@ async fn the_same_toolkit_id_in_another_project_is_another_store() {
             .code(),
         Code::InvalidArgument
     );
+}
+
+// ── inventory ───────────────────────────────────────────────────────────────
+
+fn inventory_namespace(namespace_id: &str) -> pb::Namespace {
+    pb::Namespace {
+        source: pb::Source::Inventory as i32,
+        ..Harness::namespace(namespace_id)
+    }
+}
+
+fn inventory_scope(namespaces: &[&str]) -> pb::Scope {
+    pb::Scope {
+        source: pb::Source::Inventory as i32,
+        ..Harness::scope(namespaces)
+    }
+}
+
+/// The exact cosine similarity, in f64.
+fn exact_cosine(left: &[f32], right: &[f32]) -> f64 {
+    let dot: f64 = left
+        .iter()
+        .zip(right)
+        .map(|(l, r)| f64::from(*l) * f64::from(*r))
+        .sum();
+    let norm = |v: &[f32]| v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
+    dot / (norm(left) * norm(right))
+}
+
+/// What a collection was made with, read from Qdrant.
+struct MadeWith {
+    datatype: Option<i32>,
+    quantized: bool,
+    sparse: bool,
+}
+
+impl Harness {
+    fn inventory_collection(&self) -> String {
+        format!("inv_{}_{DIMENSION}", self.slug)
+    }
+
+    fn shared_collection(&self) -> String {
+        format!("emb_{}_{DIMENSION}", self.slug)
+    }
+
+    /// The points of `project` (and `source`, when given) in `collection`,
+    /// read from Qdrant directly.
+    async fn truth_in(&self, collection: &str, project: i64, source: Option<&str>) -> u64 {
+        let mut conditions = vec![qdrant_client::qdrant::Condition::matches(
+            "project_id",
+            project.to_string(),
+        )];
+        if let Some(source) = source {
+            conditions.push(qdrant_client::qdrant::Condition::matches(
+                "source",
+                source.to_owned(),
+            ));
+        }
+        self.qdrant
+            .count(
+                qdrant_client::qdrant::CountPointsBuilder::new(collection)
+                    .filter(qdrant_client::qdrant::Filter::must(conditions))
+                    .exact(true),
+            )
+            .await
+            .expect("count")
+            .result
+            .map_or(0, |result| result.count)
+    }
+
+    async fn made_with(&self, collection: &str) -> MadeWith {
+        let config = self
+            .qdrant
+            .collection_info(collection)
+            .await
+            .expect("collection info")
+            .result
+            .and_then(|info| info.config)
+            .expect("config");
+        let params = config.params.expect("params");
+        let dense = match params
+            .vectors_config
+            .and_then(|vectors| vectors.config)
+            .expect("vectors")
+        {
+            qdrant_client::qdrant::vectors_config::Config::ParamsMap(map) => map.map["dense"],
+            qdrant_client::qdrant::vectors_config::Config::Params(_) => {
+                panic!("named vectors expected")
+            }
+        };
+        MadeWith {
+            datatype: dense.datatype,
+            quantized: config.quantization_config.is_some() || dense.quantization_config.is_some(),
+            sparse: params
+                .sparse_vectors_config
+                .is_some_and(|sparse| !sparse.map.is_empty()),
+        }
+    }
+
+    async fn inventory_search(
+        &mut self,
+        token: &str,
+        scope: pb::Scope,
+        vector: [f32; 4],
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<pb::ScoredPoint>, tonic::Status> {
+        self.worker
+            .search(with_token(
+                token,
+                pb::SearchRequest {
+                    scope: Some(scope),
+                    space: Some(self.space()),
+                    vector: vector.to_vec(),
+                    limit,
+                    offset,
+                    ..pb::SearchRequest::default()
+                },
+            ))
+            .await
+            .map(|response| response.into_inner().points)
+    }
+
+    /// Project A's wiki and A's and B's Inventory, in one space and under one
+    /// namespace id.
+    async fn seed_inventory(&mut self) -> Vec<(String, [f32; 4])> {
+        let entities: Vec<(String, [f32; 4])> = vec![
+            ("entity-1".to_owned(), [0.9, 0.1, 0.0, 0.0]),
+            ("entity-2".to_owned(), [0.3, 0.7, 0.123_456_7, 0.0]),
+            ("entity-3".to_owned(), [0.123_456_7, 0.765_432_1, 0.5, 0.25]),
+        ];
+        let points = |prefix: &str| {
+            entities
+                .iter()
+                .map(|(key, vector)| {
+                    Harness::point(
+                        &format!("{prefix}{key}"),
+                        &format!("{prefix}{key}"),
+                        *vector,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let wiki = self
+            .upsert(
+                TOKEN_A_WIKI,
+                0,
+                wiki_namespace(NAMESPACE_A),
+                points("wiki-"),
+            )
+            .await
+            .expect("wiki upsert");
+        assert_eq!(wiki.collection, self.shared_collection());
+        let a = self
+            .upsert(TOKEN_A_INV, 0, inventory_namespace(NAMESPACE_A), points(""))
+            .await
+            .expect("inventory upsert a");
+        assert_eq!(a.collection, self.inventory_collection());
+        assert_eq!(a.upserted, 3);
+        let b = self
+            .upsert(
+                TOKEN_B_INV,
+                0,
+                inventory_namespace(NAMESPACE_A),
+                points("b-"),
+            )
+            .await
+            .expect("inventory upsert b");
+        assert_eq!(b.collection, self.inventory_collection());
+        entities
+    }
+}
+
+/// Inventory points go to their own float32, unquantized, BM25-less
+/// collection; the shared sources stay in the float16, quantized one; and
+/// neither ever holds the other's points. Scores are the exact cosine.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario: write, inspect, read back.
+async fn inventory_writes_use_a_float32_collection_without_quantization() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let entities = h.seed_inventory().await;
+    let inventory = h.inventory_collection();
+    let shared = h.shared_collection();
+
+    let made = h.made_with(&inventory).await;
+    assert!(
+        matches!(
+            made.datatype.map(qdrant_client::qdrant::Datatype::try_from),
+            None | Some(Ok(
+                qdrant_client::qdrant::Datatype::Float32 | qdrant_client::qdrant::Datatype::Default
+            ))
+        ),
+        "inventory is float32: {:?}",
+        made.datatype
+    );
+    assert!(!made.quantized, "inventory is not quantized");
+    assert!(!made.sparse, "inventory has no BM25 vector");
+    let made = h.made_with(&shared).await;
+    assert_eq!(
+        made.datatype,
+        Some(qdrant_client::qdrant::Datatype::Float16 as i32),
+        "the shared family stays float16"
+    );
+    assert!(made.quantized && made.sparse);
+
+    // Each collection holds its own family's points only.
+    assert_eq!(
+        h.truth_in(&inventory, PROJECT_A, Some("inventory")).await,
+        3
+    );
+    assert_eq!(h.truth_in(&inventory, PROJECT_A, None).await, 3);
+    assert_eq!(h.truth_in(&inventory, PROJECT_B, None).await, 3);
+    assert_eq!(h.truth_in(&shared, PROJECT_A, Some("deepwiki")).await, 3);
+    assert_eq!(h.truth_in(&shared, PROJECT_A, Some("inventory")).await, 0);
+
+    // A reads A's inventory only, with the exact cosine scores, in order.
+    let query = [0.5, 0.5, 0.1, 0.0];
+    let found = h
+        .inventory_search(TOKEN_A_INV, inventory_scope(&[NAMESPACE_A]), query, 10, 0)
+        .await
+        .expect("search");
+    only_project(&found, PROJECT_A);
+    assert_eq!(found.len(), 3);
+    for point in &found {
+        assert_eq!(point.source, pb::Source::Inventory as i32);
+        let vector = entities
+            .iter()
+            .find(|(key, _)| *key == point.document_key)
+            .map(|(_, vector)| vector)
+            .expect("an entity of A");
+        let expected = exact_cosine(&query, vector);
+        assert!(
+            (f64::from(point.score) - expected).abs() < 1e-6,
+            "{}: {} vs exact {expected}",
+            point.document_key,
+            point.score
+        );
+        assert_eq!(point.dense_score, Some(point.score));
+    }
+    assert!(found.windows(2).all(|pair| pair[0].score >= pair[1].score));
+
+    // Count, list and the document listing see A's inventory alone.
+    let counted = h
+        .worker
+        .count(with_token(
+            TOKEN_A_INV,
+            pb::CountRequest {
+                scope: Some(inventory_scope(&[NAMESPACE_A])),
+                // This test's collection: other tests' collections hold
+                // points under the same projects and namespace id.
+                space: Some(h.space()),
+                ..pb::CountRequest::default()
+            },
+        ))
+        .await
+        .expect("count")
+        .into_inner()
+        .count;
+    assert_eq!(counted, 3);
+    let documents = h
+        .worker
+        .list_documents(with_token(
+            TOKEN_A_INV,
+            pb::ListDocumentsRequest {
+                namespace: Some(inventory_namespace(NAMESPACE_A)),
+                ..pb::ListDocumentsRequest::default()
+            },
+        ))
+        .await
+        .expect("documents")
+        .into_inner()
+        .message()
+        .await
+        .expect("page")
+        .expect("a page")
+        .documents;
+    let keys: Vec<&str> = documents.iter().map(|d| d.document_key.as_str()).collect();
+    assert_eq!(keys, ["entity-1", "entity-2", "entity-3"]);
+    assert_eq!(
+        h.listed_sources(TOKEN_A_INV).await,
+        vec![pb::Source::Inventory as i32],
+        "an inventory token lists inventory, by default"
+    );
+    // An administrator's default listing has both families, each source in
+    // its own collection only.
+    let listed = h
+        .admin
+        .list_indexes(pb::ListIndexesRequest {
+            project_id: PROJECT_A,
+            source: 0,
+        })
+        .await
+        .expect("admin list")
+        .into_inner()
+        .indexes;
+    let mine: Vec<(String, i32)> = listed
+        .into_iter()
+        .filter(|index| index.collection == inventory || index.collection == shared)
+        .map(|index| (index.collection, index.source))
+        .collect();
+    assert_eq!(
+        mine,
+        vec![
+            (shared.clone(), pb::Source::Deepwiki as i32),
+            (inventory.clone(), pb::Source::Inventory as i32),
+        ]
+    );
+
+    // The wiki search does not see inventory, and the inventory search not
+    // the wiki.
+    let wiki = h
+        .search(TOKEN_A_WIKI, wiki_scope(&[NAMESPACE_A]), None)
+        .await
+        .expect("wiki search");
+    assert!(wiki.iter().all(|p| p.source == pb::Source::Deepwiki as i32));
+    assert_eq!(wiki.len(), 3);
+}
+
+/// An Inventory search reads its whole depth in one call (one exact scan);
+/// a shared-family search keeps its 1000-result bound, and the depth bound
+/// holds for both.
+#[tokio::test]
+async fn an_inventory_search_reads_its_whole_depth_in_one_call() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_inventory().await;
+    let query = [0.5, 0.5, 0.1, 0.0];
+    let found = h
+        .inventory_search(
+            TOKEN_A_INV,
+            inventory_scope(&[NAMESPACE_A]),
+            query,
+            10_000,
+            0,
+        )
+        .await
+        .expect("a whole-depth inventory search");
+    assert_eq!(found.len(), 3);
+    for (limit, offset) in [(10_001, 0), (10_000, 1)] {
+        let refused = h
+            .inventory_search(
+                TOKEN_A_INV,
+                inventory_scope(&[NAMESPACE_A]),
+                query,
+                limit,
+                offset,
+            )
+            .await
+            .expect_err("past the bound");
+        assert_eq!(refused.code(), Code::InvalidArgument, "{limit}+{offset}");
+    }
+    let refused = h
+        .worker
+        .search(with_token(
+            TOKEN_A_WIKI,
+            pb::SearchRequest {
+                scope: Some(wiki_scope(&[NAMESPACE_A])),
+                space: Some(h.space()),
+                vector: query.to_vec(),
+                limit: 1001,
+                ..pb::SearchRequest::default()
+            },
+        ))
+        .await
+        .expect_err("a shared-family search keeps its bound");
+    assert_eq!(refused.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn hybrid_search_on_inventory_is_refused() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_inventory().await;
+    let status = h
+        .worker
+        .hybrid_search(with_token(
+            TOKEN_A_INV,
+            pb::HybridSearchRequest {
+                scope: Some(inventory_scope(&[NAMESPACE_A])),
+                space: Some(h.space()),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                text: "entity".to_owned(),
+                limit: 10,
+                ..pb::HybridSearchRequest::default()
+            },
+        ))
+        .await
+        .expect_err("hybrid on inventory");
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert!(status.message().contains("hybrid"), "{status:?}");
+}
+
+/// The source gate and the project scope hold for Inventory as for every
+/// other source: no other source's token reaches it, it reaches no other
+/// source, and project B cannot read, count, list, overwrite or delete A's
+/// entities, with a forged project field or without.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario, every RPC in turn.
+async fn inventory_is_isolated_by_source_and_by_project() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_inventory().await;
+    let inventory = h.inventory_collection();
+
+    // Other sources' tokens cannot name inventory, nor inventory theirs.
+    for token in [TOKEN_A, TOKEN_A_WIKI] {
+        h.assert_source_refused(
+            token,
+            inventory_namespace(NAMESPACE_A),
+            inventory_scope(&[NAMESPACE_A]),
+        )
+        .await;
+    }
+    h.assert_source_refused(
+        TOKEN_A_INV,
+        wiki_namespace(NAMESPACE_A),
+        wiki_scope(&[NAMESPACE_A]),
+    )
+    .await;
+    h.assert_source_refused(
+        TOKEN_A_INV,
+        Harness::namespace(NAMESPACE_A),
+        Harness::scope(&[NAMESPACE_A]),
+    )
+    .await;
+    assert_eq!(h.truth_in(&inventory, PROJECT_A, None).await, 3);
+
+    // B, under A's namespace id, reads only its own entities.
+    let found = h
+        .inventory_search(
+            TOKEN_B_INV,
+            inventory_scope(&[NAMESPACE_A]),
+            [1.0, 0.0, 0.0, 0.0],
+            100,
+            0,
+        )
+        .await
+        .expect("b search");
+    only_project(&found, PROJECT_B);
+    assert!(found.iter().all(|p| p.document_key.starts_with("b-")));
+    let counted = h
+        .worker
+        .count(with_token(
+            TOKEN_B_INV,
+            pb::CountRequest {
+                scope: Some(inventory_scope(&[NAMESPACE_A])),
+                // This test's collection: other tests' collections hold
+                // points under the same projects and namespace id.
+                space: Some(h.space()),
+                ..pb::CountRequest::default()
+            },
+        ))
+        .await
+        .expect("b count")
+        .into_inner()
+        .count;
+    assert_eq!(counted, 3, "B counts its own three");
+
+    // A forged project field is refused everywhere.
+    let forged = pb::Scope {
+        project_id: PROJECT_A,
+        ..inventory_scope(&[NAMESPACE_A])
+    };
+    let status = h
+        .inventory_search(TOKEN_B_INV, forged.clone(), [1.0, 0.0, 0.0, 0.0], 10, 0)
+        .await
+        .expect_err("forged search");
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let status = h
+        .worker
+        .count(with_token(
+            TOKEN_B_INV,
+            pb::CountRequest {
+                scope: Some(forged),
+                ..pb::CountRequest::default()
+            },
+        ))
+        .await
+        .expect_err("forged count");
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let status = h
+        .upsert(
+            TOKEN_B_INV,
+            PROJECT_A,
+            inventory_namespace(NAMESPACE_A),
+            vec![Harness::point(
+                "entity-1",
+                "overwritten",
+                [0.0, 0.0, 1.0, 0.0],
+            )],
+        )
+        .await
+        .expect_err("forged upsert");
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let whole = |project_id: i64| pb::DeleteRequest {
+        project_id,
+        space: None,
+        namespace: Some(inventory_namespace(NAMESPACE_A)),
+        selector: Some(pb::delete_request::Selector::WholeNamespace(
+            pb::WholeNamespace {},
+        )),
+    };
+    let status = h
+        .worker
+        .delete(with_token(TOKEN_B_INV, whole(PROJECT_A)))
+        .await
+        .expect_err("forged delete");
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let status = h
+        .worker
+        .list_indexes(with_token(
+            TOKEN_B_INV,
+            pb::ListIndexesRequest {
+                project_id: PROJECT_A,
+                source: pb::Source::Inventory as i32,
+            },
+        ))
+        .await
+        .expect_err("forged list");
+    assert_eq!(status.code(), Code::PermissionDenied);
+
+    // B's own delete of "the same" namespace removes B's entities only.
+    h.worker
+        .delete(with_token(TOKEN_B_INV, whole(0)))
+        .await
+        .expect("b delete");
+    assert_eq!(h.truth_in(&inventory, PROJECT_B, None).await, 0);
+    assert_eq!(h.truth_in(&inventory, PROJECT_A, None).await, 3);
+
+    // DropProject spans the inventory family too.
+    h.admin
+        .drop_project(pb::DropProjectRequest {
+            project_id: PROJECT_A,
+        })
+        .await
+        .expect("drop a");
+    assert_eq!(h.truth_in(&inventory, PROJECT_A, None).await, 0);
+    assert_eq!(h.truth_in(&h.shared_collection(), PROJECT_A, None).await, 0);
+}
+
+/// Pages of a search are disjoint, ordered, and together equal the one-shot
+/// ranking, ties included; for the exact family and the shared one (whose
+/// deeper pages read their payloads separately).
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Both families, one scenario.
+async fn offset_paging_returns_disjoint_ordered_pages() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    // 23 entities; groups of identical vectors make exact score ties that
+    // straddle the page cuts.
+    #[allow(clippy::cast_precision_loss)]
+    let points: Vec<pb::Point> = (0..23_u32)
+        .map(|index| {
+            let group = (index / 4) as f32;
+            Harness::point(
+                &format!("entity-{index:02}"),
+                &format!("entity {index}"),
+                [1.0, group * 0.25, 0.1, 0.0],
+            )
+        })
+        .collect();
+    h.upsert(
+        TOKEN_A_INV,
+        0,
+        inventory_namespace(NAMESPACE_A),
+        points.clone(),
+    )
+    .await
+    .expect("inventory upsert");
+    h.upsert(TOKEN_A, 0, Harness::namespace(NAMESPACE_A), points)
+        .await
+        .expect("toolkit upsert");
+    let query = [1.0, 0.0, 0.1, 0.0];
+
+    for (token, scope) in [
+        (TOKEN_A_INV, inventory_scope(&[NAMESPACE_A])),
+        (TOKEN_A, Harness::scope(&[NAMESPACE_A])),
+    ] {
+        let mut whole_ranking = None;
+        // The one-shot ranking, read twice: the same answer every time.
+        for _ in 0..2 {
+            let all = h
+                .inventory_search(token, scope.clone(), query, 23, 0)
+                .await
+                .expect("one shot");
+            assert_eq!(all.len(), 23, "{token}");
+            if let Some(previous) = &whole_ranking {
+                assert_eq!(&all, previous, "{token}: the ranking is stable");
+            }
+            whole_ranking = Some(all);
+        }
+        let whole_ranking = whole_ranking.expect("ranking");
+        for pair in whole_ranking.windows(2) {
+            assert!(
+                pair[0].score > pair[1].score
+                    || (pair[0].score.total_cmp(&pair[1].score).is_eq() && pair[0].id < pair[1].id),
+                "{token}: score desc, then id: {pair:?}"
+            );
+        }
+        for size in [1_u32, 3, 4, 5, 7] {
+            let mut paged = Vec::new();
+            let mut offset = 0;
+            loop {
+                let page = h
+                    .inventory_search(token, scope.clone(), query, size, offset)
+                    .await
+                    .expect("page");
+                assert!(page.len() <= size as usize);
+                if page.is_empty() {
+                    break;
+                }
+                // A deeper page carries its payload like the first.
+                for point in &page {
+                    assert_eq!(point.project_id, PROJECT_A);
+                    assert!(!point.text.is_empty() && !point.document_key.is_empty());
+                }
+                offset += size;
+                paged.extend(page);
+            }
+            assert_eq!(paged, whole_ranking, "{token}: pages of {size}");
+            let ids: HashSet<&str> = paged.iter().map(|p| p.id.as_str()).collect();
+            assert_eq!(ids.len(), paged.len(), "{token}: disjoint pages of {size}");
+        }
+        let status = h
+            .inventory_search(token, scope.clone(), query, 1000, 9001)
+            .await
+            .expect_err("too deep");
+        assert_eq!(status.code(), Code::InvalidArgument);
+        let deepest = h
+            .inventory_search(token, scope.clone(), query, 1000, 9000)
+            .await
+            .expect("at the bound");
+        assert_eq!(deepest, [] as [elitea_vector::pb::ScoredPoint; 0]);
+    }
 }

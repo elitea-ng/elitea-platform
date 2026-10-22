@@ -35,7 +35,11 @@ use super::{Context, prepare_arguments};
 use crate::cgroup::Cgroup;
 use crate::config::{ConfigError, Settings};
 use crate::errors::{EngineError, ErrorType};
-use crate::storage::build::{delete_build, new_boot_id, process_boot_id};
+use crate::storage::build::{
+    delete_build, new_boot_id, process_boot_id, record_stale_generation,
+    sweep_stale_generations_logged,
+};
+use crate::storage::dense::{DenseAccess, DenseIndex};
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use std::os::unix::fs::DirBuilderExt;
@@ -170,6 +174,9 @@ struct JobGuard {
     /// The build the child reported and the parent has not deleted yet.
     build: Option<String>,
     pool: PgPool,
+    /// Where the child's build wrote its vectors: a left build's
+    /// generation is deleted with it.
+    dense: Option<DenseIndex>,
 }
 
 impl JobGuard {
@@ -201,8 +208,9 @@ impl Drop for JobGuard {
             match tokio::runtime::Handle::try_current() {
                 Ok(handle) => {
                     let pool = self.pool.clone();
+                    let dense = self.dense.clone();
                     handle.spawn(async move {
-                        delete_left_build(&pool, &build).await;
+                        delete_left_build(&pool, &build, dense.as_ref()).await;
                     });
                 }
                 Err(_) => {
@@ -213,15 +221,44 @@ impl Drop for JobGuard {
     }
 }
 
-/// Delete the build a child left, logging the outcome. Whether the build
-/// was still there (`None` when the delete failed).
-async fn delete_left_build(pool: &PgPool, build_id: &str) -> Option<bool> {
+/// Delete the build a child left, and its vector generation, logging the
+/// outcome. Whether the build was still there (`None` when the delete
+/// failed). A build that is gone was published (its generation is live) or
+/// abandoned (the child deleted its generation): its vectors are not
+/// touched.
+async fn delete_left_build(
+    pool: &PgPool,
+    build_id: &str,
+    dense: Option<&DenseIndex>,
+) -> Option<bool> {
     match delete_build(pool, build_id).await {
-        Ok(true) => {
+        Ok(Some(key)) => {
             tracing::info!(build = %build_id, "deleted the build the wiki worker left");
+            // With the invocation's bearer at hand, the project's other
+            // stale generations go too (a never-published wiki's abandoned
+            // builds included).
+            let deleted = match dense {
+                Some(store) => match store
+                    .delete_generations(&key, vec![build_id.to_owned()])
+                    .await
+                {
+                    Ok(()) => {
+                        sweep_stale_generations_logged(pool, store, key.project()).await;
+                        true
+                    }
+                    Err(error) => {
+                        tracing::warn!(build = %build_id, %error, "could not delete the left build's vectors; the project's next publish removes them");
+                        false
+                    }
+                },
+                None => false,
+            };
+            if !deleted && let Err(error) = record_stale_generation(pool, &key, build_id).await {
+                tracing::warn!(build = %build_id, %error, "could not record the left build's vector generation");
+            }
             Some(true)
         }
-        Ok(false) => Some(false),
+        Ok(None) => Some(false),
         Err(error) => {
             tracing::warn!(build = %build_id, %error, "could not delete the wiki worker's build; the sweep removes it");
             None
@@ -318,6 +355,17 @@ impl NativeRunner {
             embedding_options: crate::llm::EmbeddingOptions::from(&self.settings.model),
             limits,
             clock: crate::ask::agent::Clock::System,
+            // Without a usable elitea-vector the questions are answered
+            // lexically (search::search_dense degrades the same way when
+            // the store does not answer).
+            dense: match DenseAccess::resolve(self.settings.vector.as_ref(), arguments) {
+                DenseAccess::Ready(index) => Some(index),
+                DenseAccess::Off => None,
+                DenseAccess::Missing(why) => {
+                    tracing::warn!(tool, %why, "elitea-vector cannot be used; answering with the lexical search only");
+                    None
+                }
+            },
         };
         crate::ask::run_tool(tool, arguments, &deps, None, context).await
     }
@@ -348,6 +396,7 @@ impl NativeRunner {
                 &self.pool,
                 &self.settings.publish,
                 self.settings.build_stale_after,
+                DenseAccess::resolve(self.settings.vector.as_ref(), &arguments),
                 &context.stop_signal(),
             )
             .await;
@@ -384,6 +433,9 @@ impl NativeRunner {
             directory: Some(directory.clone()),
             build: None,
             pool: self.pool.clone(),
+            dense: DenseAccess::resolve(self.settings.vector.as_ref(), &arguments)
+                .index()
+                .cloned(),
         };
         let outcome = self
             .supervise(&directory, arguments, context, &mut guard)
@@ -567,7 +619,7 @@ impl NativeRunner {
         // Whether the build was still there: `Some(false)` after a
         // committed publish (it deletes the build) or an abandon.
         let build_left = match guard.build.take() {
-            Some(build_id) => delete_left_build(&self.pool, &build_id).await,
+            Some(build_id) => delete_left_build(&self.pool, &build_id, guard.dense.as_ref()).await,
             None => None,
         };
         match (last, stopped) {
@@ -835,6 +887,7 @@ mod tests {
             "ELITEA_DEEPWIKI_DATABASE_URL" => Some("postgresql://u:p@127.0.0.1:1/x".to_owned()),
             "ELITEA_DEEPWIKI_BUILD_OWNER" => Some("unit".to_owned()),
             "ELITEA_DEEPWIKI_MODEL_SERVICE_URL" => Some("https://elitea-main:9446".to_owned()),
+            "ELITEA_DEEPWIKI_VECTOR_URL" => Some("https://elitea-vector:9470".to_owned()),
             "ELITEA_DEEPWIKI_SCRATCH_PATH" => Some(scratch.clone()),
             _ => None,
         })

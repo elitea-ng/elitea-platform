@@ -99,6 +99,16 @@ each once.
 {{- printf "%s:%v" .Values.vector.service.name .Values.vector.service.port -}}
 {{- end }}
 
+{{/*
+elitea-vector's origin as the DeepWiki and Inventory engines dial it
+(ELITEA_<APP>_VECTOR_URL): https://<service>:<port>. The host is the Service
+name, which the server certificate's first DNS SAN names, so the engines need
+no ELITEA_<APP>_VECTOR_SERVER_NAME.
+*/}}
+{{- define "elitea-vector.origin" -}}
+{{- printf "https://%s:%v" .Values.vector.service.name .Values.vector.service.port -}}
+{{- end }}
+
 {{/* Qdrant's gRPC URL, as elitea-vector dials it. */}}
 {{- define "elitea-vector.qdrantUrl" -}}
 {{- if eq (.Values.vector.qdrant.mode | toString) "external" -}}

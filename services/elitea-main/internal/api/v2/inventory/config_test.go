@@ -31,8 +31,8 @@ func TestAnUnsetEnvironmentIsFailClosedRatherThanPermissive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CallbackTokenTTL != 2*time.Hour {
-		t.Errorf("token lifetime %v, want the two-hour default", cfg.CallbackTokenTTL)
+	if cfg.CallbackTokenTTL != inventory.DefaultCallbackTokenTTL {
+		t.Errorf("token lifetime %v, want the eight-hour default", cfg.CallbackTokenTTL)
 	}
 	if len(cfg.SourceTypes) != len(inventory.DefaultSourceTypes) {
 		t.Errorf("source types %v, want the default %v", cfg.SourceTypes, inventory.DefaultSourceTypes)
@@ -53,7 +53,7 @@ func TestANilLookupReadsTheProcessEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CallbackTokenTTL != 2*time.Hour {
+	if cfg.CallbackTokenTTL != inventory.DefaultCallbackTokenTTL {
 		t.Fatalf("token lifetime %v", cfg.CallbackTokenTTL)
 	}
 }

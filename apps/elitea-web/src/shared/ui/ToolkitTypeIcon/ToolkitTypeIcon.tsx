@@ -59,7 +59,6 @@ import { LlmIcon } from '../icons/llm-icon';
 import { McpIcon } from '../icons/mcp-icon';
 import { MemoryIcon } from '../icons/memory-icon';
 import { OllamaIcon } from '../icons/ollama-icon';
-import { PostgreSqlIcon } from '../icons/postgre-sql-icon';
 import { PostmanIcon } from '../icons/postman-icon';
 import { PptxIcon } from '../icons/pptx-icon';
 import { QtestIcon } from '../icons/qtest-icon';
@@ -108,7 +107,6 @@ const TOOLKIT_TYPE_ICONS: Readonly<Record<string, SvgIconComponent>> = {
   ollama: OllamaIcon,
   open_api: CodeIcon,
   openapi: CodeIcon,
-  pgvector: PostgreSqlIcon,
   pipeline: FlowIcon,
   postman: PostmanIcon,
   pptx: PptxIcon,

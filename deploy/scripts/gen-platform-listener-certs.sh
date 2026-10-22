@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Generate the local mTLS material for elitea-main's platform gRPC listener
-# (:9446, #1359) on a stack WITHOUT the runtime plane — the E2E stack.
+# (:9446, #1359) on a stack WITHOUT the runtime plane: the E2E stack, and the
+# dev stack's `deepwiki` profile (deploy/docker-compose.yml).
 #
 # The sub-application hosts store their artifacts through
 # elitea.runtime.v1.ArtifactObjectService on that listener (#1359 U5). On the
-# runtime stacks the runtime CA (gen-runtime-certs.sh) signs both ends; the E2E
-# stack has no runtime CA, so this issues the two certificates off the shared
+# runtime stacks the runtime CA (gen-runtime-certs.sh) signs both ends; these
+# stacks have no runtime CA, so this issues the two certificates off the shared
 # provider CA (deploy/certs/ca.{crt,key}, created by gen-deepwiki-certs.sh or
 # gen-inventory-certs.sh — run one of them first):
 #
@@ -13,6 +14,20 @@
 #   deploy/certs/subapp-callback.{crt,key}  — presented by the hosts
 #                                              (DNS:elitea-subapp-callback, the
 #                                              identity elitea-main admits)
+#
+# and, for the dev stack's elitea-vector (ADR-0031; the `deepwiki` profile of
+# deploy/docker-compose.yml), off the same CA:
+#
+#   deploy/certs/vector-server.{crt,key}       — served by elitea-vector and
+#                                                presented to elitea-main's
+#                                                introspection (DNS:elitea-vector,
+#                                                serverAuth + clientAuth)
+#   deploy/certs/vector-main-client.{crt,key}  — elitea-main's administrator
+#                                                client (DNS:elitea-main, clientAuth)
+#   deploy/certs/qdrant-api-key                — Qdrant's API key (random)
+#
+# Distinct names from gen-vector-certs.sh's deploy/certs/vector/, which the
+# runtime CA signs for docker-compose.standalone-full.yml.
 #
 # Idempotent: regenerates only what is missing or expires within 24h.
 set -euo pipefail
@@ -48,8 +63,17 @@ issue() {
 
 issue platform-server elitea-main "${PLATFORM_CERT_SANS:-DNS:elitea-main,DNS:localhost,IP:127.0.0.1}" serverAuth
 issue subapp-callback elitea-subapp-callback "DNS:elitea-subapp-callback" clientAuth
+issue vector-server elitea-vector "DNS:elitea-vector" serverAuth,clientAuth
+issue vector-main-client elitea-main "DNS:elitea-main" clientAuth
+
+if [ ! -s "$CERT_DIR/qdrant-api-key" ]; then
+  echo "→ generating qdrant-api-key"
+  printf '%s' "$(openssl rand -hex 32)" > "$CERT_DIR/qdrant-api-key"
+fi
 
 # World-readable: throwaway local material read by containers of several uids
-# (elitea-main nonroot, the hosts 65532), in a gitignored directory.
-chmod 644 "$CERT_DIR"/platform-server.* "$CERT_DIR"/subapp-callback.*
+# (elitea-main nonroot, the hosts 65532, elitea-vector and qdrant), in a
+# gitignored directory.
+chmod 644 "$CERT_DIR"/platform-server.* "$CERT_DIR"/subapp-callback.* \
+  "$CERT_DIR"/vector-server.* "$CERT_DIR"/vector-main-client.* "$CERT_DIR"/qdrant-api-key
 echo "→ Done. Platform listener material in $CERT_DIR"

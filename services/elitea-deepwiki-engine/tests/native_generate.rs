@@ -2,8 +2,9 @@
 //! real Unix socket, `generate_wiki` in the real worker CHILD process (this
 //! crate's binary, `worker` subcommand), a real repository cloned from
 //! `git http-backend` on loopback, a mock OpenAI-compatible gateway (the
-//! e2e stub's answers, deterministic stand-in embeddings), and PostgreSQL
-//! with pgvector.
+//! e2e stub's answers, deterministic stand-in embeddings), PostgreSQL, and
+//! elitea-vector's in-process fake (`FakeVector`) on loopback for the dense
+//! vectors.
 //!
 //! * a whole run: the result against the frozen generation contract, the
 //!   published index rows, the artifacts, the progress, the clean-up;
@@ -23,6 +24,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use elitea_deepwiki_engine::config::Settings;
+use elitea_deepwiki_engine::config::VectorSettings;
 use elitea_deepwiki_engine::graph::topology::replay::standin_embedding;
 use elitea_deepwiki_engine::runner::Runner;
 use elitea_deepwiki_engine::runner::native::{
@@ -30,11 +32,13 @@ use elitea_deepwiki_engine::runner::native::{
 };
 use elitea_deepwiki_engine::server;
 use elitea_deepwiki_engine::storage::build::WikiRecord;
+use elitea_deepwiki_engine::storage::dense::{self, DenseIndex};
 use elitea_deepwiki_engine::storage::search::IndexReader;
 use elitea_deepwiki_engine::wiki::parity::stub_answer;
 use elitea_engine_sidecar::client::{EngineClient, event_json};
 use elitea_platform_rpc::pb::artifact_object_service_server::ArtifactObjectServiceServer;
 use elitea_platform_rpc::testing::FakeArtifactStore;
+use elitea_vector_index::testing::FakeVector;
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -368,14 +372,29 @@ struct Engine {
     socket: PathBuf,
     scratch: PathBuf,
     stop: Option<oneshot::Sender<()>>,
+    /// elitea-vector's fake, admitting the invocation's callback bearer for
+    /// the host's project.
+    vectors: FakeVector,
+    vector_url: String,
 }
 
+/// The callback bearer the host's arguments carry (`llm_settings.api_key`).
+const BEARER: &str = "mock-callback-bearer";
+
 impl Engine {
-    fn start(root: &Path, database: &str, gateway_port: u16) -> Self {
-        Self::start_with(root, database, gateway_port, &[])
+    async fn start(root: &Path, database: &str, gateway_port: u16) -> Self {
+        Self::start_with(root, database, gateway_port, &[]).await
     }
 
-    fn start_with(root: &Path, database: &str, gateway_port: u16, extra: &[(&str, &str)]) -> Self {
+    async fn start_with(
+        root: &Path,
+        database: &str,
+        gateway_port: u16,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let vectors = FakeVector::new(&[(BEARER, i64::from(storage_common::PROJECT))]);
+        let (address, _served) = vectors.clone().serve().await.unwrap();
+        let vector_url = format!("http://{address}");
         let scratch = root.join("scratch");
         let mut environment: Vec<(String, String)> = [
             ("ELITEA_DEEPWIKI_RUNNER", "native".to_owned()),
@@ -395,6 +414,8 @@ impl Engine {
                 "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
                 format!("http://127.0.0.1:{gateway_port}"),
             ),
+            // elitea-vector, plaintext on loopback.
+            ("ELITEA_DEEPWIKI_VECTOR_URL", vector_url.clone()),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))
@@ -424,7 +445,24 @@ impl Engine {
             socket,
             scratch,
             stop: Some(stop),
+            vectors,
+            vector_url,
         }
+    }
+
+    /// The dense store a reader of this engine's wikis searches.
+    #[allow(clippy::unnecessary_wraps)] // as `with_dense` takes it
+    fn dense(&self) -> Option<DenseIndex> {
+        let client = dense::connect(&VectorSettings {
+            url: self.vector_url.clone(),
+            server_name: None,
+            ca_file: None,
+            ca_setting: "",
+            identity: None,
+            insecure_loopback: true,
+        })
+        .unwrap();
+        Some(DenseIndex::remote(client, BEARER))
     }
 
     async fn client(&self) -> EngineClient {
@@ -478,7 +516,7 @@ fn arguments(git_port: u16, gateway_port: u16) -> Value {
         "query": "Document the notes service",
         "llm_settings": {
             "api_base": format!("http://127.0.0.1:{gateway_port}/llm/v1"),
-            "api_key": "mock-callback-bearer",
+            "api_key": BEARER,
             "organization": "42",
             "model_name": "gpt-4o",
         },
@@ -539,7 +577,7 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     let (served, commit) = served_repository(&root);
     let git_port = serve_git(served).await;
     let (gateway_port, gateway) = serve_gateway(false).await;
-    let engine = Engine::start(&root, "native_generate", gateway_port);
+    let engine = Engine::start(&root, "native_generate", gateway_port).await;
     assert_eq!(
         engine.health().await,
         json!({
@@ -731,11 +769,25 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     assert!(nodes > 10, "{nodes} nodes");
     let clustered = count(&pool, "SELECT count(*) FROM wiki_nodes WHERE wiki_id = 'acme--notes-service--main' AND macro_cluster IS NOT NULL").await;
     assert!(clustered > 0, "no node carries its Phase 3 section");
-    let vectors = count(
-        &pool,
-        "SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = 'acme--notes-service--main'",
+    // The vectors are in elitea-vector, one generation (the publish deleted
+    // any other), written with the invocation's callback bearer.
+    let vectors = i64::try_from(engine.vectors.point_count()).unwrap();
+    assert!(
+        engine
+            .vectors
+            .bearers()
+            .iter()
+            .all(|b| b == &format!("Bearer {BEARER}")),
+        "{:?}",
+        engine.vectors.bearers()
+    );
+    let active: Option<String> = sqlx::query_scalar(
+        "SELECT active_generation FROM wikis WHERE wiki_id = 'acme--notes-service--main'",
     )
-    .await;
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(active.is_some(), "the publish names its vector generation");
     assert!(vectors > 0 && vectors <= nodes, "{vectors} vectors");
     assert_eq!(
         usize::try_from(vectors).unwrap(),
@@ -765,7 +817,8 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
         count(&pool, "SELECT count(*) FROM deepwiki_build.wiki_nodes").await,
         0
     );
-    let reader = IndexReader::new(pool.clone(), storage_common::key(wiki_id.as_str()));
+    let reader = IndexReader::new(pool.clone(), storage_common::key(wiki_id.as_str()))
+        .with_dense(engine.dense());
     let hits = reader.search_fts("NoteStore", 5).await.unwrap();
     assert!(
         hits.iter().any(|h| h.rel_path == "notes/store.py"),
@@ -807,7 +860,8 @@ async fn a_native_generation_reads_an_artifact_folder() {
         "native_artifact",
         gateway_port,
         &[("ELITEA_DEEPWIKI_GIT_ALLOWLIST", "git.example.com")],
-    );
+    )
+    .await;
     let mut arguments = arguments(1, gateway_port);
     arguments["repo_config"] = json!({
         "provider_type": "artifact",
@@ -943,7 +997,7 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
     // Embeddings never answer: the worker waits in the embedding phase,
     // after the graph was staged.
     let (gateway_port, gateway) = serve_gateway(true).await;
-    let engine = Engine::start(&root, "native_stop", gateway_port);
+    let engine = Engine::start(&root, "native_stop", gateway_port).await;
     let mut lines = engine
         .invoke("inv-native-stop", &arguments(git_port, gateway_port))
         .await;
@@ -1011,14 +1065,8 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
         count(&pool, "SELECT count(*) FROM deepwiki_build.wiki_nodes").await,
         0
     );
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT count(*) FROM deepwiki_build.wiki_node_embeddings"
-        )
-        .await,
-        0
-    );
+    // The stopped build's vectors went with it.
+    assert_eq!(engine.vectors.point_count(), 0);
     assert_eq!(count(&pool, "SELECT count(*) FROM wikis").await, 0);
     assert_eq!(
         jobs_left(&engine.scratch),
@@ -1055,7 +1103,7 @@ async fn stop_while_publishing(
     let (served, _commit) = served_repository(root);
     let git_port = serve_git(served).await;
     let (gateway_port, _gateway) = serve_gateway(false).await;
-    let engine = Engine::start_with(root, database, gateway_port, extra);
+    let engine = Engine::start_with(root, database, gateway_port, extra).await;
     let id = format!("inv-{database}");
     let mut lines = engine.invoke(&id, &arguments(git_port, gateway_port)).await;
     let deadline = Instant::now() + Duration::from_mins(5);

@@ -46,13 +46,13 @@ apply_uuid_fix() {
 
   info "Using container runtime: ${runtime}"
 
-  # Find the running postgres/pgvector container
+  # Find the running postgres container
   local pg_container
   pg_container=$(${runtime} ps --format '{{.Names}}' 2>/dev/null \
-    | grep -iE 'postgres|pgvector|db' | head -1 || true)
+    | grep -iE 'postgres|db' | head -1 || true)
 
   if [[ -z "${pg_container}" ]]; then
-    fail "No running postgres/pgvector container found."
+    fail "No running postgres container found."
     fail "Containers currently running:"
     ${runtime} ps --format '{{.Names}}' >&2 || true
     exit 1

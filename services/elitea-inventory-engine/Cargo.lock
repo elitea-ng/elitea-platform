@@ -1479,6 +1479,7 @@ dependencies = [
  "elitea-pg-migrate",
  "elitea-platform-rpc",
  "elitea-repo-ingest",
+ "elitea-vector-index",
  "futures-util",
  "indexmap",
  "jiff",
@@ -1578,6 +1579,28 @@ dependencies = [
  "tonic",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "elitea-vector-index"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "elitea-engine-core",
+ "futures-util",
+ "prost",
+ "protoc-bin-vendored",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5657,6 +5680,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha1dc"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7004,6 +7033,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

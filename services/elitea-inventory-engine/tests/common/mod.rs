@@ -271,3 +271,25 @@ pub async fn gateway(chat: fn(&str) -> String) -> String {
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
     format!("http://127.0.0.1:{port}/v1")
 }
+
+/// A fake elitea-vector (in process, real gRPC) that admits each `(bearer,
+/// project)` of `tokens`, as elitea-vector admits an invocation's callback
+/// bearer for its project. Returns the fake (its state) and its loopback
+/// `http://` origin, the engine's `ELITEA_INVENTORY_VECTOR_URL` in a test.
+pub async fn fake_vector(
+    tokens: &[(&str, i64)],
+) -> (elitea_vector_index::testing::FakeVector, String) {
+    let fake = elitea_vector_index::testing::FakeVector::new(tokens);
+    let (address, _served) = fake.clone().serve().await.expect("serve the fake");
+    (fake, format!("http://{address}"))
+}
+
+/// Vector access to the fake at `origin` with `bearer`.
+pub fn entity_vectors(origin: &str, bearer: &str) -> store::vectors::EntityVectors {
+    let mut config = elitea_vector_index::client::ClientConfig::new(origin);
+    config.allow_insecure = true;
+    store::vectors::EntityVectors::new(
+        elitea_vector_index::client::VectorClient::connect_lazy(&config).expect("client"),
+        bearer,
+    )
+}

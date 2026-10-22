@@ -293,7 +293,7 @@ type AtomicAdmissionStore interface {
 
 var ErrIndexMetaInitializationMismatch = errors.New("index metadata initialization identity mismatch")
 
-// IndexMetaInitialization identifies the logical PgVector metadata generation
+// IndexMetaInitialization identifies the logical index metadata generation
 // that must already exist before its durable command becomes dispatchable.
 // Replaying the same transition preserves the first database-owned timestamp.
 type IndexMetaInitialization struct {
@@ -316,7 +316,7 @@ func (i IndexMetaInitialization) Validate() error {
 
 // IndexMetaInitializationStore owns only the durable ready transition. The
 // caller must first idempotently materialize the exact metadata row in the
-// project-owned PgVector store; this interface cannot manufacture that effect.
+// index registry; this interface cannot manufacture that effect.
 type IndexMetaInitializationStore interface {
 	MarkIndexMetaInitialized(context.Context, IndexMetaInitialization) (time.Time, error)
 }

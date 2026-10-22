@@ -97,6 +97,7 @@ pub async fn populate(
             .collect();
         stored += build
             .stage_embeddings(
+                client.model(),
                 chunk
                     .iter()
                     .zip(&vectors)

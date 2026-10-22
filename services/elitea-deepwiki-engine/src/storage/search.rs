@@ -5,7 +5,7 @@
 //!
 //! | branch | score field | parity |
 //! | --- | --- | --- |
-//! | dense | `vec_distance` (L2, lower is better) | exact: an exact scan, no HNSW index |
+//! | dense | `vec_distance` (cosine distance `1 - similarity`, lower is better) | rank only: elitea-vector's HNSW search (Qdrant), not pgvector's exact L2 scan |
 //! | fts | `fts_rank` (negated, lower is better), `score_norm` | match set and order: `plainto_tsquery` over the folded text, ranked by 'fts' statistics |
 //! | fused | `combined_score` (higher is better) | the frozen weighted RRF over fts + dense |
 //!
@@ -24,7 +24,23 @@
 //! statistics, then metadata) reads one snapshot. Python ran them in
 //! autocommit statements; a publish between two of them could mix two
 //! indexes in one answer.
+//!
+//! The dense vectors are in elitea-vector ([`crate::storage::dense`]). The
+//! dense branch reads the wiki's `active_generation`, embedding model and
+//! dimension in the snapshot, searches only that generation, and keeps the
+//! hits whose node the snapshot holds, so it ranks the vectors of the
+//! nodes it answers with. A publish that commits while the search runs
+//! deletes the generation being searched once it committed (its sweep):
+//! after the search the branch reads the wiki's `active_generation` again,
+//! outside the snapshot, and when it moved on the whole read starts again
+//! in a new snapshot (at most [`READ_ATTEMPTS`] times), so a read never
+//! answers from a half-deleted generation. Still active after the search
+//! means no sweep had started on it, so its answer is whole. The distance changed from L2 to cosine with the
+//! move; for the unit-length vectors embedding models answer, both rank
+//! alike (`|a-b|^2 = 2 - 2cos`). When elitea-vector cannot be reached the
+//! branch is skipped with a warning and the search answers lexically.
 
+use crate::storage::dense::{DenseIndex, Space};
 use crate::storage::text::{self, BRANCH_FTS};
 use crate::storage::{Result, StorageError, WikiKey};
 use indexmap::IndexMap;
@@ -45,6 +61,31 @@ pub const DEFAULT_VEC_POOL: usize = 30;
 
 /// The opening statement of every read.
 pub(crate) const READ_SNAPSHOT: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+
+/// The snapshots a read with a dense branch opens at most: one, and one
+/// more each time a publish replaced the generation it searched.
+pub const READ_ATTEMPTS: usize = 3;
+
+/// A read whose wiki was republished during every attempt.
+pub(crate) fn republished_meanwhile(key: &WikiKey) -> StorageError {
+    StorageError::Busy(format!(
+        "wiki '{}' was re-indexed during every attempt to search it; ask again",
+        key.wiki_id()
+    ))
+}
+
+/// Whether `generation` is still the wiki's active one, read outside any
+/// snapshot (the latest committed state).
+async fn still_active(pool: &PgPool, key: &WikiKey, generation: &str) -> Result<bool> {
+    let active: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT active_generation FROM wikis WHERE project_id = $1 AND wiki_id = $2",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .fetch_optional(pool)
+    .await?;
+    Ok(active.flatten().as_deref() == Some(generation))
+}
 
 /// A branch's score fields. Only the fields of the branch (and, for a
 /// fused hit, `combined_score`) are set: Python's `Hit.scores` dict holds
@@ -184,6 +225,7 @@ pub fn rrf_fuse(fts: &[Hit], dense: &[Hit], fusion: &Fusion) -> Vec<Hit> {
 pub struct IndexReader {
     pool: PgPool,
     key: WikiKey,
+    dense: Option<DenseIndex>,
 }
 
 /// One branch's statistics (`wiki_bm25_meta`), for health and reports.
@@ -207,7 +249,24 @@ impl IndexReader {
     /// The reader of one project's wiki.
     #[must_use]
     pub fn new(pool: PgPool, key: WikiKey) -> Self {
-        Self { pool, key }
+        Self {
+            pool,
+            key,
+            dense: None,
+        }
+    }
+
+    /// The dense store the dense branch searches. Without one the dense
+    /// branch answers nothing (lexical only).
+    #[must_use]
+    pub fn with_dense(mut self, dense: Option<DenseIndex>) -> Self {
+        self.dense = dense;
+        self
+    }
+
+    /// The dense store, for the adapter's own reads.
+    pub(crate) fn dense(&self) -> Option<&DenseIndex> {
+        self.dense.as_ref()
     }
 
     /// The wiki this reader is scoped to.
@@ -239,17 +298,33 @@ impl IndexReader {
         Ok(hits)
     }
 
-    /// Exact L2 KNN: hits carry `vec_distance`.
+    /// Dense KNN over the wiki's active generation: hits carry
+    /// `vec_distance` (cosine distance).
     ///
     /// # Errors
     ///
-    /// [`crate::storage::StorageError::Database`], e.g. for a vector whose
-    /// dimension differs from the stored ones.
+    /// [`crate::storage::StorageError::Database`];
+    /// [`crate::storage::StorageError::Vector`] for a vector whose dimension
+    /// differs from the stored ones.
     pub async fn search_dense(&self, embedding: &[f64], k: usize) -> Result<Vec<Hit>> {
-        let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_dense(&mut tx, &self.key, embedding, k, None).await?;
-        tx.commit().await?;
-        Ok(hits)
+        for _ in 0..READ_ATTEMPTS {
+            let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
+            let hits = search_dense(
+                &mut tx,
+                &self.pool,
+                &self.key,
+                self.dense.as_ref(),
+                embedding,
+                k,
+                None,
+            )
+            .await?;
+            tx.commit().await?;
+            if let Some(hits) = hits {
+                return Ok(hits);
+            }
+        }
+        Err(republished_meanwhile(&self.key))
     }
 
     /// FTS + dense, fused: hits carry `combined_score`. An absent or empty
@@ -264,13 +339,30 @@ impl IndexReader {
         embedding: Option<&[f64]>,
         params: &Hybrid,
     ) -> Result<Vec<Hit>> {
-        let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
-        let hits = search_hybrid(&mut tx, &self.key, query, embedding, params, None).await?;
-        tx.commit().await?;
-        Ok(hits)
+        for _ in 0..READ_ATTEMPTS {
+            let mut tx = self.pool.begin_with(READ_SNAPSHOT).await?;
+            let hits = search_hybrid(
+                &mut tx,
+                &self.pool,
+                &self.key,
+                self.dense.as_ref(),
+                query,
+                embedding,
+                params,
+                None,
+            )
+            .await?;
+            tx.commit().await?;
+            if let Some(hits) = hits {
+                return Ok(hits);
+            }
+        }
+        Err(republished_meanwhile(&self.key))
     }
 
-    /// Row counts and the statistics of each branch.
+    /// Row counts and the statistics of each branch. `vector_count` is the
+    /// active generation's point count in elitea-vector (0 without a dense
+    /// store, without vectors, or when the store cannot be reached).
     ///
     /// # Errors
     ///
@@ -284,13 +376,22 @@ impl IndexReader {
         .bind(self.key.project_id())
         .fetch_one(&mut *tx)
         .await?;
-        let vector_count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = $1 AND project_id = $2",
-        )
-        .bind(self.key.wiki_id())
-        .bind(self.key.project_id())
-        .fetch_one(&mut *tx)
-        .await?;
+        let active = active_vectors(&mut tx, &self.key).await?;
+        let vector_count = match (&self.dense, &active) {
+            (Some(store), Some(active)) => {
+                match store
+                    .count(&self.key, &active.generation, &active.space)
+                    .await
+                {
+                    Ok(count) => i64::try_from(count).unwrap_or(i64::MAX),
+                    Err(error) => {
+                        tracing::warn!(wiki = self.key.wiki_id(), %error, "could not count the wiki's vectors");
+                        0
+                    }
+                }
+            }
+            _ => 0,
+        };
         let rows = sqlx::query(
             "SELECT branch, doc_count, avgdl, k1, b FROM wiki_bm25_meta \
              WHERE wiki_id = $1 AND project_id = $2 ORDER BY branch",
@@ -453,10 +554,6 @@ async fn hits(
         .collect())
 }
 
-fn sql_limit(limit: usize) -> i64 {
-    i64::try_from(limit).unwrap_or(i64::MAX)
-}
-
 /// `PostgresBackend.search_fts`: conjunctive match, ranked by the 'fts'
 /// statistics, negated to FTS5's sign, ties broken by node id.
 pub(crate) async fn search_fts(
@@ -522,86 +619,180 @@ pub(crate) async fn search_fts(
     hits(tx, key, ranked).await
 }
 
-/// `PostgresBackend.search_dense`: exact L2 KNN. The query vector is sent as
-/// pgvector's text form, as Python sent it, so it rounds to the same
-/// `float4` values.
+/// The vectors a wiki's published index searches: its active generation
+/// and the space (model and dimension) the generation was written in, read
+/// in the caller's snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ActiveVectors {
+    pub generation: String,
+    pub model: String,
+    pub space: Space,
+}
+
+/// The wiki's [`ActiveVectors`], `None` when its last publish wrote no
+/// vector (or it has no published index).
 ///
-/// With `expected_model`, the wiki's recorded embedding model is read in the
-/// SAME statement (a scalar subquery on each row, so no extra round trip) and
-/// therefore in the same snapshot as the vectors compared. A wiki
-/// republished with another model between the caller's model choice and this
-/// search has vectors from another space; the search then answers
-/// [`crate::storage::StorageError::EmbeddingModelChanged`] instead of
-/// ranking by a meaningless distance. A search that returns no vector row has
-/// compared nothing, so there is nothing to refuse.
-pub(crate) async fn search_dense(
+/// # Errors
+///
+/// [`StorageError::Database`]; [`StorageError::Vector`] for a recorded
+/// dimension elitea-vector cannot hold.
+pub(crate) async fn active_vectors(
     tx: &mut PgConnection,
     key: &WikiKey,
+) -> Result<Option<ActiveVectors>> {
+    let row: Option<(Option<String>, Option<String>, Option<i32>)> = sqlx::query_as(
+        "SELECT active_generation, embedding_model, embedding_dim FROM wikis \
+         WHERE project_id = $1 AND wiki_id = $2",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((Some(generation), Some(model), Some(dimension))) = row else {
+        return Ok(None);
+    };
+    let dimension = usize::try_from(dimension).unwrap_or(0);
+    let space = Space::new(&model, dimension).map_err(|e| StorageError::Vector(e.to_string()))?;
+    Ok(Some(ActiveVectors {
+        generation,
+        model,
+        space,
+    }))
+}
+
+/// `PostgresBackend.search_dense`, over elitea-vector: the `k` nearest
+/// points of the wiki's active generation, best first, as hits with
+/// `vec_distance` = `1 - cosine similarity`.
+///
+/// With `expected_model`, the wiki's recorded embedding model is read in the
+/// same snapshot as the active generation. A wiki republished with another
+/// model between the caller's model choice and this search has vectors from
+/// another space; the search then answers
+/// [`crate::storage::StorageError::EmbeddingModelChanged`] instead of
+/// ranking by a meaningless distance. A wiki without vectors has nothing to
+/// compare, so there is nothing to refuse.
+///
+/// Without a dense store, or when the store cannot be reached, the branch
+/// answers nothing (the latter with a warning): the caller's search goes on
+/// lexically. Hits whose node the snapshot does not hold are dropped.
+///
+/// `None`: the generation searched is no longer the wiki's active one (read
+/// from `pool`, outside the snapshot), so a publish's sweep may have deleted
+/// some of its points during the search; the caller starts the read again
+/// in a new snapshot.
+pub(crate) async fn search_dense(
+    tx: &mut PgConnection,
+    pool: &PgPool,
+    key: &WikiKey,
+    dense: Option<&DenseIndex>,
     embedding: &[f64],
     k: usize,
     expected_model: Option<&str>,
-) -> Result<Vec<Hit>> {
-    let rows = sqlx::query(
-        "SELECT e.node_id, e.embedding <-> $1::text::vector AS distance, \
-                (SELECT w.embedding_model FROM wikis w \
-                 WHERE w.project_id = $4 AND w.wiki_id = $2) AS stored_model \
-         FROM wiki_node_embeddings e \
-         WHERE e.wiki_id = $2 AND e.project_id = $4 \
-         ORDER BY distance, e.node_id \
-         LIMIT $3",
-    )
-    .bind(vector_literal(embedding))
-    .bind(key.wiki_id())
-    .bind(sql_limit(k))
-    .bind(key.project_id())
-    .fetch_all(&mut *tx)
-    .await?;
-    let mut scored = Vec::with_capacity(rows.len());
-    for row in rows {
-        if let Some(expected) = expected_model {
-            let recorded: Option<String> = row.try_get("stored_model")?;
-            if let Some(stored) = recorded
-                .as_deref()
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
-                && stored != expected
-            {
-                return Err(StorageError::EmbeddingModelChanged {
-                    wiki_id: key.wiki_id().to_owned(),
-                    stored: stored.to_owned(),
-                    expected: expected.to_owned(),
-                });
-            }
+) -> Result<Option<Vec<Hit>>> {
+    let Some(active) = active_vectors(tx, key).await? else {
+        return Ok(Some(Vec::new()));
+    };
+    if let Some(expected) = expected_model {
+        let stored = active.model.trim();
+        if !stored.is_empty() && stored != expected {
+            return Err(StorageError::EmbeddingModelChanged {
+                wiki_id: key.wiki_id().to_owned(),
+                stored: stored.to_owned(),
+                expected: expected.to_owned(),
+            });
         }
-        let distance: f64 = row.try_get("distance")?;
-        scored.push((
-            row.try_get("node_id")?,
-            Scores {
-                vec_distance: Some(distance),
-                ..Scores::default()
-            },
-        ));
     }
-    hits(tx, key, scored).await
+    let Some(store) = dense else {
+        return Ok(Some(Vec::new()));
+    };
+    #[allow(clippy::cast_possible_truncation)] // f64 -> f32, as pgvector's float4
+    let query: Vec<f32> = embedding.iter().map(|v| *v as f32).collect();
+    let found = match store
+        .search(key, &active.generation, &active.space, &query, k)
+        .await
+    {
+        Ok(found) => found,
+        Err(error) if error.unavailable => {
+            tracing::warn!(
+                wiki = key.wiki_id(),
+                project = key.project_id(),
+                %error,
+                "elitea-vector is unavailable; answering with the lexical search only"
+            );
+            return Ok(Some(Vec::new()));
+        }
+        Err(error) => return Err(StorageError::Vector(error.to_string())),
+    };
+    if !still_active(pool, key, &active.generation).await? {
+        tracing::info!(
+            wiki = key.wiki_id(),
+            project = key.project_id(),
+            generation = %active.generation,
+            "the wiki was republished during the search; searching again"
+        );
+        return Ok(None);
+    }
+    let ids: Vec<&str> = found.iter().map(|hit| hit.node_id.as_str()).collect();
+    let held: std::collections::HashSet<String> = sqlx::query_scalar(
+        "SELECT node_id FROM wiki_nodes WHERE project_id = $1 AND wiki_id = $2 AND node_id = ANY($3)",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
+    let scored: Vec<(String, Scores)> = found
+        .into_iter()
+        .filter(|hit| held.contains(&hit.node_id))
+        .map(|hit| {
+            let distance = hit.distance();
+            (
+                hit.node_id,
+                Scores {
+                    vec_distance: Some(distance),
+                    ..Scores::default()
+                },
+            )
+        })
+        .collect();
+    hits(tx, key, scored).await.map(Some)
 }
 
-/// `PostgresBackend.search_hybrid`.
+/// `PostgresBackend.search_hybrid`. `None` as [`search_dense`].
+#[allow(clippy::too_many_arguments)] // the snapshot, the pool, the key and the search
 pub(crate) async fn search_hybrid(
     tx: &mut PgConnection,
+    pool: &PgPool,
     key: &WikiKey,
+    dense: Option<&DenseIndex>,
     query: &str,
     embedding: Option<&[f64]>,
     params: &Hybrid,
     expected_model: Option<&str>,
-) -> Result<Vec<Hit>> {
+) -> Result<Option<Vec<Hit>>> {
     let fts = search_fts(tx, key, query, params.fts_pool).await?;
     let dense = match embedding {
         Some(vector) if !vector.is_empty() => {
-            search_dense(tx, key, vector, params.vec_pool, expected_model).await?
+            match search_dense(
+                tx,
+                pool,
+                key,
+                dense,
+                vector,
+                params.vec_pool,
+                expected_model,
+            )
+            .await?
+            {
+                Some(dense) => dense,
+                None => return Ok(None),
+            }
         }
         _ => Vec::new(),
     };
-    Ok(rrf_fuse(
+    Ok(Some(rrf_fuse(
         &fts,
         &dense,
         &Fusion {
@@ -610,25 +801,7 @@ pub(crate) async fn search_hybrid(
             rrf_constant: RRF_CONSTANT,
             limit: params.limit,
         },
-    ))
-}
-
-/// `_vector_literal`: `[x,y,...]`, each the shortest text that reads back as
-/// the same `f64` (Python `repr`; Rust `Display` writes the same number
-/// without an exponent).
-#[must_use]
-pub fn vector_literal(vector: &[f64]) -> String {
-    use std::fmt::Write as _;
-    let mut text = String::with_capacity(vector.len() * 12 + 2);
-    text.push('[');
-    for (index, value) in vector.iter().enumerate() {
-        if index > 0 {
-            text.push(',');
-        }
-        let _ = write!(text, "{value}");
-    }
-    text.push(']');
-    text
+    )))
 }
 
 #[cfg(test)]
@@ -697,11 +870,6 @@ mod tests {
         );
         let ids: Vec<&str> = equal.iter().map(|h| h.node_id.as_str()).collect();
         assert_eq!(ids, ["y", "x"]);
-    }
-
-    #[test]
-    fn the_vector_literal_is_shortest_round_trip() {
-        assert_eq!(vector_literal(&[0.1, -2.0, 1e-7]), "[0.1,-2,0.0000001]");
     }
 
     #[test]

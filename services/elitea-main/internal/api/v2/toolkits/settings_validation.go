@@ -431,10 +431,10 @@ func (h *Handler) answerToolkitSettingsFailure(
 // NO LEGITIMATE ROUND TRIP CARRIES IT, so this refuses nothing a normal edit
 // does. ReferenceMode's marked output is never persisted into
 // elitea_tools.settings (see refuseUnresolvableToolkitSettings' first bullet),
-// claim-time materialization strips the key before the SDK sees it
-// (configurations_materializer.go), and the index-meta reader already treats a
-// marked pgvector_configuration in a stored toolkit as unusable
-// (indexing/index_meta.go's currentIndexMetaTarget). A stored row that DOES
+// and claim-time materialization strips the key before the SDK sees it
+// (configurations_materializer.go). (The legacy index-meta reader also treated
+// a marked pgvector_configuration as unusable; that setting is now retired and
+// dropped on every save, application/configurations/retired.go.) A stored row that DOES
 // carry one is therefore a row forged through the bypass this refusal closes;
 // it can still be renamed by a settings-free PATCH and deleted, but it cannot
 // be saved back with the forgery intact, which is the intended outcome.

@@ -942,7 +942,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the turn-only conversation sync bump, and the newest-group and paused
 	// indexes the list's `activity` reads. markConversationRead reuses
 	// models.chat.conversation.details, so no shared sibling.
-	require.EqualValues(t, 153, Head(tenant))
+	// 154: tenant/0154_strip_toolkit_pgvector_configuration.sql, removes the
+	// retired `pgvector_configuration` key from elitea_tools.settings (#1359).
+	// Data only, no permission, so no shared sibling.
+	require.EqualValues(t, 154, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

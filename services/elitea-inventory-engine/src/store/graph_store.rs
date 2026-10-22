@@ -1,9 +1,15 @@
 //! The PostgreSQL store behind the shared core's [`GraphStore`] contract
 //! (ADR-0029 decision 7): a thin adapter over this module's free
 //! functions, which stay what ingestion's `run` and `transfer` call.
+//!
+//! The entity vectors are in Qdrant behind elitea-vector (`super::vectors`):
+//! a store built [`PgGraphStore::with_vectors`] (an invocation's bearer)
+//! publishes them on every write and ranks through elitea-vector; one
+//! without vector access writes no generation (the first ranking with access
+//! backfills it) and refuses to rank a graph that has vectors.
 
 use super::sources::{self, Completion, Lease, SourceStatus};
-use super::vectors::{self, Ranking};
+use super::vectors::{self, EntityVectors, Ranking};
 use super::{GraphKey, Imported, StoreError};
 use crate::graph::Graph;
 use elitea_content_source::Acl;
@@ -16,13 +22,31 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct PgGraphStore {
     pool: PgPool,
+    vectors: Option<EntityVectors>,
 }
 
 impl PgGraphStore {
-    /// The store over `pool`.
+    /// The store over `pool`, without vector access.
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            vectors: None,
+        }
+    }
+
+    /// The same store with (or, `None`, without) vector access: one
+    /// invocation's.
+    #[must_use]
+    pub fn with_vectors(mut self, vectors: Option<EntityVectors>) -> Self {
+        self.vectors = vectors;
+        self
+    }
+
+    /// The store's vector access, if any.
+    #[must_use]
+    pub fn vectors(&self) -> Option<&EntityVectors> {
+        self.vectors.as_ref()
     }
 
     /// The pool the store reads and writes.
@@ -85,7 +109,7 @@ impl GraphStore for PgGraphStore {
         graph: &Graph,
         completion: &Completion<'_>,
     ) -> Result<i64, StoreError> {
-        sources::complete(&self.pool, key, graph, completion).await
+        sources::complete_with(&self.pool, key, graph, completion, self.vectors.as_ref()).await
     }
 
     async fn status_document(&self, key: GraphKey) -> Result<Value, StoreError> {
@@ -98,15 +122,19 @@ impl GraphStore for PgGraphStore {
         vector: &[f64],
         min_score: f64,
     ) -> Result<Ranking, StoreError> {
-        vectors::rank(&self.pool, key, vector, min_score).await
+        vectors::rank(&self.pool, key, vector, min_score, self.vectors.as_ref()).await
     }
 
+    /// With vector access, the graph's namespace is emptied too, before the
+    /// rows' commit: a failed delete keeps the graph (and the records of its
+    /// generations) and is the call's error. Without it a graph that holds
+    /// vectors is refused (`store::delete_with`).
     async fn delete(&self, key: GraphKey) -> Result<bool, StoreError> {
-        super::delete(&self.pool, key).await
+        super::delete_with(&self.pool, key, self.vectors.as_ref()).await
     }
 
     async fn save(&self, key: GraphKey, graph: &Graph) -> Result<i64, StoreError> {
-        super::save(&self.pool, key, graph).await
+        super::save_with(&self.pool, key, graph, self.vectors.as_ref()).await
     }
 
     async fn remove_source(
@@ -116,7 +144,15 @@ impl GraphStore for PgGraphStore {
         toolkit_id: &str,
         source_name: &str,
     ) -> Result<i64, StoreError> {
-        sources::remove(&self.pool, key, graph, toolkit_id, source_name).await
+        sources::remove_with(
+            &self.pool,
+            key,
+            graph,
+            toolkit_id,
+            source_name,
+            self.vectors.as_ref(),
+        )
+        .await
     }
 
     async fn import(
@@ -125,6 +161,6 @@ impl GraphStore for PgGraphStore {
         graph: &Graph,
         replace_state: bool,
     ) -> Result<Imported, StoreError> {
-        super::import(&self.pool, key, graph, replace_state).await
+        super::import_with(&self.pool, key, graph, replace_state, self.vectors.as_ref()).await
     }
 }

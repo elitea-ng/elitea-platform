@@ -56,13 +56,16 @@ func TestToolkitTypeCatalogueServesTheSDKArgumentSchemas(t *testing.T) {
 	// The SETTINGS properties are a different resource and must survive the
 	// swap: they are the fields the create-toolkit form renders, and the
 	// snapshot's own annotation "properties" do not contain them (artifact's
-	// annotations name only embedding_model and pgvector_configuration — no
-	// bucket at all), so they cannot be sourced from it.
+	// annotations name only embedding_model — no bucket at all), so they
+	// cannot be sourced from it.
 	artifact := body["artifact"].(map[string]any)["properties"].(map[string]any)
-	for _, setting := range []string{"bucket", "embedding_model", "pgvector_configuration"} {
+	for _, setting := range []string{"bucket", "embedding_model"} {
 		if _, ok := artifact[setting]; !ok {
 			t.Errorf("artifact settings lost %q; have %v", setting, keysOf(artifact))
 		}
+	}
+	if _, ok := artifact["pgvector_configuration"]; ok {
+		t.Error("artifact still serves the retired pgvector_configuration")
 	}
 }
 

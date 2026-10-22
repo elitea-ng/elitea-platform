@@ -90,6 +90,7 @@ import (
 	providerproxy "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 )
 
 func main() {
@@ -105,6 +106,15 @@ func main() {
 		}
 		_ = resp.Body.Close()
 		os.Exit(0)
+	}
+
+	// A one-shot operator command in the same image (legacy_pgvector_orphans.go):
+	// it runs and exits, and never starts the service.
+	if len(os.Args) > 1 && os.Args[1] == legacyOrphansCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runLegacyPgvectorOrphans(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -1046,23 +1056,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// no vault — and the facade then mounts without source expansion rather
 	// than failing to boot.
 	var inventorySourceSettings *configurationapp.CurrentToolkitSettingsResolver
-	// The project vector-store collaborator the project-create route provisions
-	// with (#371). It is composed from the Configurations runtime, so it exists
-	// only where that runtime does; without it a created project cannot index.
-	//
-	// DECLARED AS THE INTERFACE, never as the concrete pointer (#377). A nil
-	// `*runtimecomposition.ProjectVectorStore` assigned into an interface field
-	// is a TYPED NIL: `cfg.ProjectVectorStore != nil` in internal/api/router.go
-	// is then true, the provisioner takes the collaborator, and every step of
-	// the create pipeline runs until `project_pgvector` answers "project vector
-	// store is not configured" — so a deployment that composes no Configurations
-	// runtime could not create a project at all. It answered 500 and rolled the
-	// whole tenant back. Measured on the end-to-end stack by J31g.
-	//
-	// Same rule as toolkitSettingsValidator below: the concrete value is
-	// assigned inside the branch that composes it, and the variable is a nil
-	// INTERFACE everywhere else.
-	var projectVectorStore projectprovisioning.ProjectVectorStore
 	// The platform default model (#6826). Declared as the interface the router
 	// takes and assigned only from a non-nil service, so no typed nil reaches
 	// the router's nil checks.
@@ -1113,39 +1106,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose current Configurations services: %w", err)
 		}
 		defer currentConfigurationsRoot.Destroy()
-		// The vault material goes through the secrets handler, which holds the
-		// one master key a deployment sets (SECRETS_MASTER_KEY). That handler
-		// is also the one vault creator, through the project_secrets
-		// provisioning step, so the creator and the material writer now share a
-		// key source (#399). The Configurations runtime's own vault writer is
-		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
-		// which no file under deploy/ sets, so it could not open the vault the
-		// handler had just created.
-		//
-		// NOT UNDER THE RUST INDEXING RUNTIME (ADR-0031 decision 5). A
-		// deployment that indexes natively keeps index metadata in the
-		// registry and vectors in elitea-vector; a created project needs no
-		// pgvector role, database or `pgvector_configuration`, and requiring
-		// a pgvector bootstrap would keep alive the per-project database the
-		// runtime retires. The provisioner then takes no vector store and
-		// skips its project_pgvector step.
-		if runtimeConfig.ProjectVectorStoreProvisioned() {
-			vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
-				pool,
-				v2secrets.NewHandler(pool),
-				logger,
-			)
-			if err != nil {
-				return fmt.Errorf("compose project vector-store provisioning: %w", err)
-			}
-			// Through the concrete value, and only when there IS one. See the
-			// declaration above for what a typed nil costs here.
-			if vectorStore != nil {
-				projectVectorStore = vectorStore
-			}
-		} else {
-			logger.Info("project vector store not provisioned: the Rust indexing runtime needs no per-project pgvector database (ADR-0031 decision 5)")
-		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
 			return fmt.Errorf("compose toolkit settings validation: %w", err)
@@ -1537,12 +1497,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if minterErr != nil {
 				return fmt.Errorf("compose Inventory callback token minter: %w", minterErr)
 			}
+			inventoryGrants := dbrepos.NewCallbackTokenGrants(pool)
+			// Every Inventory bearer carries a recorded invocation grant
+			// (shared/0159) naming the provider, for elitea-vector's token
+			// introspection (ADR-0031); investigate's source-tool grant
+			// upgrades it in place.
+			inventoryMinter, grantingErr := material.GrantingMinter(
+				material.NewCallbackMinter(inventoryTokens), inventoryGrants, "inventory")
+			if grantingErr != nil {
+				return fmt.Errorf("compose Inventory callback token minter: %w", grantingErr)
+			}
 			inventorySources, err = v2inventory.NewSources(
 				inventoryToolkits, inventorySourceSettings,
-				material.NewCallbackMinter(inventoryTokens),
+				inventoryMinter,
 				// What investigate's bearer was minted for: the record the
 				// test_tool source-tool gate reads (shared/0159).
-				dbrepos.NewCallbackTokenGrants(pool), inventorySourcesConfig)
+				inventoryGrants, inventorySourcesConfig)
 			if err != nil {
 				return fmt.Errorf("compose Inventory source expander: %w", err)
 			}
@@ -1618,6 +1588,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if minterErr != nil {
 			return fmt.Errorf("compose DeepWiki callback token minter: %w", minterErr)
 		}
+		// Every DeepWiki bearer carries a recorded grant (shared/0159) naming
+		// the provider: elitea-vector's token introspection (ADR-0031) admits
+		// the engine's vector writes and reads only with one.
+		deepwikiMinter, minterErr := material.GrantingMinter(
+			v2deepwiki.NewAuthCallbackMinter(deepwikiTokens),
+			dbrepos.NewCallbackTokenGrants(pool), "deepwiki")
+		if minterErr != nil {
+			return fmt.Errorf("compose DeepWiki callback token minter: %w", minterErr)
+		}
 
 		// Registered before the route is built, for the reason the Inventory
 		// facade gives above: the gate needs the provider's own name, and
@@ -1679,7 +1658,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			legacyrbac.NewPostgresResolver(pool),
 			deepwikiCredentials,
 			deepwikiToolkitReader,
-			v2deepwiki.NewAuthCallbackMinter(deepwikiTokens),
+			deepwikiMinter,
 			slog.Default(),
 			v2deepwiki.WithHistory(
 				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
@@ -1731,12 +1710,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// replica without index ingest dispatch only drains. No replica closes a
 	// recorded step on its own configuration: only the operator's abandon
 	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
-	// refused beside a client.
-	vectorStepRecorded := runtimeConfig.RustIndexing()
+	// refused beside a client. A replica that runs Inventory records it only
+	// beside a client (projectVectorStepRecorded).
+	vectorStepRecorded := projectVectorStepRecorded(
+		runtimeConfig.RustIndexing(), api.HoldsInventory(applicationData), vectorClient != nil)
 	vectorCleanupAbandoned, err := vectorCleanupAbandonSwitch(logger, os.LookupEnv, vectorClient != nil)
 	if err != nil {
 		return err
 	}
+	// A deleted project's legacy PgVector database (#1359): dropped through
+	// the old store's admin URL, or closed under the operator's retired switch
+	// (legacy_pgvector_config.go). Through a nil INTERFACE without a URL.
+	legacyPgvectorDropper, legacyPgvectorRetired, err := composeLegacyPgvector(logger, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("compose legacy PgVector cleanup: %w", err)
+	}
+	var legacyVectorDatabases projectprovisioning.LegacyVectorDatabases
+	if legacyPgvectorDropper != nil {
+		legacyVectorDatabases = legacyPgvectorDropper
+	}
+	// A deleted Inventory toolkit's graph vectors (#1359): the toolkit cleanup
+	// journal deletes the graph's namespace in elitea-vector after the engine
+	// deleted its rows (api.WithInventoryGraphVectors). A nil INTERFACE without
+	// a client, never a typed nil, and then the Inventory client is left as it
+	// is: there is no vector leg to wait for.
+	var inventoryGraphVectors api.InventoryGraphVectors
+	if vectorClient != nil {
+		inventoryGraphVectors = vectorClient
+	}
+	applicationData = api.WithInventoryGraphVectors(applicationData, inventoryGraphVectors)
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -1876,6 +1878,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if egressErr != nil {
 			return fmt.Errorf("compose the workspace egress proxy: %w", egressErr)
 		}
+		// formGraph is a *FormGraph that stays nil on an OIDC-only
+		// deployment. Boxed straight into the three interfaces below it
+		// would make each of them non-nil around a nil pointer, so the
+		// composition's nil checks would pass and the first token call
+		// would panic. Hand over real nils instead.
+		var (
+			runtimeActorTokens   storage.ActorTokenIssuer
+			runtimeProjectTokens storage.ProjectTokenValidator
+			runtimeSystemTokens  runtimecomposition.ProjectSystemTokenSource
+		)
+		if formGraph != nil {
+			runtimeActorTokens, runtimeProjectTokens, runtimeSystemTokens = formGraph, formGraph, formGraph
+		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
 			ControlPool:                      runtimePools.Control,
@@ -1892,9 +1907,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CodeDebugStatePool:               codeConsumers.debugStatePool,
 			CurrentConfigurations:            currentConfigurationsRoot,
 			ConfigurationLifecycleReconciler: configurationLifecycleReconciler,
-			ActorTokenIssuer:                 formGraph,
-			ProjectTokenValidator:            formGraph,
-			ProjectSystemTokenSource:         formGraph,
+			ActorTokenIssuer:                 runtimeActorTokens,
+			ProjectTokenValidator:            runtimeProjectTokens,
+			ProjectSystemTokenSource:         runtimeSystemTokens,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
@@ -2577,6 +2592,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		MemoryDataRecorded:            runtimeConfig.RustIndexing(),
 		ProjectVectorDataRecorded:     vectorStepRecorded,
 		ProjectVectorCleanupAbandoned: vectorCleanupAbandoned,
+		LegacyVectorDatabases:         legacyVectorDatabases,
+		LegacyVectorDatabasesRetired:  legacyPgvectorRetired,
 		AdminUI:                       adminUICfg,
 		Pool:                          pool,
 		Branding:                      brandingResolver,
@@ -2681,7 +2698,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ConfigProviderAdmission:        configProviderAdmission,
 		ConfigStoredResolver:           configStoredResolver,
 		ObjectStore:                    objectStore,
-		ProjectVectorStore:             projectVectorStore,
 		PlatformModelDefaults:          platformModelDefaults,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*
@@ -2776,7 +2792,26 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The internal platform gRPC listener (#1359 D1), when the runtime
 	// configuration opens one.
 	platformSrv, err := newPlatformServer(runtimeConfig, func() ([]runtimegrpc.PlatformService, error) {
-		return platformServices(r, platformClientsFromEnv(os.Getenv), logger)
+		services, err := platformServices(r, platformClientsFromEnv(os.Getenv), logger)
+		if err != nil {
+			return nil, err
+		}
+		// elitea-vector's token introspection (ADR-0031), behind
+		// ELITEA_VECTOR_INTROSPECTION_CLIENTS, runtime on or off. The PAT
+		// validator is the one that reads back what this deployment's
+		// callback minters sign (patSigner's rule): the form graph when there
+		// is one, else the APPLICATION_SECRET_KEY validator (sessionTokens),
+		// which is how a deployment without ELITEA_AUTH_CONFIG_FILE (the dev
+		// compose, OIDC-only) signs its DeepWiki and Inventory bearers. Both
+		// assigned through a nil INTERFACE, so a deployment with neither is
+		// refused at boot rather than panicking on the first call.
+		introspectionValidator := introspectionTokenValidator(formGraph, sessionTokens)
+		return withVectorIntrospection(services, runtimeConfig, runtimeRoot,
+			runtimecomposition.PlatformVectorIntrospection{
+				Validator:     introspectionValidator,
+				CallbackFacts: dbrepos.NewCallbackTokenGrants(pool),
+				Logger:        logger,
+			})
 	})
 	if err != nil {
 		return fmt.Errorf("configure platform listener: %w", err)
@@ -3281,5 +3316,20 @@ func startPipelineScheduleRunner(
 			logger.Error("the pipeline schedule runner stopped", "err", err)
 		}
 	}()
+	return nil
+}
+
+// introspectionTokenValidator is the PAT validator of elitea-vector's token
+// introspection on the platform listener: the form graph when there is one,
+// else the APPLICATION_SECRET_KEY validator, the pair that reads back what
+// the callback minters sign (patSigner's rule). A nil INTERFACE when neither
+// exists, never a typed nil, so the composition refuses it at boot.
+func introspectionTokenValidator(formGraph *authcomposition.FormGraph, sessionTokens apimw.TokenValidator) vectorintrospection.TokenValidator {
+	if formGraph != nil {
+		return formGraph
+	}
+	if sessionTokens != nil {
+		return sessionTokens
+	}
 	return nil
 }

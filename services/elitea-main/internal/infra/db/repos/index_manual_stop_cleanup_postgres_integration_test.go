@@ -11,7 +11,8 @@ import (
 
 // TestPostgresServiceBackedCurrentIndexManualStopCleanupIntent crosses real
 // cancellation, migration constraints, terminal-readiness gates, lease
-// reclaim, and resolution. PgVector deletion is covered independently.
+// reclaim, and resolution. The registry effect, which deletes no vectors, is
+// covered by indexing's TestRegistryManualStopCleanerKeepsTheIndexVectorsAndOnlyVerifiesTheStop.
 func TestPostgresServiceBackedCurrentIndexManualStopCleanupIntent(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

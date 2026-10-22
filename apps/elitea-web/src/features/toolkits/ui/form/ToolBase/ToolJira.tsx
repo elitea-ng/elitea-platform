@@ -16,7 +16,7 @@ import { ToolBase, type ToolBaseProps } from './ToolBase';
  */
 const JIRA_EXCLUDED_FIELDS = ['cloud'] as const;
 const JIRA_ADVANCED_FIELDS = ['verify_ssl', 'additional_fields', 'custom_headers'] as const;
-const JIRA_PRIORITY_FIELDS = ['jira_configuration', 'pgvector_configuration', 'embedding_model', 'api_version', 'limit', 'labels'] as const;
+const JIRA_PRIORITY_FIELDS = ['jira_configuration', 'embedding_model', 'api_version', 'limit', 'labels'] as const;
 
 export function ToolJira(props: ToolBaseProps): ReactNode {
   const existingExcluded = props.excludedFields ?? [];

@@ -86,7 +86,7 @@ describe('IndexesList — a read that failed is not an empty list', () => {
         indexesList={[]}
         onIndexClick={vi.fn()}
         loading={false}
-        error={listReadFailure(400, { error: 'PGVector configuration is missing for toolkit 1' })}
+        error={listReadFailure(400, { error: 'Toolkit id is missing for toolkit 1' })}
       />,
     );
     expect(queryByText('Still no indexes created')).not.toBeInTheDocument();
@@ -100,38 +100,11 @@ describe('IndexesList — a read that failed is not an empty list', () => {
         indexesList={[]}
         onIndexClick={vi.fn()}
         loading={false}
-        error={listReadFailure(400, { error: 'PGVector configuration is missing for toolkit 1' })}
+        error={listReadFailure(400, { error: 'Toolkit id is missing for toolkit 1' })}
       />,
     );
     expect(getByText('The index list could not be loaded (400).')).toBeInTheDocument();
-    expect(getByText('PGVector configuration is missing for toolkit 1')).toBeInTheDocument();
-  });
-
-  it('adds the prerequisite guidance for the missing-vector-store failure', () => {
-    const { getByText } = renderWithTheme(
-      <IndexesList
-        handleAddIndex={vi.fn()}
-        indexesList={[]}
-        onIndexClick={vi.fn()}
-        loading={false}
-        error={listReadFailure(400, { error: 'PGVector configuration is missing for toolkit 1' })}
-      />,
-    );
-    expect(getByText(/Create a PgVector configuration in Settings/)).toBeInTheDocument();
-  });
-
-  it('omits the guidance for a failure the user cannot fix that way', () => {
-    const { getByText, queryByText } = renderWithTheme(
-      <IndexesList
-        handleAddIndex={vi.fn()}
-        indexesList={[]}
-        onIndexClick={vi.fn()}
-        loading={false}
-        error={listReadFailure(502, undefined)}
-      />,
-    );
-    expect(getByText('The index list could not be loaded (502).')).toBeInTheDocument();
-    expect(queryByText(/Create a PgVector configuration/)).not.toBeInTheDocument();
+    expect(getByText('Toolkit id is missing for toolkit 1')).toBeInTheDocument();
   });
 
   it('falls back to the generic heading when the failure carries no status', () => {
@@ -147,7 +120,7 @@ describe('IndexesList — a read that failed is not an empty list', () => {
     expect(getByText('The index list could not be loaded.')).toBeInTheDocument();
   });
 
-  it('keeps the "Add index" button reachable, so a fixed prerequisite can be used at once', () => {
+  it('keeps the "Add index" button reachable, so a retry is one click away', () => {
     const handleAddIndex = vi.fn();
     const { getByLabelText } = renderWithTheme(
       <IndexesList
@@ -155,7 +128,7 @@ describe('IndexesList — a read that failed is not an empty list', () => {
         indexesList={[]}
         onIndexClick={vi.fn()}
         loading={false}
-        error={listReadFailure(400, { error: 'PGVector configuration is missing for toolkit 1' })}
+        error={listReadFailure(400, { error: 'Toolkit id is missing for toolkit 1' })}
       />,
     );
     getByLabelText('Add index').click();
@@ -169,7 +142,7 @@ describe('IndexesList — a read that failed is not an empty list', () => {
         indexesList={[]}
         onIndexClick={vi.fn()}
         loading
-        error={listReadFailure(400, { error: 'PGVector configuration is missing for toolkit 1' })}
+        error={listReadFailure(400, { error: 'Toolkit id is missing for toolkit 1' })}
       />,
     );
     expect(queryByTestId('indexes-list-error')).not.toBeInTheDocument();

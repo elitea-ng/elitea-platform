@@ -18,6 +18,15 @@
 //! What an engine supplies is its [`Ledger`]: the table the ledger lives in
 //! and the name the lock key is hashed from. Two engines in one database
 //! must not share either.
+//!
+//! **Rewritten migrations.** Immutability has ONE sanctioned exception,
+//! [`Rewritten`]: a released file may be rewritten when a database that
+//! applied the released text stays valid. The pgvector removal (#1359) is
+//! the case: a fresh install must not need the `vector` extension, so the
+//! files that created it were rewritten without it, and a NEW migration
+//! drops what the released text created on a database that applied it. The
+//! released checksums are listed, so an applied row with one of them is
+//! accepted. Any other checksum is still refused.
 
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPool;
@@ -94,6 +103,14 @@ impl Migration {
     }
 }
 
+/// A released migration that was rewritten (see the crate docs): the
+/// checksums its released texts hashed to, each still accepted as applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rewritten {
+    pub version: &'static str,
+    pub released_checksums: &'static [&'static str],
+}
+
 /// The lowercase SHA-256 hex of `text`'s UTF-8 bytes.
 #[must_use]
 pub fn checksum(text: &str) -> String {
@@ -165,6 +182,21 @@ pub async fn apply(
     ledger: &Ledger,
     migrations: &[Migration],
 ) -> Result<Vec<String>> {
+    apply_with_rewrites(pool, ledger, migrations, &[]).await
+}
+
+/// [`apply`], accepting each [`Rewritten`] migration's released checksums
+/// as applied.
+///
+/// # Errors
+///
+/// As [`apply`].
+pub async fn apply_with_rewrites(
+    pool: &PgPool,
+    ledger: &Ledger,
+    migrations: &[Migration],
+    rewritten: &[Rewritten],
+) -> Result<Vec<String>> {
     let table = ledger.checked_table()?;
     let mut connection = pool.acquire().await?;
     let key: i64 = sqlx::query_scalar("SELECT hashtext($1)::bigint")
@@ -175,7 +207,7 @@ pub async fn apply(
         .bind(key)
         .execute(&mut *connection)
         .await?;
-    let outcome = apply_locked(&mut connection, table, migrations).await;
+    let outcome = apply_locked(&mut connection, table, migrations, rewritten).await;
     // Released even when a migration failed. A failure to release ends the
     // session's lock with the connection, so it is not reported over the
     // migration's own outcome.
@@ -193,6 +225,7 @@ async fn apply_locked(
     connection: &mut sqlx::postgres::PgConnection,
     table: &str,
     migrations: &[Migration],
+    rewritten: &[Rewritten],
 ) -> Result<Vec<String>> {
     // A schema-qualified ledger lives in the engine's own schema, which the
     // first migration cannot have created yet.
@@ -226,7 +259,7 @@ async fn apply_locked(
     for migration in migrations {
         if let Some(recorded) = applied.get(&migration.version) {
             let current = migration.checksum();
-            if *recorded != current {
+            if *recorded != current && !released_text(rewritten, &migration.version, recorded) {
                 return Err(MigrateError::Migration(format!(
                     "migration {}_{} was applied with checksum {recorded} but the file now hashes to {current}. Applied migrations are immutable — add a new migration instead of editing this one.",
                     migration.version, migration.name
@@ -263,6 +296,13 @@ async fn apply_locked(
         newly_applied.push(migration.version.clone());
     }
     Ok(newly_applied)
+}
+
+/// Whether `recorded` is a released checksum of the rewritten `version`.
+fn released_text(rewritten: &[Rewritten], version: &str, recorded: &str) -> bool {
+    rewritten
+        .iter()
+        .any(|entry| entry.version == version && entry.released_checksums.contains(&recorded))
 }
 
 #[cfg(test)]
@@ -335,5 +375,17 @@ mod tests {
             checksum(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn only_a_listed_released_checksum_of_that_version_is_accepted() {
+        const REWRITTEN: &[Rewritten] = &[Rewritten {
+            version: "0001",
+            released_checksums: &["aaaa", "bbbb"],
+        }];
+        assert!(released_text(REWRITTEN, "0001", "bbbb"));
+        assert!(!released_text(REWRITTEN, "0001", "cccc"));
+        assert!(!released_text(REWRITTEN, "0002", "aaaa"));
+        assert!(!released_text(&[], "0001", "aaaa"));
     }
 }

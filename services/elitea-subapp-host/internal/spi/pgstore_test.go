@@ -170,10 +170,23 @@ func TestPostgresStoreReconcilesAnotherOwnersOrphans(t *testing.T) {
 	if n, err := fresh.Reconcile(ctx); err != nil || n != 0 {
 		t.Fatalf("a free lock seen once was taken for death: %d %v", n, err)
 	}
-	time.Sleep(350 * time.Millisecond)
-	n, err := fresh.Reconcile(ctx)
-	if err != nil || n != 1 {
-		t.Fatalf("reconciled %d %v", n, err)
+	// Closing the pool does not end the old backend at once: the server may
+	// still hold its session lock for a moment, so the free sighting the
+	// grace counts from can come one pass later. Wait for it, bounded, and
+	// never accept more than the one orphan.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		time.Sleep(350 * time.Millisecond)
+		n, err := fresh.Reconcile(ctx)
+		if err != nil || n > 1 {
+			t.Fatalf("reconciled %d %v", n, err)
+		}
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a dead owner's orphan was never reconciled")
+		}
 	}
 	orphan, _ := fresh.Get(ctx, "Wikis", "generate_wiki", "invocation_orphan")
 	if orphan.Status != "stopped" || orphan.Result["status"] != "Error" || orphan.Result["error_category"] != "runtime_error" || orphan.FinishedAt.IsZero() {

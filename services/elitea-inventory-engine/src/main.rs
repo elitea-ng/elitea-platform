@@ -398,8 +398,7 @@ struct OrphanArguments {
 /// The share of the stored graphs `orphans --delete` may call orphans
 /// without `--force-fraction`: a higher share means a wrong or partial list
 /// (the wrong database's projects, a toolkit export that missed a project's
-/// toolkits), not a platform that lost most of its data. The same default as
-/// elitea-main's `pgvector-orphans --max-orphan-fraction`.
+/// toolkits), not a platform that lost most of its data.
 const DEFAULT_MAX_ORPHAN_FRACTION: f64 = 0.2;
 
 /// Why `--delete` over `orphans` of `stored` graphs is refused by the
@@ -836,16 +835,21 @@ async fn delete_orphans(
 ) -> ExitCode {
     use elitea_inventory_engine::store::delete::{self, GuardedDeletion};
     let mut failed = false;
+    let mut held = Vec::new();
     for orphan in orphans {
         let (project, toolkit) = (orphan.key.project_id, orphan.key.application_id);
         // The activity check runs again here, inside the deletion's own
         // transaction and under the graph's lock, immediately before the
         // rows go: a write since the check above is seen, or queues behind
         // this deletion.
-        match delete::delete_graph_guarded(pool, orphan.key, listed_at).await {
+        // A live project's graph that holds entity vectors is refused: the
+        // command has no bearer for elitea-vector, and the platform's
+        // toolkit cleanup deletes both (`delete::delete_orphan`). A deleted
+        // project's vectors go with its DropProject.
+        match delete::delete_orphan(pool, &orphan, listed_at).await {
             Ok(GuardedDeletion::Deleted { removed, .. }) => println!(
                 "deleted project {project} toolkit {toolkit}: {} entities, {} relations",
-                removed.entities, removed.relations
+                removed.entities, removed.relations,
             ),
             Ok(GuardedDeletion::Busy) => {
                 // An ingestion holds the graph: it is in use, not an orphan.
@@ -858,6 +862,10 @@ async fn delete_orphans(
                 println!("SKIPPED project {project} toolkit {toolkit}: {reason}");
                 skipped.push((orphan, reason));
             }
+            Ok(GuardedDeletion::VectorsHeld(reason)) => {
+                println!("SKIPPED project {project} toolkit {toolkit}: {reason}");
+                held.push(orphan);
+            }
             Err(error) => {
                 eprintln!("project {project} toolkit {toolkit}: {error}");
                 failed = true;
@@ -868,6 +876,12 @@ async fn delete_orphans(
         println!(
             "{} graph(s) skipped: written after the list; run again with a fresh list",
             skipped.len()
+        );
+    }
+    if !held.is_empty() {
+        println!(
+            "{} graph(s) of live projects kept: their entity vectors are in elitea-vector. elitea-main's toolkit cleanup journal deletes such a graph and then its namespace; check that journal for the toolkit",
+            held.len()
         );
     }
     if failed {

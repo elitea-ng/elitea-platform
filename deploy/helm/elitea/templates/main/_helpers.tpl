@@ -938,7 +938,7 @@ and the term that actually moves is the one this counts.
      rendered (vector.enabled): elitea-vector's token introspection reads the
      claim-token table on its own bounded pool, so a burst of introspection
      calls cannot starve the lease/control pool. */}}
-{{- $perReplica = add $perReplica (int (default 8 (get $env "ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS"))) -}}
+{{- $perReplica = add $perReplica (int (default 2 (get $env "ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS"))) -}}
 {{- end -}}
 {{- end -}}
 

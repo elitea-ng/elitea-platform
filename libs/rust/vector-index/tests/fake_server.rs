@@ -13,7 +13,9 @@
 
 #![allow(clippy::too_many_lines, reason = "scenario tests read top to bottom")]
 
-use elitea_vector_index::client::{toolkit_namespace, toolkit_scope};
+use elitea_vector_index::client::{
+    inventory_namespace, inventory_scope, toolkit_namespace, toolkit_scope,
+};
 use elitea_vector_index::format::Doctype;
 use elitea_vector_index::testing::{FakeVector, status};
 use elitea_vector_index::{
@@ -1356,4 +1358,87 @@ async fn extended_search_reads_document_chunks_in_one_call() {
     assert_eq!(found.as_array().unwrap().len(), 5, "{found}");
     // document search + title search + one read of the five document chunks.
     assert_eq!(fake.calls()[before..], ["search", "search", "search"]);
+}
+
+#[tokio::test]
+async fn search_pages_are_disjoint_and_in_ranking_order() {
+    let (client, _fake) = connect().await;
+    // Ties: pairs of identical vectors.
+    let points: Vec<pb::Point> = (0..9_u8)
+        .map(|n| {
+            let tilt = f32::from(n / 2) * 0.2;
+            point(
+                &format!("entity-{n}"),
+                "0",
+                "entity",
+                "e",
+                &json!({}),
+                [1.0, tilt, 0.0],
+            )
+        })
+        .collect();
+    let written = client
+        .upsert(&token(TOKEN_A), space(), inventory_namespace(NS), points)
+        .await
+        .expect("upsert");
+    assert_eq!(written.collection, "inv_test-model_3");
+    let params = |limit: u32| SearchParams {
+        scope: inventory_scope(vec![NS.to_owned()]),
+        space: space(),
+        vector: vec![1.0, 0.0, 0.0],
+        filter: None,
+        limit,
+        score_threshold: None,
+    };
+    let whole = client
+        .search(&token(TOKEN_A), params(9))
+        .await
+        .expect("one shot");
+    assert_eq!(whole.len(), 9);
+    let mut paged = Vec::new();
+    for offset in (0..9).step_by(2) {
+        paged.extend(
+            client
+                .search_page(&token(TOKEN_A), params(2), offset)
+                .await
+                .expect("page"),
+        );
+    }
+    assert_eq!(paged, whole);
+    let status = client
+        .search_page(&token(TOKEN_A), params(1000), 9001)
+        .await
+        .expect_err("past the depth bound");
+    assert!(
+        matches!(
+            &status,
+            Error::Rpc {
+                code: Code::InvalidArgument,
+                ..
+            }
+        ),
+        "{status:?}"
+    );
+    let hybrid = client
+        .hybrid_search(
+            &token(TOKEN_A),
+            HybridSearchParams {
+                search: params(5),
+                text: "e".to_owned(),
+                dense_weight: 0.0,
+                text_weight: 0.0,
+            },
+        )
+        .await
+        .expect_err("no hybrid for inventory");
+    assert!(
+        matches!(
+            &hybrid,
+            Error::Rpc {
+                code: Code::InvalidArgument,
+                ..
+            }
+        ),
+        "{hybrid:?}"
+    );
 }

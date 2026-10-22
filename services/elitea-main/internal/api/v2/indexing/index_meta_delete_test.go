@@ -269,15 +269,10 @@ func TestCurrentIndexMetaDeleteRouteCurrentErrorsAndSafeCleanupDivergence(
 			want:      http.StatusBadRequest,
 			wantError: "Toolkit id is missing for toolkit None",
 		},
-		"pgvector validation": {
+		"index storage validation": {
 			err:       indexmetaapp.ErrCurrentIndexMetaTargetMissing,
 			want:      http.StatusBadRequest,
-			wantError: "PGVector configuration is missing for toolkit 9",
-		},
-		"connection validation": {
-			err:       indexmetaapp.ErrCurrentIndexMetaConnectionMissing,
-			want:      http.StatusBadRequest,
-			wantError: "Connection string is missing in PGVector configuration for toolkit 9",
+			wantError: "Index storage is not available for toolkit 9",
 		},
 		"cleanup toolkit disappears": {
 			err: &indexmetaapp.ScheduleToolkitMissingError{
@@ -288,7 +283,7 @@ func TestCurrentIndexMetaDeleteRouteCurrentErrorsAndSafeCleanupDivergence(
 			want:      http.StatusNotFound,
 			wantError: "Toolkit 9 not found (project_id=7, index_name='Docs')",
 		},
-		"pgvector failure": {
+		"index storage failure": {
 			err:       indexmetaapp.ErrCurrentIndexMetaUnavailable,
 			want:      http.StatusBadRequest,
 			wantError: "Error occurred while deleting index_meta",

@@ -47,7 +47,7 @@ export const IndexWriteRefusal = zod
     error: zod
       .string()
       .describe(
-        "A fixed, human-readable sentence. It never carries the driver error: an unwrapped pgx failure names the PgVector user, database, host and port.\n",
+        "A fixed, human-readable sentence. It never carries the driver error, which can name database credentials, hosts and ports.\n",
       ),
   })
   .describe(

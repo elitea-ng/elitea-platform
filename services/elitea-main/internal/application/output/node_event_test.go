@@ -81,38 +81,6 @@ func TestNodeEventServiceRejectsStaleFenceBeforeProjection(t *testing.T) {
 	}
 }
 
-func TestNodeEventFrameSelectsOnlyCurrentInProgressTaskRestampSource(t *testing.T) {
-	frame := validNodeEventFrame()
-	frame.BrowserData = []byte(`{
-		"type":"agent_index_data_status",
-		"response_metadata":{
-			"state":"in_progress",
-			"created_at":1700000000.25,
-			"task_id":"forged-task",
-			"project_id":999,
-			"toolkit_id":999,
-			"index_name":"forged"
-		}
-	}`)
-	createdOn, selected := frame.CurrentIndexMetaTaskRestampSource()
-	if !selected || createdOn != 1700000000.25 {
-		t.Fatalf("task restamp source=(%v, %v)", createdOn, selected)
-	}
-
-	for _, browserData := range []string{
-		`{"type":"agent_thinking_step","response_metadata":{"state":"in_progress","created_at":1700000000}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"completed","created_at":1700000000}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"in_progress","created_at":"1700000000"}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"in_progress","created_at":0}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"in_progress"}}`,
-	} {
-		frame.BrowserData = []byte(browserData)
-		if _, selected := frame.CurrentIndexMetaTaskRestampSource(); selected {
-			t.Fatalf("unexpected task restamp source: %s", browserData)
-		}
-	}
-}
-
 func validNodeEventFrame() NodeEventFrame {
 	fence := runtimedomain.Fence{
 		CommandID:         "command-node-1",

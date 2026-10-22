@@ -66,50 +66,12 @@ func WithWorkerCapability(source ToolkitCapabilitySource) Option {
 
 // WithMemoryOnVectorStore states that the deployment keeps memory toolkit data
 // in elitea-vector (the Rust indexing runtime, worker unit M9). The memory
-// type is then served without its SDK `pgvector_configuration` field: the Rust
-// worker reads nothing from it and such a deployment provisions no pgvector
-// configuration, so a form that required one could not be saved. The SDK schema
-// stays as pinned everywhere else (the Python worker uses the field).
+// type is then served with its `memory_scope` setting. No type carries the
+// SDK's `pgvector_configuration` field any more: it was removed from the
+// pinned snapshots with the retired `pgvector` configuration type
+// (application/configurations/retired.go).
 func WithMemoryOnVectorStore(enabled bool) Option {
 	return func(h *Handler) { h.memoryOnVectorStore = enabled }
-}
-
-// withoutPgvectorConfiguration copies a settings schema without the
-// `pgvector_configuration` property and its `required` entry. Only the nodes on
-// those paths are rebuilt, so the shared pinned schema is never written to.
-func withoutPgvectorConfiguration(settingsSchema map[string]any) map[string]any {
-	typeSchema := make(map[string]any, len(settingsSchema))
-	for key, value := range settingsSchema {
-		typeSchema[key] = value
-	}
-	if properties, ok := settingsSchema[toolkitSettingsPropertyKey].(map[string]any); ok {
-		kept := make(map[string]any, len(properties))
-		for name, property := range properties {
-			if name != "pgvector_configuration" {
-				kept[name] = property
-			}
-		}
-		typeSchema[toolkitSettingsPropertyKey] = kept
-	}
-	switch required := settingsSchema["required"].(type) {
-	case []any:
-		kept := make([]any, 0, len(required))
-		for _, name := range required {
-			if name != "pgvector_configuration" {
-				kept = append(kept, name)
-			}
-		}
-		typeSchema["required"] = kept
-	case []string:
-		kept := make([]string, 0, len(required))
-		for _, name := range required {
-			if name != "pgvector_configuration" {
-				kept = append(kept, name)
-			}
-		}
-		typeSchema["required"] = kept
-	}
-	return typeSchema
 }
 
 // memoryScopeDescription is what the create form shows under "Memory scope".
@@ -299,7 +261,7 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	// rendering its flat list. See tool_groups.go.
 	typeSchema = withToolGroups(typeSchema)
 	if toolkitType == "memory" && h != nil && h.memoryOnVectorStore {
-		typeSchema = withMemoryScope(withoutPgvectorConfiguration(typeSchema))
+		typeSchema = withMemoryScope(typeSchema)
 	}
 
 	typeMetadata := h.toolkitTypeMetadata(toolkitType, metadata, catalogued)

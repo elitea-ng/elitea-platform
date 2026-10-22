@@ -232,7 +232,9 @@ exceptions (owner decisions, 2026-10-06):
   fixable), where Alpine scans clean.
 
 **Debian 13 PostgreSQL image (2026-10).** The `postgres` service moved from
-`pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`.
+`pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`,
+and later (#1359) to plain `postgres:18`, the same major on the same Debian 13:
+nothing needs pgvector any more, and that second move rebuilds nothing.
 The PostgreSQL major is the same, so the `standalone_pg_data` volume is reused
 in place. The C library changed (glibc 2.36 to 2.41), and with it the collation
 rules that ordered the existing text indexes. PostgreSQL logs this as
@@ -1307,10 +1309,10 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   schema (`internal/infra/db/migrations/001_initial.sql`) and applies it first
   when the database does not carry it, then applies the shared and tenant
   histories. So the migration hook does build the schema, and nobody runs SQL
-  by hand before the install (#556). Two preparations stay outside it, because
-  both need rights the migrating role does not hold: `CREATE DATABASE` for the
-  agent-state store and `CREATE EXTENSION vector`. The `dbInit` Job does them,
-  and it needs an administrator DSN.
+  by hand before the install (#556). One preparation stays outside it, because
+  it needs a right the migrating role does not hold: `CREATE DATABASE` for the
+  agent-state store. The `dbInit` Job does it, and it needs an administrator
+  DSN. No `vector` extension: plain PostgreSQL is enough (#1359).
 - **No browser edge by default, and no securityContext hardening.** The charts
   render neither an Ingress nor an HTTPRoute until `main.ingress.enabled` is
   on, so a default install leaves `elitea-web` and `elitea-main` reachable

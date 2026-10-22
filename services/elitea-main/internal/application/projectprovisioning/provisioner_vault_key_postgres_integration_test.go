@@ -8,8 +8,8 @@ package projectprovisioning_test
 // vault that one path cannot decrypt. Nothing reports the fault. Only a later
 // read fails, and by then the vault exists and looks healthy.
 //
-// WHY THE EXISTING PGVECTOR TEST COULD NOT CATCH IT. That test runs with no
-// master key at all, so every path agrees by accident: an absent
+// WHY A TEST WITH NO MASTER KEY COULD NOT CATCH IT. With no master key at
+// all every path agrees by accident: an absent
 // SECRETS_MASTER_KEY and an absent ELITEA_VAULT_MASTER_KEY_FILE both mean
 // "unwrapped". That is the standalone stack. It is not the staging deployment,
 // which sets SECRETS_MASTER_KEY, and which is precisely where the two key
@@ -21,19 +21,21 @@ package projectprovisioning_test
 // the other source cannot open it. The final case proves that, so a future
 // change that moved the writer back to the other key source would fail here
 // rather than in production.
+//
+// The per-project PgVector material that was the first writer this pinned went
+// with the per-project store (#1359); the round trip below writes through the
+// same handler every later material write uses.
 
 import (
 	"context"
 	"errors"
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	vectorstoreapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/vectorstore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -53,8 +55,6 @@ const referenceMasterKey = "dGVzdC1tYXN0ZXIta2V5LTMyLWJ5dGVzLXNlZWQtMDE="
 const unwrappedStoredKeyBytes = 44
 
 func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T) {
-	skipWithoutVectorExtension(t)
-
 	// The deployment shape. Five files under deploy/ set SECRETS_MASTER_KEY; no
 	// file under deploy/ sets ELITEA_VAULT_MASTER_KEY_FILE. Set the first
 	// BEFORE anything builds a secrets handler, which reads it at construction.
@@ -65,14 +65,10 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	seedPublicPgvectorBootstrap(ctx, t, pool)
-	vectorStore := newProjectVectorStoreForTest(t, pool)
-
 	provisioner := projectprovisioning.New(
 		pool,
 		migrate.New(pool, platformmigrations.Files),
 		nil,
-		projectprovisioning.WithVectorStore(vectorStore),
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
 	)
 	result, err := provisioner.Provision(ctx, projectprovisioning.Request{
@@ -82,12 +78,10 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 		t.Fatalf("provision: %v (steps=%+v)", err, result.Steps)
 	}
 	projectID := result.ProjectID
-	dropProvisionedVectorStore(t, projectID)
 
-	// Premise checks. Both steps must have RUN, or every assertion below would
-	// be measuring an empty result.
+	// Premise check. The step must have RUN, or every assertion below would be
+	// measuring an empty result.
 	assertStepSucceeded(t, result.Steps, projectprovisioning.StepProjectSecrets)
-	assertStepSucceeded(t, result.Steps, projectprovisioning.StepProjectPgvector)
 
 	/* ── the vault really is master-key-wrapped ──────────────────────────
 	 *
@@ -117,37 +111,14 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 	handler := v2secrets.NewHandler(pool)
 	projectVaultID := strconv.FormatInt(projectID, 10)
 
-	connectionString, err := handler.LookupProjectSecret(
-		ctx, projectVaultID, vectorstoreapp.ProjectPgvectorConnstrKey)
-	// The two failures are separated, not collapsed (#416). ErrSecretNotFound
-	// means the vault opened and the material writer wrote nothing; anything
-	// else means this key cannot open the vault it created.
-	if errors.Is(err, v2secrets.ErrSecretNotFound) {
-		t.Fatal("the provisioned vault holds no pgvector connection string: " +
-			"the material writer wrote nothing an index run can redeem")
-	}
-	if err != nil {
-		t.Fatalf("the deployment's own master key cannot open the vault it created: %v", err)
-	}
-	if strings.Contains(connectionString, "{{secret.") {
-		t.Fatalf("the stored connection string is still a placeholder (%q)", connectionString)
-	}
-	if _, err := handler.LookupProjectSecret(
-		ctx, projectVaultID, vectorstoreapp.ProjectPgvectorPasswordKey); err != nil {
-		t.Fatalf("the provisioned vault holds no pgvector password: %v", err)
-	}
-	// The material is real, not merely present.
-	assertVectorStoreAccepts(ctx, t, connectionString, projectID)
-
 	/* ── a full write-then-read round trip through the same key ──────────
 	 *
-	 * The provisioning write above proves the creator and the writer agree. This
-	 * proves the writer can be used AGAIN on the same vault, which is what every
-	 * later material update does.
+	 * A create-if-absent that never opens the vault cannot detect a key
+	 * mismatch, and an existence check on the two rows passes for a vault
+	 * nothing can decrypt. This writes through the deployment's handler and
+	 * reads the value back, which opens the vault both ways.
 	 */
-	if err := handler.StoreProjectSecrets(ctx, projectVaultID, map[string]string{
-		"issue_399_round_trip": "round-trip-value",
-	}); err != nil {
+	if err := handler.StoreSecret(ctx, nil, projectVaultID, "issue_399_round_trip", "round-trip-value"); err != nil {
 		t.Fatalf("write vault material through the deployment's key: %v", err)
 	}
 	readBack, err := handler.LookupProjectSecret(ctx, projectVaultID, "issue_399_round_trip")
@@ -180,7 +151,7 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 	t.Cleanup(otherWriter.Destroy)
 	err = otherWriter.MutateProject(ctx, projectID, []centrysecrets.Mutation{{
 		Collection: centrysecrets.RegularSecrets,
-		Name:       vectorstoreapp.ProjectPgvectorPasswordKey,
+		Name:       "issue_399_round_trip",
 		Value:      "written-with-the-wrong-key",
 	}})
 	if err == nil {
@@ -193,7 +164,7 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 
 	// And the vault the wrong key could not open is still intact.
 	stillThere, err := handler.LookupProjectSecret(
-		ctx, projectVaultID, vectorstoreapp.ProjectPgvectorPasswordKey)
+		ctx, projectVaultID, "issue_399_round_trip")
 	if err != nil || stillThere == "written-with-the-wrong-key" {
 		t.Fatalf("the failed other-key write damaged the vault: %v", err)
 	}
@@ -202,13 +173,11 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 // TestProvisionDeprovisionRemovesTheWrappedVault proves the delete half still
 // works when only ONE owner remains.
 //
-// RemoveProjectVectorStore used to delete the vault too. It no longer does
-// (#399), so this pins that removeProjectSecrets alone is enough. A vault left
+// The vector-store step used to delete the vault too (#399), and that step is
+// gone (#1359), so this pins that removeProjectSecrets alone is enough. A vault left
 // behind is adopted by the next project that draws the same id, and its rows
 // carry no foreign key to centry.project, so nothing else would ever sweep it.
 func TestProvisionDeprovisionRemovesTheWrappedVault(t *testing.T) {
-	skipWithoutVectorExtension(t)
-
 	t.Setenv("SECRETS_MASTER_KEY", referenceMasterKey)
 	assertVaultMasterKeyFileIsUnset(t)
 
@@ -216,14 +185,10 @@ func TestProvisionDeprovisionRemovesTheWrappedVault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	seedPublicPgvectorBootstrap(ctx, t, pool)
-	vectorStore := newProjectVectorStoreForTest(t, pool)
-
 	provisioner := projectprovisioning.New(
 		pool,
 		migrate.New(pool, platformmigrations.Files),
 		nil,
-		projectprovisioning.WithVectorStore(vectorStore),
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
 	)
 	result, err := provisioner.Provision(ctx, projectprovisioning.Request{
@@ -233,7 +198,6 @@ func TestProvisionDeprovisionRemovesTheWrappedVault(t *testing.T) {
 		t.Fatalf("provision: %v (steps=%+v)", err, result.Steps)
 	}
 	projectID := result.ProjectID
-	dropProvisionedVectorStore(t, projectID)
 
 	// Premise: the vault is there before the delete. Without this the assertion
 	// below passes for a project whose vault was never created.
@@ -250,65 +214,6 @@ func TestProvisionDeprovisionRemovesTheWrappedVault(t *testing.T) {
 	}
 }
 
-// TestProvisionFailsWhenTheMaterialWriterUsesTheOtherKeySource is the
-// discrimination proof for the two cases above.
-//
-// A test that only asserts the happy path cannot show that it would have caught
-// the defect. This case rebuilds the defect on purpose: the vault CREATOR keeps
-// the deployment's SECRETS_MASTER_KEY, and the material WRITER is built without
-// it — which is exactly the production shape, where the writer read
-// ELITEA_VAULT_MASTER_KEY_FILE and no deployment set it.
-//
-// Provisioning must FAIL. Before this change it succeeded, because the writer
-// never opened the vault it was writing into, and the mismatch surfaced only at
-// a later decrypt in a different subsystem.
-func TestProvisionFailsWhenTheMaterialWriterUsesTheOtherKeySource(t *testing.T) {
-	assertVaultMasterKeyFileIsUnset(t)
-
-	pool := newProvisioningPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	// The writer's key source, built FIRST. An empty SECRETS_MASTER_KEY is how
-	// NewHandler expresses "no master key", which is what the other source
-	// resolves to on every deployment in this repository. NewHandler reads the
-	// variable once, at construction, so the order of these two matters.
-	t.Setenv("SECRETS_MASTER_KEY", "")
-	writerOnTheOtherKey := v2secrets.NewHandler(pool)
-
-	// The creator's key source, and the one the vault is really wrapped under.
-	t.Setenv("SECRETS_MASTER_KEY", referenceMasterKey)
-
-	seedPublicPgvectorBootstrap(ctx, t, pool)
-	vectorStore := newProjectVectorStoreWithSecretsForTest(t, pool, writerOnTheOtherKey)
-
-	provisioner := projectprovisioning.New(
-		pool,
-		migrate.New(pool, platformmigrations.Files),
-		nil,
-		projectprovisioning.WithVectorStore(vectorStore),
-		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
-	)
-	result, err := provisioner.Provision(ctx, projectprovisioning.Request{
-		Name: "Mismatched Key Project", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
-	})
-	if result.ProjectID > 0 {
-		dropProvisionedVectorStore(t, result.ProjectID)
-	}
-	if err == nil {
-		t.Fatal("provisioning SUCCEEDED with a material writer on the other key source: " +
-			"the writer did not open the vault it wrote into, so a key mismatch " +
-			"reaches production silently — which is defect #399 itself")
-	}
-	// The failure must be the vault one, at the step that writes the material.
-	// A failure anywhere else would pass this case for the wrong reason.
-	assertStepSucceeded(t, result.Steps, projectprovisioning.StepProjectSecrets)
-	if !strings.Contains(err.Error(), projectprovisioning.StepProjectPgvector) {
-		t.Fatalf("provisioning failed with %v, want a failure at %q",
-			err, projectprovisioning.StepProjectPgvector)
-	}
-}
-
 // assertVaultMasterKeyFileIsUnset guards the premise of both cases above. The
 // divergence needs one key source present and the other absent.
 func assertVaultMasterKeyFileIsUnset(t *testing.T) {
@@ -320,3 +225,17 @@ func assertVaultMasterKeyFileIsUnset(t *testing.T) {
 }
 
 // countVaultRows lives in provisioner_secrets_postgres_integration_test.go.
+
+func assertStepSucceeded(t *testing.T, steps []projectprovisioning.StepStatus, name string) {
+	t.Helper()
+	for _, status := range steps {
+		if status.Step != name {
+			continue
+		}
+		if status.OK == nil || !*status.OK {
+			t.Fatalf("step %q did not report success: %+v", name, status)
+		}
+		return
+	}
+	t.Fatalf("step %q was never attempted; the pipeline is %+v", name, steps)
+}

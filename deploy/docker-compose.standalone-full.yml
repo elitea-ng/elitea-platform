@@ -168,25 +168,21 @@ services:
   # ── Infrastructure ──────────────────────────────────────────────────────────
 
   postgres:
-    # pgvector, not plain postgres:18, and it is load-bearing for the index
-    # plane (#93 Surface A). The index-start request materializes its initial
-    # index_meta SYNCHRONOUSLY before it answers, and that write creates
-    # `langchain_pg_embedding (… embedding vector …)` in the target database
-    # (internal/infra/pgvector/index_meta_writer.go:649-667). Without the
-    # extension the DDL fails with `type "vector" does not exist` and the start
-    # route answers 500 — no dispatch, no task_id, nothing on the events
-    # stream. The legacy stack has always used a pgvector image for the same
-    # reason; this one had not needed it because the index plane was off.
+    # Plain PostgreSQL: nothing on this stack needs the `vector` extension
+    # (#1359, 2026-10-21). Every dense vector — the worker's indexes, DeepWiki's
+    # and Inventory's — lives in Qdrant behind elitea-vector (below), and no
+    # migration creates the extension any more. It replaced
+    # pgvector/pgvector:0.8.1-pg18-trixie; the same PostgreSQL major on the
+    # same Debian 13, so the existing standalone_pg_data volume is reused in
+    # place. The engines' drop migrations remove the pgvector leftovers
+    # (their tables and, when nothing else uses it, the extension) from a
+    # volume that image created.
     #
-    # Same PostgreSQL major as before (pg18), so the existing standalone_pg_data
-    # volume is reused in place rather than re-initialized.
-    #
-    # `-trixie` (Debian 13), like every image in this stack. The tag without a
-    # suffix is Debian 12. The move changes glibc, so a volume an older image
-    # created needs its text indexes rebuilt once: `standalone-stack.sh up`
-    # runs `pg-collation-repair` before the rest of the stack starts (see
-    # deploy/README.md, "Upgrade notes").
-    image: pgvector/pgvector:0.8.1-pg18-trixie
+    # Debian 13 (trixie), like every image in this stack. A volume an older,
+    # Debian 12 image created needs its text indexes rebuilt once:
+    # `standalone-stack.sh up` runs `pg-collation-repair` before the rest of
+    # the stack starts (see deploy/README.md, "Upgrade notes").
+    image: postgres:18
     shm_size: '2g'
     # Raise the server-side budget for the enlarged #965 pooler pool
     # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128). The image
@@ -354,12 +350,6 @@ services:
              "SELECT 1 FROM pg_database WHERE datname = 'agentstate'" | grep -q 1; then
           psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d postgres -c "CREATE DATABASE agentstate"
         fi
-        # The vector type the index plane's DDL uses unqualified, so it has to
-        # live in a schema on the default search_path — `public`. Idempotent,
-        # and separate from 001_initial.sql because it must also be applied to
-        # a database that predates this line.
-        psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d elitea \
-             -c "CREATE EXTENSION IF NOT EXISTS vector SCHEMA public"
         if psql -h postgres -U elitea -d elitea -tAc "SELECT to_regclass('centry.project')" | grep -q .; then
           echo "centry schema already present; skipping 001_initial.sql"
           exit 0
@@ -1538,8 +1528,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      # db-init creates the vector extension too; two concurrent
-      # CREATE EXTENSION IF NOT EXISTS can fail the loser on a fresh volume.
+      # After db-init, so the first boot's schema bootstrap and this
+      # service's migrations do not race on a fresh volume.
       db-init:
         condition: service_completed_successfully
     restart: "no"
@@ -1584,6 +1574,11 @@ services:
       # (https://elitea-platform.invalid/llm/v1) that only names the route.
       # The fixture runner calls no model and ignores them.
       ELITEA_DEEPWIKI_MODEL_SERVICE_URL: "https://elitea-main:9446"
+      # The native runner's dense vectors (ADR-0031): elitea-vector, with the
+      # invocation's callback token over the same CA and client certificate.
+      # elitea-vector's certificate (DNS:elitea-vector) and its client CA are
+      # both the runtime CA. Required by native, ignored by fixture.
+      ELITEA_DEEPWIKI_VECTOR_URL: "https://elitea-vector:9470"
       ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
       ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
       ELITEA_DEEPWIKI_CALLBACK_KEY_FILE: /run/elitea-subapp/subapp-callback-client.key
@@ -1598,6 +1593,8 @@ services:
         condition: service_completed_successfully
       runtime-material:
         condition: service_completed_successfully
+      elitea-vector:
+        condition: service_healthy
     healthcheck:
       # Distroless: no shell, no python. The binary probes its own socket
       # with the engine's gRPC Health (elitea.engine.v1).
@@ -1700,8 +1697,9 @@ services:
     restart: unless-stopped
 
   # The Inventory graph store's migrations, from the native engine image (the
-  # binary embeds the SQL files, creates the inventory_graph schema and the
-  # pgvector extension, and writes inventory_graph.schema_migrations). Exits 0
+  # binary embeds the SQL files, creates the inventory_graph schema and
+  # writes inventory_graph.schema_migrations; no extension — the entity
+  # vectors are in Qdrant behind elitea-vector). Exits 0
   # at the newest migration; the engine waits for it. It runs for the fixture
   # runner too, so switching to native needs no extra step.
   elitea-inventory-migrate:
@@ -1718,8 +1716,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      # db-init creates the vector extension too; two concurrent
-      # CREATE EXTENSION IF NOT EXISTS can fail the loser on a fresh volume.
+      # After db-init, so the first boot's schema bootstrap and this
+      # service's migrations do not race on a fresh volume.
       db-init:
         condition: service_completed_successfully
     restart: "no"
@@ -1763,6 +1761,9 @@ services:
       # (https://elitea-platform.invalid/llm/v1) that only names the route.
       # The fixture runner calls no model and ignores them.
       ELITEA_INVENTORY_MODEL_SERVICE_URL: "https://elitea-main:9446"
+      # The native runner's entity vectors (ADR-0031), as DeepWiki's engine
+      # above. Required by native, ignored by fixture.
+      ELITEA_INVENTORY_VECTOR_URL: "https://elitea-vector:9470"
       ELITEA_INVENTORY_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
       ELITEA_INVENTORY_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
       ELITEA_INVENTORY_CALLBACK_KEY_FILE: /run/elitea-subapp/subapp-callback-client.key
@@ -1778,6 +1779,8 @@ services:
         condition: service_completed_successfully
       runtime-material:
         condition: service_completed_successfully
+      elitea-vector:
+        condition: service_healthy
     healthcheck:
       # Distroless: no shell, no python. The binary probes its own socket.
       test: ["CMD", "/usr/local/bin/elitea-inventory-engine", "healthcheck"]
@@ -1834,8 +1837,9 @@ services:
       ELITEA_VECTOR_HEALTH_ADDR: "0.0.0.0:9471"
       ELITEA_VECTOR_TLS_CERT_FILE: /run/elitea-vector/vector.crt
       ELITEA_VECTOR_TLS_KEY_FILE: /run/elitea-vector/vector.key
-      # The callers' trust root: the workers' agent-worker-client and
-      # elitea-main's administrator identity are both runtime-CA identities.
+      # The callers' trust root: the workers' agent-worker-client, the
+      # engines' subapp-callback-client and elitea-main's administrator
+      # identity are all runtime-CA identities.
       ELITEA_VECTOR_TLS_CLIENT_CA_FILE: /run/elitea-vector/runtime-ca.crt
       # Admitted without a token, for deletion and admin reads only.
       ELITEA_VECTOR_ADMIN_IDENTITIES: "dns:elitea-main"

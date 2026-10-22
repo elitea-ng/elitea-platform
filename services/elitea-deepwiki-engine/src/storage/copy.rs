@@ -1,12 +1,8 @@
 //! `COPY ... FROM STDIN` in the text format.
 //!
-//! WHY TEXT, NOT BINARY: the binary format needs each column's wire type,
-//! and `vector` has none sqlx knows without the pgvector codec per row; the
-//! text format needs only escaping. It also writes a vector the way the
-//! Python publisher sent it: the decimal text of each `float` (Python
-//! `repr`, Rust `Display`: both the shortest text that reads back as the
-//! same `f64`), which pgvector rounds to `float4`. Same text in, same
-//! `float4` out, so dense distances match bit for bit.
+//! WHY TEXT, NOT BINARY: the binary format needs each column's wire type;
+//! the text format needs only escaping. (The dense vectors are not staged
+//! here: they go to elitea-vector, `storage::dense`.)
 
 use crate::storage::{Result, StorageError};
 use sqlx::postgres::PgConnection;
@@ -110,30 +106,6 @@ impl<'c> CopyWriter<'c> {
     pub(crate) fn boolean(&mut self, value: bool) {
         self.separator();
         self.buffer.push(if value { b't' } else { b'f' });
-    }
-
-    /// A `vector` column: `[x,y,...]` in pgvector's text input form.
-    pub(crate) fn vector(&mut self, values: &[f64], row: &str) -> Result<()> {
-        self.separator();
-        if values.is_empty() {
-            return Err(StorageError::Publish(format!(
-                "{row}: an empty embedding cannot be stored"
-            )));
-        }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(StorageError::Publish(format!(
-                "{row}: the embedding has a non-finite component"
-            )));
-        }
-        self.buffer.push(b'[');
-        for (index, value) in values.iter().enumerate() {
-            if index > 0 {
-                self.buffer.push(b',');
-            }
-            let _ = write!(self.buffer, "{value}");
-        }
-        self.buffer.push(b']');
-        Ok(())
     }
 
     /// End the current row; send the buffer when it is large.

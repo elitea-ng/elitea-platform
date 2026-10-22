@@ -31,7 +31,6 @@ import { useQueries } from '@tanstack/react-query';
 const SECTIONS = [
   'llm',
   'embedding',
-  'vectorstorage',
   'image_generation',
   'asr',
   'tts',

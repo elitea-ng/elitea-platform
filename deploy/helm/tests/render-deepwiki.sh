@@ -25,11 +25,18 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # the engine sidecar's model calls go over gRPC on elitea-main's platform
 # listener (#1359 U2/U5), so DeepWiki renders only beside it.
 RUNTIME="-f $CHART/values-standalone.yaml"
+# The native engine keeps its dense vectors in elitea-vector (ADR-0031), so the
+# chart refuses a native runner without one. A complete install names an
+# external elitea-vector here: this chart's own (vector.enabled) needs the
+# runtime plane, which the refusal cases below turn off one at a time, and it
+# is asserted on its own at the end ("the engine reaches elitea-vector").
+VECTOR="--set deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL=https://vector.elsewhere.invalid:9470"
 
 # A complete, correct DeepWiki install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
 COMPLETE="\
 $RUNTIME \
+$VECTOR \
 --set deepwiki.enabled=true \
 --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
 --set main.fileConfig.deepwikiClientMaterial.enabled=true \
@@ -478,13 +485,39 @@ expect "on: the target is the Service and the platform port" "$(main_env "$grpc"
 explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=deepwiki.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"
 expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
-facade_off="$(render $RUNTIME --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
+facade_off="$(render $RUNTIME $VECTOR --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
   || fail "the engine with its service on and the facade off does not render: $facade_off"
 expect "facade off: nothing derived for a caller that is not composed" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
 if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then
   fail "a platform target beside a facade that is off renders"
 else
   note "refused: a target with the facade off"
+fi
+
+# ── The engine reaches elitea-vector (ADR-0031) ──────────────────────────────
+#
+# The native engine keeps its dense vectors in elitea-vector and refuses to start
+# without ELITEA_DEEPWIKI_VECTOR_URL. With this chart's elitea-vector the chart
+# derives it from the Service; with neither that nor an explicit value the
+# render is refused; an explicit value wins.
+
+echo "== the engine reaches elitea-vector =="
+CHART_VECTOR="--set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key "
+engine_vector_url() {
+  printf '%s' "$1" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[] | select(.name == "engine") | .env[] | select(.name == "ELITEA_DEEPWIKI_VECTOR_URL") | .value' -
+}
+with_chart_vector="$(render ${COMPLETE/"$VECTOR"/} $CHART_VECTOR )" \
+  || fail "the native engine beside this chart's elitea-vector does not render: $with_chart_vector"
+expect "derived from this chart's elitea-vector" "$(engine_vector_url "$with_chart_vector")" "https://elitea-vector:9470"
+explicit_vector="$(render $COMPLETE $CHART_VECTOR )" \
+  || fail "an explicit elitea-vector beside this chart's does not render: $explicit_vector"
+expect "an explicit elitea-vector wins" "$(engine_vector_url "$explicit_vector" | sort -u)" "https://vector.elsewhere.invalid:9470"
+refuses_with "a native engine with no elitea-vector" "vector.enabled is false and deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL is unset" \
+  ${COMPLETE/"$VECTOR"/} 
+if fixture_novector="$(render ${COMPLETE/"$VECTOR"/}  --set deepwiki.engine.runner=fixture 2>&1)"; then
+  expect "the fixture runner needs no elitea-vector" "$(engine_vector_url "$fixture_novector")" ""
+else
+  fail "a fixture engine with no elitea-vector does not render: $fixture_novector"
 fi
 
 if [ "$failures" -ne 0 ]; then

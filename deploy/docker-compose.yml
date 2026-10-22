@@ -1,5 +1,12 @@
 services:
   postgres:
+    # Plain PostgreSQL: nothing in this stack needs the `vector` extension.
+    # Every dense vector, DeepWiki's included, lives in Qdrant behind
+    # elitea-vector (the `deepwiki` profile below); the engine's migrations
+    # create no extension. A postgres_data volume from the earlier pgvector
+    # image is reused as it is (same major, Debian 13 both): the engine's
+    # drop migration removes the pgvector leftovers. `task down:clean` starts
+    # over instead.
     image: postgres:18
     shm_size: '2g'
     environment:
@@ -77,11 +84,8 @@ services:
         condition: service_healthy
 
   # S3-compatible local object store (see docs/plans/storage-migration-plan.md
-  # S4/S17). Not yet wired into elitea-main's environment — the factory that
-  # reads STORAGE_BACKEND/S3_* and constructs an ObjectStore lands in S5, and
-  # the routes that use it in S11. This service and its bucket only need to
-  # exist ahead of that so `task up` has a working store to point at once
-  # they do.
+  # S4/S17): elitea-main's artifact store (STORAGE_BACKEND / S3_* on that
+  # service), the bucket created by rustfs-bucket-init below.
   rustfs:
     image: docker.io/rustfs/rustfs:latest
     ports:
@@ -156,6 +160,46 @@ services:
       - "4317:4317" # OTLP gRPC
       - "4318:4318" # OTLP HTTP
 
+  # Installs elitea-main's platform-listener material into a named volume
+  # (#1359 U5), the same step docker-compose.e2e-standalone.yml runs.
+  # securefile requires a private key to carry owner-only bits AND be readable
+  # by the reading uid (distroless nonroot, 65532); the generated
+  # deploy/certs/platform-server.key is 0644 for the hosts' sake, and a bind
+  # mount cannot change owner or mode per consumer
+  # (deploy/runtime/install-material.sh explains the same split for the
+  # standalone stack). The image is nats-health's, already pulled.
+  #
+  # NOT profiled, because elitea-main waits for it, and an unprofiled service
+  # cannot wait for a profiled one. It installs nothing and exits 0 while
+  # ELITEA_RUNTIME_PLATFORM_ADDRESS is unset, so the default stack needs no
+  # platform-listener certificates; with the address set, a missing file
+  # fails it and elitea-main does not start.
+  platform-material:
+    image: docker.io/library/python:3.12.14-slim-trixie
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      PLATFORM_ADDRESS: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:-}"
+    command:
+      - |
+        if [ -z "$$PLATFORM_ADDRESS" ]; then
+          echo "ELITEA_RUNTIME_PLATFORM_ADDRESS is unset: the platform listener stays closed, nothing to install"
+          exit 0
+        fi
+        for f in platform-server.key platform-server.crt ca.crt; do
+          [ -f "/src/$$f" ] || {
+            echo "deploy/certs/$$f is missing: run deploy/scripts/gen-deepwiki-certs.sh, then deploy/scripts/gen-platform-listener-certs.sh" >&2
+            exit 1
+          }
+        done
+        install -o 65532 -g 65532 -m 0600 /src/platform-server.key /dst/platform-server.key
+        install -o 0 -g 0 -m 0644 /src/platform-server.crt /dst/platform-server.crt
+        install -o 0 -g 0 -m 0644 /src/ca.crt /dst/ca.crt
+    volumes:
+      - ./certs:/src:ro
+      - platform_main:/dst
+    restart: "no"
+
   elitea-main:
     build:
       context: ..
@@ -200,6 +244,17 @@ services:
       OIDC_CLIENT_ID: "elitea-dev-client"
       OIDC_CLIENT_SECRET: "elitea-dev-secret"
       OIDC_REDIRECT_URI: "http://localhost:8080/auth/oidc/callback"
+      # Object storage: the local rustfs store above, as on the e2e and
+      # standalone stacks. Required: elitea-main refuses to start with
+      # STORAGE_BACKEND unset (the S5 storage factory), and every artifact,
+      # DeepWiki's pages included, lands here.
+      STORAGE_BACKEND: "s3"
+      STORAGE_CONTAINER: "elitea-artifacts"
+      S3_ENDPOINT_URL: "http://rustfs:9000"
+      S3_ACCESS_KEY: "elitea"
+      S3_SECRET_KEY: "elitea-dev-secret"
+      S3_REGION: "us-east-1"
+      S3_FORCE_PATH_STYLE: "true"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). This stack has no authentication
       # configuration document, so its `initial_global_admins` list is always
@@ -234,17 +289,19 @@ services:
       #
       # Turn the whole thing on with:
       #     bash deploy/scripts/gen-deepwiki-certs.sh
+      #     bash deploy/scripts/gen-platform-listener-certs.sh
       #     ELITEA_DEEPWIKI_ENABLED=true \
       #     ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki:9443 \
+      #     ELITEA_RUNTIME_PLATFORM_ADDRESS=:9446 \
       #     podman compose --profile deepwiki up -d
       ELITEA_DEEPWIKI_ENABLED: "${ELITEA_DEEPWIKI_ENABLED:-false}"
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
 
-      # No ELITEA_DEEPWIKI_CALLBACK_BASE_URL (#1359 U5): the provider's model
-      # and artifact calls are gRPC on elitea-main's platform listener, which
-      # this stack does not open. elitea-main refuses the old key.
+      # No ELITEA_DEEPWIKI_CALLBACK_BASE_URL (#1359 U5; elitea-main refuses
+      # it): the provider's model and artifact calls are gRPC on elitea-main's
+      # platform listener below.
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       # The provider's gRPC listener (#1359): the facade's SPI calls and the
@@ -255,6 +312,49 @@ services:
       # The server certificate's SANs name elitea-deepwiki
       # (gen-deepwiki-certs.sh), which is what this verifies.
       ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "${ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET:-}"
+      # The platform listener (#1359): elitea-main's internal gRPC port, where
+      # the DeepWiki host stores its artifacts (elitea.runtime.v1.
+      # ArtifactObjectService, U5) and the engine makes its model calls
+      # (elitea.llm.v1.ModelService, U2) and reads artifact folders. This
+      # stack has no runtime plane and the listener needs none: it opens
+      # whenever the address is set, with material from
+      # deploy/scripts/gen-platform-listener-certs.sh off the provider CA.
+      # Set it to :9446 TOGETHER with the DeepWiki pair above. Not published
+      # to the host: only the providers dial it.
+      #
+      # Unset (the default) the listener stays closed and the three TLS files
+      # render empty, because elitea-main refuses a TLS file beside no
+      # address. The allowlists below are read only when the listener opens.
+      ELITEA_RUNTIME_PLATFORM_ADDRESS: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:-}"
+      # Installed by platform-material (owner 65532, key 0600).
+      ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+/run/elitea-platform/platform-server.crt}"
+      ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+/run/elitea-platform/platform-server.key}"
+      ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+/run/elitea-platform/ca.crt}"
+      # Who may call each service there: the sub-application callback
+      # identity (subapp-callback.crt, DNS:elitea-subapp-callback) that the
+      # DeepWiki host and engine present. ModelService is required whenever
+      # the listener opens. No ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS: only the
+      # Inventory engine calls InternalToolService, and this stack has no
+      # Inventory.
+      ELITEA_MODEL_SERVICE_CLIENTS: "dns:elitea-subapp-callback"
+      ELITEA_ARTIFACT_SERVICE_CLIENTS: "dns:elitea-subapp-callback"
+      # elitea-vector (the `deepwiki` profile) verifies the engine's
+      # per-invocation token through TokenIntrospectionService on this same
+      # listener, presenting vector-server.crt (DNS:elitea-vector, provider
+      # CA; gen-platform-listener-certs.sh). Rendered empty while the address
+      # is unset: elitea-main refuses the list with the runtime plane off and
+      # no platform listener to serve it on.
+      ELITEA_VECTOR_INTROSPECTION_CLIENTS: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+dns:elitea-vector}"
+      # The hop the other way: deleting a project or a toolkit's vectors as
+      # elitea-vector's administrator (dns:elitea-main, admitted by its
+      # ELITEA_VECTOR_ADMIN_IDENTITIES), with vector-main-client.crt — not the
+      # provider hop's client.crt, which carries no DNS SAN. All five are
+      # all-or-nothing in elitea-main, so they render empty with the address,
+      # and the default stack runs with no vector client at all.
+      ELITEA_VECTOR_GRPC_TARGET: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+elitea-vector:9470}"
+      ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+/certs/vector-main-client.crt}"
+      ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+/certs/vector-main-client.key}"
+      ELITEA_VECTOR_GRPC_CA_FILE: "${ELITEA_RUNTIME_PLATFORM_ADDRESS:+/certs/ca.crt}"
       # The toolkit-deletion reconciler (#1244): drains centry.toolkit_deletions,
       # the engine-side deletion an Inventory toolkit's delete owes. On by
       # default (its own flag, apart from ELITEA_PROJECT_DELETION_RECONCILER_
@@ -264,7 +364,10 @@ services:
       # Read-only, and shared with the gateway hop: one dev CA signs both, and
       # `CN=elitea-main` is the same client on both.
       - ./certs:/certs:ro
+      - platform_main:/run/elitea-platform:ro
     depends_on:
+      platform-material:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       nats-health:
@@ -275,6 +378,8 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      rustfs-bucket-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/elitea-main", "-healthcheck"]
       interval: 10s
@@ -290,6 +395,10 @@ services:
   #
   # BEFORE the first run:
   #     bash deploy/scripts/gen-deepwiki-certs.sh
+  #     bash deploy/scripts/gen-platform-listener-certs.sh
+  # then bring it up with elitea-main's three variables (its "Turn the whole
+  # thing on" note): the provider's way back to elitea-main is that
+  # service's platform listener, which stays closed without them.
   #
   # There is no plaintext mode on either side and that is deliberate — read the
   # script's header. A dev-only relaxation in the production code path is how a
@@ -298,7 +407,9 @@ services:
   # The shape the chart ships (ADR-0023 H2): the Go sub-application host
   # serves the SPI and reaches the Rust-native engine (ADR-0026) over a Unix
   # socket the two share. The engine runs its `native` runner (generation
-  # through the invocation's llm_settings, every index in PostgreSQL);
+  # through the invocation's llm_settings, the graph and lexical index in
+  # PostgreSQL, the dense vectors in Qdrant through elitea-vector — both in
+  # this profile; see the engine's note below: this stack has no LLM gateway);
   # DEEPWIKI_NATIVE_RUNNER=fixture gives canned results instead, and
   # =unavailable refuses every tool.
   elitea-deepwiki:
@@ -348,6 +459,16 @@ services:
       # rest of compose's NATS; docker-compose.nats-secure.yml presents the
       # elitea-deepwiki identity instead.
       ELITEA_DEEPWIKI_NATS_URL: "nats://nats:4222"
+      # Artifact uploads and reads (#1359 U5): elitea.runtime.v1.
+      # ArtifactObjectService on elitea-main's platform listener
+      # (ELITEA_RUNTIME_PLATFORM_ADDRESS on elitea-main), trusting the
+      # provider CA and presenting the sub-application callback identity,
+      # which elitea-main admits through ELITEA_ARTIFACT_SERVICE_CLIENTS. From
+      # deploy/scripts/gen-platform-listener-certs.sh.
+      ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /certs/ca.crt
+      ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /certs/subapp-callback.crt
+      ELITEA_DEEPWIKI_CALLBACK_KEY_FILE: /certs/subapp-callback.key
     expose:
       - "9443"
     volumes:
@@ -370,13 +491,24 @@ services:
   # The engine sidecar: one distroless binary on the socket the host dials.
   # No port, no TLS, no identity — the shared volume is the only way in.
   #
-  # KNOWN LIMIT (#1359 U2): the native runner makes its model calls over
-  # elitea.llm.v1.ModelService on elitea-main's platform listener
-  # (ELITEA_DEEPWIKI_MODEL_SERVICE_URL), and its artifact calls over
-  # ArtifactObjectService there (#1359 U5); this stack does not open that
-  # listener (no runtime plane). Generation with a model, and artifact
-  # uploads, need docker-compose.standalone-full.yml;
-  # DEEPWIKI_NATIVE_RUNNER=fixture runs without one.
+  # Its OUTBOUND calls go to elitea-main's platform listener (#1359): model
+  # calls over elitea.llm.v1.ModelService (U2) and artifact-folder reads over
+  # ArtifactObjectService (U5), presenting the sub-application callback
+  # identity. Its dense vectors go to elitea-vector (:9470, below) with the
+  # invocation's callback token over the same callback material. The native
+  # runner refuses to start without ELITEA_DEEPWIKI_MODEL_SERVICE_URL or
+  # ELITEA_DEEPWIKI_VECTOR_URL, and elitea-vector verifies every token on
+  # elitea-main's platform listener, so elitea-main must run with
+  # ELITEA_RUNTIME_PLATFORM_ADDRESS=:9446 (see its "Turn the whole thing on"
+  # note).
+  #
+  # THIS STACK HAS NO LLM GATEWAY, and never had one: elitea-main mounts its
+  # /llm surface, which ModelService runs in process, only with
+  # LLM_GATEWAY_URL set. The transport works and artifacts work; a model call
+  # still fails at elitea-main, with `llm_gateway_not_configured` ("LLM_GATEWAY_URL
+  # is empty") in the refusal the engine reports. Generating a wiki with a model needs
+  # docker-compose.standalone-full.yml, which runs elitea-llm-gateway.
+  # DEEPWIKI_NATIVE_RUNNER=fixture gives canned results with no model.
   elitea-deepwiki-engine:
     profiles: ["deepwiki"]
     build:
@@ -397,13 +529,31 @@ services:
       # The engine checks the same allowlist again before it clones.
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
+      # The platform listener (see above), trusting the provider CA and
+      # presenting the callback identity elitea-main admits through
+      # ELITEA_MODEL_SERVICE_CLIENTS. The fixture runner calls no model and
+      # ignores them.
+      ELITEA_DEEPWIKI_MODEL_SERVICE_URL: "https://elitea-main:9446"
+      # elitea-vector, over the same CA and client certificate: its server
+      # certificate (vector-server.crt, DNS:elitea-vector) is signed by the
+      # provider CA, and it trusts that CA for the callback identity.
+      ELITEA_DEEPWIKI_VECTOR_URL: "https://elitea-vector:9470"
+      ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /certs/ca.crt
+      ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /certs/subapp-callback.crt
+      ELITEA_DEEPWIKI_CALLBACK_KEY_FILE: /certs/subapp-callback.key
     volumes:
       - deepwiki-engine-sock:/run/deepwiki
+      # A bind mount, like the host's: the engine (uid 10001) reads the 0644
+      # callback key as it is; only elitea-main's securefile needs the
+      # owner-only copy that platform-material makes.
+      - ./certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
       elitea-deepwiki-migrate:
         condition: service_completed_successfully
+      elitea-vector:
+        condition: service_healthy
     healthcheck:
       # Distroless: no shell. The binary probes its own socket.
       test: ["CMD", "/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
@@ -430,6 +580,87 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+
+  # ── Qdrant and elitea-vector (ADR-0031), for the DeepWiki engine ─────────
+  #
+  # The same two services docker-compose.standalone-full.yml runs, in the
+  # `deepwiki` profile: the engine keeps its dense vectors there and nowhere
+  # else. Neither is published to the host.
+  #
+  # Qdrant: single node, reached by elitea-vector only, which is the only
+  # holder of its API key (deploy/certs/qdrant-api-key, from
+  # gen-platform-listener-certs.sh). The entrypoint is wrapped only to read
+  # the key from the file, so the value never sits in `compose config`.
+  qdrant:
+    profiles: ["deepwiki"]
+    image: docker.io/qdrant/qdrant:v1.19.2
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'QDRANT__SERVICE__API_KEY="$$(cat /run/qdrant/api-key)" exec ./entrypoint.sh'
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+      QDRANT__LOG_LEVEL: "INFO"
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./certs/qdrant-api-key:/run/qdrant/api-key:ro
+    healthcheck:
+      # /readyz needs no API key. The image has no curl; bash's /dev/tcp does.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /readyz HTTP/1.0\r\n\r\n' >&3 && grep -q ' 200 ' <&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # elitea-vector: the stateless gRPC facade over mTLS (:9470). This stack
+  # has no runtime CA, so the provider CA (deploy/certs/ca.crt) is its
+  # whole trust: vector-server.crt (DNS:elitea-vector, server AND client use)
+  # serves its listener and presents itself to elitea-main's platform
+  # listener, where it verifies the engine's token
+  # (ELITEA_VECTOR_INTROSPECTION_CLIENTS on elitea-main). Its client CA is
+  # the same provider CA, which signs the engine's subapp-callback.crt and
+  # elitea-main's administrator vector-main-client.crt (dns:elitea-main).
+  # It checks no key-file permission bits, so the 0644 bind mount is right.
+  elitea-vector:
+    profiles: ["deepwiki"]
+    build:
+      context: ..
+      dockerfile: services/elitea-vector/Containerfile
+    image: ghcr.io/elitea-ng/elitea-vector:dev
+    environment:
+      ELITEA_VECTOR_GRPC_ADDR: "0.0.0.0:9470"
+      ELITEA_VECTOR_HEALTH_ADDR: "0.0.0.0:9471"
+      ELITEA_VECTOR_TLS_CERT_FILE: /certs/vector-server.crt
+      ELITEA_VECTOR_TLS_KEY_FILE: /certs/vector-server.key
+      ELITEA_VECTOR_TLS_CLIENT_CA_FILE: /certs/ca.crt
+      # Admitted without a token, for deletion and admin reads only.
+      ELITEA_VECTOR_ADMIN_IDENTITIES: "dns:elitea-main"
+      ELITEA_VECTOR_QDRANT_URL: "http://qdrant:6334"
+      ELITEA_VECTOR_QDRANT_API_KEY_FILE: /certs/qdrant-api-key
+      ELITEA_VECTOR_COLLECTION_REPLICATION_FACTOR: "1"
+      ELITEA_VECTOR_COLLECTION_SHARD_NUMBER: "1"
+      # elitea-main's PLATFORM listener (ELITEA_RUNTIME_PLATFORM_ADDRESS=:9446);
+      # this stack has no control listener. platform-server.crt names
+      # DNS:elitea-main, off the provider CA.
+      ELITEA_VECTOR_INTROSPECTION_URL: "https://elitea-main:9446"
+      ELITEA_VECTOR_INTROSPECTION_CA_FILE: /certs/ca.crt
+      ELITEA_VECTOR_INTROSPECTION_SERVER_NAME: "elitea-main"
+      ELITEA_VECTOR_INTROSPECTION_TIMEOUT_MS: "2000"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      RUST_LOG: "${ELITEA_VECTOR_LOG:-info}"
+    volumes:
+      - ./certs:/certs:ro
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      # Distroless: no shell. The binary probes its own health listener.
+      test: ["CMD", "/usr/local/bin/elitea-vector", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
   elitea-ui:
     build:
@@ -491,5 +722,10 @@ volumes:
   # The DeepWiki engine sidecar's Unix socket, shared by the host and the
   # engine only.
   deepwiki-engine-sock:
+  # elitea-main's platform-listener material, written by platform-material
+  # (empty while the listener is off).
+  platform_main:
+  # Qdrant's storage (the `deepwiki` profile).
+  qdrant_data:
   rustfs_data:
   nats_data:

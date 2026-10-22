@@ -55,6 +55,12 @@ async fn a_bucket_graph_is_imported_and_exported_through_the_socket() {
             "ELITEA_INVENTORY_MODEL_SERVICE_URL",
             "https://elitea-main:9446".to_owned(),
         ),
+        // These calls carry no bearer: the import publishes no vectors (the
+        // first ranking would backfill them), so elitea-vector is not dialled.
+        (
+            "ELITEA_INVENTORY_VECTOR_URL",
+            "http://127.0.0.1:9".to_owned(),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v))
@@ -162,6 +168,12 @@ async fn replace_ingestion_state_false_string_keeps_the_state() {
         (
             "ELITEA_INVENTORY_MODEL_SERVICE_URL",
             "https://elitea-main:9446".to_owned(),
+        ),
+        // These calls carry no bearer: the import publishes no vectors (the
+        // first ranking would backfill them), so elitea-vector is not dialled.
+        (
+            "ELITEA_INVENTORY_VECTOR_URL",
+            "http://127.0.0.1:9".to_owned(),
         ),
     ]
     .into_iter()

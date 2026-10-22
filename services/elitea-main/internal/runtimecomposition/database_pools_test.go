@@ -16,7 +16,7 @@ func TestPhaseOneDatabasePoolLimitsArePositiveAndBounded(t *testing.T) {
 	}
 	if limits.AdmissionPublisher != 10 || limits.Control != 8 || limits.Output != 8 ||
 		limits.Replay != 4 || limits.TerminalEffects != 2 || limits.Content != 4 ||
-		limits.VectorIntrospection != 8 {
+		limits.VectorIntrospection != 2 {
 		t.Fatalf("unexpected phase-one database profile: %+v", limits)
 	}
 }

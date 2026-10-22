@@ -51,6 +51,10 @@ sha2 = "=0.10.9"
 # InvokeToolkit on the platform listener (#1359 U5), over the model calls'
 # channel.
 elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
+# Entity vectors live in Qdrant behind elitea-vector (source inventory, the
+# float32 exact family): the typed elitea.vector.v1 client, on aws-lc like
+# every other TLS hop of this engine.
+elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.
@@ -87,6 +91,9 @@ tonic = { version = "=0.14.6", default-features = false }
 elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
 # The platform's toolkit invocations, faked (tests/investigate.rs, native).
 elitea-platform-rpc = { path = "../../libs/rust/platform-rpc", features = ["testing"] }
+# elitea-vector faked in process (`testing::FakeVector`): the entity vectors'
+# upserts, searches and deletes over real gRPC.
+elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc", "test-server"] }
 
 [lints.rust]
 unsafe_code = "forbid"

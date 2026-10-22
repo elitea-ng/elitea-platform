@@ -148,11 +148,6 @@ type Querier interface {
 	DeleteCurrentAgentProvisionalText(ctx context.Context, arg DeleteCurrentAgentProvisionalTextParams) error
 	DeleteCurrentConfiguration(ctx context.Context, arg DeleteCurrentConfigurationParams) (int32, error)
 	DeleteCurrentNotification(ctx context.Context, arg DeleteCurrentNotificationParams) (int64, error)
-	// The exact inverse of the statement above, and only that row. The four
-	// identity predicates repeat the ones the upsert conflicts on, so a
-	// user-created configuration that happens to carry the same title is never
-	// removed by a rollback of the system row.
-	DeleteCurrentProjectPgvectorConfiguration(ctx context.Context, arg DeleteCurrentProjectPgvectorConfigurationParams) (int64, error)
 	DeletePATByID(ctx context.Context, id int32) (int64, error)
 	// Reclaims chunk rows for a chunked upload that was abandoned before its
 	// final chunk arrived (browser tab closed, connection lost) — the only
@@ -173,11 +168,6 @@ type Querier interface {
 	// independent guarantees; this query is the first.
 	DeleteTokenProjectBinding(ctx context.Context, tokenID int32) error
 	EnsureRuntimeAdmissionPolicy(ctx context.Context, arg EnsureRuntimeAdmissionPolicyParams) error
-	// Whether the project's system PgVector row exists. It reads the same four
-	// identity predicates the upsert and the delete above use, so a user-created
-	// configuration that happens to carry the title does not count. The project
-	// delete asks it inside its deciding transaction (#1211).
-	ExistsCurrentProjectPgvectorConfiguration(ctx context.Context, arg ExistsCurrentProjectPgvectorConfigurationParams) (bool, error)
 	FinalizeCurrentAgentAuthorizationPause(ctx context.Context, arg FinalizeCurrentAgentAuthorizationPauseParams) (int64, error)
 	FinalizeCurrentAgentFullMessage(ctx context.Context, arg FinalizeCurrentAgentFullMessageParams) (int64, error)
 	FinalizeCurrentAgentHITLPause(ctx context.Context, arg FinalizeCurrentAgentHITLPauseParams) (int64, error)
@@ -865,11 +855,6 @@ type Querier interface {
 	// twice replaces it) — never double-counted, since the primary key already
 	// de-duplicates by chunk_index.
 	UpsertAttachmentChunk(ctx context.Context, arg UpsertAttachmentChunkParams) error
-	// The project transaction establishes the authorized p_<project_id>
-	// search_path before this statement runs. The public PgVector bootstrap
-	// configuration is never copied into this tenant row: only the current vault
-	// reference is stored.
-	UpsertCurrentProjectPgvectorConfiguration(ctx context.Context, arg UpsertCurrentProjectPgvectorConfigurationParams) (int32, error)
 }
 
 var _ Querier = (*Queries)(nil)

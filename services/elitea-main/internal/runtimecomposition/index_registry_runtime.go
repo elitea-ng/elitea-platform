@@ -113,11 +113,9 @@ type registryScheduleFailureWriter interface {
 	) error
 }
 
-// registryIndexScheduleFailureRecorder is currentIndexScheduleFailureRecorder
-// for the registry. A scheduled run that could not start leaves a failed entry
-// in the index's history and a notification for the schedule's creator. The
-// python recorder resolves the toolkit's pgvector target first; the registry
-// needs only the visibility check.
+// registryIndexScheduleFailureRecorder records a scheduled run that could not
+// start: a failed entry in the index's history and a notification for the
+// schedule's creator. It needs only the toolkit visibility check.
 type registryIndexScheduleFailureRecorder struct {
 	toolkits      indexingapp.CurrentToolkitReader
 	history       registryScheduleFailureWriter

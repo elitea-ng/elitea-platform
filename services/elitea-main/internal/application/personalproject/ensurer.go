@@ -638,7 +638,7 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 			//
 			// It also does not wait for the cleanup: the decision (the row and
 			// every credential) is committed when Deprovision returns, and the
-			// artifact bytes, the schema and the PgVector database are the
+			// artifact bytes, the schema and the application data are the
 			// journal's, which the reconciler finishes. A login must not wait on
 			// an object store or a vector server.
 			if _, err := e.provisioner.Deprovision(ctx, candidate.id,

@@ -43,11 +43,9 @@ RENDER=(
 )
 # No indexing: index ingest dispatch off (values-standalone.yaml turns it on).
 NOINDEX=(--set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
-# An indexing deployment: the registry, and this chart's elitea-vector (whose
-# introspection pool costs the fourth main replica, as render-vector.sh
-# explains).
+# An indexing deployment: the registry, and this chart's elitea-vector.
 RUST=(
-  --set vector.enabled=true --set main.autoscaling.maxReplicas=3
+  --set vector.enabled=true
   --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key
 )
 

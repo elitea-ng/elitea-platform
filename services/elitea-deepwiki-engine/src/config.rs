@@ -188,6 +188,10 @@ pub struct Settings {
     pub publish: PublishSettings,
     /// The model client's process-wide settings.
     pub model: ModelEnvSettings,
+    /// `ELITEA_DEEPWIKI_VECTOR_URL` and the callback TLS material: where the
+    /// wikis' dense vectors are (elitea-vector). The native runner requires
+    /// it; the fixture and unavailable runners never read it.
+    pub vector: Option<VectorSettings>,
     /// The `generate_wiki` worker child's limits.
     pub worker: WorkerSettings,
     /// `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` (default 8, at most 256): the
@@ -209,6 +213,68 @@ pub const CALLBACK_CERT_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE";
 pub const CALLBACK_KEY_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE";
 /// The model service origin (see [`ModelEnvSettings::model_service`]).
 pub const MODEL_SERVICE_SETTING: &str = "ELITEA_DEEPWIKI_MODEL_SERVICE_URL";
+
+/// elitea-vector's origin (see [`VectorSettings`]).
+pub const VECTOR_URL_SETTING: &str = "ELITEA_DEEPWIKI_VECTOR_URL";
+/// The name elitea-vector's certificate is verified against.
+pub const VECTOR_SERVER_NAME_SETTING: &str = "ELITEA_DEEPWIKI_VECTOR_SERVER_NAME";
+
+/// How the engine reaches elitea-vector (ADR-0031 D1-D3, #1359): gRPC over
+/// mutual TLS, with the callback hop's CA and client identity
+/// (`ELITEA_DEEPWIKI_CALLBACK_CA_FILE`, `_CERT_FILE`, `_KEY_FILE`, the
+/// identity elitea-main's platform listener already admits), and the
+/// invocation's callback bearer on every call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSettings {
+    /// `ELITEA_DEEPWIKI_VECTOR_URL`: `https://elitea-vector:9470`. `http://`
+    /// is accepted for a loopback host only (tests), and then no TLS
+    /// material is used.
+    pub url: String,
+    /// `ELITEA_DEEPWIKI_VECTOR_SERVER_NAME`: the name verified against the
+    /// server certificate. Unset: the URL's host.
+    pub server_name: Option<String>,
+    /// The CA that signed elitea-vector's certificate (the runtime CA): the
+    /// callback hop's ([`ModelEnvSettings::tls_ca_file`]).
+    pub ca_file: Option<PathBuf>,
+    /// Which variable `ca_file` came from.
+    pub ca_setting: &'static str,
+    /// The client certificate and key (the callback identity).
+    pub identity: Option<crate::llm::ClientIdentityFiles>,
+    /// A plaintext loopback URL (tests only).
+    pub insecure_loopback: bool,
+}
+
+fn vector_settings(
+    raw: &impl Fn(&str) -> Option<String>,
+    model: &ModelEnvSettings,
+) -> Result<Option<VectorSettings>, ConfigError> {
+    let Some(url) = raw("VECTOR_URL").map(|url| url.trim().trim_end_matches('/').to_owned()) else {
+        return Ok(None);
+    };
+    let insecure_loopback = is_loopback_http(&url);
+    let parsed = reqwest::Url::parse(&url).ok();
+    let origin_only = parsed.as_ref().is_some_and(|parsed| {
+        parsed.host_str().is_some_and(|host| !host.is_empty())
+            && matches!(parsed.path(), "" | "/")
+            && parsed.query().is_none()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+    });
+    if !(url.starts_with("https://") || insecure_loopback) || !origin_only {
+        return Err(ConfigError(format!(
+            "{VECTOR_URL_SETTING} must be the https origin of elitea-vector (https://elitea-vector:9470), got '{url}'"
+        )));
+    }
+    let server_name = raw("VECTOR_SERVER_NAME").map(|name| name.trim().to_owned());
+    Ok(Some(VectorSettings {
+        url,
+        server_name,
+        ca_file: model.tls_ca_file.clone(),
+        ca_setting: model.tls_ca_setting,
+        identity: model.callback_identity.clone(),
+        insecure_loopback,
+    }))
+}
 
 /// What the environment decides about model calls; the invocation's
 /// `llm_settings` decide the rest (`llm::settings`).
@@ -697,6 +763,7 @@ impl Settings {
             PathBuf::from(raw("ENGINE_SOCKET").unwrap_or_else(|| DEFAULT_SOCKET.to_owned()));
         let ingest = ingest_settings(&raw)?;
         let model = model_settings(&raw, &lookup)?;
+        let vector = vector_settings(&raw, &model)?;
         let database_url = raw("DATABASE_URL")
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty())
@@ -724,6 +791,11 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {MODEL_SERVICE_SETTING}: the native engine reaches the model calls and the artifact store only on elitea-main's platform listener (https://elitea-main:9446); llm_settings.api_base never names a host. Set it, or use 'fixture' or 'unavailable'."
             )));
         }
+        if runner == RunnerKind::Native && vector.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {VECTOR_URL_SETTING}: the native engine keeps every wiki's dense vectors in elitea-vector (https://elitea-vector:9470, over the callback CA and client certificate); PostgreSQL holds none. Set it, or use 'fixture' or 'unavailable'."
+            )));
+        }
         Ok(Self {
             runner,
             fixture_step,
@@ -734,6 +806,7 @@ impl Settings {
             build_stale_after,
             publish,
             model,
+            vector,
             worker,
             query_pool_size,
         })
@@ -1098,8 +1171,72 @@ mod tests {
                 "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
                 "https://elitea-main:9446",
             ),
+            ("ELITEA_DEEPWIKI_VECTOR_URL", "https://elitea-vector:9470"),
         ]);
         assert_eq!(parsed.map(|s| s.runner), Ok(RunnerKind::Native));
+    }
+
+    #[test]
+    fn native_refuses_to_start_without_elitea_vector() {
+        let base = [
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
+        ];
+        let refused = settings(&base);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("ELITEA_DEEPWIKI_VECTOR_URL")),
+            "{refused:?}"
+        );
+        // The other runners never read it.
+        assert!(
+            settings(&[("ELITEA_DEEPWIKI_RUNNER", "fixture")]).is_ok_and(|s| s.vector.is_none())
+        );
+        let with = |url: &'static str, extra: &[(&'static str, &'static str)]| {
+            let mut pairs = base.to_vec();
+            pairs.push(("ELITEA_DEEPWIKI_VECTOR_URL", url));
+            pairs.extend_from_slice(extra);
+            settings(&pairs).map(|s| s.vector)
+        };
+        for (url, accepted) in [
+            ("https://elitea-vector:9470", true),
+            ("https://elitea-vector:9470/", true),
+            ("http://127.0.0.1:9470", true),
+            ("http://elitea-vector:9470", false),
+            ("https://elitea-vector:9470/v1", false),
+            ("elitea-vector:9470", false),
+        ] {
+            assert_eq!(with(url, &[]).is_ok(), accepted, "{url}");
+        }
+        let vector = with(
+            "https://elitea-vector:9470",
+            &[
+                ("ELITEA_DEEPWIKI_VECTOR_SERVER_NAME", "vector.internal"),
+                ("ELITEA_DEEPWIKI_CALLBACK_CA_FILE", "/ca.pem"),
+                ("ELITEA_DEEPWIKI_CALLBACK_CERT_FILE", "/c.crt"),
+                ("ELITEA_DEEPWIKI_CALLBACK_KEY_FILE", "/c.key"),
+            ],
+        );
+        let Ok(Some(vector)) = vector else {
+            panic!("refused: {vector:?}");
+        };
+        assert_eq!(vector.url, "https://elitea-vector:9470");
+        assert_eq!(vector.server_name.as_deref(), Some("vector.internal"));
+        assert_eq!(vector.ca_file, Some(PathBuf::from("/ca.pem")));
+        assert_eq!(vector.ca_setting, CALLBACK_CA_SETTING);
+        assert!(vector.identity.is_some());
+        assert!(!vector.insecure_loopback);
+        let loopback = with("http://127.0.0.1:9470", &[]);
+        assert!(matches!(loopback, Ok(Some(v)) if v.insecure_loopback && v.server_name.is_none()));
     }
 
     #[test]
@@ -1208,6 +1345,7 @@ mod tests {
                 "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
                 "https://elitea-main:9446",
             ),
+            ("ELITEA_DEEPWIKI_VECTOR_URL", "https://elitea-vector:9470"),
         ];
         let with = |extra: &[(&'static str, &'static str)]| {
             let mut pairs = native.to_vec();

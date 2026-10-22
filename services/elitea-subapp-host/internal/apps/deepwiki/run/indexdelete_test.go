@@ -33,6 +33,7 @@ import (
 type engineIndex struct {
 	mu     sync.Mutex
 	wikis  []string
+	bearer []any // llm_settings.api_key of each call
 	result map[string]any
 	err    error
 }
@@ -41,6 +42,8 @@ func (e *engineIndex) tool(_ context.Context, arguments map[string]any, _ *spi.C
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.wikis = append(e.wikis, arguments["wiki_id"].(string))
+	settings, _ := arguments["llm_settings"].(map[string]any)
+	e.bearer = append(e.bearer, settings["api_key"])
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -75,6 +78,11 @@ func TestDeleteWikiReportsTheArtifactsAndTheIndex(t *testing.T) {
 	}
 	if calls := engine.calls(); len(calls) != 1 || calls[0] != "acme--gone--main" {
 		t.Fatalf("the engine was asked to delete %v", calls)
+	}
+	// The invocation's callback token goes along: the engine deletes the
+	// wiki's vectors from elitea-vector with it (#1359).
+	if len(engine.bearer) != 1 || engine.bearer[0] != llmSettings["api_key"] {
+		t.Fatalf("the engine got the bearers %v", engine.bearer)
 	}
 	// The index is deleted AFTER the artifacts: by then the bucket is empty.
 	if len(store.objects) != 0 {

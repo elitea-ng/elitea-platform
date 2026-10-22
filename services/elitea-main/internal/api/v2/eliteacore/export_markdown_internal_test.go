@@ -49,7 +49,7 @@ func agentDocument(version map[string]any) map[string]any {
 		}},
 		"toolkits": []any{map[string]any{
 			"name":        "Postgres",
-			"type":        "pgvector",
+			"type":        "sql",
 			"import_uuid": "tk-1",
 			"settings": map[string]any{
 				"pgvector_configuration": map[string]any{
@@ -126,13 +126,10 @@ func TestMarkdownExportDropsTheConnectionStringAndInternalKeys(t *testing.T) {
 	if strings.Contains(file.content, "hunter2") || strings.Contains(file.content, "connection_string") {
 		t.Errorf("the pgvector connection string reached the exported file:\n%s", file.content)
 	}
-	// The allow-list keeps what identifies the index to a human...
-	if !strings.Contains(file.content, "elitea_title: shared index") {
-		t.Errorf("the pgvector title should survive the sanitiser:\n%s", file.content)
-	}
-	// ...and `private` is forced false so the file imports into any project.
-	if !strings.Contains(file.content, "private: false") {
-		t.Errorf("private must be exported as false, not as the source project's true:\n%s", file.content)
+	// The pgvector configuration type is retired: a toolkit saved before the
+	// retirement still holds the block, and the export drops all of it.
+	if strings.Contains(file.content, "pgvector_configuration") || strings.Contains(file.content, "shared index") {
+		t.Errorf("the retired pgvector_configuration block reached the exported file:\n%s", file.content)
 	}
 	if strings.Contains(file.content, "configuration_uuid") {
 		t.Errorf("a project-local configuration id reached the exported file:\n%s", file.content)

@@ -178,23 +178,28 @@ the folded `plainto_tsquery` over the staged `fts` column, optionally under
 build's own statistics (document length = the sum of position counts, the
 document frequency of each query lexeme counted once per build and cached),
 negated to FTS5's sign, ties by node id; `phraseto_tsquery` for the phrase
-counts; exact pgvector L2 for dense search, ranked over ALL vectors and
+counts; for dense search the exact L2 distance pgvector computed, over the
+build's own vectors, ranked over ALL vectors and
 filtered by the prefix AFTER the limit (sqlite-vec's order, the owner's
 decision), so fewer than `k` hits can come back. The hub flags and the meta
 entries have no column in the ADR-0022 schema; the store returns them to the
 caller. Each call checks the stop first.
 
 Before Phase 2 the staging tables are `ANALYZE`d (best effort), so the
-planner plans for the rows just staged. Dense search does not scan every
-vector in SQL per orphan: the build's vectors are read into memory once
-(on the first dense search; `nodes × dimensions × 4` bytes, about 600 MB
-for 100k nodes of 1536 dimensions) and each search ranks them in process,
-in parallel. The vectors within 0.1 % of the k-th nearest distance are the
-candidates, and one indexed query over them computes pgvector's own
-distances and order, so the hits are the full-scan query's, row for row and
-bit for bit (`tests/storage_topology.rs` compares both). Measured (release
-build, 5000 nodes × 1536 dimensions, 300 searches): 1.9 s in process,
-including the read, against 72 s for the full-scan query.
+planner plans for the rows just staged. PostgreSQL holds no vector (#1359:
+a wiki's dense vectors are in Qdrant behind elitea-vector, `storage::dense`).
+Dense search never reads them back from there: the build keeps the vectors
+it staged (`Build::vectors`; `nodes × dimensions × 4` bytes, about 600 MB
+for 100k nodes of 1536 dimensions), in memory up to 64 MiB and past that in
+an unlinked file in the job's scratch directory, read back in 4 MiB blocks
+(the page cache, not the worker's heap, holds them), and each search ranks
+them in process, in parallel, with pgvector's `float4` L2 rule, then reads the hits'
+paths in one query. The hits are those of the full-scan SQL query Phase 2
+ran before the vectors left PostgreSQL, row for row and bit for bit
+(`tests/storage_topology.rs` compares them with a brute-force copy of that
+query). Measured when that query still existed (release build, 5000 nodes ×
+1536 dimensions, 300 searches): 1.9 s in process against 72 s for the
+full-scan query.
 
 ### The worker child
 
@@ -660,7 +665,8 @@ Migration 0003 (additive, applied by both runners) adds schema
 `deepwiki_build`: `builds (build_id, wiki_id, owner, started_at,
 heartbeat_at)` and UNLOGGED copies of `wiki_nodes` (with the folded
 `deepwiki_porter` tsvector and its GIN index), `wiki_edges` and
-`wiki_node_embeddings` keyed by `build_id`, plus `bm25_docs` /
+`wiki_node_embeddings` keyed by `build_id` (dropped again by 0008: the
+vectors are in elitea-vector), plus `bm25_docs` /
 `bm25_postings` (see below). Every staging row cascades from its `builds`
 row. Migration 0004 (additive) adds the nullable `builds.boot_id`; 0003 is
 never edited, because both runners checksum it. Migration 0005 recreates
@@ -686,9 +692,10 @@ an error).
 `storage/publish.py` maps the `.wiki.db` rows: NULL text becomes `""`,
 flags become booleans, parallel edges collapse onto `(source, target,
 rel_type)` with the first position and the last `edge_class` / `weight`, a
-weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are written as the
-shortest decimal text of each `f64`, the text Python's `repr` gave, so
-pgvector rounds them to the same `float4`.
+weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are not written to
+PostgreSQL: `Build::stage_embeddings` rounds each `f64` to `f32` (the
+`float4` pgvector stored) and writes them to elitea-vector under the build's
+generation, before the publish.
 
 `Build::publish` is one transaction: lock the build row (and check it names
 the project and wiki the build was opened for); queue without a timeout
@@ -703,7 +710,9 @@ replica must use the same number); set `statement_timeout`
 (`…_PUBLISH_WORK_MEM_MB`, default 64, so the slots bound the memory the
 publishes take together); upsert the `wikis` row (`registry_from_result`'s
 fields; an absent field keeps the stored value), refuse an empty build,
-delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes, edges and vectors,
+delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes and edges,
+record the build's elitea-vector generation in `wikis.active_generation` (the
+one it replaces goes to `wiki_stale_generations`, deleted after the commit),
 write the `wiki_bm25_*` statistics of the `'fts'` branch, delete the build, commit. A reader sees
 the old index or the new one. After the commit the live tables are
 `ANALYZE`d one by one, best effort, each with a short `lock_timeout`
@@ -776,9 +785,10 @@ host's `delete_wiki` removed the artifact objects and the index stayed.
 `storage::delete` and the two tools in `runner::maintenance`:
 
 - `delete_wiki_index` deletes one `(project_id, wiki_id)`: the `wikis` row and
-  every row of `wiki_nodes`, `wiki_edges`, `wiki_node_embeddings` and
-  `wiki_bm25_*`, in ONE transaction that first takes the publish's per-wiki
-  advisory lock (`elitea_deepwiki.publish_wiki`). It queues behind a publish
+  every row of `wiki_nodes`, `wiki_edges` and `wiki_bm25_*`, in ONE
+  transaction that first takes the publish's per-wiki advisory lock
+  (`elitea_deepwiki.publish_wiki`); after the commit it deletes the wiki's
+  elitea-vector namespace with the caller's bearer (`storage::delete`). It queues behind a publish
   of that wiki and a publish queues behind it, so the wiki ends whole or
   absent, never half. The queue is BOUNDED: past
   `ELITEA_DEEPWIKI_PUBLISH_DELETE_LOCK_WAIT_SECONDS` (default 30) the tool
@@ -917,7 +927,7 @@ the retry and abandon after a failed publish, the statement and lock
 timeouts, the slot queue, the `ANALYZE` after the commit and two concurrent
 publishes (of one wiki, of two wikis).
 
-The tests need PostgreSQL with pgvector: they skip, with a message, when
+The tests need PostgreSQL (plain, no extension): they skip, with a message, when
 `DEEPWIKI_TEST_DSN` is unset, and fail when `DEEPWIKI_REQUIRE_POSTGRES=1`
 is set as well (CI sets both). Each test creates its own database.
 
@@ -927,7 +937,8 @@ is set as well (CI sets both). Each test creates its own database.
 the graph, stages it, publishes it into `ELITEA_DEEPWIKI_DATABASE_URL` and
 times a few searches. Measured 2026-10-05 (Apple M4 Pro under load, podman
 VM, pgvector 0.8.5 / PostgreSQL 16, 384-dimension pseudo-vectors, before
-the postings were inserted in key order):
+the postings were inserted in key order, and before #1359 moved the vectors
+to elitea-vector):
 
 | Step | Rows | Time |
 | --- | --- | --- |
@@ -1542,11 +1553,11 @@ cargo test --locked --all-targets --all-features
 
 The tests run the sidecar on a real Unix socket. Two of them read the
 shared fixtures in `conformance/provider/fixtures/deepwiki/`. The storage
-tests need PostgreSQL with pgvector (they skip without it):
+tests need PostgreSQL, plain `postgres:18` as CI runs (they skip without it):
 
 ```bash
 podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki \
-    -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/pgvector/pgvector:0.8.5-pg16
+    -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/library/postgres:18
 DEEPWIKI_TEST_DSN=postgresql://deepwiki:deepwiki@127.0.0.1:15436/deepwiki \
 DEEPWIKI_REQUIRE_POSTGRES=1 cargo test --locked --all-targets
 ```

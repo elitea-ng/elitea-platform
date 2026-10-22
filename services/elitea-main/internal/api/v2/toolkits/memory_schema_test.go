@@ -24,19 +24,20 @@ func memorySchemaRequired(t *testing.T, body map[string]any) (map[string]any, []
 	return properties, required
 }
 
-func TestMemorySchemaKeepsPgvectorRequiredUnlessItLivesOnTheVectorStore(t *testing.T) {
+func TestMemorySchemaServesTheScopeOnTheVectorStoreAndNeverPgvector(t *testing.T) {
 	t.Parallel()
 
-	// The SDK schema, as pinned: both fields required (Python indexing).
+	// The pinned schema: the retired pgvector_configuration is gone from it,
+	// so namespace is the one required field whatever the runtime.
 	properties, required := memorySchemaRequired(t, getToolkitTypeCatalogue(t, catalogueOptions(t, "")...))
-	if _, present := properties["pgvector_configuration"]; !present {
-		t.Fatal("the SDK schema has pgvector_configuration")
+	if _, present := properties["pgvector_configuration"]; present {
+		t.Fatal("the retired pgvector_configuration is still served")
 	}
-	if strings.Join(required, ",") != "namespace,pgvector_configuration" {
-		t.Fatalf("SDK required = %v", required)
+	if strings.Join(required, ",") != "namespace" {
+		t.Fatalf("pinned required = %v, want only namespace", required)
 	}
 
-	// Under the Rust indexing runtime the field is neither shown nor required.
+	// Under the Rust indexing runtime the scope setting is added.
 	options := append(catalogueOptions(t, ""), toolkits.WithMemoryOnVectorStore(true))
 	properties, required = memorySchemaRequired(t, getToolkitTypeCatalogue(t, options...))
 	if _, present := properties["pgvector_configuration"]; present {
@@ -64,18 +65,22 @@ func TestMemorySchemaKeepsPgvectorRequiredUnlessItLivesOnTheVectorStore(t *testi
 	}
 
 	// Serving it that way must not edit the shared pinned schema.
-	properties, required = memorySchemaRequired(t, getToolkitTypeCatalogue(t, catalogueOptions(t, "")...))
+	properties, _ = memorySchemaRequired(t, getToolkitTypeCatalogue(t, catalogueOptions(t, "")...))
 	if _, present := properties["memory_scope"]; present {
-		t.Fatal("the SDK schema (Python indexing) has no memory_scope")
+		t.Fatal("the shared schema was mutated: memory_scope leaked into it")
 	}
-	if _, present := properties["pgvector_configuration"]; !present || len(required) != 2 {
-		t.Fatalf("the shared schema was mutated: %v %v", properties, required)
-	}
-	// Other types keep theirs.
-	options = append(catalogueOptions(t, ""), toolkits.WithMemoryOnVectorStore(true))
+	// No other type carries the retired field either.
 	body := getToolkitTypeCatalogue(t, options...)
-	if _, present := typeSchemaOf(t, body, "artifact")["properties"].(map[string]any)["pgvector_configuration"]; !present {
-		t.Fatal("artifact lost pgvector_configuration")
+	for toolkitType := range body {
+		schema, ok := body[toolkitType].(map[string]any)
+		if !ok {
+			continue
+		}
+		if settings, ok := schema["properties"].(map[string]any); ok {
+			if _, present := settings["pgvector_configuration"]; present {
+				t.Errorf("%s still serves pgvector_configuration", toolkitType)
+			}
+		}
 	}
 }
 

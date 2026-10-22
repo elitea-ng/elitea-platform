@@ -25,9 +25,20 @@
 //! One addition: the run holds a session advisory lock, so two engine
 //! replicas started together cannot both apply the same file. The Python
 //! runner took no lock; the lock changes nothing in the ledger.
+//!
+//! # Rewritten migrations
+//!
+//! 0001, 0003 and 0005 were rewritten once, by #1359 (pgvector removal):
+//! their released texts created the `vector` extension and the
+//! `wiki_node_embeddings` tables, which a fresh install must no longer need.
+//! [`REWRITTEN`] lists the exact checksum of each released text (one each;
+//! every released version of a file had the same text); a database that
+//! applied it is accepted, and any OTHER checksum is still refused. Each
+//! rewritten file's header names the checksum it replaces. 0008 removes
+//! what the released texts created.
 
 use crate::storage::{Result, StorageError};
-use elitea_pg_migrate::{Ledger, MigrateError};
+use elitea_pg_migrate::{Ledger, MigrateError, Rewritten};
 use sqlx::postgres::PgPool;
 
 pub use elitea_pg_migrate::{Migration, checksum};
@@ -69,6 +80,28 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0007_drop_bm25_branch_rows.sql",
         include_str!("../../migrations/0007_drop_bm25_branch_rows.sql"),
     ),
+    (
+        "0008_vectors_in_qdrant.sql",
+        include_str!("../../migrations/0008_vectors_in_qdrant.sql"),
+    ),
+];
+
+/// The migrations rewritten after their release, with the exact checksum
+/// of each released text (#1359; see the module docs). No wildcard: a
+/// ledger row with any other checksum is refused.
+pub const REWRITTEN: &[Rewritten] = &[
+    Rewritten {
+        version: "0001",
+        released_checksums: &["ea5af872e89869cdf824e92f71586ed58143efa30572c74c73a3e7bfa1bb40c3"],
+    },
+    Rewritten {
+        version: "0003",
+        released_checksums: &["e36c440fb1c6d43c2900931f94f4f1c1ea023359c9e9ffbddd93e191efaf2b7e"],
+    },
+    Rewritten {
+        version: "0005",
+        released_checksums: &["fe71faa1fc925a050ad73b5d3b7313e1cc8ca926d1218fe476ae950bd3a7cac7"],
+    },
 ];
 
 /// This engine's ledger: `schema_migrations`, locked on
@@ -126,13 +159,14 @@ pub async fn apply_all(pool: &PgPool) -> Result<Vec<String>> {
     apply(pool, &embedded()?).await
 }
 
-/// [`apply_all`] over an explicit migration list (tests use their own).
+/// [`apply_all`] over an explicit migration list (tests use their own),
+/// accepting the released checksums of [`REWRITTEN`].
 ///
 /// # Errors
 ///
 /// See [`apply_all`].
 pub async fn apply(pool: &PgPool, migrations: &[Migration]) -> Result<Vec<String>> {
-    Ok(elitea_pg_migrate::apply(pool, &LEDGER, migrations).await?)
+    Ok(elitea_pg_migrate::apply_with_rewrites(pool, &LEDGER, migrations, REWRITTEN).await?)
 }
 
 #[cfg(test)]
@@ -145,7 +179,9 @@ mod tests {
         let versions: Vec<&str> = migrations.iter().map(|m| m.version.as_str()).collect();
         assert_eq!(
             versions,
-            ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+            [
+                "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
+            ]
         );
     }
 
@@ -157,5 +193,35 @@ mod tests {
             crate::storage::text::TS_CONFIG
         );
         assert!(migrations[0].sql.contains(&config));
+    }
+
+    #[test]
+    fn no_migration_but_0008_names_the_vector_type() {
+        for migration in embedded().unwrap_or_default() {
+            let sql = migration.sql.to_uppercase();
+            if migration.version == "0008" {
+                continue;
+            }
+            assert!(!sql.contains("CREATE EXTENSION"), "{}", migration.name);
+            assert!(!sql.contains(" VECTOR "), "{}", migration.name);
+            assert!(!sql.contains(" VECTOR,"), "{}", migration.name);
+        }
+    }
+
+    #[test]
+    fn each_rewritten_file_names_the_checksum_it_replaces() {
+        let migrations = embedded().unwrap_or_default();
+        for rewritten in REWRITTEN {
+            let migration = migrations.iter().find(|m| m.version == rewritten.version);
+            let Some(migration) = migration else {
+                panic!("{} is not embedded", rewritten.version);
+            };
+            assert_eq!(rewritten.released_checksums.len(), 1);
+            for released in rewritten.released_checksums {
+                assert!(migration.sql.starts_with("-- REWRITTEN (#1359"));
+                assert!(migration.sql.contains(released), "{}", migration.name);
+                assert_ne!(migration.checksum(), *released);
+            }
+        }
     }
 }

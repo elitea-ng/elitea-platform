@@ -39,6 +39,12 @@ import (
 //     MCP builders through /app/{project}/mcp and the Inventory engine's
 //     source-tool calls through the toolkit test_tool route
 //     (internal/transport/internaltoolgrpc).
+//
+// and, behind ELITEA_VECTOR_INTROSPECTION_CLIENTS, elitea-vector's
+// elitea.vector.v1.TokenIntrospectionService (ADR-0031) — not a public route
+// but the same server the runtime control listener serves, or, with the
+// runtime off, one that verifies provider callback tokens only
+// (runtimecomposition.NewPlatformVectorIntrospection).
 
 // ModelServiceClientsEnv lists the workload identities admitted to
 // elitea.llm.v1.ModelService: the agent worker's and the sub-application
@@ -113,6 +119,25 @@ func platformServices(publicHandler http.Handler, clients platformClients, logge
 			return nil, err
 		}
 		services = append(services, server.PlatformService(tools))
+	}
+	return services, nil
+}
+
+// withVectorIntrospection appends elitea-vector's token introspection to the
+// platform services when ELITEA_VECTOR_INTROSPECTION_CLIENTS names someone;
+// otherwise services are returned unchanged.
+func withVectorIntrospection(
+	services []runtimegrpc.PlatformService,
+	config runtimecomposition.Config,
+	runtime *runtimecomposition.Runtime,
+	dependencies runtimecomposition.PlatformVectorIntrospection,
+) ([]runtimegrpc.PlatformService, error) {
+	service, ok, err := runtimecomposition.NewPlatformVectorIntrospection(config, runtime, dependencies)
+	if err != nil {
+		return nil, fmt.Errorf("compose vector token introspection: %w", err)
+	}
+	if ok {
+		services = append(services, service)
 	}
 	return services, nil
 }

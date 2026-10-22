@@ -40,6 +40,9 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
@@ -199,6 +202,13 @@ func (c *GatewayCompleter) Complete(ctx context.Context, req CompletionRequest) 
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("predict: call gateway: %w", ctxErr)
+		}
+		// gRPC enforces the context's deadline on its own timer, so the call
+		// can fail with DeadlineExceeded a moment before ctx.Err() reports it.
+		// That is still this caller's deadline, and callers test for it with
+		// errors.Is(err, context.DeadlineExceeded).
+		if _, hasDeadline := ctx.Deadline(); hasDeadline && status.Code(err) == codes.DeadlineExceeded {
+			return "", fmt.Errorf("predict: call gateway: %w: %w", context.DeadlineExceeded, err)
 		}
 		return "", fmt.Errorf("predict: call gateway: %w", err)
 	}

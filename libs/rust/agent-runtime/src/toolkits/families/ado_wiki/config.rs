@@ -5,8 +5,8 @@ use crate::toolkits::families::ado::config::{AdoConfigError, AdoToolkitConfig};
 /// `ado_wiki` settings (`tools/ado/__init__.py::get_tools`):
 /// `ado_configuration`, `project`, `limit`, `selected_tools` and the optional
 /// `default_wiki_identifier`.
-/// The pgvector and embedding settings only feed the index tools, which this
-/// runtime does not serve.
+/// The embedding setting only feeds the index tools, which this runtime does
+/// not serve (the SDK's `pgvector_configuration` is retired and never sent).
 pub(crate) struct AdoWikiToolkitConfig {
     inner: AdoToolkitConfig,
 }

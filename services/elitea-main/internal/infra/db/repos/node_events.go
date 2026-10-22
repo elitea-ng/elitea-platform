@@ -21,7 +21,6 @@ const (
 	defaultMaxProgressBytes       = int64(8 * 1024 * 1024)
 	defaultMaxProgressAge         = 5 * time.Minute
 	defaultReplayJanitorBatchSize = 100
-	maxTaskRestampSourceEventID   = 512
 )
 
 type replayRetentionPolicy struct {
@@ -132,10 +131,6 @@ func (r *NodeEventsRepository) ProjectNodeEvent(ctx context.Context, frame outpu
 		return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidNodeEventOutput
 	}
 	eventDigest := runtimedomain.SHA256(frame.BrowserData)
-	restampCreatedOn, persistTaskRestamp := frame.CurrentIndexMetaTaskRestampSource()
-	if persistTaskRestamp && len(frame.EventID) > maxTaskRestampSourceEventID {
-		return outputapp.ProjectionOutcome{}, outputapp.ErrInvalidNodeEventOutput
-	}
 
 	var outcome outputapp.ProjectionOutcome
 	err = r.store.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
@@ -359,18 +354,6 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 					return err
 				}
 			}
-			if capabilityID == executiondomain.IndexIngestCapability && persistTaskRestamp {
-				if err := persistCurrentIndexMetaTaskRestampIntent(
-					ctx,
-					tx,
-					frame,
-					restampCreatedOn,
-					resourceProjectID,
-					projectionProjectID,
-				); err != nil {
-					return err
-				}
-			}
 			outcome = outputapp.ProjectionOutcome{Inserted: true, Cursor: uint64(cursor), CommittedSequence: frame.Sequence}
 			return nil
 		}
@@ -406,68 +389,6 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 		return outputapp.ProjectionOutcome{}, err
 	}
 	return outcome, nil
-}
-
-func persistCurrentIndexMetaTaskRestampIntent(
-	ctx context.Context,
-	tx sqlExecutor,
-	frame outputapp.NodeEventFrame,
-	createdOn float64,
-	resourceProjectID int64,
-	projectionProjectID int64,
-) error {
-	var targetExists, updated bool
-	err := tx.QueryRow(ctx, `
-WITH target AS MATERIALIZED (
-    SELECT i.execution_id, i.generation
-    FROM elitea_runtime.index_ingest_jobs AS i
-    JOIN elitea_runtime.execution_jobs AS j
-      ON j.execution_id = i.execution_id
-     AND j.generation = i.generation
-     AND j.capability_id = i.capability_id
-    WHERE i.execution_id = $1
-      AND i.generation = $2
-      AND i.capability_id = 'index.ingest.v1'
-      AND i.index_meta_initialized_at IS NOT NULL
-      AND j.tenant_id = $3
-      AND j.resource_project_id = $4
-      AND j.projection_project_id = $5
-),
-persisted AS (
-    UPDATE elitea_runtime.index_ingest_jobs AS i
-    SET index_meta_task_restamp_source_event_id = $6,
-        index_meta_task_restamp_occurred_at = $7,
-        index_meta_task_restamp_created_on = $8,
-        index_meta_task_restamp_status = 'PENDING',
-        index_meta_task_restamp_attempt_count = 0,
-        index_meta_task_restamp_next_attempt_at = clock_timestamp()
-    FROM target
-    WHERE i.execution_id = target.execution_id
-      AND i.generation = target.generation
-      AND i.index_meta_task_restamp_status IS NULL
-    RETURNING 1
-)
-SELECT EXISTS (SELECT 1 FROM target),
-       EXISTS (SELECT 1 FROM persisted)`,
-		frame.Fence.ExecutionID,
-		int64(frame.Fence.Generation),
-		frame.TenantID,
-		resourceProjectID,
-		projectionProjectID,
-		frame.EventID,
-		frame.OccurredAt.UTC(),
-		createdOn,
-	).Scan(&targetExists, &updated)
-	if err != nil {
-		return fmt.Errorf("persist current index metadata task restamp intent: %w", err)
-	}
-	if !targetExists {
-		return runtimedomain.ErrStaleFence
-	}
-	// A prior authenticated in-progress event owns the immutable intent.
-	// Later progress events in the same generation are intentional no-ops.
-	_ = updated
-	return nil
 }
 
 func initializeReplayExecutionState(ctx context.Context, tx sqlExecutor, executionID string, generation, projectionProjectID int64) error {

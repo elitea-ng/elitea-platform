@@ -8,7 +8,7 @@ Read Figma file contents, comments and images for design context. It's listed un
 ## Prerequisites
 
 - An account at Figma with permission to issue an API token or credential, saved in Elitea as a **`figma`** credential (`/credentials/create-credential/<type>`).
-- If you plan to index content for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+- If you plan to index content for retrieval: an embedding model, configured under AI providers.
 
 ## Connect the toolkit
 
@@ -22,7 +22,7 @@ Under the credential field, choose an existing **figma** credential, or select *
 </Step>
 
 <Step title="Add indexing settings (optional)">
-If you plan to index this source, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit without indexing.
+If you plan to index this source, set an **embedding model**. Indexes are kept in the platform's vector store, so there is no vector-storage setting to pick. Leave it empty to use the toolkit without indexing.
 </Step>
 
 <Step title="Save">

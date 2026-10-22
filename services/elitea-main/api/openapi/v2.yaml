@@ -11357,8 +11357,7 @@ components:
           type: string
           description: >
             A fixed, human-readable sentence. It never carries the driver
-            error: an unwrapped pgx failure names the PgVector user,
-            database, host and port.
+            error, which can name database credentials, hosts and ports.
       description: >
         NOTE(W2): the refusal half of the same `{"ok": ..., "error": ...}`
         envelope IndexWriteAck describes — the shape the index write paths
@@ -28225,9 +28224,8 @@ paths:
               schema: { $ref: '#/components/schemas/IndexWriteAck' }
         '400':
           description: |
-            `index_configuration` is not a JSON object, the toolkit is not
-            visible to the caller, or it has no PgVector configuration to
-            write into.
+            `index_configuration` is not a JSON object, or the toolkit is
+            not visible to the caller.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
@@ -28239,7 +28237,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
         '502':
-          description: The project's PgVector store could not be written.
+          description: The index registry could not be written.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/IndexWriteRefusal' }

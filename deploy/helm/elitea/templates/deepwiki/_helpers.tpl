@@ -142,6 +142,17 @@ elitea-main
 {{- if not .Values.deepwiki.mtls.enabled -}}
 {{- fail "deepwiki.mtls.enabled is false, but the provider serves gRPC over mutual TLS only (#1359) and refuses to start without its server certificate and client CA. Enable mtls." -}}
 {{- end -}}
+{{- /*
+  The native engine keeps every wiki's dense vectors in elitea-vector (ADR-0031; PostgreSQL holds
+  none) and REFUSES to start without ELITEA_DEEPWIKI_VECTOR_URL. The chart sets it
+  from this release's elitea-vector, so a native runner needs vector.enabled,
+  or deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL naming one deployed elsewhere (whose
+  certificate the runtime CA signs and whose client CA trusts the callback
+  identity). Without this guard the refusal is a sidecar in CrashLoopBackOff.
+*/ -}}
+{{- if and (include "elitea-deepwiki.modelCalls" .) (not .Values.vector.enabled) (not (get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_VECTOR_URL")) -}}
+{{- fail "deepwiki.engine.runner is \"native\" but vector.enabled is false and deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL is unset. The native engine keeps every wiki's dense vectors in elitea-vector (ADR-0031) and refuses to start without it; PostgreSQL holds no vector. Enable vector (this chart's elitea-vector and Qdrant), name an external elitea-vector in deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL, or use runner fixture." -}}
+{{- end -}}
 {{- if not (include "elitea-deepwiki.platformGrpc" .) -}}
 {{- fail "deepwiki.platformGrpc.clients is empty, so the provider's one listener admits nobody and elitea-main's facade is refused on every call (#1359). The default is [elitea-main]." -}}
 {{- end -}}

@@ -7,7 +7,7 @@
  * building.** `GET /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/
  * {toolkitID}` (`services/elitea-main/internal/api/v2/indexing/
  * index_meta.go`) returns `[{id, metadata, stale}]` where `metadata` is
- * `map[string]any` copied verbatim out of the PgVector row
+ * `map[string]any` copied verbatim out of the index-registry row
  * (`internal/application/indexmeta/list.go:54-58`) — so the `report`,
  * `skipped`, `indexed`, `total`, `state`, `error` and `history` keys the
  * indexer writes all arrive untouched. `../../ui/IndexDetails/

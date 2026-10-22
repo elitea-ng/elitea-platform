@@ -15,7 +15,6 @@ const ICON_TYPE_KEYS: Record<string, readonly string[]> = {
   HUGGING_FACE: ['hugging_face', 'huggingface'],
   CHROMA: ['chroma'],
   AZURE: ['open_ai_azure', 'azure', 'azure_openai', 'azure_open_ai', 'model-router'],
-  PGVECTOR: ['pgvector', 'postgresql', 'postgres'],
 };
 
 const CONFIGURATION_TYPE_GROUPS = {
@@ -45,9 +44,6 @@ const CONFIGURATION_TYPE_GROUPS = {
       'azure_openai',
       'azure_open_ai',
       'model-router',
-      'pgvector',
-      'postgresql',
-      'postgres',
     ],
   },
 } as const;
@@ -66,7 +62,6 @@ const THIRD_PARTY_HOSTING_KEYWORDS = [
   'ollama',
   'hugging',
   'model-router',
-  'postgres',
 ];
 
 const OPENAI_GROUP_TYPES = CONFIGURATION_TYPE_GROUPS.OpenAI.types;

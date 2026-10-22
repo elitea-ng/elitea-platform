@@ -271,7 +271,6 @@ export const buildConfigurationData = ({
     available_configurations: {
       llm_models: mapConfigToList(configurationsBySections.llm),
       embedding_models: mapConfigToList(configurationsBySections.embedding),
-      vector_storages: mapConfigToList(configurationsBySections.vectorstorage),
       ai_credentials: mapConfigToList(configurationsBySections.ai_credentials),
       image_generation_models: mapConfigToList(configurationsBySections.image_generation),
       asr_models: mapConfigToList(configurationsBySections.asr),

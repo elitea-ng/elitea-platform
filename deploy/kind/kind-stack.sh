@@ -120,7 +120,7 @@ build_images() {
 # Third-party images are pulled once to the HOST and side-loaded, so a repeated
 # `up` needs no registry at all.
 INFRA_IMAGES=(
-  docker.io/pgvector/pgvector:0.8.5-pg16-trixie
+  docker.io/library/postgres:18
   docker.io/rustfs/rustfs:latest
   rustfs/rc:latest
 )

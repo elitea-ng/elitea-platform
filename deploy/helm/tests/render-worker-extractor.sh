@@ -63,11 +63,10 @@ RENDER=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
-# A Rust-indexing deployment (render-indexing-runtime.sh explains the replica
-# count).
+# A Rust-indexing deployment.
 RUST=(
   --set worker.implementation=rust --set worker.indexingRuntime=rust
-  --set vector.enabled=true --set main.autoscaling.maxReplicas=3
+  --set vector.enabled=true
   --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key
 )
 

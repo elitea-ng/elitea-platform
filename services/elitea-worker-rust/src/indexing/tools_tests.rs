@@ -653,7 +653,6 @@ fn toolkit_settings(
             "active_branch": "main",
             "base_branch": "main",
             "selected_tools": selected,
-            "pgvector_configuration": null,
             "embedding_model": null
         }),
         "artifact" => json!({"bucket": "docs", "selected_tools": selected}),

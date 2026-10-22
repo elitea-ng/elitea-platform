@@ -3,8 +3,7 @@ package projectprovisioning
 // The application-data steps of a project delete (issues #1243 and #1244).
 //
 // A DeepWiki wiki's search index and an Inventory toolkit's graph live in the
-// engine's own store, not in the project's tenant schema or its PgVector
-// database, so none of the journal's other steps reaches them. Each application
+// engine's own store, not in the project's tenant schema, so none of the journal's other steps reaches them. Each application
 // wired on the replica that DECIDES the delete contributes ONE journal step,
 // `<app>_data` (StepDeepWikiData, StepInventoryData), that asks the engine to
 // delete everything it holds for the project over its platform gRPC service

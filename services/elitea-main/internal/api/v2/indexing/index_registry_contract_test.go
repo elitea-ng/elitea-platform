@@ -455,8 +455,8 @@ func TestRegistryIndexListOfAMissingToolkitAnswersLikeThePythonPath(t *testing.T
 }
 
 func TestRegistryIndexListNeverFailsForWantOfAPgvectorConfiguration(t *testing.T) {
-	// The python path answers 400 "PGVector configuration is missing" for a
-	// toolkit without one. A rust deployment's toolkits need none.
+	// The retired python path answered 400 "PGVector configuration is missing"
+	// for a toolkit without one. The registry's toolkits need none.
 	f := newRegistryFixture(t, registryToolkits{})
 	f.store.add(t, 7, 9, "docs", 1, true)
 	if response := f.do(http.MethodGet, listPath, ""); response.Code != http.StatusOK {

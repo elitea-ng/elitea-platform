@@ -199,8 +199,7 @@ async function createIndexThroughUi(page: Page, panel: Locator, projectId: strin
  * `IndexActionsParts.tsx:43` disables the button on it, with the tooltip
  * `'"Remove index" tool is not selected'` (`IndexActionsParts.tsx:37`). The
  * fixture toolkit `seed-index` writes carries NO `selected_tools` at all —
- * its settings are `bucket` + `embedding_model` + `pgvector_configuration`
- * and nothing else (`deploy/scripts/standalone-stack.sh:1104-1114`) — so on
+ * its settings are `bucket` + `embedding_model` and nothing else (`deploy/scripts/standalone-stack.sh:1104-1114`) — so on
  * a freshly-seeded stack that button is permanently disabled, which is what
  * this journey's first real run measured (job 101650528151: the locator
  * resolved to `<button disabled …>Delete</button>` and never became

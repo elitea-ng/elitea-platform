@@ -269,7 +269,6 @@ fn settings(selected: &[&str]) -> Map<String, Value> {
         "active_branch": "feature/runtime",
         "base_branch": "main",
         "selected_tools": selected,
-        "pgvector_configuration": null,
         "embedding_model": null
     })
     .as_object()

@@ -174,6 +174,17 @@ elitea-main
 {{- if not .Values.inventory.mtls.enabled -}}
 {{- fail "inventory.mtls.enabled is false, but the provider serves gRPC over mutual TLS only (#1359) and refuses to start without its server certificate and client CA. Enable mtls." -}}
 {{- end -}}
+{{- /*
+  The native engine keeps every graph's entity vectors in elitea-vector (ADR-0031; PostgreSQL holds
+  none) and REFUSES to start without ELITEA_INVENTORY_VECTOR_URL. The chart sets it
+  from this release's elitea-vector, so a native runner needs vector.enabled,
+  or inventory.env.ELITEA_INVENTORY_VECTOR_URL naming one deployed elsewhere (whose
+  certificate the runtime CA signs and whose client CA trusts the callback
+  identity). Without this guard the refusal is a sidecar in CrashLoopBackOff.
+*/ -}}
+{{- if and (include "elitea-inventory.modelCalls" .) (not .Values.vector.enabled) (not (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_VECTOR_URL")) -}}
+{{- fail "inventory.engine.runner is \"native\" but vector.enabled is false and inventory.env.ELITEA_INVENTORY_VECTOR_URL is unset. The native engine keeps every graph's entity vectors in elitea-vector (ADR-0031) and refuses to start without it; PostgreSQL holds no vector. Enable vector (this chart's elitea-vector and Qdrant), name an external elitea-vector in inventory.env.ELITEA_INVENTORY_VECTOR_URL, or use runner fixture." -}}
+{{- end -}}
 {{- if not (include "elitea-inventory.platformGrpc" .) -}}
 {{- fail "inventory.platformGrpc.clients is empty, so the provider's one listener admits nobody and elitea-main's facade is refused on every call (#1359). The default is [elitea-main]." -}}
 {{- end -}}

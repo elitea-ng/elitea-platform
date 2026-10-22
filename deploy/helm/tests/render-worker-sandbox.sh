@@ -46,7 +46,7 @@ YAML
 args=(-f deploy/helm/elitea/values-standalone.yaml -f "$work/profiles.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-  --set vector.enabled=true --set main.autoscaling.maxReplicas=3
+  --set vector.enabled=true
   --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key)
 helm template test deploy/helm/elitea "${args[@]}" \
   --show-only templates/worker/configmap-runtime.yaml > "$work/config.yaml"

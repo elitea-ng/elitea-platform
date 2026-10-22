@@ -7,7 +7,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { PlusIcon } from '@/shared/ui/icons/plus-icon';
 
-import { isMissingVectorStoreError, readIndexesListErrorMessage, readIndexesListErrorStatus } from '../../lib/helpers/indexesListError';
+import { readIndexesListErrorMessage, readIndexesListErrorStatus } from '../../lib/helpers/indexesListError';
 import type { IndexRow } from '../../model/indexesStore';
 import { IndexListItem } from './IndexListItem';
 
@@ -22,8 +22,8 @@ import { IndexListItem } from './IndexListItem';
  * back to an empty array — so the rail asserted "no indexes" about a toolkit
  * whose index list it had not been able to read. See
  * `../../lib/helpers/indexesListError.ts` for the measured case (validation
- * matrix F4: a 400 naming a missing PGVector configuration, rendered as an
- * empty list) and for why the server's own sentence is shown verbatim.
+ * matrix F4: a 400 naming a missing prerequisite, rendered as an empty
+ * list) and for why the server's own sentence is shown verbatim.
  */
 export interface IndexesListProps {
   readonly handleAddIndex: () => void;
@@ -39,7 +39,7 @@ const SKELETON_ROW_COUNT = 4;
 
 /**
  * The failed-read body. Split from `IndexesList` for the §3.5 cyclomatic
- * budget (12) — the three conditional lines below all belong to one state and
+ * budget (12) — the conditional lines below all belong to one state and
  * counting them against the list's own loading/empty/rows branching says
  * nothing useful about either.
  */
@@ -66,17 +66,6 @@ function IndexesListError({ error }: { readonly error: unknown }): ReactNode {
           color="text.secondary"
         >
           {message}
-        </Typography>
-      )}
-      {isMissingVectorStoreError(message) && (
-        <Typography
-          variant="bodySmall"
-          color="text.secondary"
-        >
-          {t(
-            'features.toolkits.indexesList.missingVectorStore',
-            'Indexes need a vector store. Create a PgVector configuration in Settings → AI Providers, then select it in this toolkit’s Configuration tab.',
-          )}
         </Typography>
       )}
     </Box>

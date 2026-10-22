@@ -7,13 +7,22 @@
 //!
 //! | branch | assertion |
 //! | --- | --- |
-//! | dense | exact: same order (up to recorded ties), same L2 distances |
+//! | dense | same order (up to recorded ties); the recorded L2 distances converted to the cosine distance elitea-vector ranks by |
 //! | fts | same match set; order within the recorded tie groups; legacy sign |
 //! | fused | recomputed from the components; equal to the recording when the components agree and no dense tie reaches the top k |
+//!
+//! The dense vectors are in elitea-vector now (#1359), which ranks by
+//! cosine similarity; the tests use the in-process `MemoryDense`, which
+//! scores exactly. The fixtures were recorded with pgvector's L2 distance
+//! `d`. With the norms `|a|` and `|b|` of the two vectors (all within
+//! 1e-6 of 1 here), the cosine distance is
+//! `1 - (|a|^2 + |b|^2 - d^2) / (2 |a| |b|)`, a monotone function of `d`
+//! for unit vectors, so the order and the ties are the recording's and
+//! each distance is converted, not re-recorded.
 
 mod storage_common;
 
-use elitea_deepwiki_engine::storage::build::{BuildSpace, WikiRecord};
+use elitea_deepwiki_engine::storage::build::WikiRecord;
 use elitea_deepwiki_engine::storage::search::{Fusion, Hit, Hybrid, IndexReader, rrf_fuse};
 use serde_json::Value;
 use sqlx::postgres::PgPool;
@@ -26,7 +35,7 @@ const WIKI: &str = "acme--notes-service--main";
 /// A migrated database holding the fixture corpus, published.
 async fn published(name: &str) -> Option<(PgPool, IndexReader)> {
     let pool = common::fresh_database(name).await?;
-    let space = BuildSpace::new(pool.clone(), "parity");
+    let (space, store) = common::dense_space(&pool, "parity");
     let mut build = space.begin(&common::key(WIKI)).await.expect("begin");
     build
         .stage_nodes(common::corpus())
@@ -34,7 +43,10 @@ async fn published(name: &str) -> Option<(PgPool, IndexReader)> {
         .expect("stage nodes");
     let embeddings = common::embeddings();
     build
-        .stage_embeddings(embeddings.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .stage_embeddings(
+            common::TEST_MODEL,
+            embeddings.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
         .await
         .expect("stage embeddings");
     let counts = build
@@ -43,7 +55,25 @@ async fn published(name: &str) -> Option<(PgPool, IndexReader)> {
         .expect("publish");
     assert_eq!(counts.nodes, 20);
     assert_eq!(counts.embeddings, 20);
-    Some((pool.clone(), IndexReader::new(pool, common::key(WIKI))))
+    Some((
+        pool.clone(),
+        IndexReader::new(pool, common::key(WIKI)).with_dense(common::dense(&store)),
+    ))
+}
+
+fn norm(vector: &[f64]) -> f64 {
+    vector.iter().map(|v| v * v).sum::<f64>().sqrt()
+}
+
+/// A recorded L2 distance `d` between `query` and the stored vector of
+/// `node`, as the cosine distance of the same two vectors.
+fn cosine_distance_of(l2: f64, query: &[f64], node: &str) -> f64 {
+    let stored = common::embeddings()
+        .into_iter()
+        .find(|(id, _)| id == node)
+        .map_or_else(|| panic!("no embedding for {node}"), |(_, v)| v);
+    let (a, b) = (norm(query), norm(&stored));
+    1.0 - (a * a + b * b - l2 * l2) / (2.0 * a * b)
 }
 
 fn ids(hits: &[Hit]) -> Vec<String> {
@@ -83,7 +113,12 @@ async fn dense_ranking_is_exact() {
             .search_dense(&embedding, param(&fixture, "vec_pool"))
             .await
             .expect("dense");
-        let (expected_ids, expected) = recorded(&fixture, "dense", "vec_distance");
+        let (expected_ids, recorded_l2) = recorded(&fixture, "dense", "vec_distance");
+        let expected: Vec<f64> = expected_ids
+            .iter()
+            .zip(&recorded_l2)
+            .map(|(id, l2)| cosine_distance_of(*l2, &embedding, id))
+            .collect();
         let scores: Vec<f64> = hits
             .iter()
             .map(|h| h.scores.vec_distance.expect("distance"))

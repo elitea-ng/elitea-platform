@@ -13,9 +13,9 @@ import type { ToolFieldValue, ToolPropertySchemaItems, ToolSchema } from './type
  * other two exports, used only by a separate "new tool" seeding path that
  * is not part of this sub-unit's owned files).
  *
- * DISCLOSED SCOPE REDUCTION: the baseline's `defaultVectorStorage`/
- * `defaultEmbeddingModel`/`defaultImageGenerationModel` parameters are
- * dropped — `ToolBase.jsx`'s own call site never supplies them (they
+ * DISCLOSED SCOPE REDUCTION: the baseline's `defaultVectorStorage` (gone
+ * with the pgvector configuration type)/`defaultEmbeddingModel`/
+ * `defaultImageGenerationModel` parameters are dropped — `ToolBase.jsx`'s own call site never supplies them (they
  * default to `{}`/`''`/`''` there too), so the `configuration_types`/
  * `embedding_model`/`image_generation_model` branches below return their
  * baseline-equivalent fallback (`null`/`''`) rather than a caller-supplied

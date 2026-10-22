@@ -623,12 +623,12 @@ describe('CredentialForm — edit flow', () => {
     expect(capturedBody).toMatchObject({ elitea_title: 'internal-key-v1', label: 'My Prod Key v2' });
   });
 
-  it("disables Delete with a reason on a project's last vectorstorage configuration (regression: A7-pages finding 2)", async () => {
+  it("disables Delete with a reason on a project's last embedding configuration (regression: A7-pages finding 2)", async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
     server.use(
       http.get(`${BASE}/configurations/configuration/7/abc`, () =>
-        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'only-pgvector', section: 'vectorstorage', data: {} }),
+        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'only-embedding', section: 'embedding', data: {} }),
       ),
     );
     server.use(
@@ -644,10 +644,10 @@ describe('CredentialForm — edit flow', () => {
         onDiscarded={vi.fn()}
       />,
     );
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('only-pgvector'));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('only-embedding'));
     fireEvent.click(screen.getByRole('button', { name: 'Credential actions' }));
     await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true'));
-    expect(screen.getByLabelText('Cannot delete the only pgVector configuration. At least one is required for the project.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Cannot delete the only embedding model configuration. At least one is required for the project.')).toBeInTheDocument();
   });
 
   it('keeps Delete enabled when a second configuration exists in the same protected section (regression: A7-pages finding 2)', async () => {
@@ -655,7 +655,7 @@ describe('CredentialForm — edit flow', () => {
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
     server.use(
       http.get(`${BASE}/configurations/configuration/7/abc`, () =>
-        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'one-of-two', section: 'vectorstorage', data: {} }),
+        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'one-of-two', section: 'embedding', data: {} }),
       ),
     );
     server.use(
@@ -958,7 +958,7 @@ describe('CredentialForm — type catalogue scope', () => {
 
     expect(await screen.findByText('LLM Model')).toBeInTheDocument();
     expect(seen).toEqual([
-      ['llm', 'embedding', 'vectorstorage', 'ai_credentials', 'image_generation', 'asr', 'tts'],
+      ['llm', 'embedding', 'ai_credentials', 'image_generation', 'asr', 'tts'],
     ]);
   });
 

@@ -141,11 +141,12 @@ jobs:
     # cmd/elitea-llm-gateway's budget-probe test) skip without a database.
     # They ran nowhere in CI until this service; ELITEA_REQUIRE_GATEWAY_POSTGRES_TEST
     # below turns their skip into a failure, so losing the service cannot
-    # read as green (ci-go.yml's #423 pattern). pgvector, as in ci-go.yml, so
-    # one image serves every Postgres test in the repository.
+    # read as green (ci-go.yml's #423 pattern). Plain PostgreSQL 18 (Debian
+    # 13), the server every deployment runs: the gateway's DDL needs no
+    # extension.
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

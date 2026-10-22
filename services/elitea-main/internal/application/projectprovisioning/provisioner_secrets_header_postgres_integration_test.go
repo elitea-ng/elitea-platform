@@ -167,10 +167,9 @@ func TestBackfillGivesAnExistingProjectAHeaderValue(t *testing.T) {
 	secrets := v2secrets.NewHandler(pool)
 
 	// Put the project back in the state every project was in: a readable vault
-	// holding no value. StoreProjectSecrets rewrites the vault, so writing an
-	// empty value is the shape a pre-#408 project has.
-	if err := secrets.StoreProjectSecrets(ctx, projectID,
-		map[string]string{v2secrets.SecretsHeaderValueName: ""}); err != nil {
+	// holding no value. StoreSecret rewrites the vault, so writing an empty
+	// value is the shape a pre-#408 project has.
+	if err := secrets.StoreSecret(ctx, nil, projectID, v2secrets.SecretsHeaderValueName, ""); err != nil {
 		t.Fatalf("clear the header value: %v", err)
 	}
 

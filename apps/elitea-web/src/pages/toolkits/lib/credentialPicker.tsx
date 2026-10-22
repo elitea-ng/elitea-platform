@@ -40,7 +40,7 @@ import { CredentialsSelect, useCredentialValidation } from '@/features/credentia
 import { useCredentialRows, type CredentialPickerRow } from './useCredentialRows';
 import { DelegatedCredentialStatus, delegatedCredentialKey } from './DelegatedCredentialStatus';
 
-/** The section every credential-kind property carries; `vectorstorage` is the other value the catalogue serves. */
+/** The section every credential-kind property carries. */
 const CREDENTIALS_SECTION = 'credentials';
 
 /** Route `/_shell/credentials/create-credential/$credentialType` (`src/routes/_shell/credentials/create-credential.$credentialType.tsx`). */
@@ -111,7 +111,7 @@ export interface SelectedCredentialRefusal {
 
 export interface ToolkitCredentialPickerProps {
   readonly projectId: string | undefined;
-  /** `credentials` or `vectorstorage`, read off the property's resolved `$defs` entry. */
+  /** Read off the property's resolved `$defs` entry — `credentials` for every toolkit credential. */
   readonly section: string;
   readonly configurationTypes: readonly string[];
   readonly value: unknown;
@@ -191,8 +191,6 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
         handlers={handlers}
         field={toSelectField(field)}
         type={credentialType}
-        // The baseline's own gate: a vector-storage reference is picked, never created here.
-        isCreationAllowed={section !== 'vectorstorage'}
         autoSelectFirstShared={isCreating && section === CREDENTIALS_SECTION}
         mismatch={{ mismatchedPrivateCredential: true, createHref: `/credentials/create-credential/${credentialType}` }}
       />
@@ -212,8 +210,7 @@ interface BatchValidationParams {
 /**
  * The baseline's own post-load batch test-connection pass
  * (`useCredentialsData.hooks.js`'s second effect), which is what turns a row's
- * "invalid credential" marker on. Only the `credentials` section is tested; a
- * vector-storage reference has no connection to check.
+ * "invalid credential" marker on. Only the `credentials` section is tested.
  *
  * THE SAVED-ROW ROUTE, NOT THE CANDIDATE-PAYLOAD ONE. This used to post
  * `row.data` to `POST /configurations/check_connection/…`, and `row.data` is

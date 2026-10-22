@@ -54,6 +54,8 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
     common::publish(&root, &[("docs/refunds.md", Some(policy.as_str()))]);
     let git_port = common::serve(&root).await;
     let gateway = common::gateway(answer).await;
+    // elitea-vector, admitting the invocation's bearer ("k") for project 7.
+    let (vectors, vector_url) = common::fake_vector(&[("k", 7)]).await;
 
     let env: HashMap<String, String> = [
         ("ELITEA_INVENTORY_RUNNER", "native".to_owned()),
@@ -64,6 +66,7 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
         ("ELITEA_INVENTORY_GIT_ALLOWLIST", "127.0.0.1".to_owned()),
         // The platform listener: the mock gateway (only its origin counts).
         ("ELITEA_INVENTORY_MODEL_SERVICE_URL", gateway.clone()),
+        ("ELITEA_INVENTORY_VECTOR_URL", vector_url),
         (
             "ELITEA_INVENTORY_SCRATCH_PATH",
             root.join("jobs").display().to_string(),
@@ -135,6 +138,29 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
     assert_eq!(feature["embedding"], json!([0.1, 0.2, 0.3, 0.4]));
     assert_eq!(graph.metadata["embeddings_model"], json!("embed-model"));
     assert_eq!(graph.metadata["embeddings_dimension"], json!(4));
+    // The entity vectors went to elitea-vector with the invocation's bearer
+    // before the run committed, under the generation the graph row records.
+    let embedded = graph
+        .nodes()
+        .filter(|(_, n)| {
+            n.get("embedding")
+                .and_then(Value::as_array)
+                .is_some_and(|v| !v.is_empty())
+        })
+        .count();
+    assert!(embedded > 0);
+    assert_eq!(vectors.point_count(), embedded);
+    assert!(vectors.bearers().iter().all(|bearer| bearer == "Bearer k"));
+    let generation = || async {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT vector_generation FROM inventory_graph.graphs
+              WHERE project_id = 7 AND application_id = 70",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the graph row")
+    };
+    assert!(generation().await.is_some());
 
     let mut status_arguments = arguments.clone();
     status_arguments["params"] = json!({"output_format": "json"});
@@ -212,5 +238,8 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
     )
     .expect("json");
     assert_eq!(summary["total_sources"], json!(0));
+    // That call carried no bearer (no llm_settings): its write published no
+    // generation, and the first ranking with one backfills the graph.
+    assert_eq!(generation().await, None);
     let _ = std::fs::remove_dir_all(&root);
 }

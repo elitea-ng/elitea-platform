@@ -669,6 +669,9 @@ func configurationOrderBy(sortBy, sortOrder string) string {
 // no caller string reaches the statement text.
 func configurationRowFilter(request configurationListQuery, placeholder int) (string, []any) {
 	clause, args := configurationSectionFilter(request.sections, placeholder)
+	// A row of a retired type is kept but never listed (retired.go). The
+	// value is a package constant, not request input.
+	clause += retiredConfigurationTypeFilter
 	placeholder += len(args)
 	if len(request.ids) > 0 {
 		clause += " AND id = ANY($" + strconv.Itoa(placeholder) + "::integer[])"
@@ -686,6 +689,18 @@ func configurationRowFilter(request configurationListQuery, placeholder int) (st
 	}
 	return clause, args
 }
+
+// retiredConfigurationTypeFilter keeps every row of a retired configuration
+// type (application/configurations/retired.go) out of a listing.
+//
+// It normalises the stored value the way IsRetiredConfigurationType normalises
+// a request's: case-folded and trimmed of the whitespace strings.TrimSpace
+// strips in ASCII (space, tab, newline, carriage return, vertical tab, form
+// feed; \x0B because an E-string has no \v escape). A row written as "PgVector" or
+// "pgvector " before the gate folded case is the same retired type and stays
+// hidden. A NULL type is filtered as before (NULL <> x is NULL).
+const retiredConfigurationTypeFilter = " AND lower(btrim(type, E' \\t\\n\\r\\x0B\\f')) <> '" +
+	configurationapp.RetiredPgvectorConfigurationType + "'"
 
 // The two sentinels separate a row this handler could not READ from a row it
 // read and could not DECODE. Both are 500s, and they keep the two messages the
@@ -1121,6 +1136,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
+	// A retired type (application/configurations/retired.go) is refused before
+	// anything else: as an unknown type it would otherwise be stored.
+	if configurationapp.IsRetiredConfigurationType(strVal(body, "type")) {
+		writeRetiredConfigurationTypeRefusal(w)
+		return
+	}
 
 	// The keyless mode (keyless_credentials.go) runs BEFORE the required-field
 	// walk: that walk reads the mode to decide whether the key is required,
@@ -1385,6 +1406,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
+	// A change TO a retired type is refused before the database is read.
+	if configurationapp.IsRetiredConfigurationType(strVal(body, "type")) {
+		writeRetiredConfigurationTypeRefusal(w)
+		return
+	}
 	// The self-referential guard answers before the transaction opens. It
 	// refuses a client mistake, so it must not depend on the database.
 	if failure := validateUpdatedConfigurationData(body); failure != nil {
@@ -1415,6 +1441,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestedType := strVal(body, "type")
+	// Nor is a stored row of a retired type rewritten. It stays deletable
+	// (retired.go).
+	if configurationapp.IsRetiredConfigurationType(storedType) {
+		writeRetiredConfigurationTypeRefusal(w)
+		return
+	}
 	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
 		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
@@ -1948,7 +1980,8 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 		"image_generation_model": "image_generation",
 	}
 
-	q := fmt.Sprintf(`SELECT DISTINCT type, section FROM %s.configuration ORDER BY type`, schema)
+	q := fmt.Sprintf(`SELECT DISTINCT type, section FROM %s.configuration WHERE TRUE%s ORDER BY type`,
+		schema, retiredConfigurationTypeFilter)
 	// Same rule as ListModels: only a missing schema is an empty list.
 	rows, err := h.pool.Query(ctx, q)
 	if err != nil {
@@ -2251,4 +2284,11 @@ func configurationQueryIDs(values url.Values) ([]int32, error) {
 		return nil, configurationapp.ErrInvalidCurrentConfigurationRequest
 	}
 	return configurationapp.ParseCurrentConfigurationIDs(values.Get("ids"))
+}
+
+// writeRetiredConfigurationTypeRefusal answers a create or update of a retired
+// configuration type with the reviewed mutation route's body shape.
+func writeRetiredConfigurationTypeRefusal(w http.ResponseWriter) {
+	writeCurrentConfigurationMutationError(
+		w, http.StatusBadRequest, configurationapp.RetiredPgvectorConfigurationMessage, "type")
 }

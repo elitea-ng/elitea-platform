@@ -111,9 +111,6 @@ func newFreshInstallIdentityDatabase(t *testing.T, ctx context.Context) *pgxpool
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
-		t.Fatalf("create the vector extension: %v", err)
-	}
 	applied, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial)
 	if err != nil {
 		t.Fatalf("bootstrap the fresh-install schema: %v", err)

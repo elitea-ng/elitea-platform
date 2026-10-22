@@ -189,16 +189,13 @@ type deleteProjectResponse struct {
 	// and what happens to them. Message also carries the reason of a 500.
 	Pending []string `json:"pending,omitempty"`
 	Message string   `json:"message,omitempty"`
-	// Database names the PgVector database a delete has not dropped yet, when
-	// the project was recorded as having one (#1211).
-	Database string `json:"database,omitempty"`
 }
 
 // DeleteProject serves `DELETE /api/v2/projects/project/{mode}/{projectID}`.
 //
 // Destructive and irreversible: it removes the project row and revokes its
 // credentials in one transaction, then cleans up what is slow or external
-// (artifact bytes, the tenant schema with CASCADE, the PgVector database) from
+// (artifact bytes, the tenant schema with CASCADE, application data) from
 // the cleanup journal. It is gated on the same administration-mode permission
 // the reference declares, and answers 404 for any other `{mode}`.
 //
@@ -260,10 +257,9 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		// journal retries it with backoff. The body names what is pending, never
 		// the underlying error, which can hold SQL or addresses.
 		writeJSON(w, http.StatusAccepted, deleteProjectResponse{
-			Steps:    nonNilSteps(result.RollbackSteps),
-			Pending:  result.Pending,
-			Message:  "the project was deleted and its access revoked; cleanup of the remaining steps continues in the background",
-			Database: result.VectorDatabase,
+			Steps:   nonNilSteps(result.RollbackSteps),
+			Pending: result.Pending,
+			Message: "the project was deleted and its access revoked; cleanup of the remaining steps continues in the background",
 		})
 		return
 	}

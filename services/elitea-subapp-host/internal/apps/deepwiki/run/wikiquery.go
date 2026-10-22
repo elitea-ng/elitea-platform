@@ -241,7 +241,7 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 		// failed between its two halves, or a wiki whose objects were removed
 		// by hand. The index is cleaned up here, so a retry of a half-failed
 		// delete finishes the job.
-		index := q.deleteIndex(ctx, wikiID, tc)
+		index := q.deleteIndex(ctx, wikiID, object(arguments["llm_settings"]), tc)
 		switch {
 		case index.unavailable:
 			// Nothing to clean here and the engine cannot say whether an
@@ -301,7 +301,7 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 	if q.deps.DeleteIndex == nil {
 		return response("message", message), nil
 	}
-	index := q.deleteIndex(ctx, wikiID, tc)
+	index := q.deleteIndex(ctx, wikiID, object(arguments["llm_settings"]), tc)
 	if index.err != nil {
 		// The artifacts are gone and the index is not: the half-deleted
 		// state this tool exists to avoid. It is an ERROR, so a caller that
@@ -345,7 +345,12 @@ const indexUnavailable = "search index cleanup unavailable on this engine versio
 
 // deleteIndex deletes one wiki's search index in the engine. A host without
 // an engine (DeleteIndex nil) reports nothing removed and no error.
-func (q *wikiQuery) deleteIndex(ctx context.Context, wikiID string, tc *spi.Context) indexOutcome {
+//
+// llmSettings are the invocation's: the engine deletes the wiki's dense
+// vectors from elitea-vector with their callback token (api_key), which is
+// admitted for the invocation's project and source deepwiki (#1359). The
+// engine refuses the deletion without it rather than leave the vectors.
+func (q *wikiQuery) deleteIndex(ctx context.Context, wikiID string, llmSettings map[string]any, tc *spi.Context) indexOutcome {
 	if q.deps.DeleteIndex == nil {
 		return indexOutcome{}
 	}
@@ -360,7 +365,11 @@ func (q *wikiQuery) deleteIndex(ctx context.Context, wikiID string, tc *spi.Cont
 	if err := tc.Thinking(ctx, "Deleting the wiki's search index"); err != nil {
 		return indexOutcome{err: err}
 	}
-	result, err := q.deps.DeleteIndex(ctx, map[string]any{"wiki_id": wikiID}, tc)
+	call := map[string]any{"wiki_id": wikiID}
+	if len(llmSettings) > 0 {
+		call["llm_settings"] = llmSettings
+	}
+	result, err := q.deps.DeleteIndex(ctx, call, tc)
 	// The last resort, for an engine that does not list its tools: the
 	// refusal of a tool it does not serve.
 	if errors.Is(err, engine.ErrUnknownTool) {

@@ -38,7 +38,7 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		// They are catalogued so their rows get a section and their keys get
 		// sealed — see provider_admission_test.go (#G3).
 		"anthropic", "open_ai_azure", "vllm",
-		"s3", "s3_api_credentials", "github", "pgvector", "ado", "gitlab", "qtest",
+		"s3", "s3_api_credentials", "github", "ado", "gitlab", "qtest",
 		"bitbucket", "confluence", "jira", "postman", "service_now", "testrail", "slack",
 		"azure_search", "delta_lake", "bigquery", "xray", "zephyr", "zephyr_enterprise",
 		"zephyr_essential", "figma", "rally", "sonar", "sql", "google_places", "salesforce",
@@ -150,10 +150,8 @@ func TestCurrentAvailableCatalogFiltersSectionsLikeCurrentEndpoint(t *testing.T)
 	if err != nil {
 		t.Fatalf("CompleteEntries(multiple) error = %v", err)
 	}
-	if len(multiple) != 2 {
-		t.Fatalf("multiple section types = %v", multiple)
-	}
-	if got := []string{multiple[0].Type, multiple[1].Type}; !slices.Equal(got, []string{"s3", "pgvector"}) {
+	// vectorstorage held only the retired pgvector type, so it adds nothing.
+	if len(multiple) != 1 || multiple[0].Type != "s3" {
 		t.Fatalf("multiple section types = %v", multiple)
 	}
 	if entries, err := catalog.CompleteEntries(""); err != nil || len(entries) != 0 {

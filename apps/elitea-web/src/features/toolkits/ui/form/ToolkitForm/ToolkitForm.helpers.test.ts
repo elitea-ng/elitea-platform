@@ -342,12 +342,12 @@ describe('applyAutoSelectFormReset', () => {
   it('still calls onResetForm for an auto-selected field in another section', () => {
     const onResetForm = vi.fn();
     applyAutoSelectFormReset(
-      { isAutoSelect: true, section: 'vectorstorage' },
-      { type: 'github', settings: { pgvector_configuration: null } },
-      'settings.pgvector_configuration',
+      { isAutoSelect: true, section: 'embedding' },
+      { type: 'github', settings: { embedding_model: null } },
+      'settings.embedding_model',
       { id: 9 },
       onResetForm,
     );
-    expect(onResetForm).toHaveBeenCalledWith({ type: 'github', settings: { pgvector_configuration: { id: 9 } } });
+    expect(onResetForm).toHaveBeenCalledWith({ type: 'github', settings: { embedding_model: { id: 9 } } });
   });
 });

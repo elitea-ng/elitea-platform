@@ -1,6 +1,6 @@
 {{- if .Values.dbInit.enabled }}
 {{- $d := .Values.dbInit }}
-# The two things elitea-migrate cannot do for itself, because both need rights
+# The one thing elitea-migrate cannot do for itself, because it needs a right
 # the migrating role does not have.
 #
 # WHAT IS NOT HERE, DELIBERATELY. The pylon-era schema (001_initial.sql) used to
@@ -20,10 +20,13 @@
 #      the connection-string shape the checkpointer uses. Without it the worker
 #      claims an execution, runs the agent, and then fails delivery with "The
 #      durable agent checkpoint store is unavailable".
-#   2. CREATE EXTENSION vector, into public, where the index plane's unqualified
-#      DDL needs it. No migration creates it, so nothing else will.
 #
-# Both are idempotent, and an already-prepared database costs two queries.
+# It no longer creates the `vector` extension: nothing in the platform needs
+# pgvector (#1359) — every dense vector is in Qdrant behind elitea-vector. An
+# extension an earlier release created is left in place here; the DeepWiki and
+# Inventory engines' drop migrations remove it when nothing uses it.
+#
+# Idempotent, and an already-prepared database costs one query.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -34,8 +37,7 @@ metadata:
   annotations:
     # BEFORE the migration (weight 0). The migration no longer DEPENDS on this
     # Job for the schema, but the agent-state database has to exist before the
-    # worker starts, and doing both database preparations in one place keeps the
-    # ordering obvious. Argo ignores helm.sh/hook-weight when its own hook
+    # worker starts, and running it first keeps the ordering obvious. Argo ignores helm.sh/hook-weight when its own hook
     # annotation is present, so the wave states the same thing in its dialect.
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-20"
@@ -71,13 +73,13 @@ spec:
             capabilities:
               drop: ["ALL"]
           env:
-            # An ADMIN DSN: CREATE DATABASE and CREATE EXTENSION are exactly the
-            # rights the application role does not have, which is why this names
+            # An ADMIN DSN: CREATE DATABASE is exactly the right the
+            # application role does not have, which is why this names
             # its own secret rather than reusing `postgresql`.
             - name: PGURL
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "dbInit.database.existingSecret is required (it needs CREATE DATABASE and CREATE EXTENSION rights)" $d.database.existingSecret }}
+                  name: {{ required "dbInit.database.existingSecret is required (it needs the CREATE DATABASE right)" $d.database.existingSecret }}
                   key: {{ required "dbInit.database.key is required" $d.database.key }}
             - name: AGENT_STATE_DB
               value: {{ required "dbInit.agentStateDatabase is required" $d.agentStateDatabase | quote }}
@@ -119,10 +121,6 @@ spec:
               else
                 echo "database $AGENT_STATE_DB already present"
               fi
-
-              # 2. the vector type, on the default search_path.
-              psql "$PGURL" -v ON_ERROR_STOP=1 \
-                -c "CREATE EXTENSION IF NOT EXISTS vector SCHEMA public"
 
               echo "database prepared"
           resources:

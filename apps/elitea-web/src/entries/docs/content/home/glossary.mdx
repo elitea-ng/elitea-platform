@@ -9,7 +9,7 @@ This glossary defines terms used throughout the platform. Where the current UI u
 
 **Agent** — A configurable virtual assistant that combines instructions, an AI model, and optional toolkits to perform tasks and answer questions.
 
-**AI Providers** — The Settings section where you configure LLM, embedding, vector storage, image generation, speech recognition, and text-to-speech models and their credentials for a project.
+**AI Providers** — The Settings section where you configure LLM, embedding, image generation, speech recognition, and text-to-speech models and their credentials for a project.
 
 **Artifact** — A file stored in a project bucket, shared between agents, pipelines, and conversations for temporary storage and context.
 
@@ -87,7 +87,7 @@ This glossary defines terms used throughout the platform. Where the current UI u
 
 **Version** — A saved snapshot of an agent, pipeline, or skill. Agents and pipelines support multiple named versions; skills currently support only one implicit `base` version.
 
-**Vector Storage** — The storage layer (PGVector) used for embeddings and semantic retrieval, configured per project in AI Providers.
+**Vector Storage** — The storage layer used for embeddings and semantic retrieval: Qdrant, behind the elitea-vector service. It is set up once for the whole deployment by an administrator; projects and toolkits configure nothing, and each project's vectors are kept apart.
 
 ## W
 

@@ -84,7 +84,7 @@ YAML
 worker=(-f "$chart/values-standalone.yaml" -f "$work/runs.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-  --set vector.enabled=true --set main.autoscaling.maxReplicas=3 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key)
+  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key)
 helm template test "$chart" "${worker[@]}" --show-only templates/worker/configmap-runtime.yaml > "$work/runs-config.yaml"
 python3 - "$work/runs-config.yaml" <<'PY'
 import json, sys, yaml
@@ -99,7 +99,7 @@ PY
 helm template test "$chart" -f "$chart/values-standalone.yaml" \
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1 \
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
-  --set worker.enabled=true --set worker.implementation=rust --set vector.enabled=true --set main.autoscaling.maxReplicas=3 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
+  --set worker.enabled=true --set worker.implementation=rust --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
   --show-only templates/worker/configmap-runtime.yaml > "$work/default-config.yaml"
 ! grep -q workspace_runs "$work/default-config.yaml"
 # An audience Main does not sign for is refused.

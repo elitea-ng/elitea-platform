@@ -2,8 +2,9 @@
 //!
 //! The SDK's four tools (`manage_memory`, `search_memory`, `get_memory`,
 //! `delete_memory`) keep a `LangGraph` `PostgresStore` in a user-configured
-//! pgvector database, under the namespace `(namespace,)` of the toolkit's
-//! settings. Here the same four operations run over `elitea-vector`:
+//! pgvector database (a configuration type the platform has since retired),
+//! under the namespace `(namespace,)` of the toolkit's settings. Here the same
+//! four operations run over `elitea-vector`:
 //!
 //! * **Who may see a memory is decided by the SERVICE.** A memory point is of
 //!   the `memory` source, and the facade stamps its `owner` from the token

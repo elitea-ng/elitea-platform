@@ -64,14 +64,14 @@ fi
 # ── 2. the arithmetic ────────────────────────────────────────────────────────
 echo "== an over-budget topology is refused, and the message shows its working =="
 if output="$(render --set main.env.ELITEA_DATABASE_MAX_CONNS=8 --set main.autoscaling.maxReplicas=10)"; then
-  fail "10 replicas x (8 + 36) = 440 connections rendered against a budget of 175"
+  fail "10 replicas x (8 + 36) = 440 connections rendered against a budget of 185"
 else
-  for fragment in "can open 440" "44 per elitea-main replica x 10 replicas" "only 175 are available"; do
+  for fragment in "can open 440" "44 per elitea-main replica x 10 replicas" "only 185 are available"; do
     if [[ "$output" != *"$fragment"* ]]; then
       fail "the refusal does not show its working — missing: $fragment"
     fi
   done
-  note "refused: 440 = 44 x 10, against 175"
+  note "refused: 440 = 44 x 10, against 185"
 fi
 
 # ── 3. the guard PERMITS a sane topology ─────────────────────────────────────
@@ -82,7 +82,7 @@ echo "== a topology inside the budget renders =="
 if render --set main.env.ELITEA_DATABASE_MAX_CONNS=4 \
           --set main.autoscaling.enabled=false \
           --set main.replicaCount=1 >/dev/null; then
-  note "1 replica x (4 + 36) = 40 renders, inside 175"
+  note "1 replica x (4 + 36) = 40 renders, inside 185"
 else
   fail "the guard refuses a topology well inside the budget, so it is not a guard"
 fi
@@ -93,8 +93,8 @@ budget_render() {
   render --set "main.env.ELITEA_DATABASE_MAX_CONNS=$1" \
          --set main.autoscaling.enabled=false --set main.replicaCount=1 >/dev/null 2>&1
 }
-if budget_render 139; then note "175 renders"; else fail "175 was refused; the boundary is off by one"; fi
-if budget_render 140; then fail "176 rendered; the boundary is off by one"; else note "176 refused"; fi
+if budget_render 149; then note "185 renders"; else fail "185 was refused; the boundary is off by one"; fi
+if budget_render 150; then fail "186 rendered; the boundary is off by one"; else note "186 refused"; fi
 
 # ── 5. the runtime plane OFF does not pay for pools it does not open ─────────
 #
@@ -140,15 +140,15 @@ else
 fi
 
 echo "== a pooler pool that outgrows the server budget is refused =="
-if output="$(render "${PB[@]}" --set pgbouncer.poolSize=180 2>&1)"; then
-  fail "poolSize 180 + reserve 4 = 184 rendered against a server budget of 175"
+if output="$(render "${PB[@]}" --set pgbouncer.poolSize=190 2>&1)"; then
+  fail "poolSize 190 + reserve 4 = 194 rendered against a server budget of 185"
 else
-  for fragment in "184 server-side connections" "only 175 are available"; do
+  for fragment in "194 server-side connections" "only 185 are available"; do
     if [[ "$output" != *"$fragment"* ]]; then
       fail "the refusal does not show its working — missing: $fragment"
     fi
   done
-  note "refused: 184 = 180 + 4, against 175"
+  note "refused: 194 = 190 + 4, against 185"
 fi
 
 echo "== a replica fan-out that outgrows the pooler's client ceiling is refused =="
@@ -173,7 +173,7 @@ else
 fi
 
 # The client-side refusal must not have been the server-side one: 48 + 4 = 52
-# is inside 175, so only the client term can have fired.
+# is inside 185, so only the client term can have fired.
 if render "${PB[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=4 >/dev/null 2>&1; then
   note "a pooler topology inside both budgets renders (52 server, 160 client)"
 else

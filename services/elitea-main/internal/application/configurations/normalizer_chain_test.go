@@ -22,8 +22,8 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 53 {
-		t.Fatalf("catalog entries = %d, want 52 pinned and cloud_executor", len(entries))
+	if len(entries) != 52 {
+		t.Fatalf("catalog entries = %d, want 51 pinned and cloud_executor", len(entries))
 	}
 
 	sdkTypes := 0
@@ -88,8 +88,8 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 			t.Fatalf("Normalize(update %q) data=%#v, want shallow numeric coercion", entry.Type, update.Data)
 		}
 	}
-	if sdkTypes != 32 || validator.calls != 32 {
-		t.Fatalf("SDK types=%d validation calls=%d, want 32/32", sdkTypes, validator.calls)
+	if sdkTypes != 31 || validator.calls != 31 {
+		t.Fatalf("SDK types=%d validation calls=%d, want 31/31", sdkTypes, validator.calls)
 	}
 }
 

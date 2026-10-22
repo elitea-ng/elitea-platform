@@ -35,7 +35,6 @@ fn settings(selected: &[&str]) -> Map<String, Value> {
         "repository": "team/project/",
         "branch": "main",
         "selected_tools": selected,
-        "pgvector_configuration": null,
         "embedding_model": null
     })
     .as_object()

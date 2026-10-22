@@ -232,8 +232,8 @@ func TestCurrentIndexConfigurationRouteRefusesAMalformedBody(t *testing.T) {
 	}
 }
 
-// Every application refusal has to arrive as its own status. A save that lost
-// the PgVector target and a save against an index that does not exist are
+// Every application refusal has to arrive as its own status. A save whose
+// index storage is unavailable and a save against an index that does not exist are
 // different problems for the person looking at the screen, and the delete
 // route already answers them apart.
 func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {
@@ -248,13 +248,9 @@ func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {
 			err: indexmetaapp.ErrCurrentIndexMetaToolkitMissing, wantStatus: http.StatusBadRequest,
 			wantBody: "Toolkit id is missing for toolkit 9",
 		},
-		"no pgvector": {
+		"no index storage": {
 			err: indexmetaapp.ErrCurrentIndexMetaTargetMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "PGVector configuration is missing for toolkit 9",
-		},
-		"no connection string": {
-			err: indexmetaapp.ErrCurrentIndexMetaConnectionMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "Connection string is missing in PGVector configuration for toolkit 9",
+			wantBody: "Index storage is not available for toolkit 9",
 		},
 		"index missing": {
 			err: indexmetaapp.ErrCurrentIndexMetaNotFound, wantStatus: http.StatusNotFound,

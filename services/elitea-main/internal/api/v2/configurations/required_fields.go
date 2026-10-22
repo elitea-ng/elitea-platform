@@ -8,7 +8,7 @@
 // could be sealed (secret_sealing.go). Everything else was stored as sent. So
 //
 //	POST /configurations/configurations/{project}
-//	{"elitea_title":"…","type":"pgvector"}
+//	{"elitea_title":"…","type":"jira"}
 //
 // answered 201 and wrote a row with an empty label and an empty `data`. The
 // reference implementation answers 400 for that body, because it parses it
