@@ -26,10 +26,11 @@ import (
 
 // migrations are the DeepWiki engine's migrations that create and extend the
 // invocation tables, in order: 0002 creates them, 0009 adds the fleet
-// (labels, holds_slot, host_replicas).
+// (labels, holds_slot, host_replicas), 0010 the stop fences.
 var migrations = []string{
 	"../../../elitea-deepwiki-engine/migrations/0002_invocations.sql",
 	"../../../elitea-deepwiki-engine/migrations/0009_host_fleet.sql",
+	"../../../elitea-deepwiki-engine/migrations/0010_host_stop_fences.sql",
 }
 
 // testStore creates a throwaway schema, applies the migration into it, and

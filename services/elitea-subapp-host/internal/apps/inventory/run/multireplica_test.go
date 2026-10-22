@@ -31,14 +31,18 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/testpg"
 )
 
-// inventoryHostMigration is the migration that creates the host's tables in
-// the Inventory engine's schema; the test applies it with the schema name
+// inventoryHostMigrations are the migrations that create the host's tables
+// in the Inventory engine's schema, in order (0009 the invocation tables,
+// 0010 the stop fences); the test applies them with the schema name
 // replaced.
-const inventoryHostMigration = "../../../../../elitea-inventory-engine/migrations/0009_host_invocations.sql"
+var inventoryHostMigrations = []string{
+	"../../../../../elitea-inventory-engine/migrations/0009_host_invocations.sql",
+	"../../../../../elitea-inventory-engine/migrations/0010_host_stop_fences.sql",
+}
 
-// fleetSchema creates a throwaway schema, applies the Inventory migration
-// 0009 into it (inventory_graph rewritten to the schema) and returns the DSN
-// and the schema. The schema is dropped at cleanup.
+// fleetSchema creates a throwaway schema, applies the Inventory migrations
+// 0009 and 0010 into it (inventory_graph rewritten to the schema) and
+// returns the DSN and the schema. The schema is dropped at cleanup.
 func fleetSchema(t *testing.T) (string, string) {
 	t.Helper()
 	dsn := testpg.DSN(os.Getenv("ELITEA_SUBAPP_HOST_TEST_DSN"))
@@ -59,12 +63,14 @@ func fleetSchema(t *testing.T) (string, string) {
 		_, _ = admin.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
 		admin.Close()
 	})
-	sql, err := os.ReadFile(filepath.Clean(inventoryHostMigration))
-	if err != nil {
-		t.Fatalf("the engine's migration is the schema of record: %v", err)
-	}
-	if _, err := admin.Exec(ctx, strings.ReplaceAll(string(sql), "inventory_graph", schema)); err != nil {
-		t.Fatalf("apply the migration: %v", err)
+	for _, migration := range inventoryHostMigrations {
+		sql, err := os.ReadFile(filepath.Clean(migration))
+		if err != nil {
+			t.Fatalf("the engine's migration is the schema of record: %v", err)
+		}
+		if _, err := admin.Exec(ctx, strings.ReplaceAll(string(sql), "inventory_graph", schema)); err != nil {
+			t.Fatalf("apply the migration %s: %v", migration, err)
+		}
 	}
 	return dsn, schema
 }

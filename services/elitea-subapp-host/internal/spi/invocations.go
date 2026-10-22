@@ -93,7 +93,8 @@ type FleetLister interface {
 type FleetCapacity struct {
 	// Total is the sum of the slots of the live replicas that admit work.
 	Total int
-	// Active is the number of unfinished slot-holding invocations.
+	// Active is the number of unfinished slot-holding invocations that
+	// count as load (PostgresStore.fleetQuery says which).
 	Active int
 	// Replicas is the number of live replicas that admit work.
 	Replicas int
@@ -301,13 +302,39 @@ type inFlight struct {
 const (
 	// noSlotMessage: every slot of the fleet is busy.
 	noSlotMessage = "[SERVICE_BUSY] All %d generation slots are busy. Start it again later."
-	// noLocalSlotMessage: every slot of the replica the call landed on is
-	// busy. Another replica may have a free one, and the next call may
-	// land there.
+	// noLocalSlotMessage: every slot of this process is busy, and the store
+	// has no fleet (an in-memory store: one replica only).
 	noLocalSlotMessage = "[SERVICE_BUSY] All %d generation slots are busy on this replica. Start it again later."
 	// drainingMessage: the replica is shutting down.
 	drainingMessage = "[SERVICE_BUSY] This replica is shutting down and starts no new generation. Start it again later."
+	// fencedMessage: a deletion of what the invocation works on is in
+	// progress (StopMatching). It is not service_busy: it is not demand
+	// for more slots.
+	fencedMessage = "A deletion of what this invocation works on is in progress, so it was not started. Start it again when the deletion ends."
 )
+
+// The reasons of a busy refusal: the `reason` label of MetricSlotRefusals,
+// and the value of BusyReasonKey in the refused invocation's stored result.
+const (
+	// RefusalFleetFull: every slot of the fleet was busy. This is the only
+	// reason that is demand for one more replica.
+	RefusalFleetFull = "fleet_full"
+	// RefusalDraining: this replica was shutting down.
+	RefusalDraining = "draining"
+	// RefusalLocalFull: every slot of this process was busy and the store
+	// has no fleet (in-memory store). A host with a durable store never
+	// refuses for this reason.
+	RefusalLocalFull = "local_full"
+)
+
+// RefusalReasons are the busy refusal reasons, in the order /metrics writes
+// them.
+var RefusalReasons = []string{RefusalFleetFull, RefusalDraining, RefusalLocalFull}
+
+// BusyReasonKey is the key of the busy refusal reason in the stored result
+// of a refused invocation (result->>'busy_reason' in SQL). Only a busy
+// refusal has it.
+const BusyReasonKey = "busy_reason"
 
 type Manager struct {
 	store     Store
@@ -332,10 +359,16 @@ type Manager struct {
 	holders  int
 	draining bool
 
-	// refusals counts the slot holders this process refused because every
-	// slot of the fleet was busy: the demand that admission turned away,
-	// which an autoscaler adds to the running load (MetricSlotRefusals).
-	refusals atomic.Int64
+	// fences are the stop fences of the deletions in progress on this
+	// process (StopMatching), by id. A new invocation that a fence matches
+	// is refused when it registers. Guarded by mu.
+	fences map[string]StopFence
+
+	// refusals counts the slot holders this process refused, by reason
+	// (RefusalReasons, in that order). The fleet_full count is the demand
+	// that admission turned away, which an autoscaler adds to the running
+	// load (MetricSlotRefusals).
+	refusals [3]atomic.Int64
 }
 
 // SetSlots sets how many slot-holding invocations this process runs at once
@@ -387,7 +420,8 @@ func NewManager(store Store, retention time.Duration, logger *slog.Logger) *Mana
 	if retention <= 0 {
 		retention = time.Hour
 	}
-	return &Manager{store: store, logger: logger, retention: retention, inFlight: map[string]*inFlight{}, stopped: make(chan struct{})}
+	return &Manager{store: store, logger: logger, retention: retention, inFlight: map[string]*inFlight{},
+		fences: map[string]StopFence{}, stopped: make(chan struct{})}
 }
 
 // Store exposes the registry's store (for /health's durable flag).
@@ -468,23 +502,33 @@ type Submission struct {
 
 // SubmitWith is SubmitLabelled with the slot flag.
 //
-// A slot-holding invocation is ADMITTED before it is registered, in two
-// steps, and never waits:
+// A slot-holding invocation is ADMITTED before it is registered, and never
+// waits:
 //
-//  1. It takes a LOCAL slot, without blocking. When this process drains
-//     (SetAdmitting(false)) or runs as many slot holders as it has slots,
-//     it is refused at once. A refusal here, and not a wait, is what keeps
-//     a call off a full replica while a sibling has a free slot, and keeps
-//     a pending generation from starting on a replica after SIGTERM.
-//  2. With a store that admits against the fleet (FleetSlotter), Create
-//     checks the fleet. When the fleet is full, the local slot is given
-//     back and the call is refused.
+//   - When this process drains (SetAdmitting(false)), it is refused at once
+//     (reason draining), so no generation starts on a replica after SIGTERM.
+//   - With a store that admits against the fleet (FleetSlotter), the FLEET
+//     decides, in Create: the call is admitted while the fleet's running
+//     slot holders are fewer than the slots of the live replicas that admit
+//     work, else refused (reason fleet_full). The slots of THIS process do
+//     not refuse it. /slots reports the fleet, and a call that a load
+//     balancer sends to a busy replica while a sibling is idle must run, or
+//     can_start would lie and the refusal would count as demand. So a
+//     replica can run more slot holders than its own slot count while the
+//     fleet has room; the fleet total stays the bound.
+//   - With any other store (in memory: one replica), the slots of this
+//     process are the bound (reason local_full).
 //
 // A refused invocation is still accepted with an id, because the SPI is
 // asynchronous unconditionally (Server.Accept). It is recorded at once as
 // terminal, with holds_slot false, and a service_busy tool error that says
-// why, so the first poll on any replica reads the refusal. Each refusal is
-// counted (Refusals).
+// why, with the reason under BusyReasonKey, so the first poll on any
+// replica reads the refusal. Each refusal is counted by reason
+// (RefusalsFor).
+//
+// An invocation that a stop fence of a deletion in progress matches
+// (StopMatching) is refused too, with a runtime error that is not
+// service_busy and is not counted as a busy refusal.
 func (m *Manager) SubmitWith(ctx context.Context, toolkit, tool string, submission Submission, call Call) (*Invocation, error) {
 	invocation := &Invocation{ID: newInvocationID(), Toolkit: toolkit, Tool: tool, Status: statusPending, CreatedAt: time.Now()}
 	if len(submission.Labels) > 0 {
@@ -495,19 +539,20 @@ func (m *Manager) SubmitWith(ctx context.Context, toolkit, tool string, submissi
 	}
 	holds := false
 	if submission.HoldsSlot {
+		_, fleet := m.store.(FleetSlotter)
 		m.mu.Lock()
 		limited, draining, slots := m.slots > 0, m.draining, m.slots
 		full := limited && m.holders >= m.slots
-		holds = limited && !draining && !full
+		holds = limited && !draining && (fleet || !full)
 		if holds {
 			m.holders++
 		}
 		m.mu.Unlock()
 		switch {
 		case limited && draining:
-			return m.refuseNoSlot(ctx, invocation, Failf(KindRuntime, drainingMessage))
-		case full:
-			return m.refuseNoSlot(ctx, invocation, Failf(KindRuntime, noLocalSlotMessage, slots))
+			return m.refuse(ctx, invocation, Failf(KindRuntime, drainingMessage), RefusalDraining)
+		case full && !fleet:
+			return m.refuse(ctx, invocation, Failf(KindRuntime, noLocalSlotMessage, slots), RefusalLocalFull)
 		}
 	}
 	invocation.HoldsSlot = holds
@@ -516,13 +561,36 @@ func (m *Manager) SubmitWith(ctx context.Context, toolkit, tool string, submissi
 			m.releaseHolder()
 		}
 		var noSlot *NoSlotError
-		if errors.As(err, &noSlot) {
-			return m.refuseNoSlot(ctx, invocation, Failf(KindRuntime, noSlotMessage, noSlot.Total))
+		switch {
+		case errors.As(err, &noSlot):
+			return m.refuse(ctx, invocation, Failf(KindRuntime, noSlotMessage, noSlot.Total), RefusalFleetFull)
+		case errors.Is(err, ErrFenced):
+			return m.refuse(ctx, invocation, Failf(KindRuntime, fencedMessage), "")
 		}
 		return nil, err
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	m.mu.Lock()
+	// The local fences are read under the same lock hold that registers
+	// the run, and StopMatching adds a fence and reads the runs under one
+	// lock hold too. So a run of this process is either in StopMatching's
+	// list or refused here.
+	if m.fencedLocked(invocation) {
+		if holds {
+			m.holders--
+		}
+		invocation.HoldsSlot = false
+		invocation.Status = statusStopped
+		invocation.FinishedAt = time.Now()
+		invocation.Result = ToolError(m.logger, invocation.ID, invocation.Tool, Failf(KindRuntime, fencedMessage))
+		snapshot := invocation.state()
+		m.mu.Unlock()
+		cancel()
+		if err := m.store.Update(ctx, &snapshot); err != nil {
+			return nil, err
+		}
+		return invocation, nil
+	}
 	m.inFlight[invocation.ID] = &inFlight{cancel: cancel, invocation: invocation}
 	m.mu.Unlock()
 	m.wg.Add(1)
@@ -549,19 +617,37 @@ func (m *Manager) releaseHolder() {
 	m.mu.Unlock()
 }
 
-// refuseNoSlot records the invocation as terminal at once with the refusal
-// and returns it as accepted (SubmitWith). The row it writes holds no slot
-// and is finished, so a refusal never counts against the fleet.
-func (m *Manager) refuseNoSlot(ctx context.Context, invocation *Invocation, refusal error) (*Invocation, error) {
-	m.refusals.Add(1)
+// refuse records the invocation as terminal at once with the refusal and
+// returns it as accepted (SubmitWith). The row it writes holds no slot and
+// is finished, so a refusal never counts against the fleet. A busy refusal
+// (reason not empty) is counted by reason, and its result carries the
+// reason under BusyReasonKey.
+func (m *Manager) refuse(ctx context.Context, invocation *Invocation, refusal error, reason string) (*Invocation, error) {
 	invocation.HoldsSlot = false
 	invocation.Status = statusStopped
 	invocation.FinishedAt = time.Now()
 	invocation.Result = ToolError(m.logger, invocation.ID, invocation.Tool, refusal)
+	if reason != "" {
+		if counter := m.refusalCounter(reason); counter != nil {
+			counter.Add(1)
+		}
+		invocation.Result[BusyReasonKey] = reason
+	}
 	if err := m.store.Create(ctx, invocation); err != nil {
 		return nil, err
 	}
 	return invocation, nil
+}
+
+// refusalCounter is the counter of one refusal reason; nil for a reason
+// that is not in RefusalReasons.
+func (m *Manager) refusalCounter(reason string) *atomic.Int64 {
+	for i, known := range RefusalReasons {
+		if known == reason {
+			return &m.refusals[i]
+		}
+	}
+	return nil
 }
 
 func (m *Manager) run(ctx context.Context, invocation *Invocation, call Call) {
@@ -713,9 +799,24 @@ func (m *Manager) WaitIdle(ctx context.Context) error {
 	return nil
 }
 
-// Refusals is how many slot holders this process refused because every slot
-// was busy, since it started. It only increases.
-func (m *Manager) Refusals() int64 { return m.refusals.Load() }
+// Refusals is how many slot holders this process refused as busy, for all
+// reasons, since it started. It only increases.
+func (m *Manager) Refusals() int64 {
+	var total int64
+	for i := range m.refusals {
+		total += m.refusals[i].Load()
+	}
+	return total
+}
+
+// RefusalsFor is how many slot holders this process refused for one reason
+// (RefusalReasons) since it started; zero for an unknown reason.
+func (m *Manager) RefusalsFor(reason string) int64 {
+	if counter := m.refusalCounter(reason); counter != nil {
+		return counter.Load()
+	}
+	return 0
+}
 
 // InFlight is the number of invocations still running — what Slots reports
 // as active.
@@ -734,9 +835,93 @@ type RunningInvocation struct {
 	Labels  map[string]string
 }
 
-// StopMatching asks every running invocation that `match` selects to stop,
-// then waits up to `wait` for them to end. It returns how many are still
-// running afterwards (0 means they all stopped).
+// StopFence names the runs a deletion stops (StopMatching), and the new
+// invocations it holds back while the deletion is in progress.
+//
+// A run or an invocation matches when its tool is Tool and, for each label
+// of the fence with a value, its own label of that name is empty or equal.
+// So an empty fence value matches every value ("every wiki of the
+// project"), and a run with no value for a label matches every fence value
+// of that label ("a generation whose wiki the host could not name"). The
+// second rule also makes a row with no labels at all match: the row of a
+// replica from before the fleet labels (a mixed fleet in a rolling
+// upgrade). Stopping one run too many is the safe side of a deletion.
+type StopFence struct {
+	Tool   string
+	Labels map[string]string
+}
+
+// Matches reports whether the fence selects a run of tool with labels.
+func (f StopFence) Matches(tool string, labels map[string]string) bool {
+	if tool != f.Tool {
+		return false
+	}
+	for key, want := range f.Labels {
+		if want == "" {
+			continue
+		}
+		if got := labels[key]; got != "" && got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// StopFencer is a store that keeps stop fences for the whole fleet
+// (PostgresStore). Fence records the fence for ttl at most, and returns
+// its id. From the moment Fence returns, Create refuses (ErrFenced) a new
+// invocation that the fence matches, on every replica: the fence write
+// and the admission take the same transaction lock. Unfence removes it.
+type StopFencer interface {
+	Fence(ctx context.Context, fence StopFence, ttl time.Duration) (string, error)
+	Unfence(ctx context.Context, id string) error
+}
+
+// stopFenceMargin is how much longer than the stop's wait a fence lives at
+// most. It is a safety net for a process that stops before it removes its
+// fence; a deletion that ends removes it at once.
+const stopFenceMargin = 10 * time.Minute
+
+// fencedLocked reports whether a local fence matches the invocation. The
+// caller holds m.mu.
+func (m *Manager) fencedLocked(invocation *Invocation) bool {
+	for _, fence := range m.fences {
+		if fence.Matches(invocation.Tool, invocation.Labels) {
+			return true
+		}
+	}
+	return false
+}
+
+// LocalRunning lists the runs of this process with their labels, as
+// StopMatching matches them. It changes nothing.
+func (m *Manager) LocalRunning() []RunningInvocation {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	running := make([]RunningInvocation, 0, len(m.inFlight))
+	for _, info := range m.localRunningLocked() {
+		running = append(running, info)
+	}
+	return running
+}
+
+// localRunningLocked copies the runs of this process, by id. The caller
+// holds m.mu.
+func (m *Manager) localRunningLocked() map[string]RunningInvocation {
+	local := make(map[string]RunningInvocation, len(m.inFlight))
+	for id, live := range m.inFlight {
+		info := RunningInvocation{ID: id, Toolkit: live.invocation.Toolkit, Tool: live.invocation.Tool, Labels: map[string]string{}}
+		for k, v := range live.invocation.Labels {
+			info.Labels[k] = v
+		}
+		local[id] = info
+	}
+	return local
+}
+
+// StopMatching asks every running invocation that the fence selects to
+// stop, then waits up to `wait` for them to end. It returns how many are
+// still running afterwards (0 means they all stopped).
 //
 // The stop is the same cooperative one Cancel sends: the tool observes it at
 // its next checkpoint, and the engine call is stopped by the host's stop
@@ -748,85 +933,110 @@ type RunningInvocation struct {
 // bus to the replica that runs it, and the wait reads the rows until each is
 // terminal. With any other store only this process's runs are matched,
 // because the labels live in memory.
-func (m *Manager) StopMatching(ctx context.Context, match func(RunningInvocation) bool, wait time.Duration) int {
-	if lister, ok := m.store.(FleetLister); ok {
-		return m.stopMatchingFleet(ctx, lister, match, wait)
+//
+// THE FENCE. The list of runs is read one time. Without more, a replica
+// could admit a new matching run right after that read, and the run would
+// publish into what the deletion removes. So StopMatching first records the
+// fence, and only then reads the runs:
+//
+//   - on this process, in memory, under the same lock hold that reads this
+//     process's runs. SubmitWith reads the fences under the lock hold that
+//     registers a run, so a run of this process is in the list or refused;
+//   - with a StopFencer store, in the database (host_stop_fences), under a
+//     transaction lock that Create also takes for the tool. A Create that
+//     committed before the fence is in the list that is read after it; a
+//     Create after the fence finds the fence and is refused (ErrFenced).
+//
+// The fence stays while the deletion runs: it is removed when ctx ends, so
+// a caller passes the context of the deletion and cancels it when the
+// deletion ends. When runs are still there after the wait, the deletion is
+// refused, and the fence is removed at once. A process that stops before it
+// removes its database fence leaves it for wait plus stopFenceMargin at
+// most. When the fence cannot be written, nothing on the other replicas can
+// be held back, so the answer is "still running" and the caller deletes
+// nothing.
+func (m *Manager) StopMatching(ctx context.Context, fence StopFence, wait time.Duration) int {
+	localID := newFenceID()
+	m.mu.Lock()
+	m.fences[localID] = fence
+	local := m.localRunningLocked()
+	m.mu.Unlock()
+
+	var storeID string
+	release := func() {
+		m.mu.Lock()
+		delete(m.fences, localID)
+		m.mu.Unlock()
+		if storeID == "" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.store.(StopFencer).Unfence(ctx, storeID); err != nil {
+			m.logger.Warn("could not remove a stop fence; it expires by itself", "fence", storeID, "error", err)
+		}
 	}
-	return m.stopMatchingLocal(ctx, match, wait)
+	fenceFailed := false
+	if fencer, ok := m.store.(StopFencer); ok {
+		id, err := fencer.Fence(ctx, fence, wait+stopFenceMargin)
+		if err != nil {
+			m.logger.Warn("could not write the stop fence; only this replica's runs are stopped", "tool", fence.Tool, "error", err)
+			fenceFailed = true
+		}
+		storeID = id
+	}
+
+	var remaining int
+	lister, fleet := m.store.(FleetLister)
+	switch {
+	case fenceFailed || !fleet:
+		remaining = m.stopTargets(ctx, nil, matching(local, fence), wait)
+		if fenceFailed {
+			remaining = max(1, remaining)
+		}
+	default:
+		remaining = m.stopMatchingFleet(ctx, lister, fence, local, wait)
+	}
+	if remaining > 0 {
+		release()
+		return remaining
+	}
+	context.AfterFunc(ctx, release)
+	return 0
 }
 
-// stopMatchingLocal is StopMatching over this process's runs.
-func (m *Manager) stopMatchingLocal(ctx context.Context, match func(RunningInvocation) bool, wait time.Duration) int {
-	m.mu.Lock()
+// matching selects the runs the fence matches.
+func matching(runs map[string]RunningInvocation, fence StopFence) []RunningInvocation {
 	var targets []RunningInvocation
-	for id, live := range m.inFlight {
-		info := RunningInvocation{ID: id, Toolkit: live.invocation.Toolkit, Tool: live.invocation.Tool, Labels: map[string]string{}}
-		for k, v := range live.invocation.Labels {
-			info.Labels[k] = v
-		}
-		if match(info) {
+	for _, info := range runs {
+		if fence.Matches(info.Tool, info.Labels) {
 			targets = append(targets, info)
 		}
 	}
-	m.mu.Unlock()
-	if len(targets) == 0 {
-		return 0
-	}
-	for _, target := range targets {
-		if _, err := m.Cancel(ctx, target.Toolkit, target.Tool, target.ID); err != nil {
-			m.logger.Warn("could not request a stop", "invocation", target.ID, "error", err)
-		}
-	}
-	deadline := time.NewTimer(wait)
-	defer deadline.Stop()
-	tick := time.NewTicker(25 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		m.mu.Lock()
-		remaining := 0
-		for _, target := range targets {
-			if _, running := m.inFlight[target.ID]; running {
-				remaining++
-			}
-		}
-		m.mu.Unlock()
-		if remaining == 0 {
-			return 0
-		}
-		select {
-		case <-ctx.Done():
-			return remaining
-		case <-deadline.C:
-			return remaining
-		case <-tick.C:
-		}
-	}
+	return targets
+}
+
+func newFenceID() string {
+	var raw [16]byte
+	_, _ = rand.Read(raw[:])
+	return "fence_" + hex.EncodeToString(raw[:])
 }
 
 // stopMatchingFleet is StopMatching over the fleet's rows (FleetLister).
-func (m *Manager) stopMatchingFleet(ctx context.Context, lister FleetLister, match func(RunningInvocation) bool, wait time.Duration) int {
+// local is this process's runs, read when the local fence was set.
+func (m *Manager) stopMatchingFleet(ctx context.Context, lister FleetLister, fence StopFence, local map[string]RunningInvocation, wait time.Duration) int {
 	running, err := lister.RunningInvocations(ctx)
 	if err != nil {
 		// Without the list nobody can say what runs on the other replicas.
 		// This process's runs are stopped all the same, and the answer is
 		// "still running", so the caller deletes nothing and tries again.
 		m.logger.Warn("could not list the fleet's running invocations; only this replica's are stopped", "error", err)
-		return max(1, m.stopMatchingLocal(ctx, match, wait))
+		return max(1, m.stopTargets(ctx, nil, matching(local, fence), wait))
 	}
 	// A run of THIS process may carry labels it set from inside the run
 	// (Context.SetLabel) on top of the ones its row was written with, and a
 	// run this process registered is in flight before anything else can
 	// list it. Both are matched with the labels in memory.
-	m.mu.Lock()
-	local := make(map[string]RunningInvocation, len(m.inFlight))
-	for id, live := range m.inFlight {
-		info := RunningInvocation{ID: id, Toolkit: live.invocation.Toolkit, Tool: live.invocation.Tool, Labels: map[string]string{}}
-		for k, v := range live.invocation.Labels {
-			info.Labels[k] = v
-		}
-		local[id] = info
-	}
-	m.mu.Unlock()
 	var targets []RunningInvocation
 	seen := map[string]bool{}
 	for _, info := range running {
@@ -839,18 +1049,22 @@ func (m *Manager) stopMatchingFleet(ctx context.Context, lister FleetLister, mat
 			}
 			info = mine
 		}
-		if info.Labels == nil {
-			info.Labels = map[string]string{}
-		}
-		if match(info) {
+		if fence.Matches(info.Tool, info.Labels) {
 			targets = append(targets, info)
 		}
 	}
 	for id, info := range local {
-		if !seen[id] && match(info) {
+		if !seen[id] && fence.Matches(info.Tool, info.Labels) {
 			targets = append(targets, info)
 		}
 	}
+	return m.stopTargets(ctx, lister, targets, wait)
+}
+
+// stopTargets cancels each target and waits up to `wait` for them to end.
+// With a lister it reads the rows (one statement a tick); without one it
+// reads this process's runs.
+func (m *Manager) stopTargets(ctx context.Context, lister FleetLister, targets []RunningInvocation, wait time.Duration) int {
 	if len(targets) == 0 {
 		return 0
 	}
@@ -859,20 +1073,31 @@ func (m *Manager) stopMatchingFleet(ctx context.Context, lister FleetLister, mat
 			m.logger.Warn("could not request a stop", "invocation", target.ID, "error", err)
 		}
 	}
-	deadline := time.NewTimer(wait)
-	defer deadline.Stop()
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
 	ids := make([]string, len(targets))
 	for i, target := range targets {
 		ids[i] = target.ID
 	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
 	for {
-		// One statement a tick, whatever the number of targets. A failed
-		// read counts every target as still running.
-		remaining, err := lister.CountUnfinished(ctx, ids)
-		if err != nil {
-			remaining = len(ids)
+		var remaining int
+		if lister != nil {
+			// A failed read counts every target as still running.
+			n, err := lister.CountUnfinished(ctx, ids)
+			if err != nil {
+				n = len(ids)
+			}
+			remaining = n
+		} else {
+			m.mu.Lock()
+			for _, id := range ids {
+				if _, running := m.inFlight[id]; running {
+					remaining++
+				}
+			}
+			m.mu.Unlock()
 		}
 		if remaining == 0 {
 			return 0

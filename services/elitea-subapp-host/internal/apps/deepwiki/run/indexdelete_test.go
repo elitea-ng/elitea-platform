@@ -445,10 +445,9 @@ func (r *deleteRig) generate(t *testing.T, organization string) *spi.Invocation 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		found := false
-		r.manager.StopMatching(t.Context(), func(running spi.RunningInvocation) bool {
+		for _, running := range r.manager.LocalRunning() {
 			found = found || (running.ID == invocation.ID && running.Labels["project"] == organization && running.Labels["wiki"] != "")
-			return false
-		}, 0)
+		}
 		if found && r.entered.Load() > before {
 			return invocation
 		}

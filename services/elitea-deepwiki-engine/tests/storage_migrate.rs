@@ -97,6 +97,10 @@ fn the_checksums_are_the_ledger_values() {
             "0009_host_fleet",
             "b5b45631bf05f8881f92a1faf11b3faa6b185fc59d4478889368873700c4262a",
         ),
+        (
+            "0010_host_stop_fences",
+            "c98ccd3570f2dc562021c55b8430336d3bd1774ee2fc65c1a38d474556d69f2d",
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -274,10 +278,13 @@ async fn a_database_on_the_released_texts_upgrades() {
 
     assert_eq!(
         migrate::apply_all(&pool).await.expect("the new chain"),
-        ["0008".to_owned(), "0009".to_owned()]
+        ["0008".to_owned(), "0009".to_owned(), "0010".to_owned()]
     );
     assert!(!relation_exists(&pool, "public.wiki_node_embeddings").await);
     assert!(!relation_exists(&pool, "deepwiki_build.wiki_node_embeddings").await);
+    // 0009 and 0010: the host fleet's registry and its stop fences.
+    assert!(relation_exists(&pool, "public.host_replicas").await);
+    assert!(relation_exists(&pool, "public.host_stop_fences").await);
     assert!(!vector_extension_installed(&pool).await);
     let kept: (String, Option<String>) =
         sqlx::query_as("SELECT wiki_id, active_generation FROM wikis")
@@ -328,7 +335,7 @@ async fn the_drop_migration_keeps_an_extension_something_else_uses() {
         .expect("a dependent object");
     assert_eq!(
         migrate::apply_all(&pool).await.expect("0008 succeeds"),
-        ["0008".to_owned(), "0009".to_owned()]
+        ["0008".to_owned(), "0009".to_owned(), "0010".to_owned()]
     );
     assert!(vector_extension_installed(&pool).await);
     assert!(!relation_exists(&pool, "public.wiki_node_embeddings").await);
@@ -544,7 +551,12 @@ async fn the_embedding_model_columns_exist_and_the_migration_leaves_the_dead_bra
     .expect("a wiki published before 0007");
     assert_eq!(
         migrate::apply_all(&pool).await.expect("0007"),
-        ["0007".to_owned(), "0008".to_owned(), "0009".to_owned()]
+        [
+            "0007".to_owned(),
+            "0008".to_owned(),
+            "0009".to_owned(),
+            "0010".to_owned()
+        ]
     );
     // Nothing was deleted by the migration: both branches are still there.
     for table in [
@@ -615,7 +627,8 @@ async fn the_project_scope_migration_deletes_the_unattributable_index() {
             "0006".to_owned(),
             "0007".to_owned(),
             "0008".to_owned(),
-            "0009".to_owned()
+            "0009".to_owned(),
+            "0010".to_owned()
         ]
     );
     for table in [

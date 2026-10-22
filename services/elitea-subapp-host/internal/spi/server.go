@@ -90,10 +90,33 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 	s.manager.cancels = s.cancels
 	// Only a runner with slot holders (SlotHolder) has a slot limit; for any
 	// other runner every invocation runs at once, as before.
-	if _, ok := app.Runner.(SlotHolder); ok {
+	if holder, ok := app.Runner.(SlotHolder); ok {
 		s.manager.SetSlots(settings.MaxParallelWorkers)
+		// A store that counts the slot load of an image from before the
+		// fleet (rows without a slot flag) learns from the runner which
+		// tools hold a slot.
+		if setter, ok := s.manager.store.(interface{ SetSlotTools([]ToolRef) }); ok {
+			setter.SetSlotTools(SlotTools(app.Toolkits, holder))
+		}
 	}
 	return s, nil
+}
+
+// SlotTools lists every (toolkit alias, tool) pair of the admission table
+// whose invocation the runner names a slot holder, from the call names
+// alone (no request, no identity).
+func SlotTools(toolkits Toolkits, holder SlotHolder) []ToolRef {
+	var tools []ToolRef
+	for _, family := range toolkits.Families {
+		for _, alias := range family.Aliases {
+			for _, tool := range family.Tools {
+				if holder.HoldsSlot(Invoke{Family: family, Toolkit: alias, Tool: tool}) {
+					tools = append(tools, ToolRef{Toolkit: alias, Tool: tool})
+				}
+			}
+		}
+	}
+	return tools
 }
 
 // Manager exposes the registry (for tests and for an embedding main).
@@ -137,9 +160,10 @@ type Labeler interface {
 // SlotHolder is a runner some of whose invocations take one of the limited
 // slots (<PREFIX>MAX_PARALLEL_WORKERS on each replica) while they run: a
 // DeepWiki wiki generation, say. The server asks before Submit, from the
-// call alone. A slot holder is admitted only while this process has a free
-// slot and admits work, and (with a durable store) the fleet has a free
-// slot; otherwise it is refused at once, never queued (Manager.SubmitWith).
+// call alone. A slot holder is admitted only while this process admits
+// work and, with a durable store, the fleet has a free slot (with an
+// in-memory store: this process has a free slot); otherwise it is refused
+// at once, never queued (Manager.SubmitWith).
 // A runner that does not implement it has no slot limit.
 type SlotHolder interface {
 	HoldsSlot(call Invoke) bool

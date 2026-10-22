@@ -85,10 +85,11 @@ func run(logger *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	app, settings, err := compose(os.LookupEnv)
+	host, err := composeHost(os.LookupEnv)
 	if err != nil {
 		return err
 	}
+	app, settings := host.app, host.settings
 	// The listener's configuration is checked before anything is started:
 	// a host that cannot serve must not reconcile rows or dial NATS first.
 	tlsConfig, err := listenerTLS(settings)
@@ -107,15 +108,10 @@ func run(logger *slog.Logger) error {
 		// work nobody is doing. A database that is configured and unreachable
 		// is a boot failure, not a host that silently runs in memory. The
 		// tables are in the application's schema (apps.App.StoreSchema):
-		// inventory_graph for Inventory, unqualified for DeepWiki.
-		key, _ := os.LookupEnv("ELITEA_SUBAPP")
-		entry, err := apps.Lookup(key)
-		if err != nil {
-			return err
-		}
-		store, err = spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger,
-			spi.WithMaxConns(settings.DatabaseMaxConns), spi.WithSchema(entry.StoreSchema),
-			spi.WithReplicaSlots(settings.MaxParallelWorkers))
+		// inventory_graph for Inventory, unqualified for DeepWiki. The
+		// schema comes from the registry entry that composeHost resolved,
+		// so the application and its tables cannot disagree.
+		store, err = spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger, storeOptions(host)...)
 		if err != nil {
 			return err
 		}
@@ -330,19 +326,45 @@ func healthcheck(lookup spi.Lookup) error {
 	return nil
 }
 
-// compose picks the application and its runner from the environment. Both
-// come out of the registry (internal/apps): the application by its
-// ELITEA_SUBAPP key, the runner by name from the set that application
-// serves. Nothing here knows which applications exist.
+// composed is what composeHost resolves from the environment: the served
+// application, its settings, and the registry entry it came from.
+type composed struct {
+	app      spi.App
+	settings spi.Settings
+	entry    apps.App
+}
+
+// storeOptions are the durable store's options for the composed host: the
+// pool ceiling, the application's schema and the replica's slots.
+func storeOptions(host composed) []spi.StoreOption {
+	return []spi.StoreOption{
+		spi.WithMaxConns(host.settings.DatabaseMaxConns),
+		spi.WithSchema(host.entry.StoreSchema),
+		spi.WithReplicaSlots(host.settings.MaxParallelWorkers),
+	}
+}
+
+// compose is composeHost without the registry entry.
 func compose(lookup spi.Lookup) (spi.App, spi.Settings, error) {
+	host, err := composeHost(lookup)
+	return host.app, host.settings, err
+}
+
+// composeHost picks the application and its runner from the environment.
+// Both come out of the registry (internal/apps): the application by its
+// ELITEA_SUBAPP key, the runner by name from the set that application
+// serves. Nothing here knows which applications exist. The caller reads
+// everything else about the application (its store schema) from the entry
+// returned here, and does not read ELITEA_SUBAPP again.
+func composeHost(lookup spi.Lookup) (composed, error) {
 	key, _ := lookup("ELITEA_SUBAPP")
 	entry, err := apps.Lookup(key)
 	if err != nil {
-		return spi.App{}, spi.Settings{}, err
+		return composed{}, err
 	}
 	settings, err := spi.SettingsFromEnv(entry.EnvPrefix, lookup)
 	if err != nil {
-		return spi.App{}, spi.Settings{}, err
+		return composed{}, err
 	}
 	runnerName, _ := lookup(entry.EnvPrefix + "RUNNER")
 	runnerName = strings.TrimSpace(runnerName)
@@ -354,15 +376,15 @@ func compose(lookup spi.Lookup) (spi.App, spi.Settings, error) {
 	if stepRaw != "" {
 		parsed, err := time.ParseDuration(strings.TrimSpace(stepRaw) + "s")
 		if err != nil || parsed < 0 {
-			return spi.App{}, spi.Settings{}, fmt.Errorf("%w: %sFIXTURE_STEP_SECONDS must be a number of seconds, got %q", spi.ErrConfig, entry.EnvPrefix, stepRaw)
+			return composed{}, fmt.Errorf("%w: %sFIXTURE_STEP_SECONDS must be a number of seconds, got %q", spi.ErrConfig, entry.EnvPrefix, stepRaw)
 		}
 		step = parsed
 	}
 	runner, err := entry.Runner(runnerName, settings, step)
 	if err != nil {
-		return spi.App{}, spi.Settings{}, err
+		return composed{}, err
 	}
-	return entry.Compose(runner), settings, nil
+	return composed{app: entry.Compose(runner), settings: settings, entry: entry}, nil
 }
 
 // listenerTLS builds the listener's TLS: the server certificate and, from

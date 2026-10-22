@@ -22,6 +22,7 @@ import (
 
 	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/testpg"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -30,6 +31,34 @@ import (
 
 func lookup(pairs map[string]string) spi.Lookup {
 	return func(key string) (string, bool) { v, ok := pairs[key]; return v, ok }
+}
+
+// The store's schema comes from the registry entry that composeHost
+// resolved from its lookup, not from a second read of the process
+// environment (finding 9 of the #scaling review). Here the process
+// environment says deepwiki and the lookup says inventory: the store
+// options carry inventory_graph. With a test database, a store built from
+// those options addresses inventory_graph's tables.
+func TestTheStoreSchemaComesFromTheComposedEntry(t *testing.T) {
+	t.Setenv("ELITEA_SUBAPP", "deepwiki")
+	host, err := composeHost(lookup(map[string]string{"ELITEA_SUBAPP": "inventory"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.app.Name != "elitea-inventory" || host.entry.StoreSchema != "inventory_graph" {
+		t.Fatalf("composed %q with store schema %q, want elitea-inventory and inventory_graph", host.app.Name, host.entry.StoreSchema)
+	}
+	dsn := testpg.DSN(os.Getenv("ELITEA_SUBAPP_HOST_TEST_DSN"))
+	if dsn == "" {
+		t.Log("ELITEA_SUBAPP_HOST_TEST_DSN is not set: the store options were not tried against a database")
+		return
+	}
+	// The test database has no inventory_graph schema, so the store fails
+	// on that schema's table, which proves the option reached it.
+	_, err = spi.NewPostgresStore(context.Background(), dsn, "compose-schema/1", nil, storeOptions(host)...)
+	if err == nil || !strings.Contains(err.Error(), "inventory_graph") {
+		t.Fatalf("a store from the composed options = %v, want a failure on inventory_graph's tables", err)
+	}
 }
 
 func TestComposeSelectsTheApplicationAndRefusesWhatItCannotServe(t *testing.T) {

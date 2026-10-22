@@ -80,6 +80,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0009_host_invocations.sql",
         include_str!("../../migrations/0009_host_invocations.sql"),
     ),
+    (
+        "0010_host_stop_fences.sql",
+        include_str!("../../migrations/0010_host_stop_fences.sql"),
+    ),
 ];
 
 /// The released migrations that were rewritten, with the checksum of every

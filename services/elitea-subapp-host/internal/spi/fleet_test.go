@@ -144,12 +144,18 @@ func TestTheMemoryStoreAdmitsSlotHoldersUpToItsSlots(t *testing.T) {
 	first := accept(t, server, "Wikis", "generate_wiki")
 	waitStatus(t, server, "Wikis", "generate_wiki", first, "InProgress")
 	refused := accept(t, server, "Wikis", "generate_wiki")
-	assertNoSlot(t, pollOnce(t, server, "Wikis", "generate_wiki", refused), 1)
-	// The refused demand is on /metrics: the in-flight gauge alone stays at
-	// the slots and could never ask the autoscaler for one more replica.
+	body := pollOnce(t, server, "Wikis", "generate_wiki", refused)
+	assertNoSlot(t, body, 1)
+	if body[spi.BusyReasonKey] != spi.RefusalLocalFull {
+		t.Fatalf("the refusal does not say its reason: %v", body)
+	}
+	// The refusal is on /metrics with its reason. Without a durable store
+	// there is one replica, so it is local_full and not fleet demand.
 	if metrics := server.MetricsText(); !strings.Contains(metrics, "# TYPE "+spi.MetricSlotRefusals+" counter") ||
-		!regexp.MustCompile(`(?m)^`+spi.MetricSlotRefusals+`\{app="[^"]+"\} 1$`).MatchString(metrics) {
-		t.Fatalf("the refusal is not counted on /metrics:\n%s", metrics)
+		!regexp.MustCompile(`(?m)^`+spi.MetricSlotRefusals+`\{app="[^"]+",reason="local_full"\} 1$`).MatchString(metrics) ||
+		!regexp.MustCompile(`(?m)^`+spi.MetricSlotRefusals+`\{app="[^"]+",reason="fleet_full"\} 0$`).MatchString(metrics) ||
+		!regexp.MustCompile(`(?m)^`+spi.MetricSlotRefusals+`\{app="[^"]+",reason="draining"\} 0$`).MatchString(metrics) {
+		t.Fatalf("the refusal is not counted on /metrics by reason:\n%s", metrics)
 	}
 
 	question := accept(t, server, "Wikis", "ask")
@@ -183,33 +189,33 @@ func (admitAll) FleetSlots(context.Context) (spi.FleetCapacity, error) {
 	return spi.FleetCapacity{Total: 10, Replicas: 10}, nil
 }
 
-// A replica whose own slots are busy refuses a slot holder AT ONCE, even
-// when the fleet admits it: it never queues the call behind its own runs
-// while a sibling has a free slot. The refusal is counted, and a freed
-// slot is taken by the next call.
-func TestAFullReplicaRefusesAtOnceWhileTheFleetHasSlots(t *testing.T) {
+// A replica whose own slots are busy does NOT refuse a slot holder while
+// the fleet admits it (finding 1 of the #scaling review): /slots reports
+// the fleet, so a call that lands on a busy replica while a sibling is idle
+// must run, or can_start would lie and the refusal would count as demand.
+// The replica runs above its own slot count; the fleet is the bound.
+func TestAFullReplicaAdmitsWhileTheFleetHasSlots(t *testing.T) {
 	runner := slotRunner{release: make(chan struct{})}
 	server := slotServer(t, runner, 1, spi.WithStore(admitAll{spi.NewMemoryStore()}))
 
 	first := accept(t, server, "Wikis", "generate_wiki")
 	waitStatus(t, server, "Wikis", "generate_wiki", first, "InProgress")
-	refused := accept(t, server, "Wikis", "generate_wiki")
-	body := pollOnce(t, server, "Wikis", "generate_wiki", refused)
-	if body["status"] != "Error" || body["error_category"] != spi.CategoryServiceBusy ||
-		!strings.Contains(messageOf(t, body), "[SERVICE_BUSY] All 1 generation slots are busy on this replica") {
-		t.Fatalf("a full replica did not refuse at once: %v", body)
+	second := accept(t, server, "Wikis", "generate_wiki")
+	waitStatus(t, server, "Wikis", "generate_wiki", second, "InProgress")
+	if got := server.Manager().Refusals(); got != 0 {
+		t.Fatalf("refusals = %d, want 0", got)
 	}
-	if got := server.Manager().Refusals(); got != 1 {
-		t.Fatalf("refusals = %d, want 1", got)
-	}
-	if got := server.Manager().LocalHolders(); got != 1 {
-		t.Fatalf("local holders = %d, want 1", got)
+	if got := server.Manager().LocalHolders(); got != 2 {
+		t.Fatalf("local holders = %d, want 2 (above the replica's 1 slot)", got)
 	}
 	close(runner.release)
-	pollTerminal(t, server, "Wikis", "generate_wiki", first)
-	again := accept(t, server, "Wikis", "generate_wiki")
-	if body := pollTerminal(t, server, "Wikis", "generate_wiki", again); body["status"] != "Completed" {
-		t.Fatalf("a freed slot was not taken: %v", body)
+	for _, id := range []string{first, second} {
+		if body := pollTerminal(t, server, "Wikis", "generate_wiki", id); body["status"] != "Completed" {
+			t.Fatalf("%v", body)
+		}
+	}
+	if got := server.Manager().LocalHolders(); got != 0 {
+		t.Fatalf("local holders = %d after the runs, want 0", got)
 	}
 }
 
@@ -227,6 +233,10 @@ func TestADrainingReplicaRefusesNewSlotHolders(t *testing.T) {
 	if body["status"] != "Error" || body["error_category"] != spi.CategoryServiceBusy ||
 		!strings.Contains(messageOf(t, body), "[SERVICE_BUSY] This replica is shutting down") {
 		t.Fatalf("a draining replica admitted a slot holder: %v", body)
+	}
+	if body[spi.BusyReasonKey] != spi.RefusalDraining || server.Manager().RefusalsFor(spi.RefusalDraining) != 1 ||
+		server.Manager().RefusalsFor(spi.RefusalFleetFull) != 0 {
+		t.Fatalf("the draining refusal is not counted as draining: %v", body)
 	}
 	if got := server.Manager().LocalHolders(); got != 0 {
 		t.Fatalf("local holders = %d, want 0", got)
@@ -436,7 +446,7 @@ func TestAStopRecordedByASiblingReachesTheRunWithoutABus(t *testing.T) {
 	other := accept(t, a, "Wikis", "ask")
 	waitStatus(t, a, "Wikis", "deep_research", matched, "InProgress")
 	waitStatus(t, a, "Wikis", "ask", other, "InProgress")
-	remaining := b.Manager().StopMatching(ctx, func(run spi.RunningInvocation) bool { return run.Tool == "deep_research" }, 5*time.Second)
+	remaining := b.Manager().StopMatching(ctx, spi.StopFence{Tool: "deep_research"}, 5*time.Second)
 	if remaining != 0 {
 		t.Fatalf("StopMatching on B reports %d still running", remaining)
 	}

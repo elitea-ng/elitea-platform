@@ -51,7 +51,9 @@ import (
 // what makes the host a fleet (#scaling): the labels a deletion on any
 // replica matches (RunningInvocations), the slot flag that fleet admission
 // counts (Create), and host_replicas, one row for each live replica with
-// its slots (FleetSlots, SetAdmitting).
+// its slots (FleetSlots, SetAdmitting). Both applications' migration 0010
+// adds host_stop_fences: the deletions in progress, which hold back new
+// matching invocations on every replica (Fence, Create).
 //
 // Durable is true, and that is not decoration: /health reports it, and an
 // operator uses it to tell a compliant deployment from a dev one.
@@ -100,6 +102,16 @@ type PostgresStore struct {
 	admitting atomic.Bool
 	fleetKey  int64
 
+	// fences is the stop fence table as the statements spell it
+	// (host_stop_fences, migration 0010).
+	fences string
+
+	// slotTools are the (toolkit, tool) pairs whose invocations hold a slot
+	// (SetSlotTools). Fleet admission counts the unfinished rows of these
+	// tools that an owner which never registered in host_replicas wrote: a
+	// replica of an image from before the fleet, which writes no slot flag.
+	slotTools atomic.Pointer[slotToolList]
+
 	// stopWatch is the callback that pollStops hands a stop request to
 	// (WatchStops); nil until a server registers one.
 	stopWatch atomic.Pointer[func(invocationID string)]
@@ -130,10 +142,46 @@ func (e *NoSlotError) Error() string {
 // Is makes errors.Is(err, ErrNoSlot) true.
 func (e *NoSlotError) Is(target error) bool { return target == ErrNoSlot }
 
+// ErrFenced refuses a new invocation that the stop fence of a deletion in
+// progress matches (StopFencer). The store inserts nothing then.
+var ErrFenced = errors.New("invocation store: a deletion in progress holds back this invocation")
+
 // fleetLockSeed seeds hashtextextended('fleet-slots:' || schema, seed), the
 // key of the transaction lock that serialises fleet admission. A seed of its
 // own, so the key is not an owner's liveness lock key.
 const fleetLockSeed = 0x53_41_46_31 // "SAF1"
+
+// fenceLockSeed seeds hashtextextended('stop-fence:' || schema || ':' ||
+// tool, seed), the key of the transaction lock of one tool's stop fences.
+// Create takes it SHARED (creates do not wait for each other), and Fence
+// takes it EXCLUSIVE, so a fence write waits for the creates in progress to
+// commit, and a create that starts after it sees the fence.
+const fenceLockSeed = 0x53_41_46_32 // "SAF2"
+
+// slotToolList is SetSlotTools' list, as two arrays for unnest.
+type slotToolList struct {
+	toolkits []string
+	tools    []string
+}
+
+// ToolRef names one tool of one toolkit alias.
+type ToolRef struct {
+	Toolkit string
+	Tool    string
+}
+
+// SetSlotTools sets the (toolkit, tool) pairs whose invocations hold a
+// slot. The server sets them from its runner (SlotHolder) when it starts.
+// Fleet admission uses them only for the rows of a replica from before the
+// fleet (fleetQuery); this store's own rows carry holds_slot.
+func (s *PostgresStore) SetSlotTools(tools []ToolRef) {
+	list := &slotToolList{toolkits: make([]string, 0, len(tools)), tools: make([]string, 0, len(tools))}
+	for _, tool := range tools {
+		list.toolkits = append(list.toolkits, tool.Toolkit)
+		list.tools = append(list.tools, tool.Tool)
+	}
+	s.slotTools.Store(list)
+}
 
 // ownerLockSeed seeds hashtextextended(owner, seed), the 64-bit key of every
 // owner's liveness lock (pg_advisory_lock(bigint)). Sixty-four bits, so two
@@ -260,6 +308,8 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 	store.invocations = store.qualify("invocations")
 	store.events = store.qualify("invocation_events")
 	store.replicas = store.qualify("host_replicas")
+	store.fences = store.qualify("host_stop_fences")
+	store.slotTools.Store(&slotToolList{toolkits: []string{}, tools: []string{}})
 	if store.slots <= 0 {
 		store.slots = 1
 	}
@@ -308,6 +358,14 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 		pool.Close()
 		return nil, fmt.Errorf("invocation store: register the replica: %w", err)
 	}
+	// Create reads the stop fences (migration 0010). Without the table every
+	// new invocation would fail, so it is a boot failure too.
+	if _, err := pool.Exec(ctx, `SELECT 1 FROM `+store.fences+` LIMIT 1`); err != nil {
+		_ = store.claim.Close(ctx)
+		store.claim = nil
+		pool.Close()
+		return nil, fmt.Errorf("invocation store: read the stop fences: %w", err)
+	}
 	go store.supervise()
 	return store, nil
 }
@@ -336,18 +394,32 @@ func (s *PostgresStore) takeClaim(ctx context.Context) (bool, error) {
 // last check. Readiness reads it.
 func (s *PostgresStore) ClaimHeld() bool { return s.held.Load() }
 
-// supervise checks the claim every claimCheck and reconciles every
-// reconcileEvery, until Close.
+// supervise checks the claim every claimCheck, refreshes this replica's row
+// in host_replicas every claimCheck on a ticker of its own, and reconciles
+// every reconcileEvery, until Close.
+//
+// The refresh does not depend on the claim check. Before, only a successful
+// claim check refreshed the row, so a failed check (a dropped claim
+// session, a slow re-take) made the fleet drop this replica's slots while
+// its runs were still counted as load, and the healthy replicas refused
+// everything. The refresh runs on the pool, and fleetQuery drops the load
+// of a replica that is not live together with its slots.
 func (s *PostgresStore) supervise() {
 	defer close(s.done)
 	check := time.NewTicker(s.claimCheck)
 	defer check.Stop()
+	heartbeat := time.NewTicker(s.claimCheck)
+	defer heartbeat.Stop()
 	reconcile := time.NewTicker(s.reconcileEvery)
 	defer reconcile.Stop()
 	for {
 		select {
 		case <-s.stop:
 			return
+		case <-heartbeat.C:
+			ctx, cancel := context.WithTimeout(context.Background(), s.claimCheck)
+			s.refreshReplica(ctx)
+			cancel()
 		case <-check.C:
 			s.checkClaim()
 			s.pollStops()
@@ -422,12 +494,15 @@ func (s *PostgresStore) checkClaim() {
 			    AND granted AND objsubid = 1 AND classid = $1::bigint::oid AND objid = $2::bigint::oid)`,
 			int64(uint64(s.lockKey)>>32), int64(uint32(s.lockKey))).Scan(&held)
 		if err == nil && held {
-			s.refreshReplica(ctx)
 			return
 		}
 		if s.held.Swap(false) {
 			s.logger.Error("the invocation store lost its owner claim; new invocations are refused until it is re-taken",
 				"owner", s.owner, "error", err)
+			// Without the claim this replica takes no new work: its slots
+			// and its runs leave the fleet's numbers at once (admitting
+			// false, upsertReplica).
+			s.refreshReplica(ctx)
 		}
 		_ = s.claim.Close(ctx)
 		s.claim = nil
@@ -445,18 +520,20 @@ func (s *PostgresStore) checkClaim() {
 }
 
 // upsertReplica writes this replica's row in host_replicas: its slots,
-// whether it admits work, and now as the time it was last seen.
+// whether it admits work, and now as the time it was last seen. It admits
+// work only while it holds its owner claim: without the claim Create
+// refuses everything (ErrClaimLost).
 func (s *PostgresStore) upsertReplica(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO `+s.replicas+` (owner, slots, admitting, seen_at) VALUES ($1, $2, $3, now())
 		 ON CONFLICT (owner) DO UPDATE SET slots = EXCLUDED.slots, admitting = EXCLUDED.admitting, seen_at = now()`,
-		s.owner, s.slots, s.admitting.Load())
+		s.owner, s.slots, s.admitting.Load() && s.held.Load())
 	return err
 }
 
-// refreshReplica is upsertReplica at a claim check. A failure is logged, and
-// the row goes stale (the fleet stops counting its slots) until a later
-// check writes it.
+// refreshReplica is upsertReplica at a heartbeat. A failure is logged, and
+// the row goes stale (the fleet stops counting its slots and its runs)
+// until a later heartbeat writes it.
 func (s *PostgresStore) refreshReplica(ctx context.Context) {
 	if err := s.upsertReplica(ctx); err != nil {
 		s.logger.Warn("could not refresh this replica's row in the fleet registry", "owner", s.owner, "error", err)
@@ -478,24 +555,46 @@ func (s *PostgresStore) liveSeconds() float64 {
 }
 
 // fleetQuery reads the fleet's slot report in ONE statement, so the three
-// numbers come from one snapshot. $1 is liveSeconds.
+// numbers come from one snapshot. $1 is liveSeconds; $2 and $3 are the
+// toolkits and tools of SetSlotTools, pair by pair.
 //
 //   - capacity: the slots of the live replicas that admit work;
 //   - replicas: how many those are;
-//   - active: the unfinished slot-holding rows, except those of a LIVE
-//     replica that does NOT admit (one that drains). Its slots are not in
-//     the capacity, so its runs must not be in the load either: a replica
-//     that drains a generation for an hour would otherwise keep the rest of
-//     the fleet refusing while it has free slots. The rows of an owner that
-//     is not live (gone, its rows not reconciled yet) stay counted.
+//   - active: the unfinished rows that count as load, which are:
+//     a. the slot-holding rows of a live replica that admits work. The rows
+//     of a REGISTERED replica that is not counted in the capacity (it
+//     drains, it lost its claim, or its row is not live) are not load
+//     either: capacity and load move together. A replica that drains a
+//     generation for an hour, or one whose heartbeat failed for a moment,
+//     would otherwise keep the rest of the fleet refusing while it has
+//     free slots. A registered owner that is really gone has its rows
+//     ended by reconcile (its liveness lock is free for ownerGrace).
+//     b. the rows of a slot tool (SetSlotTools) or with holds_slot, whose
+//     owner has NO row in host_replicas and carries claimedOwnerPrefix:
+//     a replica of an image from before the fleet (a mixed fleet in a
+//     rolling upgrade). It writes no slot flag and does not register, so
+//     its slots are not in the capacity: its generations only take free
+//     slots from the fleet. Its rows stop counting when they end, or when
+//     reconcile ends them after that owner's liveness lock has been free
+//     for ownerGrace (that image takes the lock too). Rows with no claim
+//     prefix (an image from before #1359) are not counted: only a process
+//     start ends those, so they could count for ever.
+//     A registered owner whose row reconcile deleted (stale for
+//     replicaStaleChecks) would fall under b. Its rows were ended long
+//     before, at ownerGrace, so in practice b holds old-image rows only.
 func (s *PostgresStore) fleetQuery() string {
-	live := `seen_at > now() - make_interval(secs => $1)`
-	return `SELECT
-		(SELECT COALESCE(sum(slots), 0)::int FROM ` + s.replicas + ` WHERE admitting AND ` + live + `),
-		(SELECT count(*)::int FROM ` + s.replicas + ` WHERE admitting AND ` + live + `),
-		(SELECT count(*)::int FROM ` + s.invocations + ` i WHERE i.holds_slot AND i.finished_at IS NULL
-		    AND NOT EXISTS (SELECT 1 FROM ` + s.replicas + ` r
-		                     WHERE r.owner = i.owner AND NOT r.admitting AND r.` + live + `))`
+	return `WITH live AS (
+		    SELECT owner, slots, admitting FROM ` + s.replicas + `
+		     WHERE seen_at > now() - make_interval(secs => $1))
+		SELECT
+		(SELECT COALESCE(sum(slots), 0)::int FROM live WHERE admitting),
+		(SELECT count(*)::int FROM live WHERE admitting),
+		(SELECT count(*)::int FROM ` + s.invocations + ` i WHERE i.finished_at IS NULL AND (
+		    (i.holds_slot AND EXISTS (SELECT 1 FROM live r WHERE r.owner = i.owner AND r.admitting))
+		 OR (NOT EXISTS (SELECT 1 FROM ` + s.replicas + ` r WHERE r.owner = i.owner)
+		     AND i.owner LIKE '` + claimedOwnerPrefix + `%'
+		     AND (i.holds_slot OR (i.toolkit_name, i.tool_name) IN
+		          (SELECT t.toolkit, t.tool FROM unnest($2::text[], $3::text[]) AS t(toolkit, tool))))))`
 }
 
 // fleetSlots runs fleetQuery on q (the pool, or the admission transaction).
@@ -503,8 +602,66 @@ func (s *PostgresStore) fleetSlots(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }) (FleetCapacity, error) {
 	var capacity FleetCapacity
-	err := q.QueryRow(ctx, s.fleetQuery(), s.liveSeconds()).Scan(&capacity.Total, &capacity.Replicas, &capacity.Active)
+	tools := s.slotTools.Load()
+	err := q.QueryRow(ctx, s.fleetQuery(), s.liveSeconds(), tools.toolkits, tools.tools).
+		Scan(&capacity.Total, &capacity.Replicas, &capacity.Active)
 	return capacity, err
+}
+
+// Fence records a stop fence for ttl at most (StopFencer). Under the
+// tool's fence lock, taken exclusive, it deletes the expired fences and
+// inserts this one, and commits. Every Create of the tool takes the same
+// lock shared, so a Create in progress commits first (and the caller's
+// list of runs, read after Fence returns, has it), and a Create that
+// starts later reads the fence and refuses.
+func (s *PostgresStore) Fence(ctx context.Context, fence StopFence, ttl time.Duration) (string, error) {
+	labels := []byte(`{}`)
+	if len(fence.Labels) > 0 {
+		encoded, err := json.Marshal(fence.Labels)
+		if err != nil {
+			return "", err
+		}
+		labels = encoded
+	}
+	id := newFenceID()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, $2))`, s.fenceLockName(fence.Tool), fenceLockSeed); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM `+s.fences+` WHERE expires_at <= now()`); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO `+s.fences+` (fence_id, tool_name, labels, expires_at) VALUES ($1, $2, $3, now() + make_interval(secs => $4))`,
+		id, fence.Tool, string(labels), ttl.Seconds()); err != nil {
+		return "", err
+	}
+	return id, tx.Commit(ctx)
+}
+
+// Unfence removes a stop fence (StopFencer).
+func (s *PostgresStore) Unfence(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM `+s.fences+` WHERE fence_id = $1`, id)
+	return err
+}
+
+// fenceLockName is the text the fence lock key of a tool is hashed from.
+func (s *PostgresStore) fenceLockName(tool string) string {
+	return "stop-fence:" + s.schema + ":" + tool
+}
+
+// fencedQuery reports whether a live fence of tool $1 matches the labels
+// $2 (a JSON object), with the rule of StopFence.Matches: no fence label
+// with a value differs from a label of the invocation with a value.
+func (s *PostgresStore) fencedQuery() string {
+	return `SELECT EXISTS (SELECT 1 FROM ` + s.fences + ` f
+		 WHERE f.tool_name = $1 AND f.expires_at > now()
+		   AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(f.labels) AS l(key, value)
+		                    WHERE l.value <> '' AND COALESCE($2::jsonb ->> l.key, '') NOT IN ('', l.value)))`
 }
 
 // FleetSlots reads the fleet's slot report (FleetSlotter).
@@ -589,12 +746,20 @@ func (s *PostgresStore) Durable() bool { return true }
 // refusal the manager records at once) is inserted with its result and
 // finished_at.
 //
-// A slot-holding invocation (HoldsSlot) is admitted against the FLEET, in
-// one transaction under the fleet lock. The capacity is the sum of the
-// slots of the live replicas that admit work; the load is the unfinished
-// slot-holding rows. When the load is at the capacity, Create inserts
-// nothing and returns a *NoSlotError (errors.Is ErrNoSlot). The lock makes
-// two replicas that admit at the same moment see each other's row.
+// A new (not terminal) invocation is inserted in one transaction that first
+// takes its tool's fence lock shared and reads the stop fences (Fence).
+// When a live fence matches it, Create inserts nothing and returns
+// ErrFenced.
+//
+// A slot-holding invocation (HoldsSlot) is then admitted against the FLEET,
+// in the same transaction under the fleet lock. The capacity is the sum of
+// the slots of the live replicas that admit work; the load is the
+// unfinished slot-holding rows (fleetQuery). When the load is at the
+// capacity, Create inserts nothing and returns a *NoSlotError (errors.Is
+// ErrNoSlot). The lock makes two replicas that admit at the same moment
+// see each other's row. The locks are always taken in this order (fence,
+// then fleet), and Fence takes only the fence lock, so they cannot
+// deadlock.
 func (s *PostgresStore) Create(ctx context.Context, invocation *Invocation) error {
 	if !s.held.Load() {
 		return ErrClaimLost
@@ -619,7 +784,8 @@ func (s *PostgresStore) Create(ctx context.Context, invocation *Invocation) erro
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $9::boolean THEN now() END)`
 	arguments := []any{invocation.ID, invocation.Toolkit, invocation.Tool, invocation.Status, s.owner,
 		string(labels), invocation.HoldsSlot, result, invocation.Terminal()}
-	if !invocation.HoldsSlot {
+	if invocation.Terminal() {
+		// A refusal: it runs nothing, so no fence or slot applies.
 		_, err := s.pool.Exec(ctx, insert, arguments...)
 		return err
 	}
@@ -628,15 +794,27 @@ func (s *PostgresStore) Create(ctx context.Context, invocation *Invocation) erro
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, s.fleetKey); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended($1, $2))`, s.fenceLockName(invocation.Tool), fenceLockSeed); err != nil {
 		return err
 	}
-	fleet, err := s.fleetSlots(ctx, tx)
-	if err != nil {
+	var fenced bool
+	if err := tx.QueryRow(ctx, s.fencedQuery(), invocation.Tool, string(labels)).Scan(&fenced); err != nil {
 		return err
 	}
-	if fleet.Active >= fleet.Total {
-		return &NoSlotError{Total: fleet.Total}
+	if fenced {
+		return ErrFenced
+	}
+	if invocation.HoldsSlot {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, s.fleetKey); err != nil {
+			return err
+		}
+		fleet, err := s.fleetSlots(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if fleet.Active >= fleet.Total {
+			return &NoSlotError{Total: fleet.Total}
+		}
 	}
 	if _, err := tx.Exec(ctx, insert, arguments...); err != nil {
 		return err
