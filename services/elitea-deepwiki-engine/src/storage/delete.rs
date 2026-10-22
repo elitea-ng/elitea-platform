@@ -9,7 +9,7 @@
 //! # One wiki
 //!
 //! [`delete_wiki`] removes the `wikis` row and every row of `wiki_nodes`,
-//! `wiki_edges`, `wiki_node_embeddings` and `wiki_bm25_*` for one
+//! `wiki_edges` and `wiki_bm25_*` for one
 //! `(project_id, wiki_id)`, in ONE transaction. The transaction first takes
 //! the publish's per-wiki advisory lock ([`PUBLISH_WIKI_LOCK`], the same
 //! object [`publish_wiki_lock_object`] names), so it queues behind a publish
@@ -20,7 +20,7 @@
 //! is cancelled in the database too, not left waiting. Whichever commits last wins
 //! whole: the wiki is either the published index or absent, never a mix. The
 //! `wiki_bm25_*` tables have no foreign key (migration 0001), so they are
-//! deleted explicitly, as the publish does; the other three would also go
+//! deleted explicitly, as the publish does; the other two would also go
 //! with the `wikis` row (`ON DELETE CASCADE`), and are deleted explicitly
 //! first so the result can report what was removed.
 //!
@@ -71,6 +71,17 @@
 //! still exist. [`orphans`] takes the set of existing project ids from the
 //! caller and lists the projects in this database that are not in it. It
 //! reads only; [`delete_project`] is the separate, explicit step.
+//!
+//! # The vectors
+//!
+//! The dense vectors are in elitea-vector, not in this database
+//! ([`crate::storage::dense`]); these functions delete rows only. The
+//! `delete_wiki_index` tool deletes the wiki's namespace there after the
+//! transaction committed, with the caller's bearer, and fails when it
+//! cannot (a repeat is idempotent). A project's vectors are deleted by
+//! elitea-main, which drops the project from elitea-vector (every source)
+//! in its project-deletion journal; `delete_project_wikis` has no bearer
+//! and does not touch them.
 
 use crate::storage::build::{
     LiveRows, PUBLISH_WIKI_LOCK, PublishSettings, apply_settings, delete_live,

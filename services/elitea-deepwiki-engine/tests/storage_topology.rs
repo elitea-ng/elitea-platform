@@ -58,7 +58,10 @@ async fn the_build_space_answers_phase_2() {
         .collect();
     build.stage_nodes(corpus.clone()).await.unwrap();
     build
-        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .stage_embeddings(
+            storage_common::TEST_MODEL,
+            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
         .await
         .unwrap();
     let stop = StopSignal::default();
@@ -318,15 +321,50 @@ fn setting(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-/// The in-process dense search against the full-scan SQL query, on a
-/// medium synthetic build: `DEEPWIKI_DENSE_NODES` nodes (default 2000) of
+/// pgvector's L2 distance, the reference: a `float4` sum of the squared
+/// `float4` differences in index order, its square root in `float8`.
+fn reference_distance(a: &[f64], b: &[f64]) -> f64 {
+    let mut sum = 0.0_f32;
+    for (x, y) in a.iter().zip(b) {
+        #[allow(clippy::cast_possible_truncation)]
+        let d = *x as f32 - *y as f32;
+        sum += d * d;
+    }
+    f64::from(sum).sqrt()
+}
+
+/// The full-scan search Phase 2 ran in SQL before the vectors left
+/// PostgreSQL (`ORDER BY distance, node_id COLLATE "C" LIMIT k`, then the
+/// prefix range), as a brute-force reference over the staged vectors.
+fn reference_search(
+    vectors: &[(String, Vec<f64>)],
+    query: &[f64],
+    k: usize,
+    prefix: Option<&str>,
+) -> Vec<(String, f64)> {
+    let mut all: Vec<(String, f64)> = vectors
+        .iter()
+        .map(|(id, v)| (id.clone(), reference_distance(v, query)))
+        .collect();
+    all.sort_by(|a, b| {
+        a.1.total_cmp(&b.1)
+            .then_with(|| a.0.as_bytes().cmp(b.0.as_bytes()))
+    });
+    all.truncate(k);
+    all.retain(|(id, _)| prefix.is_none_or(|p| id.starts_with(&format!("{p}/"))));
+    all
+}
+
+/// The in-process dense search against the brute-force reference of the
+/// SQL query it replaced, on a medium synthetic build:
+/// `DEEPWIKI_DENSE_NODES` nodes (default 2000) of
 /// `DEEPWIKI_DENSE_DIMENSIONS` (default 64) in 20 directories, with
 /// repeated vectors (exact ties, broken by node id) and near-duplicates.
 /// Every probe, `k` and prefix gives the same hits, row for row and bit for
-/// bit. The two paths are timed over the same probes.
+/// bit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn the_in_process_dense_search_is_the_sql_search() {
+async fn the_in_process_dense_search_is_the_full_scan() {
     let Some(pool) = storage_common::fresh_database("topology_dense").await else {
         return;
     };
@@ -369,7 +407,10 @@ async fn the_in_process_dense_search_is_the_sql_search() {
     }
     build.stage_nodes(rows).await.unwrap();
     build
-        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .stage_embeddings(
+            storage_common::TEST_MODEL,
+            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
         .await
         .unwrap();
     assert!(build.refresh_statistics().await);
@@ -401,33 +442,35 @@ async fn the_in_process_dense_search_is_the_sql_search() {
             }
         }
         let process_time = started.elapsed();
-        let started = std::time::Instant::now();
-        let mut in_database = Vec::new();
+        let mut index = 0;
         for query in &queries {
             for (k, prefix) in &cases {
-                in_database.push(store.search_dense_in_database(query, *k, *prefix).unwrap());
+                let found: Vec<(String, f64)> = in_process[index]
+                    .iter()
+                    .map(|h| (h.node_id.clone(), h.vec_distance.unwrap_or(f64::NAN)))
+                    .collect();
+                assert_eq!(
+                    found,
+                    reference_search(&vectors, query, *k, *prefix),
+                    "search {index} differs"
+                );
+                index += 1;
             }
-        }
-        let database_time = started.elapsed();
-        assert_eq!(in_process.len(), in_database.len());
-        for (index, (a, b)) in in_process.iter().zip(&in_database).enumerate() {
-            assert_eq!(a, b, "search {index} differs");
         }
         // The fixture has ties at distance 0 and directory-scoped hits.
         assert!(in_process.iter().any(|hits| hits.len() > 1
             && hits[0].vec_distance == Some(0.0)
             && hits[1].vec_distance == Some(0.0)));
         assert!(in_process.iter().any(Vec::is_empty));
-        // A query of another dimension fails as pgvector fails.
+        // A query of another dimension fails as pgvector failed.
         assert!(store.search_dense(&[0.5; 3], 5, None).is_err());
-        (store, (process_time, database_time))
+        (store, process_time)
     })
     .await
     .unwrap();
     let searches = probes * 6;
     eprintln!(
-        "dense search, {nodes} nodes x {dimensions} dimensions, {searches} searches: in process (vectors read once) {:?}, full SQL scan {:?}",
-        timings.0, timings.1
+        "dense search, {nodes} nodes x {dimensions} dimensions, {searches} searches in process: {timings:?}"
     );
     store.into_parts().build.abandon().await.unwrap();
 }

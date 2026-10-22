@@ -18,6 +18,7 @@ use elitea_deepwiki_engine::storage::adapter::{Scope, UnifiedDb};
 use elitea_deepwiki_engine::storage::build::{
     BuildSpace, PUBLISH_WIKI_LOCK, WikiRecord, publish_wiki_lock_object,
 };
+use elitea_deepwiki_engine::storage::dense::MemoryDense;
 use elitea_deepwiki_engine::storage::rows::{IndexEdge, IndexNode};
 use elitea_deepwiki_engine::storage::search::{Hybrid, IndexReader};
 use elitea_deepwiki_engine::storage::{PROJECT_ARG, WikiKey};
@@ -82,7 +83,10 @@ async fn publish(space: &BuildSpace, project: i32, tag: &str, count: usize) {
     build.stage_nodes(nodes).await.expect("nodes");
     build.stage_edges(&edges).await.expect("edges");
     build
-        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .stage_embeddings(
+            common::TEST_MODEL,
+            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
         .await
         .expect("embeddings");
     build
@@ -103,7 +107,6 @@ async fn owned(pool: &PgPool, project: i32) -> Vec<i64> {
         "wikis",
         "wiki_nodes",
         "wiki_edges",
-        "wiki_node_embeddings",
         "wiki_bm25_meta",
         "wiki_bm25_docs",
         "wiki_bm25_terms",
@@ -123,15 +126,22 @@ async fn owned(pool: &PgPool, project: i32) -> Vec<i64> {
     counts
 }
 
-fn db(pool: &PgPool, project: i32) -> UnifiedDb {
-    UnifiedDb::new(pool.clone(), common::key_in(project, WIKI))
+fn db(pool: &PgPool, store: &MemoryDense, project: i32) -> UnifiedDb {
+    UnifiedDb::new(pool.clone(), common::key_in(project, WIKI)).with_dense(common::dense(store))
 }
 
 /// Each project reads its own rows of the shared wiki id through every
 /// read surface, and nothing of the other's.
-async fn assert_sees_only(pool: &PgPool, project: i32, tag: &str, other: &str, count: usize) {
+async fn assert_sees_only(
+    pool: &PgPool,
+    store: &MemoryDense,
+    project: i32,
+    tag: &str,
+    other: &str,
+    count: usize,
+) {
     let n = i64::try_from(count).expect("small");
-    let db = db(pool, project);
+    let db = db(pool, store, project);
     assert_eq!(db.node_count().await.expect("nodes"), n, "{project}");
     assert_eq!(db.edge_count().await.expect("edges"), n - 1, "{project}");
     assert!(db.vec_available().await.expect("vectors"));
@@ -150,10 +160,13 @@ async fn assert_sees_only(pool: &PgPool, project: i32, tag: &str, other: &str, c
         "{project}: one outgoing edge, not one per project"
     );
     assert_eq!(db.get_edges_to("n1").await.expect("edges").len(), 1);
+    // The project's vectors are in its own namespace of the dense store.
+    let generations = store.generations(&common::key_in(project, WIKI));
+    assert_eq!(generations.len(), 1, "{project}: {generations:?}");
+    assert_eq!(generations[0].1, count, "{project}");
     assert_eq!(
-        db.get_embedding("n0")
-            .await
-            .expect("embedding")
+        store
+            .vector(&common::key_in(project, WIKI), &generations[0].0, "n0")
             .map(|v| v[0] > 0.0),
         Some(tag == "alpha")
     );
@@ -178,8 +191,9 @@ async fn assert_sees_only(pool: &PgPool, project: i32, tag: &str, other: &str, c
     );
 
     // The branch searches, each with the other project's word.
-    let reader = IndexReader::new(pool.clone(), common::key_in(project, WIKI));
-    assert_eq!(reader.search_fts(other, 10).await.expect("fts"), []);
+    let reader = IndexReader::new(pool.clone(), common::key_in(project, WIKI))
+        .with_dense(common::dense(store));
+    assert!(reader.search_fts(other, 10).await.expect("fts").is_empty());
     assert_eq!(reader.search_fts(tag, 50).await.expect("fts").len(), count);
     let dense = reader.search_dense(&embedding, 50).await.expect("dense");
     assert_eq!(dense.len(), count, "{project}: dense hits of one project");
@@ -207,15 +221,15 @@ async fn two_projects_with_one_wiki_id_each_read_only_their_own_index() {
     let Some(pool) = common::fresh_database("tenancy_reads").await else {
         return;
     };
-    let space = BuildSpace::new(pool.clone(), "tenancy");
+    let (space, store) = common::dense_space(&pool, "tenancy");
     publish(&space, A, "alpha", 3).await;
     publish(&space, B, "beta", 5).await;
 
-    assert_sees_only(&pool, A, "alpha", "beta", 3).await;
-    assert_sees_only(&pool, B, "beta", "alpha", 5).await;
+    assert_sees_only(&pool, &store, A, "alpha", "beta", 3).await;
+    assert_sees_only(&pool, &store, B, "beta", "alpha", 5).await;
 
     // A project that generated nothing finds nothing under the same id.
-    let none = db(&pool, C);
+    let none = db(&pool, &store, C);
     assert_eq!(none.node_count().await.expect("nodes"), 0);
     assert!(!none.vec_available().await.expect("vectors"));
     assert_eq!(none.get_node("n0").await.expect("node"), None);
@@ -238,7 +252,7 @@ async fn a_publish_replaces_only_its_own_projects_rows() {
     let Some(pool) = common::fresh_database("tenancy_publish").await else {
         return;
     };
-    let space = BuildSpace::new(pool.clone(), "tenancy");
+    let (space, store) = common::dense_space(&pool, "tenancy");
     publish(&space, A, "alpha", 3).await;
     publish(&space, B, "beta", 5).await;
     let a_before = owned(&pool, A).await;
@@ -247,10 +261,10 @@ async fn a_publish_replaces_only_its_own_projects_rows() {
     // B regenerates the same wiki id, bigger: A's index is untouched.
     publish(&space, B, "gamma", 7).await;
     assert_eq!(owned(&pool, A).await, a_before);
-    assert_sees_only(&pool, A, "alpha", "gamma", 3).await;
-    assert_sees_only(&pool, B, "gamma", "alpha", 7).await;
+    assert_sees_only(&pool, &store, A, "alpha", "gamma", 3).await;
+    assert_sees_only(&pool, &store, B, "gamma", "alpha", 7).await;
     assert!(
-        db(&pool, B)
+        db(&pool, &store, B)
             .search_hybrid("beta", None, &Scope::default(), &Hybrid::default())
             .await
             .expect("hybrid")
@@ -265,7 +279,7 @@ async fn a_publish_replaces_only_its_own_projects_rows() {
         .execute(&pool)
         .await
         .expect("delete");
-    assert_eq!(db(&pool, B).node_count().await.expect("nodes"), 0);
+    assert_eq!(db(&pool, &store, B).node_count().await.expect("nodes"), 0);
     assert_eq!(owned(&pool, A).await, a_before);
 }
 
@@ -274,7 +288,7 @@ async fn two_projects_publish_one_wiki_id_at_the_same_time() {
     let Some(pool) = common::fresh_database("tenancy_lock").await else {
         return;
     };
-    let space = BuildSpace::new(pool.clone(), "tenancy");
+    let (space, store) = common::dense_space(&pool, "tenancy");
     // Hold A's publish lock of the wiki, as a long publish of A would.
     let mut holder = pool.begin().await.expect("holder");
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
@@ -302,8 +316,8 @@ async fn two_projects_publish_one_wiki_id_at_the_same_time() {
     tokio::time::timeout(Duration::from_secs(30), a)
         .await
         .expect("A's publish lands");
-    assert_sees_only(&pool, A, "alpha", "beta", 3).await;
-    assert_sees_only(&pool, B, "beta", "alpha", 4).await;
+    assert_sees_only(&pool, &store, A, "alpha", "beta", 3).await;
+    assert_sees_only(&pool, &store, B, "beta", "alpha", 4).await;
 }
 
 fn arguments(value: &Value) -> serde_json::Map<String, Value> {
@@ -324,6 +338,7 @@ async fn ask(pool: &PgPool, project: Option<i32>, mut payload: Value) -> Result<
         embedding_options: EmbeddingOptions::default(),
         limits: Limits::default(),
         clock: Clock::System,
+        dense: None,
     };
     let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
     let context = Context::new(sender, StopSignal::default());

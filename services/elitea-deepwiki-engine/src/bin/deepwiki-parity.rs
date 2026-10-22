@@ -79,6 +79,7 @@ use elitea_deepwiki_engine::parsers::parser_for;
 use elitea_deepwiki_engine::pyjson;
 use elitea_deepwiki_engine::storage;
 use elitea_deepwiki_engine::storage::build::{BuildSpace, WikiRecord};
+use elitea_deepwiki_engine::storage::dense::{DenseIndex, MemoryDense};
 use elitea_deepwiki_engine::storage::search::IndexReader;
 use serde::Serialize;
 use serde_json::Value;
@@ -328,8 +329,12 @@ fn index_dump(args: &[String]) -> Result<(), String> {
         storage::migrate::apply_all(&pool)
             .await
             .map_err(|e| e.to_string())?;
-        let summary = stage_and_publish(&pool, &graph, &key, dimension).await?;
-        let reader = IndexReader::new(pool.clone(), key.clone());
+        // The pseudo-vectors go to an in-process dense store with exact
+        // cosine scoring: the tool measures this database, not Qdrant.
+        let dense = MemoryDense::new();
+        let summary = stage_and_publish(&pool, &graph, &key, dimension, &dense).await?;
+        let reader = IndexReader::new(pool.clone(), key.clone())
+            .with_dense(Some(DenseIndex::memory(dense.clone())));
         probe_queries(&reader, dimension).await?;
         let stats = reader.stats().await.map_err(|e| e.to_string())?;
         let branches: Vec<String> = stats
@@ -353,9 +358,11 @@ async fn stage_and_publish(
     graph: &CodeGraph,
     key: &storage::WikiKey,
     dimension: Option<usize>,
+    dense: &MemoryDense,
 ) -> Result<String, String> {
     let wiki_id = key.wiki_id();
-    let space = BuildSpace::new(pool.clone(), "deepwiki-parity");
+    let space = BuildSpace::new(pool.clone(), "deepwiki-parity")
+        .with_dense(Some(DenseIndex::memory(dense.clone())));
     let mut build = space.begin(key).await.map_err(|e| e.to_string())?;
 
     let stage_started = Instant::now();
@@ -380,7 +387,10 @@ async fn stage_and_publish(
                 .map(|id| (*id, pseudo_vector(id, dimension)))
                 .collect();
             written += build
-                .stage_embeddings(vectors.iter().map(|(id, v)| (*id, v.as_slice())))
+                .stage_embeddings(
+                    "deepwiki-parity-pseudo",
+                    vectors.iter().map(|(id, v)| (*id, v.as_slice())),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
         }

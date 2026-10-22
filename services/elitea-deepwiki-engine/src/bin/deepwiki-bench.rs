@@ -10,13 +10,19 @@
 //! per line with `id` and `question`) with the PostgreSQL read path the
 //! native `ask` uses: the question embedded through the engine's own
 //! embedding client (`--api-base`, an OpenAI-compatible base URL ending in
-//! `/v1`), then `IndexReader::search_hybrid` — FTS and exact dense KNN fused
+//! `/v1`), then `IndexReader::search_hybrid` — FTS and dense KNN fused
 //! by weighted RRF, candidate pools of 30 and 30, as `ask`'s
 //! `repository_docs` asks for them — over the published index of
 //! `<wiki-id>` of project `<project-id>` (the index is scoped by project,
 //! migration 0005) in `ELITEA_DEEPWIKI_DATABASE_URL`. One line per question:
 //! `id`, the ranked `hits` (`node_id`, `rel_path`, `symbol_name`,
 //! `symbol_type`, `combined_score`), `embed_ms` and `search_ms`.
+//!
+//! The dense vectors are in elitea-vector: with `DEEPWIKI_BENCH_VECTOR_TOKEN`
+//! (a callback token with a `deepwiki` grant for the project) the dense
+//! branch searches the elitea-vector the engine's own settings name
+//! (`ELITEA_DEEPWIKI_VECTOR_URL` and the callback TLS files); without it the
+//! search is lexical only.
 
 use elitea_deepwiki_engine::llm::{
     EmbeddingClient, EmbeddingOptions, ModelSettings, Transport, TransportSettings,
@@ -60,6 +66,21 @@ fn read_questions(path: &str) -> Result<Vec<Value>, String> {
         items.push(serde_json::from_str(&line).map_err(|e| e.to_string())?);
     }
     Ok(items)
+}
+
+/// The dense store, when `DEEPWIKI_BENCH_VECTOR_TOKEN` is set.
+fn bench_dense() -> Result<Option<storage::dense::DenseIndex>, String> {
+    let Ok(token) = std::env::var("DEEPWIKI_BENCH_VECTOR_TOKEN") else {
+        eprintln!("DEEPWIKI_BENCH_VECTOR_TOKEN is not set: lexical search only");
+        return Ok(None);
+    };
+    let settings =
+        elitea_deepwiki_engine::config::Settings::from_env().map_err(|e| e.to_string())?;
+    let vector = settings
+        .vector
+        .ok_or("DEEPWIKI_BENCH_VECTOR_TOKEN needs ELITEA_DEEPWIKI_VECTOR_URL")?;
+    let client = storage::dense::connect(&vector).map_err(|e| e.to_string())?;
+    Ok(Some(storage::dense::DenseIndex::remote(client, token)))
 }
 
 /// `<project-id>`: the project the index belongs to (migration 0005).
@@ -125,7 +146,8 @@ fn search(args: &[String]) -> Result<(), String> {
         let reader = IndexReader::new(
             pool.clone(),
             storage::WikiKey::new(project, wiki_id.as_str()),
-        );
+        )
+        .with_dense(bench_dense()?);
         let params = Hybrid {
             limit,
             fts_pool: 30,

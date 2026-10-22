@@ -1,3 +1,11 @@
+-- REWRITTEN (#1359, pgvector removal). The released text of this file has
+-- the checksum e36c440fb1c6d43c2900931f94f4f1c1ea023359c9e9ffbddd93e191efaf2b7e;
+-- the engine's migration runner accepts it for a database that applied it
+-- (`storage::migrate::REWRITTEN`). The released text staged dense vectors in
+-- a `deepwiki_build.wiki_node_embeddings` table of type `vector`; a build
+-- keeps its vectors in memory and writes them to elitea-vector now, so this
+-- text no longer creates that table (0008 drops it where it exists).
+--
 -- The build space: where a generation stages its index before publishing it.
 --
 -- ADR-0026 decision 5. The owner decision is "no SQLite anywhere": the
@@ -106,16 +114,6 @@ CREATE UNLOGGED TABLE IF NOT EXISTS deepwiki_build.wiki_edges (
 
 CREATE INDEX IF NOT EXISTS idx_build_edges_target
     ON deepwiki_build.wiki_edges (build_id, target_id);
-
--- The staged copy of `wiki_node_embeddings`. No dimension, as in 0001.
-CREATE UNLOGGED TABLE IF NOT EXISTS deepwiki_build.wiki_node_embeddings (
-    build_id  TEXT   NOT NULL,
-    node_id   TEXT   NOT NULL,
-    embedding VECTOR NOT NULL,
-    PRIMARY KEY (build_id, node_id),
-    FOREIGN KEY (build_id, node_id)
-        REFERENCES deepwiki_build.wiki_nodes (build_id, node_id) ON DELETE CASCADE
-);
 
 -- The standalone BM25 index's input, per staged node.
 --

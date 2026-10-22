@@ -67,7 +67,10 @@ async fn publish_version(space: &BuildSpace, wiki: &str, tag: &str, count: usize
     build.stage_nodes(nodes).await.expect("nodes");
     build.stage_edges(&edges).await.expect("edges");
     build
-        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .stage_embeddings(
+            common::TEST_MODEL,
+            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
         .await
         .expect("embeddings");
     build
@@ -77,13 +80,14 @@ async fn publish_version(space: &BuildSpace, wiki: &str, tag: &str, count: usize
 }
 
 /// Everything a reader can count about one wiki, in ONE statement (one
-/// snapshot under READ COMMITTED).
+/// snapshot under READ COMMITTED). `vectors` is 1 when the wiki names an
+/// active vector generation (the vectors are in the dense store).
 async fn observe(pool: &PgPool, wiki: &str) -> (i64, i64, i64, i64, i64, i64) {
     let row = sqlx::query(
         "SELECT \
            (SELECT count(*) FROM wiki_nodes WHERE wiki_id = $1) AS nodes, \
            (SELECT count(*) FROM wiki_edges WHERE wiki_id = $1) AS edges, \
-           (SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = $1) AS vectors, \
+           (SELECT count(*) FROM wikis WHERE wiki_id = $1 AND active_generation IS NOT NULL) AS vectors, \
            (SELECT count(*) FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = 'fts') AS fts_docs, \
            (SELECT coalesce(max(doc_count), -1)::bigint FROM wiki_bm25_meta \
               WHERE wiki_id = $1 AND branch = 'fts') AS fts, \
@@ -108,12 +112,13 @@ async fn observe(pool: &PgPool, wiki: &str) -> (i64, i64, i64, i64, i64, i64) {
 /// alternating between two versions of different sizes; every observation
 /// must be exactly one whole version.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // the readers, the publishes, the checks
 async fn readers_never_see_a_partial_index() {
     let Some(pool) = common::fresh_database("publish_atomic").await else {
         return;
     };
     let wiki = "acme--atomic--main";
-    let space = BuildSpace::new(pool.clone(), "publisher");
+    let (space, store) = common::dense_space(&pool, "publisher");
     let (alpha, beta) = (3_000, 5_000);
     publish_version(&space, wiki, "alpha", alpha).await;
     let full = |count: usize, alpha_nodes: usize| {
@@ -121,7 +126,7 @@ async fn readers_never_see_a_partial_index() {
         (
             n,
             n - 1,
-            n,
+            1,
             n,
             n,
             i64::try_from(alpha_nodes).expect("small"),
@@ -135,8 +140,9 @@ async fn readers_never_see_a_partial_index() {
     for reader in 0..3 {
         let pool = pool.clone();
         let stop = Arc::clone(&stop);
+        let dense = common::dense(&store);
         readers.push(tokio::spawn(async move {
-            let db = UnifiedDb::new(pool.clone(), common::key(wiki));
+            let db = UnifiedDb::new(pool.clone(), common::key(wiki)).with_dense(dense);
             let mut seen = [0_usize; 2];
             while !stop.load(Ordering::Relaxed) {
                 if reader == 0 {
@@ -209,6 +215,11 @@ async fn readers_never_see_a_partial_index() {
         .await
         .expect("staged");
     assert_eq!((builds, staged), (0, 0));
+    // Each publish deleted the generations before it: the dense store holds
+    // the last version's vectors only (the last round published alpha).
+    let generations = store.generations(&common::key(wiki));
+    assert_eq!(generations.len(), 1, "{generations:?}");
+    assert_eq!(generations[0].1, alpha);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -217,9 +228,10 @@ async fn a_failed_publish_leaves_the_live_index_untouched() {
         return;
     };
     let wiki = "acme--refuse--main";
-    let space = BuildSpace::new(pool.clone(), "publisher");
+    let (space, store) = common::dense_space(&pool, "publisher");
     publish_version(&space, wiki, "alpha", 50).await;
     let before = observe(&pool, wiki).await;
+    let live_generations = store.generations(&common::key(wiki));
 
     // An empty build is never published over a possibly good one.
     let mut empty = space.begin(&common::key(wiki)).await.expect("begin");
@@ -245,21 +257,199 @@ async fn a_failed_publish_leaves_the_live_index_untouched() {
         matches!(&refused, Err(StorageError::Publish(m)) if m.contains("bad.py::f") && m.contains("non-finite")),
         "{refused:?}"
     );
-    // A failing statement inside the transaction rolls everything back: an
-    // embedding for a node the build does not have.
+    // An embedding for a node the build does not have is refused, and so
+    // is another dimension than the build's first vectors.
+    let (beta_nodes, beta_vectors) = version("beta", 5);
     build
-        .stage_nodes(version("beta", 5).0)
+        .stage_nodes(beta_nodes)
         .await
         .expect("stage after a refused COPY");
     let orphan = build
-        .stage_embeddings([("not-a-node", [1.0; DIM].as_slice())])
+        .stage_embeddings(common::TEST_MODEL, [("not-a-node", [1.0; DIM].as_slice())])
         .await;
     assert!(
-        matches!(orphan, Err(StorageError::Database(_))),
+        matches!(&orphan, Err(StorageError::Publish(m)) if m.contains("not-a-node")),
         "{orphan:?}"
     );
+    build
+        .stage_embeddings(
+            common::TEST_MODEL,
+            [(beta_vectors[0].0.as_str(), beta_vectors[0].1.as_slice())],
+        )
+        .await
+        .expect("a vector");
+    let other = build
+        .stage_embeddings(
+            common::TEST_MODEL,
+            [(beta_vectors[1].0.as_str(), [1.0; 3].as_slice())],
+        )
+        .await;
+    assert!(
+        matches!(&other, Err(StorageError::Publish(m)) if m.contains("dimensions")),
+        "{other:?}"
+    );
+    // The build wrote one vector under its own generation, which no reader
+    // names; abandoning it deletes that generation.
+    assert_eq!(store.generations(&common::key(wiki)).len(), 2);
     build.abandon().await.expect("abandon");
     assert_eq!(observe(&pool, wiki).await, before);
+    assert_eq!(store.generations(&common::key(wiki)), live_generations);
+
+    // elitea-vector refusing the build's vectors fails the staging; the
+    // live index and its vectors stay.
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
+    build
+        .stage_nodes(version("beta", 5).0)
+        .await
+        .expect("nodes");
+    store.set_unavailable(true);
+    let refused = build
+        .stage_embeddings(
+            common::TEST_MODEL,
+            beta_vectors
+                .iter()
+                .map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
+        .await;
+    assert!(
+        matches!(&refused, Err(StorageError::Vector(m)) if m.contains("elitea-vector")),
+        "{refused:?}"
+    );
+    store.set_unavailable(false);
+    build.abandon().await.expect("abandon");
+    assert_eq!(observe(&pool, wiki).await, before);
+    assert_eq!(store.generations(&common::key(wiki)), live_generations);
+}
+
+/// The publish flips `wikis.active_generation` to the build's generation in
+/// the same transaction as the rows, and only after the commit deletes the
+/// namespace's other generations (an abandoned build's included). A publish
+/// that fails keeps the previous generation active.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_publish_flips_the_active_generation_and_cleans_the_old_ones() {
+    let Some(pool) = common::fresh_database("publish_generations").await else {
+        return;
+    };
+    let wiki = "acme--generations--main";
+    let key = common::key(wiki);
+    let (space, store) = common::dense_space(&pool, "publisher");
+    let active = |pool: PgPool| async move {
+        sqlx::query_as::<_, (Option<String>, Option<String>, Option<i32>)>(
+            "SELECT active_generation, embedding_model, embedding_dim FROM wikis WHERE wiki_id = $1",
+        )
+        .bind(wiki)
+        .fetch_one(&pool)
+        .await
+        .expect("wikis row")
+    };
+
+    publish_version(&space, wiki, "alpha", 10).await;
+    let (first, model, dim) = active(pool.clone()).await;
+    let first = first.expect("an active generation");
+    assert_eq!(model.as_deref(), Some(common::TEST_MODEL));
+    assert_eq!(dim, Some(i32::try_from(DIM).expect("small")));
+    assert_eq!(store.generations(&key), vec![(first.clone(), 10)]);
+
+    // A build that wrote its vectors and then failed its publish: the old
+    // generation stays active, the new one is never searched.
+    let (nodes, vectors) = version("beta", 4);
+    let mut failing = space.begin(&key).await.expect("begin");
+    let failing_id = failing.build_id().to_owned();
+    failing.stage_nodes(nodes).await.expect("nodes");
+    failing
+        .stage_embeddings(
+            common::TEST_MODEL,
+            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
+        .await
+        .expect("embeddings");
+    let refused = failing
+        .publish(&WikiRecord {
+            embedding_model: Some("another-model".into()),
+            ..WikiRecord::default()
+        })
+        .await;
+    assert!(
+        matches!(refused, Err(StorageError::Publish(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        active(pool.clone()).await.0.as_deref(),
+        Some(first.as_str())
+    );
+    // Not abandoned (a crashed worker): its generation is left behind.
+    drop(failing);
+    assert_eq!(store.generations(&key).len(), 2);
+    let db = UnifiedDb::new(pool.clone(), key.clone()).with_dense(common::dense(&store));
+    let hits = db
+        .reader()
+        .search_dense(&vectors[0].1, 50)
+        .await
+        .expect("dense");
+    assert!(
+        hits.iter().all(|h| h.node_id.starts_with("alpha/")),
+        "a reader searched a generation that is not active: {hits:?}"
+    );
+
+    // The next publish activates its own generation and deletes both the
+    // previous one and the left one.
+    publish_version(&space, wiki, "beta", 6).await;
+    let second = active(pool.clone()).await.0.expect("active");
+    assert_ne!(second, first);
+    assert_ne!(second, failing_id);
+    assert_eq!(store.generations(&key), vec![(second, 6)]);
+    assert!(store.calls().contains(&"delete"));
+}
+
+/// When elitea-vector cannot be reached the hybrid search answers with the
+/// lexical branch alone, and says so in the log; it does not fail.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreachable_vector_store_degrades_to_lexical() {
+    let Some(pool) = common::fresh_database("publish_degrade").await else {
+        return;
+    };
+    let wiki = "acme--degrade--main";
+    let (space, store) = common::dense_space(&pool, "publisher");
+    publish_version(&space, wiki, "alpha", 30).await;
+    let db = UnifiedDb::new(pool.clone(), common::key(wiki)).with_dense(common::dense(&store));
+    assert!(db.vec_available().await.expect("vec"));
+    let fused = db
+        .search_hybrid(
+            "common",
+            Some(&[1.0; DIM]),
+            &Scope::default(),
+            &Hybrid::default(),
+        )
+        .await
+        .expect("search");
+    // Every dense hit is also a lexical hit here, so the rows keep the FTS
+    // fields; the dense branch shows in the fused score (more than the FTS
+    // weight alone can give).
+    let lexical_only_best = 0.4 / 61.0;
+    assert!(store.calls().contains(&"search"));
+    assert!(fused[0].scores.combined_score.expect("score") > lexical_only_best);
+
+    store.set_unavailable(true);
+    let lexical = db
+        .search_hybrid(
+            "common",
+            Some(&[1.0; DIM]),
+            &Scope::default(),
+            &Hybrid::default(),
+        )
+        .await
+        .expect("a search without elitea-vector still answers");
+    assert_eq!(lexical.len(), 20);
+    assert!(lexical.iter().all(|r| r.scores.vec_distance.is_none()));
+    assert!(
+        lexical
+            .iter()
+            .all(|r| r.scores.combined_score.expect("score") <= lexical_only_best)
+    );
+    assert!(lexical.iter().all(|r| r.scores.fts_rank.is_some()));
+    // Without a dense store at all, no dense branch either.
+    let plain = UnifiedDb::new(pool, common::key(wiki));
+    assert!(!plain.vec_available().await.expect("vec"));
 }
 
 fn node(path: &str, name: &str, kind: &'static str, text: &str) -> NodeData {
@@ -528,40 +718,45 @@ async fn the_wikis_row_follows_the_generation_result() {
     assert_eq!(db.edge_count().await.expect("count"), 3);
 }
 
-/// Dense vectors go in as decimal text and come back as `float4`: the same
-/// rounding the Python publisher's `_vector_literal` got.
+/// Dense vectors are stored as `f32` (pgvector's `float4` too) under the
+/// build's generation, and a search of the same vector finds it at
+/// distance 0.
 #[tokio::test(flavor = "multi_thread")]
 async fn vectors_round_trip_as_float4() {
     let Some(pool) = common::fresh_database("publish_vectors").await else {
         return;
     };
     let wiki = "acme--vectors--main";
-    let space = BuildSpace::new(pool.clone(), "vectors");
+    let (space, store) = common::dense_space(&pool, "vectors");
     let (nodes, _) = version("alpha", 1);
     let vector = [0.1_f64, -2.5, 1e-7, 0.333_333_333_333_333_3];
     let mut build = space.begin(&common::key(wiki)).await.expect("begin");
+    let generation = build.generation().to_owned();
     build.stage_nodes(nodes.clone()).await.expect("nodes");
     build
-        .stage_embeddings([(nodes[0].node_id.as_str(), vector.as_slice())])
+        .stage_embeddings(
+            common::TEST_MODEL,
+            [(nodes[0].node_id.as_str(), vector.as_slice())],
+        )
         .await
         .expect("embeddings");
     build
         .publish(&WikiRecord::default())
         .await
         .expect("publish");
-    let db = UnifiedDb::new(pool, common::key(wiki));
+    let db = UnifiedDb::new(pool, common::key(wiki)).with_dense(common::dense(&store));
     assert!(db.vec_available().await.expect("vec"));
-    let stored = db
-        .get_embedding(&nodes[0].node_id)
-        .await
-        .expect("get")
+    let stored = store
+        .vector(&common::key(wiki), &generation, &nodes[0].node_id)
         .expect("exists");
     #[allow(clippy::cast_possible_truncation)]
     let expected: Vec<f32> = vector.iter().map(|v| *v as f32).collect();
     assert_eq!(stored, expected);
     let hits = db.reader().search_dense(&vector, 5).await.expect("dense");
     assert_eq!(hits.len(), 1);
-    assert!(hits[0].scores.vec_distance.expect("distance").abs() < 1e-12);
+    assert!(hits[0].scores.vec_distance.expect("distance").abs() < 1e-6);
+    let stats = db.reader().stats().await.expect("stats");
+    assert_eq!(stats.vector_count, 1);
 }
 
 /// A whitespace-free run longer than a B-tree key allows (a minified line)

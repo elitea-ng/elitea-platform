@@ -169,12 +169,24 @@ pub async fn generate_wiki(
             storage::DSN_ENV
         )));
     };
+    // The build writes its vectors to elitea-vector with the invocation's
+    // callback bearer; a configured store that cannot be used refuses the
+    // run before any work (an index without its vectors would answer
+    // lexically for ever).
+    let dense = storage::dense::DenseAccess::resolve(settings.vector.as_ref(), arguments)
+        .required()
+        .map_err(|why| {
+            runtime(format!(
+                "Repository indexing failed: the wiki's vectors cannot be written to elitea-vector: {why}"
+            ))
+        })?;
     let pool = storage::worker_pool(url.expose(), POOL_CONNECTIONS)
         .map_err(|error| value_error(error.to_string()))?;
     let mut slot: Option<Build> = None;
     let outcome = Pipeline {
         request: &request,
         environment,
+        dense,
         settings,
         context,
         job,
@@ -196,6 +208,8 @@ pub async fn generate_wiki(
 struct Pipeline<'a> {
     request: &'a GenerateRequest,
     environment: Environment,
+    /// Where the build writes its vectors.
+    dense: Option<storage::dense::DenseIndex>,
     settings: &'a Settings,
     context: &'a Context,
     job: &'a Job<'a>,
@@ -347,7 +361,8 @@ impl Pipeline<'_> {
         // The build: stage, embed.
         let mut space = BuildSpace::new(pool.clone(), settings.build_owner.clone())
             .with_stale_after(settings.build_stale_after)
-            .with_publish_settings(settings.publish);
+            .with_publish_settings(settings.publish)
+            .with_dense(self.dense.clone());
         if let Some(boot_id) = self.job.boot_id {
             space = space.with_boot_id(boot_id);
         }

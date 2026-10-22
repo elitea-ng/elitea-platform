@@ -1,9 +1,11 @@
 //! The build space: stage, publish, reconcile (ADR-0026 decision 5).
 //!
 //! A generation opens a [`Build`] for one project's wiki (a [`WikiKey`]:
-//! `(project_id, wiki_id)`, migration 0005), stages the code graph
-//! (and later its embeddings) into the `deepwiki_build` tables with `COPY`,
-//! and publishes. [`Build::publish`] is ONE transaction:
+//! `(project_id, wiki_id)`, migration 0005), stages the code graph into the
+//! `deepwiki_build` tables with `COPY`, writes its dense vectors to
+//! elitea-vector under the build's own generation (the build id,
+//! [`crate::storage::dense`]) and keeps them in memory for Phase 2, and
+//! publishes. [`Build::publish`] is ONE transaction:
 //!
 //! 1. lock the build row (a build the sweep removed cannot publish; the
 //!    sweep skips a locked build);
@@ -15,13 +17,23 @@
 //!    too), which bounds the `work_mem` the publishes take together;
 //! 3. set `statement_timeout`, `lock_timeout` and `work_mem` for the rest
 //!    of the transaction ([`PublishSettings`]);
-//! 4. upsert the `wikis` row;
+//! 4. upsert the `wikis` row, with `active_generation` = this build's id
+//!    when it wrote vectors (NULL when it wrote none) and the model and
+//!    dimension of those vectors (migrations 0006, 0008);
 //! 5. refuse an empty build, before anything is deleted;
-//! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`,
-//!    embeddings, edges, nodes (rows of other projects are not touched);
-//! 7. `INSERT ... SELECT` the staged nodes, edges and embeddings;
+//! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`, edges,
+//!    nodes (rows of other projects are not touched);
+//! 7. `INSERT ... SELECT` the staged nodes and edges;
 //! 8. write the `wiki_bm25_*` statistics of the `'fts'` branch;
 //! 9. delete the build row, which cascades to every staged row.
+//!
+//! The vectors were written BEFORE the transaction, under a generation no
+//! reader names; the commit flips `active_generation` together with the
+//! nodes and edges, so a reader (which reads the generation in its own
+//! snapshot) searches the old generation with the old nodes or the new one
+//! with the new nodes, never a mix. After the commit the namespace's other
+//! generations are deleted (`generations_except`), best effort: a failure
+//! is logged and the next publish of the wiki deletes them.
 //!
 //! After the commit, the live tables are `ANALYZE`d, best effort: one
 //! short transaction per table with a short `lock_timeout`, skipped (and
@@ -53,15 +65,25 @@
 //! from a background task every [`heartbeat_interval`], so a long model
 //! call between staging and the publish does not get it swept; the task
 //! stops when the build is dropped, published or abandoned.
+//!
+//! The vectors of an abandoned build: [`Build::abandon`] deletes its
+//! generation from elitea-vector, and so does the worker parent's
+//! clean-up of a killed child ([`delete_build`] returns the wiki it
+//! belonged to). The reconciliation and the sweep have no caller bearer, so
+//! they cannot; they log the builds they removed, and the generation's
+//! points (never searched) go with the wiki's next publish, its deletion or
+//! its project's (see [`crate::storage::dense`]).
 
 use crate::graph::{CodeGraph, edge_row, node_row};
 use crate::storage::copy::CopyWriter;
+use crate::storage::dense::{self, DenseIndex, Space};
 use crate::storage::rows::{IndexEdge, IndexNode, collapse_edges};
 use crate::storage::text::{BRANCH_FTS, FTS_B, FTS_K1};
 use crate::storage::{Result, StorageError, WikiKey};
 use serde_json::Value;
 use sqlx::Connection;
 use sqlx::postgres::{PgConnection, PgPool};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -201,6 +223,8 @@ pub struct BuildSpace {
     boot_id: String,
     stale_after: Duration,
     publish: PublishSettings,
+    /// Where the builds write their vectors.
+    dense: Option<DenseIndex>,
 }
 
 /// Row counts a stage call wrote.
@@ -215,6 +239,8 @@ pub struct StageCounts {
 pub struct PublishCounts {
     pub nodes: u64,
     pub edges: u64,
+    /// The vectors the build holds (written to elitea-vector before the
+    /// transaction; none is a row of this database).
     pub embeddings: u64,
     pub fts_documents: u64,
     /// Every live table was `ANALYZE`d after the commit. `false` when one
@@ -246,7 +272,9 @@ pub struct WikiRecord {
     /// dimension the model client's first response established (migration
     /// 0006). Unlike the fields above, `None` is written as NULL: the
     /// publish replaces the wiki's embeddings, so a stored model would
-    /// describe vectors that are gone.
+    /// describe vectors that are gone. A build that holds vectors writes the
+    /// model and dimension it staged them with
+    /// ([`Build::stage_embeddings`]); a different value here is refused.
     pub embedding_model: Option<String>,
     pub embedding_dim: Option<i32>,
 }
@@ -310,7 +338,17 @@ impl BuildSpace {
             boot_id: process_boot_id().to_owned(),
             stale_after: DEFAULT_STALE_AFTER,
             publish: PublishSettings::default(),
+            dense: None,
         }
+    }
+
+    /// The dense store the builds this space opens write their vectors to.
+    /// Without one a build keeps its vectors in memory only (Phase 2 reads
+    /// them) and publishes no active generation.
+    #[must_use]
+    pub fn with_dense(mut self, dense: Option<DenseIndex>) -> Self {
+        self.dense = dense;
+        self
     }
 
     /// Another boot id (a test stands for a restarted process with it).
@@ -379,6 +417,8 @@ impl BuildSpace {
             beat_every,
             beat: Some(beat),
             published: false,
+            dense: self.dense.clone(),
+            vectors: BuildVectors::default(),
         })
     }
 
@@ -393,15 +433,17 @@ impl BuildSpace {
     ///
     /// [`StorageError::Database`].
     pub async fn reconcile_owner(&self) -> Result<u64> {
-        let done = sqlx::query(
+        let removed: Vec<(String, i32, String)> = sqlx::query_as(
             "DELETE FROM deepwiki_build.builds \
-             WHERE owner = $1 AND boot_id IS DISTINCT FROM $2",
+             WHERE owner = $1 AND boot_id IS DISTINCT FROM $2 \
+             RETURNING build_id, project_id, wiki_id",
         )
         .bind(&self.owner)
         .bind(&self.boot_id)
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(done.rows_affected())
+        log_orphaned_generations("reconciliation", &removed);
+        Ok(removed.len() as u64)
     }
 
     /// The periodic sweep: delete every build, of any owner, whose
@@ -414,16 +456,35 @@ impl BuildSpace {
     ///
     /// [`StorageError::Database`].
     pub async fn sweep(&self, stale_after: Duration) -> Result<u64> {
-        let done = sqlx::query(
+        let removed: Vec<(String, i32, String)> = sqlx::query_as(
             "DELETE FROM deepwiki_build.builds WHERE build_id IN ( \
                  SELECT build_id FROM deepwiki_build.builds \
                  WHERE heartbeat_at < now() - make_interval(secs => $1) \
-                 FOR UPDATE SKIP LOCKED)",
+                 FOR UPDATE SKIP LOCKED) \
+             RETURNING build_id, project_id, wiki_id",
         )
         .bind(stale_after.as_secs_f64())
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(done.rows_affected())
+        log_orphaned_generations("sweep", &removed);
+        Ok(removed.len() as u64)
+    }
+}
+
+/// The reconciliation and the sweep remove builds without a caller bearer,
+/// so the vectors a removed build wrote (its generation) stay in
+/// elitea-vector. They are never searched (no `wikis` row names them) and
+/// are deleted by the wiki's next publish (`generations_except`), its
+/// deletion or its project's; this records which they are.
+fn log_orphaned_generations(by: &str, removed: &[(String, i32, String)]) {
+    for (build, project, wiki) in removed {
+        tracing::info!(
+            by,
+            build = %build,
+            project,
+            wiki = %wiki,
+            "removed an abandoned build; its vector generation stays in elitea-vector until the wiki is next published or deleted"
+        );
     }
 }
 
@@ -508,6 +569,73 @@ pub struct Build {
     /// `None` while a publish runs and after a publish succeeded.
     beat: Option<HeartbeatTask>,
     published: bool,
+    /// Where the vectors go; `None` keeps them in memory only.
+    dense: Option<DenseIndex>,
+    /// The vectors staged so far.
+    vectors: BuildVectors,
+}
+
+/// The vectors a build staged, in memory: Phase 2 reads them from here
+/// (no read-back from the store), node ids and one flat `f32` array,
+/// `dimension` values per node.
+#[derive(Debug, Default)]
+pub struct BuildVectors {
+    model: Option<String>,
+    space: Option<Space>,
+    ids: Vec<String>,
+    positions: HashMap<String, usize>,
+    values: Vec<f32>,
+    /// Points written to the dense store.
+    written: u64,
+}
+
+impl BuildVectors {
+    /// The vectors held.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether no vector is held.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// The dimension, 0 before the first vector.
+    #[must_use]
+    pub fn dimension(&self) -> usize {
+        self.space
+            .as_ref()
+            .map_or(0, |space| space.dimension as usize)
+    }
+
+    /// The model the vectors were made with.
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// The node ids, in staging order.
+    #[must_use]
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// The vector of `node_id`.
+    #[must_use]
+    pub fn get(&self, node_id: &str) -> Option<&[f32]> {
+        let dimension = self.dimension();
+        self.positions
+            .get(node_id)
+            .map(|position| &self.values[position * dimension..(position + 1) * dimension])
+    }
+
+    /// Every vector, flat, `dimension` values per id of [`Self::ids`].
+    #[must_use]
+    pub fn values(&self) -> &[f32] {
+        &self.values
+    }
 }
 
 /// Rows per cluster-column `UPDATE` ([`Build::set_clusters`]).
@@ -517,13 +645,16 @@ const CLUSTER_ROUND: usize = 10_000;
 /// a [`DELETE_LOCK_TIMEOUT`] and a [`DELETE_STATEMENT_TIMEOUT`]. The
 /// generation worker's parent calls this after the child ended, so a child
 /// that was killed before it could abandon its build leaves no staging
-/// rows. Returns whether a build was deleted (a published or abandoned
-/// build is already gone).
+/// rows. Returns the wiki the build belonged to when a build was deleted
+/// (`None`: a published or abandoned build is already gone), so the caller
+/// can delete the build's vector generation too
+/// ([`dense::DenseIndex::delete_generations`]); a published build's
+/// generation is live and is never touched.
 ///
 /// # Errors
 ///
 /// [`StorageError::Database`].
-pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<bool> {
+pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<Option<WikiKey>> {
     let mut tx = pool.begin().await?;
     // Bounded: a killed child's backend can still hold the build row (a
     // publish's `FOR UPDATE`) until the server notices the client is gone.
@@ -536,12 +667,16 @@ pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<bool> {
         ],
     )
     .await?;
-    let done = sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
-        .bind(build_id)
-        .execute(&mut *tx)
-        .await?;
+    let deleted: Option<(i32, String)> = sqlx::query_as(
+        "DELETE FROM deepwiki_build.builds WHERE build_id = $1 RETURNING project_id, wiki_id",
+    )
+    .bind(build_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(done.rows_affected() > 0)
+    Ok(deleted.and_then(|(project, wiki)| {
+        crate::storage::ProjectScope::new(project).map(|scope| WikiKey::new(scope, wiki))
+    }))
 }
 
 /// `lock_timeout` of [`delete_build`] (15 s): longer than a dead worker's
@@ -560,21 +695,14 @@ const NODE_COPY: &str = "COPY deepwiki_build.wiki_nodes (build_id, node_id, rel_
      is_test) FROM STDIN";
 const EDGE_COPY: &str = "COPY deepwiki_build.wiki_edges (build_id, source_id, target_id, \
      rel_type, edge_class, weight) FROM STDIN";
-const EMBEDDING_COPY: &str =
-    "COPY deepwiki_build.wiki_node_embeddings (build_id, node_id, embedding) FROM STDIN";
 
 /// The staged tables, `ANALYZE`d before a publish reads them.
-const STAGING_TABLES: [&str; 3] = [
-    "deepwiki_build.wiki_nodes",
-    "deepwiki_build.wiki_edges",
-    "deepwiki_build.wiki_node_embeddings",
-];
+const STAGING_TABLES: [&str; 2] = ["deepwiki_build.wiki_nodes", "deepwiki_build.wiki_edges"];
 
 /// The live tables, `ANALYZE`d after a publish commits.
-pub const LIVE_TABLES: [&str; 7] = [
+pub const LIVE_TABLES: [&str; 6] = [
     "wiki_nodes",
     "wiki_edges",
-    "wiki_node_embeddings",
     "wiki_bm25_meta",
     "wiki_bm25_docs",
     "wiki_bm25_terms",
@@ -685,31 +813,144 @@ impl Build {
         writer.finish().await
     }
 
-    /// Stage dense vectors, keyed by node id. Each vector is `f64` as the
-    /// gateway's JSON carries it; pgvector stores `float4`, rounded from the
-    /// same decimal text the Python publisher sent.
+    /// Stage dense vectors made with `model`, keyed by node id: keep them
+    /// in memory (Phase 2 reads them, [`Build::vectors`]) and write them to
+    /// the dense store under this build's generation, in rounds of at most
+    /// 512, BEFORE the publish. Each vector is `f64` as the model client
+    /// answers it, stored as `f32` (what pgvector stored too).
+    ///
+    /// Every vector of a build has the same dimension and model, and names
+    /// a node this build staged, once.
     ///
     /// # Errors
     ///
-    /// [`StorageError::Publish`] for an empty or non-finite vector;
-    /// [`StorageError::Database`], e.g. for a node that was not staged.
+    /// [`StorageError::Publish`] for an empty or non-finite vector, another
+    /// dimension or model than the build's, a node that was not staged or
+    /// was given a vector already; [`StorageError::Vector`] when the dense
+    /// store refused the write (its message, never a bearer);
+    /// [`StorageError::Database`].
     pub async fn stage_embeddings<'a>(
         &mut self,
+        model: &str,
         embeddings: impl IntoIterator<Item = (&'a str, &'a [f64])>,
     ) -> Result<u64> {
         self.heartbeat().await?;
-        let mut connection = self.pool.acquire().await?;
-        let mut writer = CopyWriter::start(&mut connection, EMBEDDING_COPY).await?;
-        for (node_id, vector) in embeddings {
-            writer.text(&self.id);
-            writer.text(node_id);
-            if let Err(error) = writer.vector(vector, node_id) {
-                writer.abort("embedding encoding failed").await?;
-                return Err(error);
-            }
-            writer.end_row().await?;
+        let rows: Vec<(&str, &[f64])> = embeddings.into_iter().collect();
+        if rows.is_empty() {
+            return Ok(0);
         }
-        writer.finish().await
+        match self.vectors.model.as_deref() {
+            None => self.vectors.model = Some(model.to_owned()),
+            Some(staged) if staged == model => {}
+            Some(staged) => {
+                return Err(StorageError::Publish(format!(
+                    "build {} holds vectors of the model '{staged}'; vectors of '{model}' cannot join them",
+                    self.id
+                )));
+            }
+        }
+        let mut converted: Vec<(&str, Vec<f32>)> = Vec::with_capacity(rows.len());
+        for (node_id, vector) in &rows {
+            if vector.is_empty() {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: an empty embedding cannot be stored"
+                )));
+            }
+            if vector.iter().any(|value| !value.is_finite()) {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: the embedding has a non-finite component"
+                )));
+            }
+            #[allow(clippy::cast_possible_truncation)] // f64 -> f32, as pgvector's float4
+            converted.push((node_id, vector.iter().map(|v| *v as f32).collect()));
+        }
+        let dimension = if let Some(space) = &self.vectors.space {
+            space.dimension as usize
+        } else {
+            let space = Space::new(model, converted[0].1.len())
+                .map_err(|e| StorageError::Publish(e.to_string()))?;
+            let dimension = space.dimension as usize;
+            self.vectors.space = Some(space);
+            dimension
+        };
+        let mut seen = std::collections::HashSet::with_capacity(converted.len());
+        for (node_id, vector) in &converted {
+            if vector.len() != dimension {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: {} dimensions, the build's vectors have {dimension}",
+                    vector.len()
+                )));
+            }
+            if self.vectors.positions.contains_key(*node_id) || !seen.insert(*node_id) {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: the node already has a vector in build {}",
+                    self.id
+                )));
+            }
+        }
+        let ids: Vec<&str> = converted.iter().map(|(id, _)| *id).collect();
+        self.check_staged(&ids).await?;
+        if let (Some(store), Some(space)) = (&self.dense, &self.vectors.space) {
+            let generation =
+                dense::generation_of(&self.id).map_err(|e| StorageError::Vector(e.to_string()))?;
+            let points: Vec<(&str, &[f32])> = converted
+                .iter()
+                .map(|(id, vector)| (*id, vector.as_slice()))
+                .collect();
+            self.vectors.written += store
+                .upsert(&self.key, &generation, space, &points)
+                .await
+                .map_err(|e| {
+                    StorageError::Vector(format!(
+                        "writing the vectors to elitea-vector failed: {e}"
+                    ))
+                })?;
+        }
+        for (node_id, vector) in converted {
+            self.vectors
+                .positions
+                .insert(node_id.to_owned(), self.vectors.ids.len());
+            self.vectors.ids.push(node_id.to_owned());
+            self.vectors.values.extend_from_slice(&vector);
+        }
+        Ok(rows.len() as u64)
+    }
+
+    /// Vectors only for staged nodes, as the staged vector table's foreign
+    /// key required (Phase 2 ranks nodes, never bare vectors).
+    async fn check_staged(&self, ids: &[&str]) -> Result<()> {
+        let staged: Vec<String> = sqlx::query_scalar(
+            "SELECT node_id FROM deepwiki_build.wiki_nodes WHERE build_id = $1 AND node_id = ANY($2)",
+        )
+        .bind(&self.id)
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        if staged.len() == ids.len() {
+            return Ok(());
+        }
+        let staged: std::collections::HashSet<&str> = staged.iter().map(String::as_str).collect();
+        let missing = ids
+            .iter()
+            .find(|id| !staged.contains(**id))
+            .copied()
+            .unwrap_or_default();
+        Err(StorageError::Publish(format!(
+            "embedding {missing}: build {} staged no such node",
+            self.id
+        )))
+    }
+
+    /// The vectors staged so far.
+    #[must_use]
+    pub fn vectors(&self) -> &BuildVectors {
+        &self.vectors
+    }
+
+    /// The generation the build's vectors are written under: the build id.
+    #[must_use]
+    pub fn generation(&self) -> &str {
+        &self.id
     }
 
     /// Replace the staged edges with `edges` (Phase 2's
@@ -824,6 +1065,16 @@ impl Build {
             .bind(&self.id)
             .execute(&self.pool)
             .await?;
+        // The generation's points, best effort: a build that wrote none
+        // costs one idempotent delete. A failure leaves them to the wiki's
+        // next publish (they are never searched).
+        if let Some(store) = &self.dense
+            && let Err(error) = store
+                .delete_generations(&self.key, vec![self.id.clone()])
+                .await
+        {
+            tracing::warn!(build = %self.id, %error, "could not delete the abandoned build's vectors; the wiki's next publish removes them");
+        }
         Ok(())
     }
 
@@ -885,10 +1136,14 @@ impl Build {
         let key = &self.key;
         let wiki = key.wiki_id();
         let project = key.project_id();
+        let record = self.record_with_vectors(record)?;
+        // The generation readers search once this commits: this build's,
+        // when it wrote its vectors to the dense store.
+        let active_generation = (self.dense.is_some() && !self.vectors.is_empty()).then_some(build);
         let mut tx = connection.begin().await?;
         enter_publish(&mut tx, &self.publish, build, key).await?;
 
-        upsert_wiki(&mut tx, key, record).await?;
+        upsert_wiki(&mut tx, key, &record, active_generation).await?;
 
         let staged: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM deepwiki_build.wiki_nodes WHERE build_id = $1",
@@ -932,17 +1187,7 @@ impl Build {
         .execute(&mut *tx)
         .await?
         .rows_affected();
-        let embeddings = sqlx::query(
-            "INSERT INTO wiki_node_embeddings (project_id, wiki_id, node_id, embedding) \
-             SELECT $3, $1, node_id, embedding \
-             FROM deepwiki_build.wiki_node_embeddings WHERE build_id = $2",
-        )
-        .bind(wiki)
-        .bind(build)
-        .bind(project)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let embeddings = self.vectors.len() as u64;
 
         // The postings (millions of rows for a large repository) are
         // inserted in key order, so the B-trees fill in order instead of at
@@ -955,6 +1200,15 @@ impl Build {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+
+        // The namespace's other generations: the previous publish's, and
+        // any abandoned build's. After the commit, so no reader of the
+        // previous snapshot loses its vectors before the flip; best effort.
+        if let Some(store) = &self.dense
+            && let Err(error) = store.delete_generations_except(key, build).await
+        {
+            tracing::warn!(build, wiki, project, %error, "could not delete the wiki's older vector generations; the next publish removes them");
+        }
 
         // Statistics that describe the new rows: the first searches after
         // a publish otherwise plan against the old row counts (measured: a
@@ -973,6 +1227,31 @@ impl Build {
             fts_documents,
             statistics_refreshed,
         })
+    }
+
+    /// `record` with the model and dimension of the build's vectors. A
+    /// build without vectors publishes the record's (normally none).
+    fn record_with_vectors(&self, record: &WikiRecord) -> Result<WikiRecord> {
+        let mut record = record.clone();
+        let (Some(model), dimension) = (self.vectors.model(), self.vectors.dimension()) else {
+            return Ok(record);
+        };
+        let dimension = i32::try_from(dimension).ok();
+        let model_differs = record
+            .embedding_model
+            .as_deref()
+            .is_some_and(|m| m != model);
+        let dimension_differs = record.embedding_dim.is_some_and(|d| Some(d) != dimension);
+        if model_differs || dimension_differs {
+            return Err(StorageError::Publish(format!(
+                "build {} holds vectors of '{model}' ({} dimensions); the record names another model or dimension",
+                self.id,
+                self.vectors.dimension()
+            )));
+        }
+        record.embedding_model = Some(model.to_owned());
+        record.embedding_dim = dimension;
+        Ok(record)
     }
 }
 
@@ -1001,10 +1280,6 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
             "DELETE FROM wiki_bm25_meta WHERE project_id = $1 AND wiki_id = $2",
         ),
         (
-            "embeddings",
-            "DELETE FROM wiki_node_embeddings WHERE project_id = $1 AND wiki_id = $2",
-        ),
-        (
             "edges",
             "DELETE FROM wiki_edges WHERE project_id = $1 AND wiki_id = $2",
         ),
@@ -1021,7 +1296,6 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
             .rows_affected();
         match table {
             "statistics" => removed.statistics += done,
-            "embeddings" => removed.embeddings += done,
             "edges" => removed.edges += done,
             _ => removed.nodes += done,
         }
@@ -1034,6 +1308,8 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
 pub struct LiveRows {
     pub nodes: u64,
     pub edges: u64,
+    /// Always 0: the vectors are in elitea-vector, not in this database.
+    /// Kept so the deletion results keep their shape.
     pub embeddings: u64,
     /// Rows of the four `wiki_bm25_*` tables together.
     pub statistics: u64,
@@ -1267,14 +1543,19 @@ async fn copy_nodes(
 /// `_update_registry`, in one static statement. A supplied field replaces
 /// the stored one; an absent one keeps it (or takes the column default on a
 /// new row). `updated_at` is set on every publish.
-async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) -> Result<()> {
+async fn upsert_wiki(
+    tx: &mut PgConnection,
+    key: &WikiKey,
+    record: &WikiRecord,
+    active_generation: Option<&str>,
+) -> Result<()> {
     sqlx::query(
         "INSERT INTO wikis (project_id, wiki_id, repo, branch, provider, host, display_name, \
              description, folder_path, commit_hash, canonical_repo_identifier, analysis_key, \
-             wiki_version_id, embedding_model, embedding_dim, updated_at) \
+             wiki_version_id, embedding_model, embedding_dim, active_generation, updated_at) \
          VALUES ($13, $1, COALESCE($2, $1), COALESCE($3, 'main'), COALESCE($4, 'github'), \
              COALESCE($5, 'github.com'), COALESCE($6, ''), COALESCE($7, ''), COALESCE($8, ''), \
-             $9, $10, $11, $12, $14, $15, now()) \
+             $9, $10, $11, $12, $14, $15, $16, now()) \
          ON CONFLICT (project_id, wiki_id) DO UPDATE SET \
              repo = COALESCE($2, wikis.repo), \
              branch = COALESCE($3, wikis.branch), \
@@ -1289,6 +1570,7 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
              wiki_version_id = COALESCE($12, wikis.wiki_version_id), \
              embedding_model = $14, \
              embedding_dim = $15, \
+             active_generation = $16, \
              updated_at = now()",
     )
     .bind(key.wiki_id())
@@ -1306,6 +1588,7 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
     .bind(key.project_id())
     .bind(record.embedding_model.as_deref())
     .bind(record.embedding_dim)
+    .bind(active_generation)
     .execute(&mut *tx)
     .await?;
     Ok(())
