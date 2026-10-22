@@ -34,8 +34,9 @@ use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 use tokio::net::UnixListener;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
@@ -99,6 +100,8 @@ pub trait Engine: Send + Sync + 'static {
 struct Shared<E> {
     engine: E,
     running: Mutex<HashMap<String, StopSignal>>,
+    /// Woken each time an invocation ends, for the drain.
+    ended: Notify,
 }
 
 impl<E> Shared<E> {
@@ -127,16 +130,30 @@ pub fn service_with_limit<E: Engine>(
     engine: E,
     max_invoke_bytes: usize,
 ) -> EngineServiceServer<Sidecar<E>> {
-    EngineServiceServer::new(Sidecar(Arc::new(Shared {
-        engine,
-        running: Mutex::new(HashMap::new()),
-    })))
-    .max_decoding_message_size(max_invoke_bytes)
-    .max_encoding_message_size(usize::MAX)
+    with_limit(Sidecar::new(engine), max_invoke_bytes)
+}
+
+fn with_limit<E: Engine>(
+    sidecar: Sidecar<E>,
+    max_invoke_bytes: usize,
+) -> EngineServiceServer<Sidecar<E>> {
+    EngineServiceServer::new(sidecar)
+        .max_decoding_message_size(max_invoke_bytes)
+        .max_encoding_message_size(usize::MAX)
 }
 
 /// The `EngineService` implementation over one [`Engine`].
 pub struct Sidecar<E>(Arc<Shared<E>>);
+
+impl<E> Sidecar<E> {
+    fn new(engine: E) -> Self {
+        Self(Arc::new(Shared {
+            engine,
+            running: Mutex::new(HashMap::new()),
+            ended: Notify::new(),
+        }))
+    }
+}
 
 /// One protocol event from the line a tool produced.
 fn event(line: &Line) -> InvokeEvent {
@@ -170,6 +187,7 @@ impl<E> Drop for StreamGuard<E> {
             self.stop.request();
         }
         self.shared.running().remove(&self.invocation_id);
+        self.shared.ended.notify_waiters();
     }
 }
 
@@ -295,6 +313,9 @@ pub async fn serve<E: Engine>(
 
 /// [`serve`] with an Invoke limit of `max_invoke_bytes`.
 ///
+/// [`serve`] and this function do not drain: the server stops when
+/// `shutdown` resolves. For a drain, use [`serve_with_options`].
+///
 /// # Errors
 ///
 /// The server's I/O failure.
@@ -304,9 +325,122 @@ pub async fn serve_with_limit<E: Engine>(
     max_invoke_bytes: usize,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    let options = ServeOptions {
+        max_invoke_bytes,
+        drain_timeout: Duration::ZERO,
+    };
+    serve_with_options(listener, engine, options, shutdown).await
+}
+
+/// The default drain deadline: 30 seconds, the default of the host
+/// (`<PREFIX>DRAIN_TIMEOUT_SECONDS` not set).
+pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How [`serve_with_options`] serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServeOptions {
+    /// The largest Invoke message the server reads.
+    pub max_invoke_bytes: usize,
+    /// How long the server continues to serve after the shutdown signal
+    /// while an invocation runs. Zero: stop at once.
+    pub drain_timeout: Duration,
+}
+
+impl Default for ServeOptions {
+    fn default() -> Self {
+        Self {
+            max_invoke_bytes: DEFAULT_INVOKE_BYTES,
+            drain_timeout: DEFAULT_DRAIN_TIMEOUT,
+        }
+    }
+}
+
+/// The drain deadline from the value of `<PREFIX>DRAIN_TIMEOUT_SECONDS`,
+/// the setting that the host in the same pod reads. Each engine reads the
+/// variable with its own prefix and gives the value here, so that the two
+/// containers use the same value. `None` or empty: [`DEFAULT_DRAIN_TIMEOUT`].
+///
+/// # Errors
+///
+/// A value that is not a whole number of seconds.
+pub fn parse_drain_timeout(value: Option<&str>) -> Result<Duration, String> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(DEFAULT_DRAIN_TIMEOUT),
+        Some(text) => text
+            .parse::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|_| format!("must be a whole number of seconds, got '{text}'")),
+    }
+}
+
+/// Serve `engine` on `listener`, with a drain after `shutdown` resolves.
+///
+/// The kubelet sends SIGTERM to the host and to this sidecar at the same
+/// time. The host continues to serve its running invocations for its drain
+/// time, and it calls this socket for them (Stop, Health, new streams). The
+/// container probe also connects to this socket. Thus, after `shutdown`, the
+/// server continues to serve normally and accepts new connections until no
+/// invocation runs (the `active` count of Health) or until
+/// `options.drain_timeout` ends. Only then does the graceful stop of tonic
+/// start: the server accepts no new connection, and the calls in progress
+/// complete.
+///
+/// # Errors
+///
+/// The server's I/O failure.
+pub async fn serve_with_options<E: Engine>(
+    listener: UnixListener,
+    engine: E,
+    options: ServeOptions,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    let sidecar = Sidecar::new(engine);
+    let shared = Arc::clone(&sidecar.0);
+    let drained = async move {
+        shutdown.await;
+        drain(&shared, options.drain_timeout).await;
+    };
     tonic::transport::Server::builder()
-        .add_service(service_with_limit(engine, max_invoke_bytes))
-        .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
+        .add_service(with_limit(sidecar, options.max_invoke_bytes))
+        .serve_with_incoming_shutdown(UnixListenerStream::new(listener), drained)
         .await
         .map_err(io::Error::other)
+}
+
+/// Wait until no invocation runs, or until `timeout` ends.
+async fn drain<E>(shared: &Shared<E>, timeout: Duration) {
+    if timeout.is_zero() {
+        return;
+    }
+    let running = shared.running().len();
+    if running == 0 {
+        return;
+    }
+    tracing::info!(
+        running,
+        timeout_seconds = timeout.as_secs(),
+        "shutdown signal: the engine continues to serve until its invocations end"
+    );
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        // Register for the wake-up before the count is read, so that an
+        // invocation that ends between the two is not missed.
+        let ended = shared.ended.notified();
+        tokio::pin!(ended);
+        ended.as_mut().enable();
+        if shared.running().is_empty() {
+            tracing::info!("drain complete: no invocation runs; the engine stops");
+            return;
+        }
+        tokio::select! {
+            () = &mut ended => {}
+            () = tokio::time::sleep_until(deadline) => {
+                tracing::warn!(
+                    running = shared.running().len(),
+                    "drain deadline: the engine stops while invocations run"
+                );
+                return;
+            }
+        }
+    }
 }

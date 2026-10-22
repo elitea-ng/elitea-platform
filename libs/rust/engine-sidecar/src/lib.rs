@@ -44,5 +44,5 @@ pub mod proto {
 }
 
 #[cfg(feature = "server")]
-pub use server::{Engine, serve, service};
+pub use server::{Engine, ServeOptions, serve, serve_with_options, service};
 pub use socket::bind;
