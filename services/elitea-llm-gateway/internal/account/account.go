@@ -216,7 +216,7 @@ type Config struct {
 	// bifrost's CheckAndSetDefaults applies its own default.
 	ProviderConcurrency int
 	// SelfOrigins are the platform's own /llm origins (e.g.
-	// "https://dev.elitea.ai/llm/v1", "http://legacy-main:8080/llm/v1"). Any
+	// "https://dev.elitea.ai/llm/v1", "http://elitea-main:8080/llm/v1"). Any
 	// credential api_base matching one of these origins is rejected with
 	// SELF_REFERENTIAL_CREDENTIAL. Values are normalised (scheme+host+path,
 	// trailing slash stripped) before comparison.

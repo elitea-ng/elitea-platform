@@ -1306,7 +1306,7 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   Issuer, #1076), and every NATS client presents a certificate from it.
   The table in [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
   names both.
-  The database itself may be **empty**. `elitea-migrate` embeds the pylon-era
+  The database itself may be **empty**. `elitea-migrate` embeds the legacy-era
   schema (`internal/infra/db/migrations/001_initial.sql`) and applies it first
   when the database does not carry it, then applies the shared and tenant
   histories. So the migration hook does build the schema, and nobody runs SQL

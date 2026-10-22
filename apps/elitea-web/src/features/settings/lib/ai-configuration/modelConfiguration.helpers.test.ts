@@ -31,7 +31,7 @@ const CURRENT_PLATFORM_MODEL = {
   supports_vision: true,
 };
 
-/** One row in the pylon shape, which carries an id and a capability map. */
+/** One row in the legacy shape, which carries an id and a capability map. */
 const LEGACY_CAPABILITY_MAP_MODEL = {
   id: '7_gpt-4o',
   name: 'gpt-4o',

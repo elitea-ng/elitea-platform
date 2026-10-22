@@ -30,7 +30,7 @@ Point it at the standalone stack's PostgreSQL, or any disposable PostgreSQL (pla
 
 ## Migrations
 
-Migration files live under `services/elitea-main/migrations/`, in three independently ordered scopes: `shared/`, `tenant/` and `agentstate/` (embedded and loaded by the `internal/infra/db/migrate` package). A separate, single-file directory — `internal/infra/db/migrations/001_initial.sql` — carries only the legacy pylon-era initial schema, applied first when a database doesn't already have it. Each versioned file is named `NNNN_description.sql` and identified by a SHA-256 checksum of its contents — **a migration is checksum-immutable once it exists**: never edit an applied file, always add a new one with the next free number.
+Migration files live under `services/elitea-main/migrations/`, in three independently ordered scopes: `shared/`, `tenant/` and `agentstate/` (embedded and loaded by the `internal/infra/db/migrate` package). A separate, single-file directory — `internal/infra/db/migrations/001_initial.sql` — carries only the legacy initial schema, applied first when a database doesn't already have it. Each versioned file is named `NNNN_description.sql` and identified by a SHA-256 checksum of its contents — **a migration is checksum-immutable once it exists**: never edit an applied file, always add a new one with the next free number.
 
 <Steps>
 <Step title="Pick a free version number">

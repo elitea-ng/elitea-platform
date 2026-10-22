@@ -52,7 +52,7 @@ async function putResourcesInformationVersion(
   return { status: response.status(), body: await response.text() };
 }
 
-// Every Pylon plugin name the ELITEA-0971 manual case pinned. `admin` is
+// Every legacy plugin name the ELITEA-0971 manual case pinned. `admin` is
 // distinct from `elitea-main` (the real component this fix reports) and both
 // must be checked so a partial-name match cannot hide either bug.
 const LEGACY_PLUGIN_NAMES = ['elitea_core', 'admin', 'notifications', 'configurations', 'sdk_plugin', 'indexer_worker'];

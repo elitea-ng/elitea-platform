@@ -72,7 +72,7 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 			wantMessage: "Invalid secret header",
 		},
 		{
-			// The defect this issue closes. Pylon answers 200 here.
+			// The defect this issue closes: the old runtime answered 200 here.
 			name:        "the legacy secret literal is refused when the project has no value",
 			err:         fmt.Errorf("look up p_1 secret: %w: %q", secrets.ErrSecretNotFound, "secrets_header_value"),
 			received:    "secret",

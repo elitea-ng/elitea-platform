@@ -332,7 +332,7 @@ func TestVersionPatchIgnoresTheRetiredEnvironmentSecret(t *testing.T) {
 // `secret` is refused on a newly provisioned project". The fixture's vault
 // holds a value that is not the literal, exactly as
 // EnsureProjectSecretsHeaderValue writes one, so the literal is simply the
-// wrong value and gets pylon's 400.
+// wrong value and gets the legacy contract's 400.
 func TestVersionPatchRefusesTheLegacySecretLiteralOnAProvisionedProject(t *testing.T) {
 	fixture := newExpandedFixture(t, "openai")
 
