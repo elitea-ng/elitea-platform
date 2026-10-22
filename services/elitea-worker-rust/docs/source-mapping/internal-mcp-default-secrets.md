@@ -10,7 +10,7 @@
 | SDK credential-native `X-SECRET` transport | Main `default_policy.go` | Compare the project vault header without replacing project authorization. |
 | SDK internal MCP secret tools | Main `internal_secrets_execute.go`, consumed by Rust native MCP | Reuse the same vault handler and return metadata without secret values. |
 
-Centry paths are under `legacy/plugins` in the umbrella workspace.
+Centry paths are under `legacy/centry/<main runtime>` in the umbrella workspace.
 
 ## Implementation history
 

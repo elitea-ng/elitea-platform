@@ -872,11 +872,12 @@ func (x *AgentExecutionArtifactReferenceV1) GetClassification() string {
 // content so the platform can persist what the worker extracted (#607).
 //
 // The legacy runtime extracts a document's text once, at message-persist time,
-// and stores it: rpc/chat_all.py:344-377 reads the files through the SDK
-// artifact toolkit and appends the text as a second `{"type": "text"}` chunk of
-// the item's `content`, with `flag_modified(item, "content")` at :376. Every
-// later turn is then pure DB — utils/chat_history.py:67-73 extends the stored
-// chunks straight into the message and re-reads nothing.
+// and stores it (paths in the legacy/plugins/elitea_core dev clone):
+// rpc/chat_all.py:346-379 reads the files through the SDK artifact toolkit and
+// appends the text as a second `{"type": "text"}` chunk of the item's
+// `content`, with `flag_modified(item, "content")` at :378. Every later turn is
+// then pure DB — utils/chat_history.py:67-73 extends the stored chunks straight
+// into the message and re-reads nothing.
 //
 // Here the two halves live in different services: only the worker can reach the
 // artifact toolkit, and only elitea-main can write `chat_messages_attachment`.

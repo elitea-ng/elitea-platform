@@ -35,8 +35,8 @@
 //! [`read_attachment_documents`] reads it, and [`resolved_attachment_chunks`]
 //! splices each document in as a SECOND text chunk after its own header —
 //! exactly the shape the legacy runtime's extraction step leaves behind, and
-//! exactly what the
-//! Python worker builds (`sdk_adapter.py:529-624`, `_read_attachment_documents`).
+//! exactly what the Python worker builds (`sdk_adapter.py:529-624`,
+//! `_read_attachment_documents`).
 //!
 //! WHAT MAIN SERVES, AND WHAT HAPPENS WHEN IT CANNOT. Main extracts the file
 //! (PDF, DOCX, PPTX, XLSX or text) and serves its text with a page, slide,
@@ -54,8 +54,7 @@
 //! A header chunk IMMEDIATELY FOLLOWED by a plain text chunk (one with no marker
 //! of its own) is already extracted and is NOT read again. That is the storage
 //! shape the legacy runtime leaves behind, and it is also the shape this module
-//! produces, so
-//! a replayed turn does not pay for the read twice.
+//! produces, so a replayed turn does not pay for the read twice.
 //!
 //! Reporting extracted text back onto the stored row (#607) is a separate,
 //! unowned platform boundary; `agents/result.rs` returns no
@@ -74,12 +73,12 @@
 //! does not understand would silently change the prompt, and a chunk that fails
 //! INSIDE the provider call fails after the turn was admitted and billed. The
 //! admitted set is the two chunk shapes the legacy runtime's own processors
-//! produce, `text`
-//! and `image_url` — matching the Python worker's `_ADMITTED_CHUNK_TYPES` so the
-//! two ends stay deploy-compatible. A marker FIELD, by contrast, decides nothing
-//! the model sees, so an unknown field is ignored rather than refused: that
-//! asymmetry is deliberate and lets elitea-main add a marker field (as it did
-//! `item_id` for #607) without making the two services undeployable apart.
+//! produce, `text` and `image_url` — matching the Python worker's
+//! `_ADMITTED_CHUNK_TYPES` so the two ends stay deploy-compatible. A marker
+//! FIELD, by contrast, decides nothing the model sees, so an unknown field is
+//! ignored rather than refused: that asymmetry is deliberate and lets
+//! elitea-main add a marker field (as it did `item_id` for #607) without making
+//! the two services undeployable apart.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

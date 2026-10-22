@@ -21,10 +21,11 @@
 // math/big so a large token count cannot overflow int64 before the divide.
 //
 // The package reads prices from Postgres (source of truth) with a short
-// in-process TTL cache on the hot path (§8.8, line 448), and falls back to the
-// same default price table the legacy runtime uses (identical values, identical ordered
-// prefix match) so an un-catalogued model is priced consistently with the
-// legacy path rather than dropped.
+// in-process TTL cache on the hot path (§8.8, line 448), and falls back to a
+// copy of the legacy runtime's default price table
+// (gateway_analytics.MODEL_PRICING_DEFAULTS: identical values, identical ordered
+// prefix match, see defaultPrice) so an un-catalogued model is priced exactly as
+// the legacy CostCalculator priced it, rather than dropped.
 //
 // THREE BASES, ONE DIVISOR RULE (issue #323, the audio routes). A model is not
 // always sold by the token. whisper-1 is sold by the second. Some text-to-speech
@@ -547,7 +548,9 @@ func (c *Calculator) Price(ctx context.Context, provider, model string) Price {
 	price, ok := c.lookupCatalog(ctx, provider, model)
 	if !ok {
 		// Not in the catalog (or a NULL/absent input price, or a DB error):
-		// fall back to the legacy default table, exactly as the legacy path does.
+		// fall back to defaultPrice, the copy of the legacy runtime's default
+		// price table. The legacy CostCalculator drops to that same table when
+		// its DB row is unusable, so both price an un-catalogued model alike.
 		price = defaultPrice(model)
 	}
 

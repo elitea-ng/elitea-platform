@@ -2,12 +2,15 @@
 // (issue #323).
 //
 // WHY THIS FILE EXISTS. The retired LiteLLM proxy served /v1/audio/speech and
-// /v1/audio/transcriptions, and the legacy indexer's voice paths call them directly
-// (indexer_tts.py, indexer_asr_whisper.py). Nothing replaced those two routes
-// when LiteLLM was removed, so the indexer kept a LiteLLM process of its own to
-// answer them. That process is a SECOND LLM data plane: it applies no budget,
-// bills nothing, and resolves credentials from a registry the platform no
-// longer writes. These two routes exist so it can be deleted.
+// /v1/audio/transcriptions, and the routes' original callers were the legacy
+// indexer's voice paths (indexer_tts.py, indexer_asr_whisper.py). Nothing
+// replaced those two routes when LiteLLM was removed, so the indexer kept a
+// LiteLLM process of its own to answer them: a SECOND LLM data plane that
+// applied no budget, billed nothing, and resolved credentials from a registry
+// the platform no longer writes. These routes let it be deleted, and the
+// indexer went with it (#339). Today they serve elitea-web's voice features
+// (read-aloud and speech input, shared/api/voiceTransport.ts there), which
+// reach them through elitea-main's /llm edge proxy.
 //
 // The two routes follow the same order every /llm route follows, and the order
 // is a correctness rule, not a style: decode, then mapModel, then checkBudget,
@@ -18,8 +21,8 @@
 // TWO DELIBERATE LIMITS, both stated here rather than discovered later:
 //
 //  1. Neither route streams. The speech route answers one complete audio body.
-//     The legacy TTS client reads the response with `iter_content`, so a unary
-//     body still arrives as a stream of chunks to it; what it loses is
+//     The legacy TTS client read the response with `iter_content`, so a unary
+//     body still arrived as a stream of chunks to it; what it lost was
 //     first-byte latency, not audio. A streaming speech route needs the same
 //     detached-drain billing machinery the chat stream has, and that is a
 //     larger change than this one.
@@ -246,7 +249,7 @@ func (h *Handler) audioModelPriced(ctx context.Context, provider, model string, 
 // Speech handles POST /llm/v1/audio/speech (text-to-speech).
 //
 // The success body is the raw audio the provider returned, NOT JSON. That is
-// the OpenAI contract and the one the legacy TTS client reads. Errors stay
+// the OpenAI contract and the one the legacy TTS client read. Errors stay
 // OpenAI-shaped JSON like every other route (spec §2.5).
 func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	var req openai.OpenAISpeechRequest

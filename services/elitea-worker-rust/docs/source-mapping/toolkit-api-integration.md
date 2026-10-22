@@ -4,8 +4,8 @@
 
 | Current platform source | Replatform source | Functional contract |
 | --- | --- | --- |
-| `legacy/plugins/elitea_core/api/v2/toolkit_available_tools.py` | `services/elitea-main/internal/api/v2/toolkits/handler.go` | Discover operations for one saved toolkit instance. |
-| `legacy/plugins/elitea_core/api/v2/test_toolkit_tool.py` | `services/elitea-main/internal/application/toolkitcalltool/service.go` | Run an explicit operation with supplied arguments. |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/toolkit_available_tools.py` | `services/elitea-main/internal/api/v2/toolkits/handler.go` | Discover operations for one saved toolkit instance. |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/test_toolkit_tool.py` | `services/elitea-main/internal/application/toolkitcalltool/service.go` | Run an explicit operation with supplied arguments. |
 | `projects/elitea-sdk/elitea_sdk/tools/github/__init__.py` | `services/elitea-main/internal/api/v2/toolkits/type_catalogue.go` | Expose credential, embedding, and branch settings from the SDK catalogue. |
 | Current Core toolkit RPC dispatch | `services/elitea-main/cmd/elitea-main/main.go`, `internal/api/router.go` | Compose discovery and Test independently from index ingestion. |
 

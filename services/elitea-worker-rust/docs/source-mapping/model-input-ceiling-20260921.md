@@ -8,7 +8,7 @@ Rust already supports optional `ModelContextLimitsV1.max_input_tokens`. Main doe
 
 ## Source mapping
 
-Current-platform `legacy/plugins/configurations/routing_models.py` resolves authorized model metadata.
+Current-platform `legacy/centry/<main runtime>/plugins/configurations/routing_models.py` resolves authorized model metadata.
 Its model fields include `context_window` and `max_output_tokens`.
 `configurations/utils.py` also projects these values from saved configuration data.
 These files provide the catalogue ownership reference. The optional input ceiling extends the replatform contract.

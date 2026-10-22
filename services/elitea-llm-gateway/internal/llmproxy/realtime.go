@@ -2,13 +2,15 @@
 // audio session that the gateway gates, meters and bills exactly like every
 // other /llm route (issue #323 follow-up).
 //
-// WHY THIS FILE EXISTS. The legacy indexer's realtime ASR relay
-// (indexer_asr_realtime.py) opens a WebSocket to `/v1/realtime?model=…&intent=
-// transcription` and pumps PCM16 audio at it. The retired LiteLLM proxy answered
-// that path. Nothing replaced it, so that image keeps a LiteLLM process of its
-// own — a second LLM data plane that applies no budget and bills nothing. The
-// unary audio routes (audio.go) removed two thirds of that reason; this route
-// removes the last third.
+// WHY THIS FILE EXISTS. The route's original caller was the legacy indexer's
+// realtime ASR relay (indexer_asr_realtime.py), which opened a WebSocket to
+// `/v1/realtime?model=…&intent=transcription` and pumped PCM16 audio at it. The
+// retired LiteLLM proxy answered that path, and until this route existed that
+// image kept a LiteLLM process of its own — a second LLM data plane that applied
+// no budget and billed nothing. That relay was deleted with the indexer (#339).
+// Today the route serves the realtime sessions elitea-main's /llm edge proxy
+// forwards over the GatewayService Realtime stream (proxy_realtime.go there);
+// elitea-web does not open one yet.
 //
 // WHY IT IS NOT "audio.go WITH A SOCKET". Every other route on this gateway is
 // a request that ENDS, so one admission check bounds it. A realtime session does
@@ -545,7 +547,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 	// stream. Both apply the SAME handshake and Origin checks.
 	clientSock, clientSubprotocol, aerr := RealtimeAcceptorFrom(r.Context())(w, r, RealtimeAcceptOptions{
 		// The caller may ask for a subprotocol or for none. RFC 6455 always
-		// allows the empty one, which is what the legacy relay uses. The
+		// allows the empty one, which is what the legacy relay used. The
 		// provider's own subprotocol is not known yet — the dial happens after
 		// this — so the gateway offers the ONE subprotocol this surface uses.
 		Subprotocols: realtimeSubprotocols(realtimeSubprotocol),
@@ -618,7 +620,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 
 // realtimeSubprotocol is the ONE WebSocket subprotocol this surface uses.
 // OpenAI and Azure both negotiate "realtime"; RFC 6455 always allows the empty
-// one, which is what the legacy relay asks for. It is a constant rather than a
+// one, which is what the legacy relay asked for. It is a constant rather than a
 // value read from the provider because the client socket is now accepted BEFORE
 // the provider is dialled, so the provider's answer is not known yet. A
 // provider that negotiates something else still works — the two sides of a

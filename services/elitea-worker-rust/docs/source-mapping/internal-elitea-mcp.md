@@ -56,7 +56,7 @@ delete, publish, execution, or administrative operations by accident.
 | `elitea_core/api/v2/application_relation.py::PromptLibAPI.patch` | `models.applications.application_relation.patch` | `patch_elitea_core_application_relation` |
 
 The current source paths above are relative to
-`legacy/plugins/elitea_core`. Each source operation has `mcp_tool=True` and
+`legacy/centry/<main runtime>/plugins/elitea_core`. Each source operation has `mcp_tool=True` and
 the `elitea_core/applications` tag. Main publishes exactly those eight
 operations.
 
@@ -210,7 +210,7 @@ Without those services, it publishes only the original five operations.
 | `configurations/api/v2/models.py::API.post` | `configurations.configuration.update` | `post_configurations_models` |
 
 The current source paths above are relative to
-`legacy/plugins/configurations`. The available catalogue REST endpoint is
+`legacy/centry/<main runtime>/plugins/configurations`. The available catalogue REST endpoint is
 authenticated but carries no project permission. Internal MCP is itself a
 project-scoped execution surface and the catalogue exists to construct project
 configuration writes, so Main deliberately strengthens that one tool to
@@ -273,7 +273,7 @@ operations marked `mcp_tool=True`; bulk mutation and deletion remain REST-only.
 | `notifications/api/v2/notification.py::PromptLibAPI.get` | `models.notifications.notification.details` | `get_notifications_notification` |
 | `notifications/api/v2/notification.py::PromptLibAPI.put` | `models.notifications.notification.update` | `put_notifications_notification` |
 
-The current source paths above are relative to `legacy/plugins`. The list
+The current source paths above are relative to `legacy/centry/<main runtime>/plugins`. The list
 contract is global user-scoped: the endpoint project authorizes the call but
 does not filter notification rows. Main preserves that behavior, so a
 notification whose payload names a different project can still appear in its
@@ -348,7 +348,7 @@ operations marked `mcp_tool=True`.
 | `secrets/api/v2/secrets.py::ProjectAPI.post` | `configuration.secrets.secret.create` | `post_secrets_secrets` |
 | `secrets/api/v2/secret.py::ProjectAPI.put` | `configuration.secrets.secret.edit` | `put_secrets_secret` |
 
-The current source paths above are relative to `legacy/plugins`. The
+The current source paths above are relative to `legacy/centry/<main runtime>/plugins`. The
 catalogue intentionally excludes plaintext `Get Secret`, deletion, hiding,
 bulk replacement, and every administration-vault operation. List returns only
 secret names, `{{secret.NAME}}` placeholders, and the existing `is_default`

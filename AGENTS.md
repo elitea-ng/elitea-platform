@@ -38,9 +38,9 @@ prototype shortcuts into new code merely to preserve current behavior.
   corrections intentionally break header trust, implicit admin, unscoped or
   unsafe token/session behavior, open redirects, raw errors and cross-tenant
   access; compatibility never requires preserving a vulnerability.
-- Do not reintroduce the legacy runtime's plugin loading, Arbiter pickle
-  payloads, global service locators, internal Python RPC aliases, or
-  hot-installed dependencies as target architecture.
+- Do not preserve, port or reintroduce the legacy runtime's plugin loading,
+  Arbiter pickle payloads, global service locators, internal Python RPC aliases,
+  or hot-installed dependencies as target architecture.
 - Durable asynchronous worker commands use the runtime command bus, NATS
   JetStream (docs/runtime-command-bus.md); PostgreSQL is the authority and the
   bus is transport only.

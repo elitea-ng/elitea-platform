@@ -8,10 +8,10 @@ It does not establish deployed browser or provider completion.
 
 | Current source under the umbrella workspace | Behavior | Native owner |
 | --- | --- | --- |
-| `legacy/plugins/elitea_core/utils/mcp_service.py`, `__get_toolkit_tools` and `__get_all_tools` | Saved opt-in rows, selected operations, and argument schemas become external descriptors. | Main `internal/api/v2/mcp/catalog.go` and `external_toolkit_schemas.go` |
+| `legacy/centry/<main runtime>/plugins/elitea_core/utils/mcp_service.py`, `__get_toolkit_tools` and `__get_all_tools` | Saved opt-in rows, selected operations, and argument schemas become external descriptors. | Main `internal/api/v2/mcp/catalog.go` and `external_toolkit_schemas.go` |
 | Same file, `__get_application_tools` and `__handle_call_tool_request` | Saved application/version identity enters the common prediction path. | Main `mcp/execute.go`, application start, and existing Rust agent/pipeline dispatch |
 | `projects/elitea-sdk/elitea_sdk/tools/__init__.py`, `get_toolkit_available_tools` | Instance settings choose live tool enumeration and argument schemas. | Shared Main `application/toolkitdiscovery` and Rust `toolkit.available_tools.v1` execution |
-| `legacy/plugins/elitea_core/api/v2/toolkit_available_tools.py`, `PromptLibAPI.get` | Project/folder authorization and saved settings precede discovery. | The same shared discovery admission use case |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/toolkit_available_tools.py`, `PromptLibAPI.get` | Project/folder authorization and saved settings precede discovery. | The same shared discovery admission use case |
 
 Inspected Core revision: `b701a00aeff0af1a416916c4a537bfdd4b7d8337`.
 Inspected SDK revision: `ecf49dfac73cd096da4c2297f3d91d13e526395a`.
