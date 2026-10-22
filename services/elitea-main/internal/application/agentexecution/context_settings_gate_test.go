@@ -47,7 +47,7 @@ func contextDeliveryFixture(t *testing.T, source *contextPolicyStub) (*CurrentAp
 	}
 	admissions := &currentApplicationAdmissionStub{}
 	freezer, _ := summaryFreezer(t)
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

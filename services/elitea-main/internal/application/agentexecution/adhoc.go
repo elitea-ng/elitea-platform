@@ -161,11 +161,6 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("freeze current ad-hoc snapshot: %w", err)
 	}
-	suggestionPolicy := service.resolveNextInputSuggestionPolicy(
-		ctx,
-		request.ProjectID,
-		request.ActorUserID,
-	)
 	toolkitGuardrails, err := service.resolveToolkitGuardrails(ctx)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -194,7 +189,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	// selected-application path.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	input, err := currentAdhocInput(
-		request, target, frozen, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
+		request, target, frozen, toolkitGuardrails, attachments, memoryRecall.Text,
 		projectContextText,
 	)
 	if err != nil {
@@ -335,7 +330,6 @@ func currentAdhocInput(
 	request CurrentAdhocStartRequest,
 	target CurrentAdhocTarget,
 	frozen json.RawMessage,
-	nextInputSuggestion json.RawMessage,
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
 	memoryText string,
@@ -423,7 +417,7 @@ func currentAdhocInput(
 		InputAttachments:       currentTurnInputAttachments(attachments),
 		ParallelReconcile:      []byte(`null`),
 		ParallelTerminalErrors: []byte(`[]`),
-		NextInputSuggestion:    bytes.Clone(nextInputSuggestion),
+		NextInputSuggestion:    noNextInputSuggestion(),
 		ToolkitGuardrails:      bytes.Clone(toolkitGuardrails),
 	}
 	if stepsLimit != nil {

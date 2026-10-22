@@ -73,11 +73,10 @@ func (service *CurrentApplicationStartService) WithMemories(memories CurrentMemo
 }
 
 // resolveCurrentMemoryRecall degrades to "no memories" on any error or
-// absent resolver, the same fail-open discipline
-// resolveNextInputSuggestionPolicy uses for the OTHER optional per-turn
-// enrichment in this file's sibling start.go: a memory-store hiccup must
-// cost the user their recalled context for this one turn, not the turn
-// itself.
+// absent resolver, the same fail-open discipline every optional per-turn
+// enrichment uses (resolveToolkitGuardrails in start.go says why guardrails
+// are the exception): a memory-store hiccup must cost the user their recalled
+// context for this one turn, not the turn itself.
 func (service *CurrentApplicationStartService) resolveCurrentMemoryRecall(
 	ctx context.Context,
 	projectID, actorUserID int64,

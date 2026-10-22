@@ -759,7 +759,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			agentTargets,
 			agentTargets,
 			agentTargets,
-			nil, // no next-input-suggestion policy source (#334): every turn carries null
 			agentGuardrails,
 			agentVersions,
 			agentAdmissions,

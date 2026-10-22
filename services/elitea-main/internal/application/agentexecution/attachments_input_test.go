@@ -31,8 +31,7 @@ func TestCurrentApplicationStartSendsTheTurnsAttachmentChunksConcatenatedInOrder
 	}}
 	admissions := newCurrentAttachmentAdmissionStub()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +61,7 @@ func TestCurrentAdhocStartSendsTheTurnsAttachmentChunksConcatenatedInOrder(t *te
 	}}
 	admissions := newCurrentAttachmentAdmissionStub()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -129,8 +127,7 @@ func TestCurrentApplicationStartSendsAnEmptyListWhenTheTurnAttachedNothing(t *te
 	}}
 	admissions := newCurrentAttachmentAdmissionStub()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -29,8 +29,7 @@ func TestPipelineHITLContinuationBindsNewResponseOnlyForDirectReview(t *testing.
 			admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
 				ExecutionID: "execution-review", CommandID: "command-review", Created: true,
 			}}
-			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-				&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 			if err != nil {
 				t.Fatal(err)
 			}

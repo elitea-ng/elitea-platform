@@ -54,8 +54,7 @@ func TestTheStartInputCarriesTheGuardrailsPolicy(t *testing.T) {
 	admissions := &currentApplicationAdmissionStub{}
 	resolver := currentApplicationResolverForStamping()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{policy: guardrailPolicyForTest()},
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{policy: guardrailPolicyForTest()},
 		&currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
@@ -105,8 +104,7 @@ func TestAnEmptyPolicyIsStampedRatherThanOmitted(t *testing.T) {
 	admissions := &currentApplicationAdmissionStub{}
 	resolver := currentApplicationResolverForStamping()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{},
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
 		&currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
@@ -134,8 +132,7 @@ func TestAnUnreadablePolicyRefusesTheTurn(t *testing.T) {
 	admissions := &currentApplicationAdmissionStub{}
 	resolver := currentApplicationResolverForStamping()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{err: errors.New("pool is gone")},
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{err: errors.New("pool is gone")},
 		&currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
