@@ -282,6 +282,15 @@ impl std::error::Error for ModelGatewayTransportError {
     }
 }
 
+/// The `ModelService` client over `channel`, with the platform listener's
+/// message limits: it sends at most what the listener receives, and decodes
+/// a unary answer as large as the listener sends.
+fn model_service_client(channel: Channel) -> elitea_model_rpc::ModelServiceClient<Channel> {
+    elitea_model_rpc::ModelServiceClient::new(channel)
+        .max_decoding_message_size(MAX_MODEL_ANSWER_BYTES)
+        .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES)
+}
+
 /// Shared connection pool for claim-scoped model invocations.
 pub(crate) struct ModelGatewayClient {
     pub(super) transport: Arc<dyn ModelGatewayTransport>,
@@ -315,9 +324,7 @@ impl ModelGatewayClient {
         Ok(Self {
             platform: Some(channel.clone()),
             transport: Arc::new(GrpcModelGatewayTransport {
-                client: elitea_model_rpc::ModelServiceClient::new(channel)
-                    .max_decoding_message_size(MAX_MODEL_ANSWER_BYTES)
-                    .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES),
+                client: model_service_client(channel),
                 max_request_bytes: config.max_request_bytes,
             }),
             config,
@@ -2074,7 +2081,7 @@ pub(crate) fn test_grpc_model_gateway_client(
     let max_request_bytes = config.max_request_bytes;
     ModelGatewayClient::with_rpc(
         GrpcModelGatewayTransport {
-            client: elitea_model_rpc::ModelServiceClient::new(channel),
+            client: model_service_client(channel),
             max_request_bytes,
         },
         config,

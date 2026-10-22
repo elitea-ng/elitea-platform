@@ -316,6 +316,28 @@ async fn embeddings_batch_in_order_with_the_right_headers() {
     assert_eq!(query[0], 7.0);
 }
 
+/// A unary answer the platform listener may send is up to the gateway's
+/// 64 MiB unary cap plus its head (elitea-main
+/// `runtimegrpc.PlatformMaxSendMessageBytes`, 65 MiB): the client decodes one
+/// well past the listener's 16 MiB receive cap, which it used to apply to
+/// answers too and refused such a message as too large.
+#[tokio::test]
+async fn a_unary_answer_over_sixteen_mib_is_received() {
+    const PADDING: usize = 20 * 1024 * 1024;
+    let (_gw, base) = gateway(|_, seen| {
+        let Reply::Json(status, mut value, headers) = embeddings_reply(seen, 4) else {
+            panic!("an embeddings reply is JSON")
+        };
+        value["padding"] = Value::String("x".repeat(PADDING));
+        Reply::Json(status, value, headers)
+    })
+    .await;
+    let client = embedder(&base, EmbeddingOptions::default());
+    let vector = ok(client.embed_query("t9", &StopSignal::default()).await);
+    assert_eq!(vector.len(), 4);
+    assert_eq!(vector[0], 9.0);
+}
+
 /// The engines' `api_base` is the artifact API's cleartext HTTP base; the
 /// configured model service origin is where every model call goes, and the
 /// `api_base` path still names the route.

@@ -2559,6 +2559,56 @@ async fn model_service(
     (channel, seen)
 }
 
+/// A unary `ModelService` answer (embeddings, images) is up to the gateway's
+/// 64 MiB cap plus its head, which the platform listener sends (elitea-main
+/// `runtimegrpc.PlatformMaxSendMessageBytes`): the production client decodes
+/// one well past the listener's 16 MiB receive cap.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_unary_answer_over_sixteen_mib_is_received() {
+    const ANSWER_BYTES: usize = 20 * 1_024 * 1_024;
+    let app = axum::Router::new().route(
+        "/llm/v1/embeddings",
+        axum::routing::post(|| {
+            std::future::ready(axum::response::IntoResponse::into_response((
+                [(CONTENT_TYPE, "application/json")],
+                format!(r#"{{"padding":"{}"}}"#, "x".repeat(ANSWER_BYTES)),
+            )))
+        }),
+    );
+    let app = elitea_model_rpc::testing::with_model_service(app, "/llm/v1");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .expect("endpoint")
+        .connect()
+        .await
+        .expect("connect");
+    let client = super::openai_compatible_facade::test_grpc_model_gateway_client(
+        channel,
+        test_model_gateway_config(),
+    )
+    .expect("client");
+    let request = http::Request::post("/llm/v1/embeddings")
+        .header(AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::new(Full::new(Bytes::from_static(
+            br#"{"input":"x"}"#,
+        ))))
+        .expect("request");
+    let Ok(response) = client.transport.post(request).await else {
+        panic!("a unary answer over 16 MiB was refused")
+    };
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .expect("the answer")
+        .to_bytes();
+    assert_eq!(body.len(), ANSWER_BYTES + r#"{"padding":""}"#.len());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chat_turn_streams_over_the_model_service() {
     let (channel, seen) = model_service(|| {

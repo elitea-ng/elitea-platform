@@ -141,7 +141,9 @@ async fn whole(answer: Answer) -> Result<(pb::ResponseHead, Bytes), Status> {
     if !answer.status.is_success() {
         return Err(refusal(answer).await);
     }
-    let body = axum::body::to_bytes(answer.body, 16 * 1024 * 1024)
+    // elitea-main's unary body cap: the gateway's 64 MiB
+    // (internal/transport/modelgrpc).
+    let body = axum::body::to_bytes(answer.body, 64 * 1024 * 1024)
         .await
         .map_err(|_| Status::unavailable("the answer broke"))?;
     Ok((
