@@ -77,7 +77,13 @@ multi-ecosystem-groups:
 
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # `/` covers .github/workflows only; the composite actions under
+    # .github/actions/ are scanned separately (they held actions/cache@v4 and
+    # bake-action@v6 on Node 20 long after the workflows had moved on).
+    directories:
+      - /
+      - /.github/actions/*
+      - /.github/actions/*/*
     multi-ecosystem-group: weekly
     patterns: ["*"]
 

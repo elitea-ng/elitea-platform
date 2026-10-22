@@ -294,7 +294,7 @@ runs:
     # step. A save that runs as a main step therefore uploads six empty
     # directories, the key then exists, and every later run hits it, skips
     # extraction and never populates it (measured on the first version of this
-    # action). So a writer uses the full `actions/cache@v4` — whose save is a
+    # action). So a writer uses the full `actions/cache@v6` — whose save is a
     # post step — registered BEFORE the dance: post steps run in reverse, the
     # dance extracts first, the cache saves second. Readers restore only.
     # The cost, stated: actions/cache saves only when the JOB succeeds, so a
@@ -307,7 +307,7 @@ runs:
       # cannot save (scripts/ci/check-workflow-cache-writes.mjs reads it).
       if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: mounts-rw
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: .buildkit-mounts
         # RUN-SCOPED, so this key CANNOT already exist and the post-step save
@@ -327,7 +327,7 @@ runs:
     - name: Restore BuildKit cache mounts (readers)
       if: steps.policy.outputs.write-mounts != 'true'
       id: mounts-ro
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .buildkit-mounts
         # Deliberately NOT a key any writer uses: readers want the newest
@@ -488,9 +488,10 @@ runs:
     # bake reads the compose files as its definition, merges the HCL's
     # per-target cache scopes onto the same-named services, and `load: true`
     # writes every result into the runner's image store (the #154 guard).
-    # `source: .` builds from the checked-out tree, not from a fresh git
-    # context; `workdir: deploy` puts bake where the compose files are, so their
-    # relative contexts resolve as compose resolves them.
+    # `source: ./deploy` is a local path: bake builds from the checked-out
+    # tree, not from a fresh git context, and runs from deploy/ (as
+    # `cd deploy && docker buildx bake`), where the compose files are, so
+    # their relative contexts resolve as compose resolves them.
     # Load mode reads the registry layer cache. The ci-cache-* packages are
     # public (the step after the bake asserts it wherever one is written), so
     # this login is not what makes a fork's read work; it only means a
@@ -507,10 +508,9 @@ runs:
       run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
 
     - name: Bake the stack images
-      uses: docker/bake-action@v6
+      uses: docker/bake-action@v7
       with:
-        source: .
-        workdir: deploy
+        source: ./deploy
         builder: ${{ steps.buildx.outputs.name }}
         files: |
           ${{ inputs.compose-files }}

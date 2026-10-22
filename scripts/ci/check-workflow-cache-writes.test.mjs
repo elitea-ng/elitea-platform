@@ -15,7 +15,7 @@ import * as checker from "./check-workflow-cache-writes.mjs";
 
 const PR_AND_PUSH = "on:\n  pull_request:\n  push:\n    branches: [main]\n";
 const MAIN_PUSH = "github.ref == 'refs/heads/main' && github.event_name == 'push'";
-const FILLER = "- uses: actions/cache/restore@v4\n  with: {path: x, key: k}\n- uses: actions/cache/restore@v4\n  with: {path: x, key: k}\n";
+const FILLER = "- uses: actions/cache/restore@v6\n  with: {path: x, key: k}\n- uses: actions/cache/restore@v6\n  with: {path: x, key: k}\n";
 
 // textwrap.indent: the prefix on every line that is not blank.
 const indent = (text, prefix) => text.replace(/^(?=.*\S)/gm, prefix);
@@ -93,12 +93,12 @@ test("setup go cache false passes", () => {
 
 // ── actions/cache ─────────────────────────────────────────────────────────
 test("full actions cache without condition is refused", () => {
-  assertWrites("- uses: actions/cache@v4\n  with: {path: x, key: k}\n", "actions/cache saves the cache");
+  assertWrites("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", "actions/cache saves the cache");
 });
 
 test("actions cache gated on ref only is refused", () => {
   // A schedule or dispatch on main is not a push to main.
-  assertWrites("- uses: actions/cache@v4\n  if: github.ref == 'refs/heads/main'\n  with: {path: x, key: k}\n", "actions/cache saves the cache");
+  assertWrites("- uses: actions/cache@v6\n  if: github.ref == 'refs/heads/main'\n  with: {path: x, key: k}\n", "actions/cache saves the cache");
 });
 
 test("actions cache save without condition is refused", () => {
@@ -106,15 +106,15 @@ test("actions cache save without condition is refused", () => {
 });
 
 test("actions cache gated on main push passes", () => {
-  assertClean(`- uses: actions/cache@v4\n  if: ${MAIN_PUSH}\n  with: {path: x, key: k}\n`);
+  assertClean(`- uses: actions/cache@v6\n  if: ${MAIN_PUSH}\n  with: {path: x, key: k}\n`);
 });
 
 test("actions cache in release only workflow passes", () => {
-  assertClean("- uses: actions/cache@v4\n  with: {path: x, key: k}\n", { on: "on:\n  push:\n    branches: [main, next]\n" });
+  assertClean("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", { on: "on:\n  push:\n    branches: [main, next]\n" });
 });
 
 test("actions cache in push to any branch is refused", () => {
-  assertWrites("- uses: actions/cache@v4\n  with: {path: x, key: k}\n", "actions/cache saves", { on: "on:\n  push:\n" });
+  assertWrites("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", "actions/cache saves", { on: "on:\n  push:\n" });
 });
 
 // ── BuildKit cache-to ─────────────────────────────────────────────────────
@@ -393,7 +393,7 @@ test("a composite action in a dot-directory is still read, as Python's pathlib g
   try {
     const dir = path.join(root, ".github", "actions", ".hidden");
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "action.yml"), "runs:\n  using: composite\n  steps:\n    - uses: actions/cache@v4\n      with: {path: x, key: k}\n");
+    fs.writeFileSync(path.join(dir, "action.yml"), "runs:\n  using: composite\n  steps:\n    - uses: actions/cache@v6\n      with: {path: x, key: k}\n");
     const [code, out] = runChecker(["--root", root]);
     assert.equal(code, 1, out);
     assert.ok(out.includes(".github/actions/.hidden/action.yml"), out);
