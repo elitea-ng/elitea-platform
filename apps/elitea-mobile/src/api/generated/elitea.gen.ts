@@ -1177,8 +1177,8 @@ export interface paths {
          *     parse gets the same status and the same `{error, error_description}`
          *     keys, with `error: invalid_client_version`.
          *
-         *     Trending (`trend_start_period`/`trend_end_period`) is the one pylon
-         *     parameter still missing here.
+         *     Trending (`trend_start_period`/`trend_end_period`) is the one
+         *     legacy-runtime parameter still missing here.
          */
         get: operations["listPublicApplications"];
         put?: never;
@@ -1744,7 +1744,7 @@ export interface components {
             llm_settings?: components["schemas"]["LlmSettings"];
             meta?: components["schemas"]["VersionMeta"] | null;
             name: string;
-            /** @description NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon's `hydrate_notes_from_meta` surfaces it. Always a string on the version-detail read and on the two write echoes ("" when the version carries no notes); absent from the other version maps (import, fork, the public catalogue detail), which do not build their response through these two helpers. */
+            /** @description NOTE(#898): `meta.notes`, surfaced beside `meta` as the legacy runtime's `hydrate_notes_from_meta` surfaces it. Always a string on the version-detail read and on the two write echoes ("" when the version carries no notes); absent from the other version maps (import, fork, the public catalogue detail), which do not build their response through these two helpers. */
             notes?: string;
             pipeline_settings?: components["schemas"]["PipelineSettings"];
             status: string;
@@ -1755,7 +1755,7 @@ export interface components {
         };
         /** @description NOTE(W2): getVersions row map, internal/api/v2/applications/handler.go:216-243. The handler emits ALL eight keys on every row; `required` lists only the five the schema carried before issue 844, so that adding the other three stays additive for the generated fixtures rather than invalidating every existing one. */
         ApplicationVersionSummary: {
-            /** @description Kept although pylon's ApplicationVersionListModel excluded it: apps/elitea-web reads it off the summary to shape the version dropdown (pages/agents/lib/editApplicationMappers.ts toVersionSummaries, and its pipeline twin). */
+            /** @description Kept although the legacy runtime's ApplicationVersionListModel excluded it: apps/elitea-web reads it off the summary to shape the version dropdown (pages/agents/lib/editApplicationMappers.ts toVersionSummaries, and its pipeline twin). */
             agent_type: string;
             /** Format: date-time */
             created_at: string;
@@ -2680,7 +2680,7 @@ export interface components {
             offset: number;
             rows: components["schemas"]["EditorTestRun"][];
         };
-        /** @description NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the pylon `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362). */
+        /** @description NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the compatibility `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362). */
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
@@ -2755,7 +2755,7 @@ export interface components {
             /** @description The numeric id or the UUID of a message group of the conversation: the caller read the conversation up to and including that message. A number is also accepted. */
             message_id?: string;
         };
-        /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in pylon's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
+        /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in the legacy runtime's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
         MemoryContextManagement: {
             /**
              * @description Balanced caps the combined context window at 272000 tokens or the model window, whichever is smaller. Full uses the model window. Both reserve model output and a safety margin before calculating usable input. Absent legacy selections resolve to balanced.
@@ -2791,7 +2791,7 @@ export interface components {
             items: components["schemas"]["MemoryEntry"][];
             total: number;
         };
-        /** @description The user's default summarization settings, stored in centry.social_users.default_summarization (jsonb) and edited by Settings > Memory. pylon's SummarizationModel, field for field. Three of these flatten into a conversation's `context_strategy.summary_llm_settings` when one is resolved: summary_model_name -> model_name, summary_model_project_id -> model_project_id, target_summary_tokens -> max_tokens. */
+        /** @description The user's default summarization settings, stored in centry.social_users.default_summarization (jsonb) and edited by Settings > Memory. The legacy runtime's SummarizationModel, field for field. Three of these flatten into a conversation's `context_strategy.summary_llm_settings` when one is resolved: summary_model_name -> model_name, summary_model_project_id -> model_project_id, target_summary_tokens -> max_tokens. */
         MemorySummarization: {
             enable_summarization?: boolean;
             min_messages_for_summary?: number;
@@ -3056,7 +3056,7 @@ export interface components {
             ids: string | number[];
             is_seen: boolean;
         };
-        /** @description NOTE(W2): the notification routes write the pylon `{"ok": false, "error": ...}` envelope on every failure, including "Notification is not found", which answers 400 rather than 404 (internal/api/v2/notifications/api.go:479-491). */
+        /** @description NOTE(W2): the notification routes write the compatibility `{"ok": false, "error": ...}` envelope that shipped clients parse on every failure, including "Notification is not found", which answers 400 rather than 404 (internal/api/v2/notifications/api.go:479-491). */
         NotificationErrorResponse: {
             error: string;
             ok: boolean;
@@ -3238,7 +3238,7 @@ export interface components {
             personal_project_id: string;
             /** @description Arbitrary user-defined personalization payload. */
             personalization?: unknown;
-            /** @description The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id. */
+            /** @description The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a bare subject the legacy runtime wrote). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id. */
             provider_refs?: string[];
         };
         StaticPipelineContinuationBody: components["schemas"]["StaticPipelineRootContinuation"] | components["schemas"]["StaticPipelineToolsContinuation"];
@@ -3455,7 +3455,7 @@ export interface components {
             };
             /** @description Identifiers of the agent's enabled internal tools (e.g. "internal_mcp"). Client-owned: elitea-main never inspects the key — UpdateVersion assigns the whole meta map it receives (applications/handler.go:826-828) — but the legacy UI writes it here and the replatformed edit page both reads and writes it, so it is modelled rather than left to the passthrough marker below. */
             internal_tools?: string[];
-            /** @description NOTE(#898): the editor's free-text "Editor Notes". It has no column of its own on `application_versions` and is not meant to: pylon stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy/plugins/elitea_core/utils/application_utils.py:191-211) and lifting it back out on read (models/pd/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution. */
+            /** @description NOTE(#898): the editor's free-text "Editor Notes". It has no column of its own on `application_versions` and is not meant to: the legacy runtime stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy/plugins/elitea_core/utils/application_utils.py:191-211) and lifting it back out on read (models/pd/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution. */
             notes?: string;
             parent_author_id?: string;
             parent_entity_id?: string;
@@ -3467,10 +3467,10 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description NOTE(W2): tag entries emitted by ExportImportGet (eliteacore/handler.go:2650-2655 — name always a scanned string there) and Fork's response echo (:2431-2438), which builds entries from unvalidated client maps: a fork payload tag without a name yields {"name": null, ...}. Hence name is nullable and not required. NOTE(#345): the same shape is now also the WRITE shape — `tags` on VersionWriteRequest refs this schema, matching pylon's own PromptTagUpdateModel (name, optional data, optional id). */
+        /** @description NOTE(W2): tag entries emitted by ExportImportGet (eliteacore/handler.go:2650-2655 — name always a scanned string there) and Fork's response echo (:2431-2438), which builds entries from unvalidated client maps: a fork payload tag without a name yields {"name": null, ...}. Hence name is nullable and not required. NOTE(#345): the same shape is now also the WRITE shape — `tags` on VersionWriteRequest refs this schema, matching the legacy runtime's own PromptTagUpdateModel (name, optional data, optional id). */
         VersionTag: {
             data?: unknown;
-            /** @description NOTE(#345): the `tags` row this association points at. The applications handler emits it on every version-detail read (versionTags, internal/api/v2/applications/handler.go). The export and fork echoes project name and data only, so it is optional. A write ignores it: the handler matches a tag by name, the same way pylon does (legacy/plugins/elitea_core/utils/application_utils.py:219-226). */
+            /** @description NOTE(#345): the `tags` row this association points at. The applications handler emits it on every version-detail read (versionTags, internal/api/v2/applications/handler.go). The export and fork echoes project name and data only, so it is optional. A write ignores it: the handler matches a tag by name, the same way the legacy runtime does (legacy/plugins/elitea_core/utils/application_utils.py:219-226). */
             id?: number;
             name?: string | null;
         };
