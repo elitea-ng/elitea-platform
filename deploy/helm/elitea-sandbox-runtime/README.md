@@ -94,6 +94,41 @@ Then set `sandboxKubernetes.runtimeClass.name: gvisor` and the same
 `nodeSelector` and tolerations under `sandboxKubernetes.workspaceRuns` in the
 `elitea` values.
 
+## As part of the elitea chart
+
+The `elitea` chart carries this chart as its `sandboxRuntime` dependency
+(`deploy/helm/elitea/charts/elitea-sandbox-runtime` is a symlink here), so one
+`elitea` release can install the platform and the node runtime together:
+
+```yaml
+sandboxRuntime:
+  enabled: true                      # off by default; GKE and AKS leave it off
+  namespace: elitea-sandbox-runtime  # the default; must admit privileged pods
+  mode: containerd                   # EKS AL2023; k3s is the default
+sandboxKubernetes:
+  runtimeClass:
+    name: gvisor
+```
+
+- **Namespace.** The DaemonSet and its ConfigMap go to `sandboxRuntime.namespace`,
+  not the release's, so the platform namespace keeps its own Pod Security
+  level. Create that namespace and label it
+  `pod-security.kubernetes.io/enforce=privileged` before the first sync; under
+  Argo CD the AppProject must allow it as a destination.
+- **Names.** `fullnameOverride: elitea-sandbox-runtime` (set by the elitea chart)
+  gives `elitea-sandbox-runtime-installer`, not a name after the platform
+  release.
+- **One per cluster.** The `gvisor` RuntimeClass is cluster-scoped and the
+  DaemonSet changes the nodes. Enable `sandboxRuntime` in ONE release per
+  cluster; a second release with it on fails to install the RuntimeClass
+  (Helm) or fights over it (Argo CD). Other releases keep it off and name the
+  same RuntimeClass.
+- Moving an existing standalone `sandbox-runtime` release into the elitea
+  release: `helm uninstall sandbox-runtime -n elitea-sandbox-runtime` (the
+  installed runsc and the containerd change stay on the nodes), then enable
+  `sandboxRuntime`. The new DaemonSet finds the release already installed and
+  only checks it.
+
 ## Values
 
 | Key | Default | |

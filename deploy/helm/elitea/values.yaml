@@ -6229,6 +6229,36 @@ sandboxImageWarmup:
   tolerations: []
   imagePullSecrets: []
 
+# The sandbox runtime installer (ADR-0034), the elitea-sandbox-runtime chart
+# carried as a dependency (charts/elitea-sandbox-runtime; its own values go
+# here, see deploy/helm/elitea-sandbox-runtime/README.md). ON for k3s and EKS,
+# whose nodes have no gVisor; OFF on GKE and AKS, which ship their own
+# RuntimeClass.
+#
+# It is NODE-LEVEL, not a platform workload:
+#   * a privileged DaemonSet (hostPID, the host's / mounted) on the nodes
+#     nodeSelector picks, which installs runsc and restarts the node's
+#     containerd. It goes to `namespace`, NOT the release's: that namespace
+#     must exist with pod-security.kubernetes.io/enforce=privileged, so the
+#     platform's namespace keeps its own Pod Security level. Create it
+#     before the first sync (with Argo CD, the AppProject must allow it as a
+#     destination):
+#       kubectl create namespace elitea-sandbox-runtime
+#       kubectl label namespace elitea-sandbox-runtime \
+#         pod-security.kubernetes.io/enforce=privileged
+#   * the cluster-scoped RuntimeClass `gvisor` (runtimeClass.name), owned by
+#     this release. ONE release per cluster may enable this: a second elitea
+#     release that renders the same RuntimeClass fails to install (Helm) or
+#     fights over it (Argo CD), and two DaemonSets would install on the same
+#     nodes. Every other release keeps sandboxRuntime.enabled false and names
+#     the same sandboxKubernetes.runtimeClass.name.
+sandboxRuntime:
+  enabled: false
+  namespace: elitea-sandbox-runtime
+  fullnameOverride: elitea-sandbox-runtime
+  # k3s or containerd (EKS AL2023, plain containerd).
+  mode: k3s
+
 # Optional Kubernetes supervisor and isolated Code namespaces.
 # Use dedicated namespaces with a NetworkPolicy-capable CNI.
 sandboxKubernetes:
@@ -6240,12 +6270,11 @@ sandboxKubernetes:
   # ADR-0034: the RuntimeClass workspace-run Pods run under. The supervisor
   # reads it (a ClusterRole grants `get` on this one name) and refuses every
   # workspace run unless its handler is runsc or gvisor (gVisor) or kata*.
-  # This chart never creates it and never touches nodes; the platform or a
-  # separate chart provides it:
+  # The platform provides it, or `sandboxRuntime` below does:
   #   GKE Sandbox node pool (sandbox_config gvisor):   gvisor
   #   AKS Pod Sandboxing node pool (KataVmIsolation): kata-vm-isolation
   #     (kata-mshv-vm-isolation on older clusters)
-  #   EKS / k3s: deploy/helm/elitea-sandbox-runtime:   gvisor (handler runsc)
+  #   EKS / k3s: sandboxRuntime.enabled (below):       gvisor (handler runsc)
   runtimeClass:
     name: gvisor
   # ADR-0034: the cloud executor's workspace runs, one Pod per cloud turn in

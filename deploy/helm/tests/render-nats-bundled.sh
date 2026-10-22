@@ -149,6 +149,10 @@ tgz=("$TMP"/pkg/elitea-*.tgz)
 if ! tar -tzf "${tgz[0]}" | grep -q '^elitea/charts/nats/Chart.yaml$'; then
   fail "the packaged chart does not carry charts/nats"
 fi
+# charts/elitea-sandbox-runtime is a symlink; the package must hold the files.
+if ! tar -tzf "${tgz[0]}" | grep -q '^elitea/charts/elitea-sandbox-runtime/templates/daemonset.yaml$'; then
+  fail "the packaged chart does not carry the sandboxRuntime subchart's files"
+fi
 "$HELM" template elitea "${tgz[0]}" "${COMMON[@]}" > "$TMP/pkg-on.yaml"
 "$HELM" template elitea "${tgz[0]}" "${COMMON[@]}" --set nats.enabled=false \
   --set natsBootstrap.enabled=false --set-string natsClient.service=my-nats > "$TMP/pkg-off.yaml"

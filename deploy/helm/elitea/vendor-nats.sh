@@ -21,10 +21,12 @@ mkdir -p "${here}/charts"
 tar xzf "${tmp}/nats-${version}.tgz" -C "${here}/charts"
 
 # Chart.lock: what `helm dependency update` would write, without leaving the
-# .tgz behind.
-cp -R "$here" "${tmp}/chart"
-rm -rf "${tmp}/chart/charts"
+# .tgz files behind. The sibling charts are copied too: the sandboxRuntime
+# dependency is file://../elitea-sandbox-runtime (charts/ links to it).
+mkdir -p "${tmp}/helm"
+cp -R "${here}" "${here}/../elitea-sandbox-runtime" "${tmp}/helm/"
+rm -rf "${tmp}/helm/elitea/charts"
 "$HELM" repo add elitea-vendor-nats "$repo" --force-update >/dev/null
-"$HELM" dependency update "${tmp}/chart" >/dev/null
-cp "${tmp}/chart/Chart.lock" "${here}/Chart.lock"
+"$HELM" dependency update "${tmp}/helm/elitea" >/dev/null
+cp "${tmp}/helm/elitea/Chart.lock" "${here}/Chart.lock"
 echo "vendored nats ${version} into ${here}/charts/nats"
