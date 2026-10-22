@@ -116,26 +116,6 @@ func listApplicationToolReferences(ctx context.Context, q relationQuerier, schem
 	return refs, legacyRows.Err()
 }
 
-// eliteaToolsHasOwnerID reports whether this tenant's `elitea_tools` carries
-// the owner_id column. A schema built by 001_initial.sql has it NOT NULL; a
-// schema built by the legacy runtime has no such column, so the INSERT must
-// name it conditionally — the same probe-and-branch the toolkit repository
-// uses (internal/api/v2/toolkits, createToolkitInsertSQL). The probe compares
-// information_schema's RAW schema name, never the quoted identifier.
-func eliteaToolsHasOwnerID(ctx context.Context, q relationQuerier, ownerProjectID int) (bool, error) {
-	var exists bool
-	err := q.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_schema = $1
-			  AND table_name = 'elitea_tools'
-			  AND column_name = 'owner_id')`, fmt.Sprintf("p_%d", ownerProjectID)).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("read elitea_tools shape: %w", err)
-	}
-	return exists, nil
-}
-
 // insertApplicationToolReference writes one sub-agent reference: the tool row
 // and its mapping to the parent version. The settings shape is the freeze's
 // contract (freezeCurrentStoredApplicationReference admits exactly
@@ -144,7 +124,7 @@ func insertApplicationToolReference(
 	ctx context.Context, q relationQuerier, schema string,
 	parentVersionID int64, name string,
 	childAppID, childVersionID int64,
-	ownerProjectID int, includeOwnerID bool, authorID int,
+	ownerProjectID int, authorID int,
 ) error {
 	settingsJSON, err := json.Marshal(map[string]any{
 		"application_id":         childAppID,
@@ -154,19 +134,11 @@ func insertApplicationToolReference(
 		return fmt.Errorf("encode sub-agent settings: %w", err)
 	}
 	var toolID int64
-	if includeOwnerID {
-		err = q.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
-			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, $4, now() AT TIME ZONE 'UTC')
-			RETURNING id`, schema),
-			name, settingsJSON, ownerProjectID, authorID).Scan(&toolID)
-	} else {
-		err = q.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id, created_at)
-			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, now() AT TIME ZONE 'UTC')
-			RETURNING id`, schema),
-			name, settingsJSON, authorID).Scan(&toolID)
-	}
+	err = q.QueryRow(ctx, fmt.Sprintf(`
+		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, $4, now() AT TIME ZONE 'UTC')
+		RETURNING id`, schema),
+		name, settingsJSON, ownerProjectID, authorID).Scan(&toolID)
 	if err != nil {
 		return fmt.Errorf("insert sub-agent tool row: %w", err)
 	}
@@ -415,16 +387,10 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		includeOwnerID, err := eliteaToolsHasOwnerID(ctx, transaction, ownerProjectID)
-		if err != nil {
-			slog.ErrorContext(ctx, "application relation: table shape probe failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})
-			return
-		}
 		if err := insertApplicationToolReference(
 			ctx, transaction, s, parentVersionID, childName,
 			childAppNumber, childVersionNumber,
-			ownerProjectID, includeOwnerID, childAuthorID,
+			ownerProjectID, childAuthorID,
 		); err != nil {
 			slog.ErrorContext(ctx, "application relation: attach failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})

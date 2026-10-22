@@ -273,3 +273,14 @@ func TestRealtimeSocketPingWriteAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestRealtimeRouteIsGetOnly: a WebSocket handshake is a GET, so the bridge
+// refuses a POST head just as the HTTP router answers it 405.
+func TestRealtimeRouteIsGetOnly(t *testing.T) {
+	if !routeRealtime.admits(head(http.MethodGet, "/llm/v1/realtime")) {
+		t.Fatal("GET /llm/v1/realtime was refused")
+	}
+	if routeRealtime.admits(head(http.MethodPost, "/llm/v1/realtime")) {
+		t.Fatal("POST /llm/v1/realtime was admitted; the legacy alias is gone")
+	}
+}
