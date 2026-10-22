@@ -64,9 +64,9 @@ metadata:
   name: {{ include "elitea-main.fullname" . }}
   labels:
     {{- include "elitea-main.labels" . | nindent 4 }}
-  {{- with .Values.main.ingress.annotations }}
+  {{- with include "elitea-main.ingressAnnotations" . }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
 spec:
   {{- if .Values.main.ingress.className }}

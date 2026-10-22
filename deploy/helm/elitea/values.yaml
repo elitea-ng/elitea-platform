@@ -1731,6 +1731,10 @@ main:
   service:
     type: ClusterIP
     port: 8080
+    # Extra annotations on the elitea-main Service. The GKE Ingress wiring
+    # (ingress.gke below) adds its own two; anything here is merged with them,
+    # and a key set here wins.
+    annotations: {}
 
   # Legacy-parity hardening (issue #241): the shipped image is already a
   # distroless nonroot build, so runAsNonRoot/readOnlyRootFilesystem cost
@@ -1825,6 +1829,93 @@ main:
       name: ""
       namespace: ""
       sectionName: ""
+
+    # cert-manager issues the TLS Secret named in ingress.tls[].secretName
+    # (standard Ingress path only). Set ONE of issuer / clusterIssuer and the
+    # chart adds the matching cert-manager.io annotation to the Ingress; the
+    # ingress-shim then keeps the Secret issued and renewed. issuerKind and
+    # issuerGroup are for an EXTERNAL issuer — for example the origin CA issuer
+    # of the proxy provider in front of your load balancer, whose certificate
+    # the proxy trusts but a browser does not. Leave all empty to bring the
+    # Secret yourself (or to set the annotations by hand in ingress.annotations).
+    certManager:
+      issuer: ""
+      clusterIssuer: ""
+      issuerKind: ""
+      issuerGroup: ""
+
+    # GKE Ingress: the standard Google Cloud external Application Load Balancer
+    # in front of elitea-main, optionally behind a proxy of your own (a
+    # Cloudflare-style CDN/WAF). Standard Ingress path only.
+    #
+    # It is ON when enabled is true, or when the Ingress is a GKE one already:
+    # className `gce` / `gce-internal`, or the same value in the
+    # kubernetes.io/ingress.class annotation. With enabled: true and neither
+    # set, the chart sets the annotation to `gce`.
+    #
+    # What the chart then renders:
+    #   * `cloud.google.com/neg: '{"ingress": true}'` on the Service, so the load
+    #     balancer sends traffic straight to the pods (container-native load
+    #     balancing) — the only mode the BackendConfig health check below can
+    #     name the container port in.
+    #   * a BackendConfig (cloud.google.com/v1) bound to the Service's `http`
+    #     port by `cloud.google.com/backend-config`.
+    #   * a FrontendConfig (networking.gke.io/v1beta1) bound to the Ingress by
+    #     `networking.gke.io/v1beta1.FrontendConfig`.
+    #
+    # NETWORK POLICY. The load balancer and its health checks reach the pods
+    # from Google's front-end ranges, so networkPolicies.main.ingressFrom must
+    # admit them:
+    #   - ipBlock: {cidr: 35.191.0.0/16}
+    #   - ipBlock: {cidr: 130.211.0.0/22}
+    gke:
+      enabled: false
+      backendConfig:
+        # false leaves the BackendConfig to you; the Service annotation then
+        # names `name` below, or nothing when that is empty too.
+        create: true
+        # Defaults to the elitea-main Service's name.
+        name: ""
+        # The backend service timeout, which on this load balancer is the
+        # LONGEST a response may take, streams included. The GCP default of 30
+        # seconds cuts every chat SSE stream, every /llm stream and every MCP
+        # tool call after half a minute. One hour bounds a stream that never
+        # ends; elitea-main writes a keepalive comment into every idle stream
+        # at least every 40 seconds, so a proxy's idle timeout in front of the
+        # load balancer (100 seconds for a Cloudflare-style proxy) does not
+        # fire either.
+        timeoutSec: 3600
+        # How long a removed endpoint keeps its connections. elitea-main's pod
+        # gets 30 seconds of grace (templates/main/deployment.yaml); draining
+        # longer than that is cut by the kill anyway.
+        connectionDrainingTimeoutSec: 30
+        # The name of a Cloud Armor security policy to attach, or "".
+        securityPolicy: ""
+        # The load balancer's own health check. elitea-main's readiness probe
+        # is an exec probe whenever the browser edge is on, so GKE cannot
+        # derive a check from it; this one asks /healthz on the container's
+        # HTTP port, which is public and answers 200 with no session.
+        healthCheck:
+          checkIntervalSec: 15
+          timeoutSec: 5
+          healthyThreshold: 1
+          unhealthyThreshold: 2
+      frontendConfig:
+        # false leaves the FrontendConfig to you; the Ingress annotation then
+        # names `name` below, or nothing when that is empty too.
+        create: true
+        # Defaults to the elitea-main Service's name.
+        name: ""
+        # Answer plain HTTP with a redirect to HTTPS. Needs the Ingress to
+        # serve both, so do not set kubernetes.io/ingress.allow-http: "false"
+        # with it.
+        redirectToHttps: true
+        # MOVED_PERMANENTLY_DEFAULT (301), FOUND (302), SEE_OTHER (303),
+        # TEMPORARY_REDIRECT (307) or PERMANENT_REDIRECT (308).
+        responseCodeName: MOVED_PERMANENTLY_DEFAULT
+        # The name of a Compute Engine SSL policy (minimum TLS version,
+        # ciphers), or "".
+        sslPolicy: ""
 
   # Optional file-based config mounts (issue #241), OFF by default. The chart
   # does not build these ConfigMaps for you — point configMapName at a

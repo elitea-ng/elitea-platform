@@ -181,6 +181,13 @@ jobs:
       - name: The chart edge is one route to elitea-main
         run: bash deploy/helm/tests/render-edge-route.sh
 
+      # The GKE Ingress companions (main.ingress.gke): NEG + BackendConfig
+      # (stream-safe timeout, /healthz check, optional Cloud Armor) on the
+      # Service, FrontendConfig (HTTPS redirect, optional SSL policy) on the
+      # Ingress, cert-manager annotations; on and off.
+      - name: The GKE Ingress renders its BackendConfig and FrontendConfig
+        run: bash deploy/helm/tests/render-gke-ingress.sh
+
       # The worker templates were rendered by NOTHING before this step: every
       # other render script here, and the template matrix below, set
       # `worker.enabled=false`, and `helm lint` does not enter a body its

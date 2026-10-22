@@ -1,0 +1,59 @@
+{{- /*
+  GKE Ingress companions for elitea-main (main.ingress.gke). Rendered only when
+  the standard Ingress is a GKE one (elitea-main.gkeIngress). The Service binds
+  the BackendConfig to its `http` port and the Ingress names the
+  FrontendConfig; both bindings are in templates/main/_helpers.tpl.
+*/ -}}
+{{- if include "elitea-main.gkeIngress" . }}
+{{- $g := .Values.main.ingress.gke }}
+{{- if $g.backendConfig.create }}
+{{- $b := $g.backendConfig }}
+# The load balancer's view of elitea-main. timeoutSec is the longest any
+# response may take, streams included: the GCP default (30 seconds) would cut
+# every SSE stream. The health check asks /healthz on the container port, since
+# the readiness probe is an exec probe GKE cannot copy.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ include "elitea-main.gkeBackendConfigName" . }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+spec:
+  timeoutSec: {{ $b.timeoutSec }}
+  connectionDraining:
+    drainingTimeoutSec: {{ $b.connectionDrainingTimeoutSec }}
+  healthCheck:
+    type: HTTP
+    requestPath: /healthz
+    # The container port: with container-native load balancing the check
+    # reaches the pod itself, not the Service.
+    port: 8080
+    checkIntervalSec: {{ $b.healthCheck.checkIntervalSec }}
+    timeoutSec: {{ $b.healthCheck.timeoutSec }}
+    healthyThreshold: {{ $b.healthCheck.healthyThreshold }}
+    unhealthyThreshold: {{ $b.healthCheck.unhealthyThreshold }}
+  {{- with $b.securityPolicy }}
+  securityPolicy:
+    name: {{ . | quote }}
+  {{- end }}
+{{- end }}
+{{- if $g.frontendConfig.create }}
+{{- $f := $g.frontendConfig }}
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: {{ include "elitea-main.gkeFrontendConfigName" . }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+spec:
+  redirectToHttps:
+    enabled: {{ $f.redirectToHttps }}
+    {{- if $f.redirectToHttps }}
+    responseCodeName: {{ $f.responseCodeName }}
+    {{- end }}
+  {{- with $f.sslPolicy }}
+  sslPolicy: {{ . | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

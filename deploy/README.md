@@ -1331,6 +1331,20 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   `/elitea-main -healthcheck <path>` inside the container, because the edge
   refuses `/readyz` and `/startupz` to a non-loopback caller, the kubelet
   included; and elitea-web's NetworkPolicy admits elitea-main only.
+- **GKE Ingress.** `main.ingress.gke.enabled` (or `className: gce`) puts
+  elitea-main behind the standard Google Cloud load balancer, optionally behind
+  a proxy of your own: the Service gets `cloud.google.com/neg` and a
+  `cloud.google.com/backend-config` binding on its `http` port, the chart
+  renders a BackendConfig (timeout 3600 s so streams survive, connection
+  draining, an HTTP `/healthz` check on 8080, optional Cloud Armor policy) and
+  a FrontendConfig (HTTPS redirect, optional SSL policy), and
+  `main.ingress.certManager` annotates the Ingress so cert-manager issues the
+  `tls[].secretName` Secret (an external origin CA issuer included). Admit the
+  load balancer's ranges `35.191.0.0/16` and `130.211.0.0/22` in
+  `networkPolicies.main.ingressFrom`. elitea-main writes an SSE comment into
+  every idle stream (chat, project events, notifications, `/llm`, MCP
+  `tools/call`) at least every 40 seconds, so a proxy idle timeout of about 100
+  seconds does not drop one.
 - **One namespace for NATS and the platform.** The Argo CD sample installs
   NATS, its bootstrap and the platform into `elitea`. That is not a
   convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer

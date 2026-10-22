@@ -91,6 +91,18 @@
   `elitea-main -healthcheck <path>`, which reads only the three probe paths;
   any other path would leave the pod never Ready.
 */ -}}
+{{- /*
+  main.ingress.gke wires a GKE Ingress (BackendConfig, FrontendConfig, NEG).
+  None of it applies to an HTTPRoute — a GKE Gateway takes GCPBackendPolicy and
+  GCPGatewayPolicy instead — so the combination would render an edge with none
+  of the timeouts the streams need.
+*/ -}}
+{{- if and .Values.main.enabled .Values.main.ingress.enabled .Values.main.ingress.gatewayApi .Values.main.ingress.gke.enabled }}
+{{- fail "main.ingress.gke.enabled=true needs main.ingress.gatewayApi=false: BackendConfig and FrontendConfig attach to a GKE Ingress, not to an HTTPRoute. For a GKE Gateway, attach a GCPBackendPolicy with a long timeoutSec to the elitea-main Service yourself." }}
+{{- end }}
+{{- if and .Values.main.ingress.certManager.issuer .Values.main.ingress.certManager.clusterIssuer }}
+{{- fail "main.ingress.certManager: set issuer or clusterIssuer, not both. cert-manager's ingress-shim reads one of them." }}
+{{- end }}
 {{- if and .Values.main.enabled (include "elitea-main.webUpstream" .) }}
 {{- range $probe := list "startup" "readiness" }}
 {{- $path := (index $.Values.main.probes $probe).path }}

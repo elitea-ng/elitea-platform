@@ -48,6 +48,81 @@ Service a browser-facing route once named directly.
 {{- end -}}
 {{- end }}
 
+{{/*
+elitea-main.gkeIngress — "true" when the standard Ingress is a GKE one
+(main.ingress.gke): gke.enabled, or className / the kubernetes.io/ingress.class
+annotation naming gce or gce-internal. Empty otherwise, and always empty on
+the HTTPRoute path (BackendConfig and FrontendConfig apply to a GKE Ingress
+only; templates/guards.yaml refuses gke.enabled with gatewayApi).
+*/}}
+{{- define "elitea-main.gkeIngress" -}}
+{{- $i := .Values.main.ingress -}}
+{{- if and .Values.main.enabled $i.enabled (not $i.gatewayApi) -}}
+{{- $class := index ($i.annotations | default dict) "kubernetes.io/ingress.class" | default "" -}}
+{{- if or $i.gke.enabled (has $i.className (list "gce" "gce-internal")) (has $class (list "gce" "gce-internal")) -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/* The BackendConfig the Service names: the chart's own, or the operator's. */}}
+{{- define "elitea-main.gkeBackendConfigName" -}}
+{{- $b := .Values.main.ingress.gke.backendConfig -}}
+{{- if $b.create -}}{{- default (include "elitea-main.fullname" .) $b.name -}}{{- else -}}{{- $b.name -}}{{- end -}}
+{{- end }}
+
+{{/* The FrontendConfig the Ingress names: the chart's own, or the operator's. */}}
+{{- define "elitea-main.gkeFrontendConfigName" -}}
+{{- $f := .Values.main.ingress.gke.frontendConfig -}}
+{{- if $f.create -}}{{- default (include "elitea-main.fullname" .) $f.name -}}{{- else -}}{{- $f.name -}}{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.serviceAnnotations — the Service's annotations as a YAML map: the
+GKE wiring (container-native load balancing and the BackendConfig binding on
+the `http` port only — the runtime listeners on the same Service are gRPC
+over mTLS and never sit behind the load balancer), then main.service.annotations,
+which wins on a clash.
+*/}}
+{{- define "elitea-main.serviceAnnotations" -}}
+{{- $out := dict -}}
+{{- if include "elitea-main.gkeIngress" . -}}
+{{- $_ := set $out "cloud.google.com/neg" (dict "ingress" true | toJson) -}}
+{{- with include "elitea-main.gkeBackendConfigName" . -}}
+{{- $_ := set $out "cloud.google.com/backend-config" (dict "ports" (dict "http" .) | toJson) -}}
+{{- end -}}
+{{- end -}}
+{{- $out = merge (deepCopy (.Values.main.service.annotations | default dict)) $out -}}
+{{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
+{{/*
+elitea-main.ingressAnnotations — the Ingress's annotations as a YAML map:
+the GKE class (when gke.enabled names no class itself), the FrontendConfig
+binding and the cert-manager issuer, then main.ingress.annotations, which wins
+on a clash.
+*/}}
+{{- define "elitea-main.ingressAnnotations" -}}
+{{- $i := .Values.main.ingress -}}
+{{- $out := dict -}}
+{{- if include "elitea-main.gkeIngress" . -}}
+{{- if and (not $i.className) (not (hasKey ($i.annotations | default dict) "kubernetes.io/ingress.class")) -}}
+{{- $_ := set $out "kubernetes.io/ingress.class" "gce" -}}
+{{- end -}}
+{{- with include "elitea-main.gkeFrontendConfigName" . -}}
+{{- $_ := set $out "networking.gke.io/v1beta1.FrontendConfig" . -}}
+{{- end -}}
+{{- end -}}
+{{- with $i.certManager -}}
+{{- if .issuer }}{{ $_ := set $out "cert-manager.io/issuer" .issuer }}{{ end -}}
+{{- if .clusterIssuer }}{{ $_ := set $out "cert-manager.io/cluster-issuer" .clusterIssuer }}{{ end -}}
+{{- if .issuerKind }}{{ $_ := set $out "cert-manager.io/issuer-kind" .issuerKind }}{{ end -}}
+{{- if .issuerGroup }}{{ $_ := set $out "cert-manager.io/issuer-group" .issuerGroup }}{{ end -}}
+{{- end -}}
+{{- $out = merge (deepCopy ($i.annotations | default dict)) $out -}}
+{{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
 {{- define "elitea-main.serviceAccountName" -}}
 {{- if .Values.main.serviceAccount.create }}
 {{- default (include "elitea-main.fullname" .) .Values.main.serviceAccount.name }}

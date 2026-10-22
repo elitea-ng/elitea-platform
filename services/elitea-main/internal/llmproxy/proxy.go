@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
 // Config configures the browser-facing /llm proxy.
@@ -37,6 +40,9 @@ type Proxy struct {
 	// audio caps the /llm/v1/audio requests one principal has in flight
 	// (audio_limits.go).
 	audio *audioInFlight
+	// streamKeepalive overrides ssewriter.KeepaliveInterval in tests. Zero
+	// means the default.
+	streamKeepalive time.Duration
 }
 
 // New builds the proxy.
@@ -117,15 +123,28 @@ func (p *Proxy) writeResponse(w http.ResponseWriter, r *http.Request, resp *Resp
 	// this too, and the edge re-asserts it (design §6.3).
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(resp.StatusCode)
-	flusher := http.NewResponseController(w)
+	// An event stream can go quiet for minutes while a model reasons before
+	// its first token, and a proxy in front of elitea-main (a Cloudflare-style
+	// proxy idles out at 100 seconds) then drops a call that is still alive.
+	// ssewriter.Keepalive writes an SSE comment into an idle stream, only
+	// between events, which every OpenAI-compatible client ignores. Any other
+	// body is copied as it was.
+	var out io.Writer = w
+	flush := http.NewResponseController(w).Flush
+	if isEventStream(resp.Header.Get("Content-Type")) {
+		keepalive := ssewriter.StartKeepalive(w, p.keepaliveInterval())
+		defer keepalive.Stop()
+		out = keepalive
+		flush = func() error { return nil } // Keepalive.Write flushes
+	}
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			if _, werr := out.Write(buf[:n]); werr != nil {
 				return
 			}
-			_ = flusher.Flush()
+			_ = flush()
 		}
 		if errors.Is(err, io.EOF) {
 			return
@@ -140,6 +159,20 @@ func (p *Proxy) writeResponse(w http.ResponseWriter, r *http.Request, resp *Resp
 			panic(http.ErrAbortHandler)
 		}
 	}
+}
+
+// isEventStream reports whether a Content-Type names an SSE body.
+func isEventStream(contentType string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/event-stream")
+}
+
+// keepaliveInterval is the idle bound for a relayed event stream; tests
+// shorten it.
+func (p *Proxy) keepaliveInterval() time.Duration {
+	if p.streamKeepalive > 0 {
+		return p.streamKeepalive
+	}
+	return ssewriter.KeepaliveInterval
 }
 
 // writeHopError answers a request whose gateway call failed.
