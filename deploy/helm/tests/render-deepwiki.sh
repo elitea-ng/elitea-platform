@@ -502,7 +502,7 @@ fi
 # render is refused; an explicit value wins.
 
 echo "== the engine reaches elitea-vector =="
-CHART_VECTOR="--set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key --set main.autoscaling.maxReplicas=3"
+CHART_VECTOR="--set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key "
 engine_vector_url() {
   printf '%s' "$1" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[] | select(.name == "engine") | .env[] | select(.name == "ELITEA_DEEPWIKI_VECTOR_URL") | .value' -
 }

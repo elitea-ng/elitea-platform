@@ -59,7 +59,7 @@ NS=elitea
   --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
   --set inventory.enabled=true --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
   --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.key=url \
-  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key --set main.autoscaling.maxReplicas=3 \
+  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-subapp.yaml"
 # The standalone profile: the runtime plane on, so the command bus's

@@ -37,15 +37,14 @@ CHART="deploy/helm/elitea"
 GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
 
 # values-standalone.yaml turns the runtime plane on, which vector needs.
-# vector.enabled adds the 8-connection token-introspection pool to every
-# elitea-main replica (50 instead of 42), so the profile's 4 replicas no
-# longer fit its 175 available connections: 3 x 50 = 150 do.
+# vector.enabled adds the 2-connection token-introspection pool to every
+# elitea-main replica (44 instead of 42); the profile's 4 replicas still fit
+# its 185 available connections (4 x 44 = 176).
 COMPLETE="\
 -f $CHART/values-standalone.yaml \
 --set llmGateway.egressPosture=allowlist \
 --set llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=elitea.invalid:8000 \
 --set vector.enabled=true \
---set main.autoscaling.maxReplicas=3 \
 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key"
 
 failures=0
@@ -309,8 +308,10 @@ expect_refusal "replication above node count" "cannot place more replicas than n
   --set vector.qdrant.internal.replicas=1
 expect_refusal "one replica" "minReplicas must be at least 2" \
   --set vector.autoscaling.minReplicas=1
-expect_refusal "the introspection pool is in the connection budget" "50 per elitea-main replica" \
-  --set main.autoscaling.maxReplicas=4
+# 9 primary + 36 runtime + 2 introspection = 47 per replica, 188 for four:
+# over 185, while the same primary without vector (45, 180) fits.
+expect_refusal "the introspection pool is in the connection budget" "47 per elitea-main replica" \
+  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=9
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'
 expect_refusal "elitea-main's identity equal to elitea-vector's own" "must differ" \

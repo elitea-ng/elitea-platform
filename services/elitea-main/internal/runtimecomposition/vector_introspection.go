@@ -27,7 +27,7 @@ const maxVectorIntrospectionClients = 16
 // newVectorIntrospection builds the introspection service when clients are
 // configured. Its claim-token reads use VectorIntrospectionPool, a small
 // bounded pool of its own (ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS,
-// 8). The mint stays on the control pool: it is part of the claim. It returns
+// 2). The mint stays on the control pool: it is part of the claim. It returns
 // nil when no clients are configured; vectorIntrospectionOrNil turns that into
 // a nil INTERFACE, never a typed nil, so the private server set leaves the
 // service unregistered.

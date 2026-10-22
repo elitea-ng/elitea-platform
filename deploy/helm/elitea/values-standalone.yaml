@@ -16,26 +16,26 @@
 # consumed the last slot. elitea-main.validateConnectionBudget now refuses to
 # render the mismatch instead.
 #
-# 200 is what this profile expects the server to be configured for. Change it
-# to match yours; the guard checks against whatever it says.
+# 210 is what this profile expects the server to be configured for: four
+# replicas at 44 (36 runtime + 6 primary + 2 for elitea-vector's token
+# introspection, which vector.enabled opens) are 176, plus the 25 reserved,
+# 201. It was 200 before the introspection pool existed; 210 keeps the
+# replica ceiling at four with vector on or off, with a little headroom.
+# Change it to match yours; the guard checks against whatever it says.
 postgresql:
-  maxConnections: 200
+  maxConnections: 210
 
 main:
   # WITH THE RUNTIME PLANE ON, THIS CEILING IS A DATABASE PROPERTY.
   #
   # The chart's default is 10, chosen against CPU and memory targets. Each
-  # replica costs ~42 connections here (36 runtime + 6 primary), so ten of them
-  # is 420 against the 175 the server above leaves — the autoscaler would
+  # replica costs ~44 connections here (36 runtime + 6 primary + 2 for
+  # elitea-vector's token introspection when vector.enabled), so ten of them
+  # is 440 against the 185 the server above leaves — the autoscaler would
   # exhaust PostgreSQL long before it exhausted a node.
   #
-  # 4 x 42 = 168, inside 175. Raise this only together with
+  # 4 x 44 = 176, inside 185. Raise this only together with
   # postgresql.maxConnections; the guard checks the pair, which is the point.
-  #
-  # vector.enabled adds elitea-vector's token-introspection pool (8
-  # connections per replica, ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS):
-  # 50 per replica, so 4 replicas no longer fit. Lower maxReplicas to 3 (150) or
-  # raise postgresql.maxConnections to 225 when you turn vector on.
   autoscaling:
     maxReplicas: 4
 
