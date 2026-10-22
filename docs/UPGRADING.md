@@ -948,6 +948,10 @@ certificate and chart/env names (`ELITEA_RUNTIME_PLATFORM_*`,
    sub-application callback identity), then
    recreate the stack. The `standalone_runtime_edge` volume is unused and can
    be removed.
+8. `main.env.LLM_GATEWAY_URL` must name the gateway's gRPC listener,
+   `https://elitea-llm-gateway-grpc:8443` (`llmGateway.service.grpcName` /
+   `grpcPort`). The chart refuses the HTTP port (`:8083`, health and metrics
+   only), which values written for the edge Traefik often still name.
 
 ## The X-Auth-* edge identity plane is removed; Form sessions resolve in elitea-main — BREAKING for external auth edges
 
