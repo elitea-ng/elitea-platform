@@ -246,6 +246,55 @@ func TestCurrentApplicationStartDoesNotBlockWhenSuggestionPolicyIsUnavailable(t 
 	}
 }
 
+// TestCurrentApplicationStartWithoutASuggestionSourceCarriesNull is the
+// production wiring: no policy source exists (#334), so the resolver is nil
+// and the turn carries `null`.
+func TestCurrentApplicationStartWithoutASuggestionSourceCarriesNull(t *testing.T) {
+	resolver := &currentApplicationResolverStub{
+		target: CurrentApplicationTarget{
+			ApplicationID:        31,
+			ApplicationVersionID: 41,
+			Variables:            json.RawMessage(`[]`),
+			VersionDetails:       json.RawMessage(`{"id":41,"application_id":31,"agent_type":"agent","instructions":"Be concise","llm_settings":{"model_name":"test"},"meta":{},"tools":[]}`),
+			ChatHistory:          json.RawMessage(`[]`),
+		},
+	}
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-1",
+		CommandID:   "command-1",
+		Created:     true,
+	}}
+	service, err := NewCurrentApplicationStartService(
+		resolver,
+		resolver,
+		resolver,
+		resolver,
+		nil,
+		&currentAgentGuardrailStub{},
+		&currentApplicationVersionFreezerStub{},
+		admissions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.StartCurrentApplication(
+		context.Background(),
+		validCurrentApplicationStartRequest(),
+	); err != nil {
+		t.Fatalf("a missing suggestion source blocked the turn: %v", err)
+	}
+	if len(admissions.requests) != 1 {
+		t.Fatalf("admissions=%d", len(admissions.requests))
+	}
+	if got := admissions.requests[0].Input.GetNextInputSuggestion(); !bytes.Equal(got, []byte(`null`)) {
+		t.Fatalf("next input suggestion policy=%s", got)
+	}
+	if len(resolver.nextSuggestionCalls) != 0 {
+		t.Fatalf("suggestion calls=%v", resolver.nextSuggestionCalls)
+	}
+}
+
 func TestCurrentApplicationStartPreservesPipelineYAMLInTheExistingApplicationContract(t *testing.T) {
 	pipelineYAML := "nodes:\n  - id: draft\n    type: llm\n  - id: review\n    type: hitl\nedges:\n  - from: draft\n    to: review\n"
 	versionDetails, err := json.Marshal(map[string]any{

@@ -348,19 +348,11 @@ in a mixed deployment for the same reason. A plain adhoc turn touches none of th
 The web chat surface also still emits into a noop socket.io client rather than
 subscribing to `{events_url}`; that port is #93.
 
-Next-input suggestions are inert. This is a deliberate gap (#334). Each turn
-asks for the suggestion policy, whose legacy contract was
-`GET /api/v2/elitea_core/next_input_suggestion_config/prompt_lib/{projectID}`.
-**No readable repository implements that path.** This monorepo does not. The
-pylon runtime and the plugin repositories do not.
-
-Until #1359 elitea-main asked over HTTP, calling itself, and every call came
-back 404. That self call is gone: the resolver asks an in-process policy source
-(`internal/infra/currentcore`), none exists, and the turn carries
-`next_input_suggestion: null` with no network hop. The policy is optional
-metadata and the caller fails open by design. The first failure is logged once
-for each process, at warning level. `ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`,
-which once named the origin of that call and then of the worker's internal
+Next-input suggestions are inert (#334). No server owns a suggestion policy,
+so elitea-main wires no policy source and every turn carries
+`next_input_suggestion: null` with no lookup at all. The policy is optional
+metadata, and the turn never waits on it. `ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`,
+which once named the origin of that lookup and then of the worker's internal
 MCP, is retired (#1359 U5) and refused at boot.
 
 The product owner must settle #334. The Go stack can own the policy, or the team

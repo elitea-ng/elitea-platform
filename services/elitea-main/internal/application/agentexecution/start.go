@@ -115,10 +115,12 @@ type CurrentApplicationResolver interface {
 	) (CurrentApplicationTarget, error)
 }
 
-// NextInputSuggestionPolicyResolver resolves the current platform's effective,
-// project-scoped suggestion policy for one authenticated execution actor. The
-// policy is optional execution metadata: an unavailable current dependency must
-// never prevent the primary agent turn from being admitted.
+// NextInputSuggestionPolicyResolver resolves the effective, project-scoped
+// suggestion policy for one authenticated execution actor. The policy is
+// optional execution metadata: an unavailable dependency must never prevent the
+// primary agent turn from being admitted. It is optional: the platform owns no
+// suggestion policy today (#334), so production passes nil and every turn
+// carries `next_input_suggestion: null`.
 type NextInputSuggestionPolicyResolver interface {
 	ResolveNextInputSuggestionPolicy(
 		context.Context,
@@ -249,7 +251,7 @@ func NewCurrentApplicationStartService(
 	admissions admissionSubmitter,
 ) (*CurrentApplicationStartService, error) {
 	if resolver == nil || adhocResolver == nil || regenerationResolver == nil ||
-		continuationResolver == nil || suggestionResolver == nil || guardrailPolicies == nil ||
+		continuationResolver == nil || guardrailPolicies == nil ||
 		freezer == nil || admissions == nil {
 		return nil, errors.New("current application start dependencies are required")
 	}
@@ -667,6 +669,9 @@ func (service *CurrentApplicationStartService) resolveNextInputSuggestionPolicy(
 	projectID int64,
 	actorUserID int64,
 ) json.RawMessage {
+	if service.suggestionResolver == nil {
+		return json.RawMessage(`null`)
+	}
 	policy, err := service.suggestionResolver.ResolveNextInputSuggestionPolicy(
 		ctx,
 		projectID,
