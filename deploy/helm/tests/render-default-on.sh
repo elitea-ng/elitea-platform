@@ -96,7 +96,8 @@ want_env = {
     "ELITEA_INVENTORY_GIT_ALLOWLIST": "github.com,*.github.com",
     "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET": "elitea-inventory-grpc:9443",
     "ELITEA_INVENTORY_SERVER_NAME": "elitea-inventory-svc",
-    "ELITEA_VECTOR_GRPC_TARGET": "elitea-vector:9470",
+    "ELITEA_VECTOR_GRPC_TARGET": "elitea-vector-grpc:9470",
+    "ELITEA_VECTOR_GRPC_SERVER_NAME": "elitea-vector",
     "ELITEA_VECTOR_INTROSPECTION_CLIENTS": "dns:elitea-vector",
 }
 for k, v in want_env.items():

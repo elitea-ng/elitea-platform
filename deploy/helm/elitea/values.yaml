@@ -1808,8 +1808,8 @@ platform:
 #
 # WHAT SCALES ON WHAT (the Scaling page of the deployment docs has the table):
 #   worker      KEDA nats-jetstream (the lag of its durable consumer) | CPU.
-#   deepwiki,   KEDA prometheus (invocations in flight + refused busy) | KEDA
-#   inventory   postgresql (running + refused-busy invocation rows) | CPU. More
+#   deepwiki,   KEDA prometheus (invocations in flight + refused fleet-full) | KEDA
+#   inventory   postgresql (running + refused fleet-full invocation rows) | CPU. More
 #               than one replica needs the host's database (invocation store).
 #   llmGateway  KEDA prometheus | HPA Pods metric through the adapter
 #               (gateway_llm_sse_active_connections) | CPU.
@@ -6045,6 +6045,13 @@ vector:
     # Named explicitly: the server certificate's DNS SANs name this Service.
     name: elitea-vector
     port: 9470
+    # The HEADLESS Service (scaling) that elitea-main dials: DNS gives one
+    # address for each ready replica, and elitea-main's round_robin keeps a
+    # connection to each one. elitea-main still verifies the certificate
+    # against `name` (ELITEA_VECTOR_GRPC_SERVER_NAME), so the certificate
+    # does not change. The Rust clients (the worker, the engines) dial `name`
+    # and spread through the server's connection age.
+    grpcName: elitea-vector-grpc
   # The plain-HTTP health listener (/healthz, /readyz). Probe-only: it is not
   # on the Service, and the NetworkPolicy admits nobody to it.
   healthPort: 9471

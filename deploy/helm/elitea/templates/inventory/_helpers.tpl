@@ -122,6 +122,24 @@ another.
 {{- end }}
 
 {{/*
+elitea-inventory.hostStoreSecrets — the database URL secret for the HOST's
+invocation store, as JSON: elitea-inventory.databaseSecrets, but only under
+the condition that renders the migrate Job (a sidecar and migrate.enabled).
+Engine migration 0009 creates the host's tables (invocations,
+invocation_events, host_replicas). Without the Job nothing creates them, and a
+host that got the URL would fail at its first query and restart for ever. So
+without the Job the host gets no URL: it keeps its invocations in memory, and
+validateGuards keeps it at one replica.
+*/}}
+{{- define "elitea-inventory.hostStoreSecrets" -}}
+{{- if and (include "elitea-inventory.sidecar" .) .Values.inventory.migrate.enabled -}}
+{{- include "elitea-inventory.databaseSecrets" . -}}
+{{- else -}}
+{}
+{{- end -}}
+{{- end }}
+
+{{/*
 elitea-inventory.validateGuards — the settings that are silently wrong rather
 than loudly missing.
 
@@ -170,10 +188,11 @@ elitea-main
   a deletion is served by any replica. Without that database each replica
   keeps its invocations in memory, and a poll that reaches another replica
   answers NOT_FOUND for a running ingestion. So more than one replica needs
-  the database secret.
+  the database secret, and the migrate Job that creates the host's tables
+  (elitea-inventory.hostStoreSecrets).
 */ -}}
-{{- if and (gt (int (include "elitea.scaling.maxReplicas" .Values.inventory)) 1) (not (fromJson (include "elitea-inventory.databaseSecrets" .))) -}}
-{{- fail (printf "inventory can run %d replicas (%s), but its host has no invocation store: no database secret is configured (inventory.secrets.ELITEA_INVENTORY_DATABASE_URL or postgresql.existingSecret). Without it each replica keeps its invocations in memory, and a poll that reaches another replica answers not-found for a running ingestion. Configure the database, or keep one replica (inventory.autoscaling.enabled=false)." (int (include "elitea.scaling.maxReplicas" .Values.inventory)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.inventory) "true"))) -}}
+{{- if and (gt (int (include "elitea.scaling.maxReplicas" .Values.inventory)) 1) (not (fromJson (include "elitea-inventory.hostStoreSecrets" .))) -}}
+{{- fail (printf "inventory can run %d replicas (%s), but its host has no invocation store. The store needs a database secret (inventory.secrets.ELITEA_INVENTORY_DATABASE_URL or postgresql.existingSecret) and the migrate Job that creates its tables (the host runner \"sidecar\" and inventory.migrate.enabled=true). Without it each replica keeps its invocations in memory, and a poll that reaches another replica answers not-found for a running ingestion. Configure both, or keep one replica (inventory.autoscaling.enabled=false)." (int (include "elitea.scaling.maxReplicas" .Values.inventory)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.inventory) "true"))) -}}
 {{- end -}}
 {{- /*
   The provider's one listener is gRPC over mutual TLS (#1359): the SPI and the

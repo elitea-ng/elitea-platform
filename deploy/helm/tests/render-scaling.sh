@@ -220,11 +220,14 @@ all(container(n, n)['lifecycle']['preStop'] == {'sleep': {'seconds': 5}} and
     env(n, n, 'ELITEA_%s_DRAIN_TIMEOUT_SECONDS' % n.split('-')[1].upper()) == '3600' and
     pod(n)['terminationGracePeriodSeconds'] == 3630
     for n in ('elitea-deepwiki', 'elitea-inventory'))"
-# The kubelet sends SIGTERM to both containers at once. The engine sidecar
-# sleeps through the host's preStop and gRPC stop (5 + 15) so a call the host
-# admits in that window does not find the engine gone.
-check default "DeepWiki and Inventory engines: preStop sleep preStop + 15 = 20" "
-all(container(n, 'engine')['lifecycle']['preStop'] == {'sleep': {'seconds': 20}}
+# The engine is a NATIVE sidecar: the kubelet stops it only after the host
+# container has exited, so every engine call of a draining invocation finds
+# the engine serving. No preStop sleep is needed on it.
+check default "DeepWiki and Inventory engines: native sidecars (init, restartPolicy Always), not plain containers" "
+all([c['name'] for c in pod(n).get('initContainers', [])] == ['engine'] and
+    pod(n)['initContainers'][0]['restartPolicy'] == 'Always' and
+    'lifecycle' not in pod(n)['initContainers'][0] and
+    'engine' not in [c['name'] for c in pod(n)['containers']]
     for n in ('elitea-deepwiki', 'elitea-inventory'))"
 check default "elitea-vector: preStop sleep 5, grace >= 5 + gRPC drain 20" \
   "container('elitea-vector','elitea-vector')['lifecycle']['preStop'] == {'sleep': {'seconds': 5}} and pod('elitea-vector')['terminationGracePeriodSeconds'] >= 25"
@@ -336,8 +339,8 @@ check keda-cluster "no hook beside an external KEDA (Capabilities)" "not [d for 
 
 # ── DeepWiki: keda-prometheus / keda-postgresql / cpu ──────────────────────
 echo "== deepwiki"
-DW_PG_QUERY="SELECT count(*) FROM invocations WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'error_category' = 'service_busy')"
-DW_PROM_QUERY='(sum(elitea_subapp_invocations_in_flight{app="elitea-deepwiki",namespace="elitea"}) or vector(0)) + (sum(increase(elitea_subapp_slot_refusals_total{app="elitea-deepwiki",namespace="elitea"}[5m])) or vector(0))'
+DW_PG_QUERY="SELECT count(*) FROM invocations WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'busy_reason' = 'fleet_full')"
+DW_PROM_QUERY='(sum(elitea_subapp_invocations_in_flight{app="elitea-deepwiki",namespace="elitea"}) or vector(0)) + (sum(increase(elitea_subapp_slot_refusals_total{app="elitea-deepwiki",reason="fleet_full",namespace="elitea"}[5m])) or vector(0))'
 check default "auto without KEDA: a CPU HPA, no ScaledObject, no replicas:" \
   "one('HorizontalPodAutoscaler','elitea-deepwiki')['spec']['metrics'][0]['resource']['name'] == 'cpu' and not has('ScaledObject','elitea-deepwiki') and 'replicas' not in one('Deployment','elitea-deepwiki')['spec']"
 # The slots are per replica and the fleet admits their sum, so the default
@@ -376,7 +379,7 @@ expect_render "DeepWiki at one replica without a database" dw-one "${NO_DB[@]}" 
 
 # ── Inventory: more than one replica on its invocation store ───────────────
 echo "== inventory"
-INV_PG_QUERY="SELECT count(*) FROM inventory_graph.invocations WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'error_category' = 'service_busy')"
+INV_PG_QUERY="SELECT count(*) FROM inventory_graph.invocations WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'busy_reason' = 'fleet_full')"
 check default "Inventory autoscales 1-3 with its database (a CPU HPA without KEDA)" \
   "hpa_range('elitea-inventory') == (1, 3) and 'replicas' not in one('Deployment','elitea-inventory')['spec']"
 expect_render "Inventory, two fixed replicas with the database" inv-two \

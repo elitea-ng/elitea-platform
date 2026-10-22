@@ -30,28 +30,56 @@ with a namespace label other than `namespace`, or bundle KEDA
   `ELITEA_INVENTORY_DATABASE_URL` from the engine's secret, with its own pool
   `ELITEA_INVENTORY_DATABASE_MAX_CONNS` ("2"). The database role must be able
   to read and write those tables (the migration creates them as that role).
-  More than one replica without a database secret is refused, for DeepWiki
-  too; a fixture install without a database sets
-  `<app>.autoscaling.enabled: false`.
+  The host gets the URL only while the migrate Job renders (the host runner
+  `sidecar` and `inventory.migrate.enabled: true`), because only that Job
+  creates its tables. Without it the host keeps its invocations in memory.
+  More than one replica without a store is refused, for DeepWiki too; a
+  fixture install without a database, or an Inventory install with
+  `inventory.migrate.enabled: false`, sets `<app>.autoscaling.enabled: false`.
 * **DeepWiki's generation slots are fleet-wide.** Migration 0009 adds
   `invocations.labels`, `invocations.holds_slot` and `host_replicas`. A
   generation is admitted only while the running generations are fewer than
-  the slots (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`) of all live replicas.
-  When every slot is busy, the call ends at once with `service_busy` ("All N
-  generation slots are busy"). Before, the slots were advisory and a second
-  generation ran on the same replica anyway. Raise
-  `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` or the replica ceiling if users start
-  generations at the same time. A deletion and a cancel now stop runs on
-  every replica, with or without NATS.
-* **Upgrade order.** The host writes its `host_replicas` row at start. Until
-  the engine sidecar has applied migration 0009, the host restarts; this
-  clears itself when the sidecar's migration runs, as for the invocation
-  tables before.
+  the slots (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`, per replica) of all
+  live replicas. A replica whose own slots are full still admits while the
+  fleet has a free slot. When the whole fleet is full, the call ends at once
+  with `service_busy` ("All N generation slots are busy"), and the poll body
+  carries one more key, `busy_reason` (`fleet_full`, `draining` or
+  `local_full`). Before, the slots were advisory and a second generation ran
+  on the same replica anyway. Raise `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`
+  or the replica ceiling if users start generations at the same time. A
+  deletion and a cancel now stop runs on every replica, with or without
+  NATS, and a deletion's stop fence (migration 0010, `host_stop_fences`)
+  refuses a matching run that starts on any replica while the deletion runs.
+* **Upgrade order.** The host checks `host_replicas` and `host_stop_fences`
+  at start. Until the engine's migrate Job has applied migrations 0009 and
+  0010, the host restarts; this clears itself when the Job runs (it is a
+  pre-upgrade hook, so with Helm it runs first).
+* **A mixed fleet during the rolling upgrade.** During a rolling upgrade, old
+  and new replicas run at the same time. An old replica does not register in
+  `host_replicas` and does not mark its generations as slot holders. The new
+  replicas count each unfinished generation of an old replica as a used
+  slot. The old replica adds no slots to the fleet capacity, so its
+  generations only reduce the free slots. A deletion on a new replica stops
+  the generations of old replicas by their tool, because their rows have no
+  labels. Thus it stops all old-replica generations of that tool, not only
+  those of the deleted project or wiki. An old replica does not see the stop
+  until it ends or is reconciled, so the deletion can be refused until then.
+  Do the deletion again after the upgrade. An old replica does not check the
+  deletion fences, so it can start a new generation during a deletion. When
+  an old replica stops, the new replicas end its unfinished rows after the
+  owner grace, and its slots are free again. Old Inventory replicas keep
+  their invocations in memory, so the new replicas do not see them at all;
+  an ingestion that runs on an old replica is polled on that replica only
+  until the rollout replaces it.
 * **DeepWiki and Inventory drain for an hour.** `*_DRAIN_TIMEOUT_SECONDS`
   30 → 3600, `terminationGracePeriodSeconds` 60 → 3630, and a native preStop
   sleep of 5 s (`<app>.preStop.sleepSeconds`). On SIGTERM a replica stops
-  admitting and finishes its running work; the engine sidecar keeps serving
-  until it is idle. A rollout of these Deployments can therefore take up to
+  admitting and finishes its running work. The engine is now a **native
+  sidecar** (in `initContainers`, `restartPolicy: Always`): the kubelet stops
+  it only after the host container has exited, so every engine call of a
+  draining invocation finds it serving. Tools that read
+  `spec.containers[1]` for the engine now read `spec.initContainers[0]`
+  (`kubectl logs -c engine` does not change). A rollout of these Deployments can therefore take up to
   an hour while a build runs. The Cluster Autoscaler gives an evicted pod at
   most 600 s by default; see the Scaling page for
   `cluster-autoscaler.kubernetes.io/safe-to-evict`.
@@ -68,17 +96,23 @@ with a namespace label other than `namespace`, or bundle KEDA
 * **Balanced gRPC hops.** elitea-main dials DeepWiki and Inventory through
   new headless Services (`elitea-deepwiki-grpc`, `elitea-inventory-grpc`)
   with `round_robin`, and checks the certificate against the old Service
-  name, so the certificates do not change. elitea-vector closes a client
-  connection after `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS` (300) so the
-  clients spread over its replicas. An explicit
-  `ELITEA_<APP>_PLATFORM_GRPC_TARGET` still wins.
+  name, so the certificates do not change. elitea-main dials elitea-vector
+  the same way: the headless `elitea-vector-grpc`
+  (`vector.service.grpcName`), with `ELITEA_VECTOR_GRPC_SERVER_NAME` set to
+  `elitea-vector`. elitea-vector closes a client connection after
+  `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS` (300), so the Rust clients (the
+  worker, the engines), which dial the ClusterIP Service, also spread over
+  its replicas. An explicit `ELITEA_<APP>_PLATFORM_GRPC_TARGET` or
+  `ELITEA_VECTOR_GRPC_TARGET` still wins.
 * **The Prometheus queries take the namespace label from
   `scaling.prometheus.namespaceLabel`** (default `namespace`; `""` drops the
   matcher) and add `scaling.prometheus.extraMatchers`. An annotation-based
   scrape that writes `kubernetes_namespace` no longer needs a hand-written
   `autoscaling.prometheus.query`. DeepWiki's and Inventory's queries now add
-  the generations refused busy (`elitea_subapp_slot_refusals_total`, a new
-  counter on the host's admin port).
+  the generations refused because the fleet was full
+  (`elitea_subapp_slot_refusals_total{reason="fleet_full"}`, a new counter on
+  the host's admin port, labelled `reason`; the postgresql source counts the
+  rows with `busy_reason` `fleet_full`).
 * **KEDA uninstall hook.** With `keda.enabled`, a pre-delete Job
   (`<release>-keda-cleanup`, the elitea-main image) deletes the release's
   ScaledObjects and TriggerAuthentications and waits for KEDA to run their

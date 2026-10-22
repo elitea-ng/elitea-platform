@@ -117,6 +117,10 @@
       "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" (printf "%s/tls.crt" $mount)
       "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" (printf "%s/tls.key" $mount)
       "ELITEA_VECTOR_GRPC_CA_FILE" (printf "%s/ca.crt" $mount)) }}
+{{- /* The target is the headless Service; the certificate names the ClusterIP one. */ -}}
+{{- if not (get $env "ELITEA_VECTOR_GRPC_SERVER_NAME") }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_VECTOR_GRPC_SERVER_NAME" .Values.vector.service.name) }}
+{{- end }}
 {{- end }}
 {{- /*
   values.yaml ships the five entries (and the ELITEA_VECTOR_CLEANUP_ABANDON

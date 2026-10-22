@@ -6,6 +6,6 @@
   keda-postgresql trigger counts inventory_graph.invocations through the same
   secret the host and the engine read.
 */ -}}
-{{- $db := get (fromJson (include "elitea-inventory.databaseSecrets" .)) "ELITEA_INVENTORY_DATABASE_URL" }}
+{{- $db := get (fromJson (include "elitea-inventory.hostStoreSecrets" .)) "ELITEA_INVENTORY_DATABASE_URL" }}
 {{- include "elitea.scaling.subappAutoscaler" (dict "ctx" . "key" "inventory" "fullname" (include "elitea-inventory.fullname" .) "labels" (include "elitea-inventory.labels" .) "selector" (include "elitea-inventory.selectorLabels" .) "dbSecret" ($db | default "") "table" "inventory_graph.invocations") }}
 {{- end }}

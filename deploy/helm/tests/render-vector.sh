@@ -218,11 +218,22 @@ main_target="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTO
 main_cert="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE')"
 main_key="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE')"
 main_ca="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CA_FILE')"
-[ "$main_target" = "elitea-vector:9470" ] && [ "$main_cert" = "/run/elitea-vector-client/tls.crt" ] \
+[ "$main_target" = "elitea-vector-grpc:9470" ] && [ "$main_cert" = "/run/elitea-vector-client/tls.crt" ] \
   && [ "$main_key" = "/run/elitea-vector-client/tls.key" ] && [ "$main_ca" = "/run/elitea-vector-client/ca.crt" ] \
-  && note "elitea-main dials elitea-vector:9470 with the mounted certificate" \
+  && note "elitea-main dials the headless elitea-vector-grpc:9470 with the mounted certificate" \
   || fail "elitea-main vector client env: target='$main_target' cert='$main_cert' key='$main_key' ca='$main_ca'"
-
+# round_robin needs one DNS address per replica: the target is headless, and
+# elitea-main verifies the certificate against the ClusterIP name it carries.
+main_sni="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_SERVER_NAME')"
+[ "$main_sni" = "elitea-vector" ] && note "elitea-main verifies the server name elitea-vector (the certificate's SAN)" \
+  || fail "ELITEA_VECTOR_GRPC_SERVER_NAME is '$main_sni', want elitea-vector"
+headless_ip="$(select_one "$on" Service elitea-vector-grpc '.spec.clusterIP')"
+headless_port="$(select_one "$on" Service elitea-vector-grpc '.spec.ports[0].port')"
+headless_sel="$(select_one "$on" Service elitea-vector-grpc '.spec.selector | to_entries | map(.key + "=" + .value) | join(",")')"
+cluster_sel="$(select_one "$on" Service elitea-vector '.spec.selector | to_entries | map(.key + "=" + .value) | join(",")')"
+[ "$headless_ip" = "None" ] && [ "$headless_port" = "9470" ] && [ -n "$headless_sel" ] && [ "$headless_sel" = "$cluster_sel" ] \
+  && note "the headless Service elitea-vector-grpc selects the same pods on port 9470" \
+  || fail "headless elitea-vector-grpc: clusterIP='$headless_ip' port='$headless_port' selector='$headless_sel' (ClusterIP selector '$cluster_sel')"
 main_mount="$(select_one "$on" Deployment elitea-main '.spec.template.spec.containers[] | select(.name == "elitea-main") | .volumeMounts[] | select(.name == "vector-client-material") | .mountPath')"
 main_secret="$(select_one "$on" Deployment elitea-main '.spec.template.spec.volumes[] | select(.name == "vector-client-material") | .secret.secretName')"
 [ "$main_mount" = "/run/elitea-vector-client" ] && [ "$main_secret" = "elitea-main-vector-client-tls" ] \

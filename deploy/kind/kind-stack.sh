@@ -456,7 +456,7 @@ cmd_verify() {
   host_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
       -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   engine_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{.items[0].spec.containers[1].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
+      -o jsonpath='{.items[0].spec.initContainers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   if [ "$host_runner" != "native" ] || [ "$engine_runner" != "fixture" ]; then
     fail "runners are host=${host_runner} engine=${engine_runner}; expected native/fixture"
   else

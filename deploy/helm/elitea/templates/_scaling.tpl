@@ -422,12 +422,13 @@ prometheus.io/path: {{ .path }}
   above the fleet's slots and alone could never ask for one more replica:
   both sources add the demand refused in the last 5 minutes.
     keda-prometheus  sum(elitea_subapp_invocations_in_flight{app=...}) +
-                     increase(elitea_subapp_slot_refusals_total[5m]) from the
+                     increase(elitea_subapp_slot_refusals_total{reason=
+                     "fleet_full"}[5m]) from the
                      host's admin /metrics, divided by MAX_PARALLEL_WORKERS.
                      Needs KEDA, scaling.prometheus.serverAddress and a scrape.
     keda-postgresql  count(*) of the host's invocations rows that are running
-                     (finished_at IS NULL) or were refused busy in the last 5
-                     minutes, divided by MAX_PARALLEL_WORKERS. Needs KEDA and
+                     (finished_at IS NULL) or were refused with busy_reason
+                     fleet_full in the last 5 minutes, divided by MAX_PARALLEL_WORKERS. Needs KEDA and
                      the host's own database (DeepWiki: invocations;
                      Inventory: inventory_graph.invocations).
     cpu              a CPU HorizontalPodAutoscaler (metrics-server).
@@ -670,21 +671,24 @@ spec:
     # plus the generations refused busy in the last 5 minutes. `or vector(0)`
     # keeps one absent series from making the whole sum empty.
     {{- $sel := include "elitea.scaling.promSelector" (dict "ctx" $ctx "matchers" (list (printf "app=%q" $app))) }}
+    {{- /* Only a fleet-full refusal is demand: a draining replica's refusal leaves with the replica. */}}
+    {{- $refusedSel := include "elitea.scaling.promSelector" (dict "ctx" $ctx "matchers" (list (printf "app=%q" $app) "reason=\"fleet_full\"")) }}
     - type: prometheus
       metadata:
         serverAddress: {{ include "elitea.scaling.prometheusAddress" $ctx | quote }}
-        query: {{ ($a.prometheus | default dict).query | default (printf "(sum(elitea_subapp_invocations_in_flight%s) or vector(0)) + (sum(increase(elitea_subapp_slot_refusals_total%s[5m])) or vector(0))" $sel $sel) | quote }}
+        query: {{ ($a.prometheus | default dict).query | default (printf "(sum(elitea_subapp_invocations_in_flight%s) or vector(0)) + (sum(increase(elitea_subapp_slot_refusals_total%s[5m])) or vector(0))" $sel $refusedSel) | quote }}
         threshold: {{ $slots | quote }}
         ignoreNullValues: "true"
     {{- else }}
     # The unfinished rows (running, and admitted but waiting for a local slot)
-    # of the host's shared invocation store, plus the rows refused busy in the
-    # last 5 minutes: the table the engine's migrations own. DeepWiki's is
+    # of the host's shared invocation store, plus the rows refused because
+    # the whole fleet was full (busy_reason fleet_full) in the last 5
+    # minutes: the table the engine's migrations own. DeepWiki's is
     # unqualified and resolves through the DSN's search_path, as the host's
     # own statements do; Inventory's is in the inventory_graph schema.
     - type: postgresql
       metadata:
-        query: {{ printf "SELECT count(*) FROM %s WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'error_category' = 'service_busy')" (.table | default "invocations") | quote }}
+        query: {{ printf "SELECT count(*) FROM %s WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'busy_reason' = 'fleet_full')" (.table | default "invocations") | quote }}
         targetQueryValue: {{ $slots | quote }}
       authenticationRef:
         name: {{ .fullname }}-keda-postgresql

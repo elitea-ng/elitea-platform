@@ -17,7 +17,7 @@ Every Elitea workload either has an autoscaler or is a singleton for a stated re
 | | HPA | CPU (70 %) | metrics-server | |
 | Agent worker | KEDA `nats-jetstream` + CPU | consumer lag on the agent command stream; one replica per `delivery_max_concurrency` (32) commands | KEDA | 1 to 10 |
 | | HPA | CPU (70 %) | metrics-server | |
-| DeepWiki | KEDA `prometheus` + CPU | running invocations plus the generations refused busy in the last 5 minutes, one replica per `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` | KEDA, Prometheus scraping the host's admin port | 1 to 3 |
+| DeepWiki | KEDA `prometheus` + CPU | running invocations plus the generations refused fleet-full in the last 5 minutes, one replica per `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` | KEDA, Prometheus scraping the host's admin port | 1 to 3 |
 | | KEDA `postgresql` + CPU | the same, counted in the `invocations` table | KEDA, the host's database | |
 | | HPA | CPU (70 %) | metrics-server | |
 | Inventory | as DeepWiki | running ingestions, counted in `inventory_graph.invocations` | as DeepWiki; the host's database is required for more than one replica | 1 to 3 |
@@ -41,15 +41,15 @@ While an autoscaler owns a Deployment, the chart renders **no `replicas:` field*
 An invocation runs on the replica that accepted it, from start to end. Its row is in a **shared invocation store** in the engine's database (DeepWiki: `invocations`; Inventory: `inventory_graph.invocations`), so any replica answers a poll, a cancel or a deletion:
 
 - A cancel goes to the owner replica over NATS. The owner also reads the stop requests on its own rows at each claim check (10 s), so a cancel arrives without NATS too.
-- A deletion stops the matching runs on **every** replica, and waits until they end.
+- A deletion stops the matching runs on **every** replica, and waits until they end. While it runs, a **stop fence** (`host_stop_fences`) refuses a new run that matches it on every replica, so a generation that starts during the deletion cannot publish the index again.
 - When a replica stops, another replica marks the runs it left behind as terminal.
-- Generation slots are **fleet-wide**. A replica writes its slot count (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`) in `host_replicas` and renews it at each claim check. A generation is admitted only while the replica that takes the call has a free slot of its own, and the running generations are fewer than the slots of all live replicas that admit work. A replica that drains stops admitting, and its running generations leave the count together with its slots. A call is never queued: when no slot is free, the call is accepted and ends at once with `service_busy` ("All N generation slots are busy"), and the UI shows that message. The slots page reports the same fleet numbers.
+- Generation slots are **fleet-wide**. A replica writes its slot count (`ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS`) in `host_replicas`, and a heartbeat apart from the claim check keeps the row live. A generation is admitted while the running generations are fewer than the slots of all live replicas that admit work. A replica whose own slots are full still admits while the fleet has a free slot (it runs above its own count; the fleet total is the bound), so a call that `round_robin` sends to a busy replica is not refused while a sibling is idle. A replica that drains, or that is not live, leaves the count with its slots and its running generations together. A call is never queued: when no slot is free, the call is accepted and ends at once with `service_busy` ("All N generation slots are busy"), and the UI shows that message. The slots page reports the same fleet numbers.
 - The setting is **per replica**, so the fleet's capacity grows with the fleet: fleet slots = `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` × live replicas that admit work. The default is 1 slot per replica and 1 to 3 replicas, so 1 to 3 generations at once. One slot per replica is deliberate: a generation holds a whole engine (memory, CPU and 4 database connections), and a second generation on the same pod slows both. To run more generations at once, raise `deepwiki.autoscaling.maxReplicas` (capacity added on demand), raise `minReplicas` (capacity always there), or raise the slots per replica together with the engine's memory and the connection budget.
 - With `source: cpu` (no KEDA), a refused generation does not make the fleet grow: only CPU does. If your users start generations at the same time, set `minReplicas` to the number of generations you expect at once, or install KEDA so the refused demand counts.
 
-The refused generations are part of the scaling signal (`elitea_subapp_slot_refusals_total` on the admin port, or the refused rows in the table). Without them the running count could never be above the slots, and the fleet could not grow.
+The generations refused because the whole fleet was full are part of the scaling signal: `elitea_subapp_slot_refusals_total{reason="fleet_full"}` on the admin port, or the rows whose result has `busy_reason` `fleet_full`. Without them the running count could never be above the slots, and the fleet could not grow. The other reasons (`draining`, and `local_full` on a one-replica install without a database) are not demand and are not counted.
 
-More than one replica needs the host's database (`postgresql.existingSecret`, or `deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL` and `inventory.secrets.ELITEA_INVENTORY_DATABASE_URL`). Without it, the chart refuses `maxReplicas` above 1: each replica would keep its invocations in memory. With a fixture runner and no database, set `deepwiki.autoscaling.enabled: false` or `inventory.autoscaling.enabled: false`.
+More than one replica needs the host's database (`postgresql.existingSecret`, or `deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL` and `inventory.secrets.ELITEA_INVENTORY_DATABASE_URL`). For Inventory, the host also needs the migrate Job that creates its tables (the host runner `sidecar` and `inventory.migrate.enabled: true`); without the Job the host gets no database URL. Without a store, the chart refuses `maxReplicas` above 1: each replica would keep its invocations in memory. With a fixture runner and no database, set `deepwiki.autoscaling.enabled: false` or `inventory.autoscaling.enabled: false`.
 
 ### Singletons and their high-availability story
 
@@ -71,9 +71,10 @@ A gRPC client keeps one HTTP/2 connection and sends every call on it. Behind a C
 | elitea-main → LLM gateway | headless `elitea-llm-gateway-grpc`, `round_robin` | 5 min |
 | elitea-main → DeepWiki | headless `elitea-deepwiki-grpc`, `round_robin` | 1 min |
 | elitea-main → Inventory | headless `elitea-inventory-grpc`, `round_robin` | 1 min |
-| elitea-main, the worker, the engines → elitea-vector | ClusterIP `elitea-vector` | `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS`, 300 s |
+| elitea-main → elitea-vector | headless `elitea-vector-grpc`, `round_robin` | `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS`, 300 s |
+| the worker, the engines → elitea-vector | ClusterIP `elitea-vector` | `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS`, 300 s |
 
-At its maximum age a connection closes gracefully: the calls on it finish, and the next call opens a new connection. Behind the ClusterIP Service of elitea-vector, each new connection goes to a replica that kube-proxy selects, so the load spreads over the replicas within a few connection ages. The certificates do not change: elitea-main still checks the ClusterIP Service name (`ELITEA_DEEPWIKI_SERVER_NAME`, `ELITEA_INVENTORY_SERVER_NAME`).
+At its maximum age a connection closes gracefully: the calls on it finish, and the next call opens a new connection. The worker and the engines are Rust clients that dial the ClusterIP Service of elitea-vector: each new connection goes to a replica that kube-proxy selects, so their load spreads over the replicas within a few connection ages. The certificates do not change: elitea-main still checks the ClusterIP Service name (`ELITEA_DEEPWIKI_SERVER_NAME`, `ELITEA_INVENTORY_SERVER_NAME`, `ELITEA_VECTOR_GRPC_SERVER_NAME`).
 
 ## Preconditions: KEDA and a custom metrics adapter
 
@@ -199,7 +200,7 @@ Kubernetes starts `terminationGracePeriodSeconds` when it runs the preStop hook,
 |---|---|---|---|---|
 | elitea-main | sleep 10 | `ELITEA_SHUTDOWN_TIMEOUT` 30s | 50 | ≥ 10 + drain + 10 |
 | LLM gateway | sleep 10 | `GATEWAY_SHUTDOWN_TIMEOUT` 150s | 190 | ≥ 10 + drain + 30 |
-| DeepWiki, Inventory | sleep 5 (the engine sidecar: preStop + 15 = 20) | `*_DRAIN_TIMEOUT_SECONDS` 3600 | 3630 | ≥ preStop + 10 + drain + 10 |
+| DeepWiki, Inventory | sleep 5 (the engine is a native sidecar and stops after the host) | `*_DRAIN_TIMEOUT_SECONDS` 3600 | 3630 | ≥ preStop + 10 + drain + 10 |
 | elitea-vector | sleep 5 | the calls it holds, up to 20 s | 30 | ≥ preStop + 20 |
 | OTel collector | sleep 5 | the batch flush, up to 10 s | 30 | ≥ preStop + 10 |
 | Egress proxy | | `drainDelaySeconds` 5 + `shutdownTimeoutSeconds` 60 | 80 | ≥ delay + timeout + 5 |
@@ -213,7 +214,7 @@ A wiki generation or an ingestion runs for minutes, and sometimes for most of an
 
 1. On SIGTERM the host stops admitting. Its slots leave the fleet's total at once, so a new generation goes to another replica or is refused busy.
 2. The host waits up to the drain timeout for its running invocations. Polls and cancels for them reach any replica through the shared store.
-3. The engine sidecar gets SIGTERM at the same moment, so it first sleeps through the host's preStop and gRPC stop (20 s), and a call the host admitted in that window still finds it. Then it keeps serving until it is idle or the same deadline passes.
+3. The engine is a **native sidecar** (an init container with `restartPolicy: Always`). The kubelet sends it SIGTERM only after the host container has exited, so every engine call of a draining invocation finds the engine serving. Then the engine closes its own open streams and exits. In compose, the host `depends_on` the engine, so `docker compose stop` also stops the host first.
 4. At the deadline, what is left is cancelled and recorded as terminal.
 
 The other option, to make a build resumable on another replica, needs the request and its git credentials kept in the store, and the work done so far is not reusable: a generation is staged and published in one step, so a cut-off build leaves no partial wiki. A drain long enough to finish is simpler, and loses nothing.

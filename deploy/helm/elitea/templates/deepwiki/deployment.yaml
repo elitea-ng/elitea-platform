@@ -186,6 +186,15 @@ spec:
               mountPath: {{ include "elitea-deepwiki.callbackClientPath" . }}
               readOnly: true
         {{- if eq $sidecar "native" }}
+      # A NATIVE sidecar (an init container with restartPolicy Always,
+      # Kubernetes 1.29+; this chart needs 1.30). The kubelet starts it before
+      # the host, and on termination it stops it only AFTER the host container
+      # has exited. The host drains its invocations (up to
+      # ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS), and an invocation calls the
+      # engine many times; the engine serves every one of those calls, because
+      # it gets no SIGTERM while the host runs. Then the engine drains its own
+      # open streams (none by then) and exits.
+      initContainers:
         # The engine sidecar (ADR-0023 H2, ADR-0026): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
         # identity — the socket directory is the only way in. One distroless
@@ -196,18 +205,7 @@ spec:
         - name: engine
           image: "{{ .Values.deepwiki.engine.native.image.repository }}:{{ include "elitea-deepwiki.nativeTag" . }}"
           imagePullPolicy: {{ .Values.deepwiki.engine.native.image.pullPolicy }}
-          {{- /*
-            The kubelet sends SIGTERM to every container of the pod at once
-            (after each container's own preStop). The engine counts only its
-            own open streams, and the host still admits calls during its
-            preStop sleep and its gRPC stop. So the engine sleeps through
-            both (preStop.sleepSeconds + 15) before its drain starts: a call
-            the host admits in that window finds the engine still serving.
-            The host's grace check (preStop + 10 + drain + 10) covers this
-            one (preStop + 15 + drain). Then the engine drains up to ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS.
-          */}}
-          {{- $enginePreStop := add $preStop 15 }}
-          {{- include "elitea.scaling.preStop" $enginePreStop | nindent 10 }}
+          restartPolicy: Always
           {{- with .Values.deepwiki.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
