@@ -20,10 +20,12 @@ name: CI — Helm install smoke
 # containers with the runners the chart sets, the facade's provider
 # registration row healthy over the mTLS hop, and a fixture generation
 # completing through the facade, and (S11) the bundled KEDA: keda.enabled
-# installs KEDA in the same release, DeepWiki autoscales on its invocation
-# store through KEDA's postgresql trigger, and the ScaledObject — created by a
-# post-install hook on this FIRST install, since the CRDs arrive with it —
-# must turn Ready=True. The worker, the LLM gateway, the web UI and
+# installs KEDA in the same release, DeepWiki and Inventory autoscale on
+# their invocation stores through KEDA's postgresql trigger, and each
+# ScaledObject — created by a post-install hook on this FIRST install, since
+# the CRDs arrive with it — must turn Ready=True. Last, `helm uninstall` must
+# return and leave no ScaledObject and no KEDA CRD in Terminating (the
+# pre-delete hook, templates/keda-cleanup.yaml). The worker, the LLM gateway, the web UI and
 # the scheduler stay off for weight, as they do in that stack: this proves
 # the chart, not the product.
 #

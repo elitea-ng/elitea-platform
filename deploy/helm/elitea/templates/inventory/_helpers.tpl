@@ -103,7 +103,7 @@ configmap.yaml derives ELITEA_INVENTORY_PLATFORM_GRPC_TARGET from it.
 */}}
 {{- define "elitea-inventory.platformGrpcTarget" -}}
 {{- if and .Values.inventory.enabled (include "elitea-inventory.platformGrpc" .) -}}
-{{- printf "%s:%d" .Values.inventory.service.name (.Values.inventory.platformGrpc.port | int) -}}
+{{- printf "%s:%d" (.Values.inventory.service.grpcName | default .Values.inventory.service.name) (.Values.inventory.platformGrpc.port | int) -}}
 {{- end -}}
 {{- end }}
 
@@ -163,18 +163,17 @@ elitea-main
 
 {{- define "elitea-inventory.validateGuards" -}}
 {{- /*
-  ONE replica (S11). GetInvocation is answered "from the shared invocation
-  store" (libs/proto/elitea/subapp/v1/provider.proto), and the Inventory host
-  has none: it is given no DATABASE_URL, and the inventory_graph schema has no
-  invocations table, so its invocations live in the memory of the replica that
-  accepted them. elitea-main polls through whichever connection a browser poll
-  reaches, so with two replicas a running ingestion answers NOT_FOUND half the
-  time. The PDB, spread and autoscaler machinery is in place
-  (elitea.scaling.subappAutoscaler); this refusal is what lifts once the host
-  has its durable store.
+  More than one replica (scaling). GetInvocation is answered "from the shared
+  invocation store" (libs/proto/elitea/subapp/v1/provider.proto). The
+  Inventory host keeps its invocations in the engine's database
+  (inventory_graph.invocations, engine migration 0009), so a poll, a cancel or
+  a deletion is served by any replica. Without that database each replica
+  keeps its invocations in memory, and a poll that reaches another replica
+  answers NOT_FOUND for a running ingestion. So more than one replica needs
+  the database secret.
 */ -}}
-{{- if gt (int (include "elitea.scaling.maxReplicas" .Values.inventory)) 1 -}}
-{{- fail (printf "inventory can run %d replicas (%s), and it must run one. The Inventory host keeps its invocations in memory (no invocation store: no DATABASE_URL on the host, no invocations table in the inventory_graph schema), so a poll that lands on another replica answers not-found for a running ingestion. Keep inventory.replicaCount at 1 and inventory.autoscaling.maxReplicas at 1 (or autoscaling off); DeepWiki, whose host shares its invocations in PostgreSQL, scales out." (int (include "elitea.scaling.maxReplicas" .Values.inventory)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.inventory) "true"))) -}}
+{{- if and (gt (int (include "elitea.scaling.maxReplicas" .Values.inventory)) 1) (not (fromJson (include "elitea-inventory.databaseSecrets" .))) -}}
+{{- fail (printf "inventory can run %d replicas (%s), but its host has no invocation store: no database secret is configured (inventory.secrets.ELITEA_INVENTORY_DATABASE_URL or postgresql.existingSecret). Without it each replica keeps its invocations in memory, and a poll that reaches another replica answers not-found for a running ingestion. Configure the database, or keep one replica (inventory.autoscaling.enabled=false)." (int (include "elitea.scaling.maxReplicas" .Values.inventory)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.inventory) "true"))) -}}
 {{- end -}}
 {{- /*
   The provider's one listener is gRPC over mutual TLS (#1359): the SPI and the

@@ -55,7 +55,7 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # values-standalone.yaml turns the runtime plane on, which vector needs.
 # vector.enabled adds the 2-connection token-introspection pool to every
 # elitea-main replica (44 instead of 42); the profile's 4 replicas still fit
-# its 255 available connections (4 x 44 + gateway 8 + scheduler 4 = 188).
+# its 395 available connections (4 x 44 + gateway 32 + scheduler 8 = 216).
 COMPLETE="\
 -f $CHART/values-standalone.yaml \
 --set llmGateway.egressPosture=allowlist \
@@ -383,11 +383,20 @@ expect_refusal "a Qdrant left on with elitea-vector off" "set qdrant.enabled=fal
   --set vector.enabled=false --set main.runtime.indexIngestDispatch.enabled=false
 expect_refusal "one replica" "minReplicas must be at least 2" \
   --set vector.autoscaling.minReplicas=1
-# 23 primary + 36 runtime + 2 introspection = 61 per replica, 244 for four,
-# plus the gateway's 8 and the scheduler's 4 = 256: over 255, while the same
-# primary without vector (59, 236 + 12 = 248) fits.
-expect_refusal "the introspection pool is in the connection budget" "61 per elitea-main replica" \
-  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=23
+# The profile has 395 connections (420 minus 25 reserved). 51 primary + 36
+# runtime + 2 introspection = 89 per replica, 356 for four, plus the
+# gateway's 32 (8 x 4) and the scheduler's 8 (4 x 2) = 396: over 395. The same
+# primary without vector (87 per replica, 348 + 40 = 388) fits.
+expect_refusal "the introspection pool is in the connection budget" "89 per elitea-main replica" \
+  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=51
+if out="$(render -f $CHART/values-standalone.yaml \
+    --set llmGateway.egressPosture=allowlist --set llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=elitea.invalid:8000 \
+    --set vector.enabled=false --set qdrant.enabled=false --set main.runtime.indexIngestDispatch.enabled=false \
+    --set-string main.env.ELITEA_DATABASE_MAX_CONNS=51)"; then
+  note "the same primary pool without elitea-vector fits"
+else
+  fail "the same primary pool without elitea-vector is refused: $(printf '%s' "$out" | grep -m1 Error)"
+fi
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'
 expect_refusal "elitea-main's identity equal to elitea-vector's own" "must differ" \

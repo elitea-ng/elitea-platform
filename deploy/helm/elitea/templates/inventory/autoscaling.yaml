@@ -1,9 +1,11 @@
 {{- if .Values.inventory.enabled }}
 {{- /*
   The Inventory host's autoscaler, disruption budget and PodMonitor
-  (elitea.scaling.subappAutoscaler). No database secret: the Inventory host
-  keeps its invocations in memory, so there is no store to count, and the
-  render refuses more than one replica (elitea-inventory.validateGuards).
+  (elitea.scaling.subappAutoscaler). The host keeps its invocations in the
+  engine's database, schema inventory_graph (engine migration 0009), so the
+  keda-postgresql trigger counts inventory_graph.invocations through the same
+  secret the host and the engine read.
 */ -}}
-{{- include "elitea.scaling.subappAutoscaler" (dict "ctx" . "key" "inventory" "fullname" (include "elitea-inventory.fullname" .) "labels" (include "elitea-inventory.labels" .) "selector" (include "elitea-inventory.selectorLabels" .) "dbSecret" "") }}
+{{- $db := get (fromJson (include "elitea-inventory.databaseSecrets" .)) "ELITEA_INVENTORY_DATABASE_URL" }}
+{{- include "elitea.scaling.subappAutoscaler" (dict "ctx" . "key" "inventory" "fullname" (include "elitea-inventory.fullname" .) "labels" (include "elitea-inventory.labels" .) "selector" (include "elitea-inventory.selectorLabels" .) "dbSecret" ($db | default "") "table" "inventory_graph.invocations") }}
 {{- end }}

@@ -552,35 +552,72 @@ for o in (b.get("items") or b.get("objects") or []):
   fi
   stop_port_forward
 
-  # ── 5. the bundled KEDA scales DeepWiki (S11) ──────────────────────────────
-  say "5. the ScaledObject created on the first install is Ready"
+  # ── 5. the bundled KEDA scales DeepWiki and Inventory (S11) ────────────────
+  say "5. the ScaledObjects created on the first install are Ready"
   # keda.enabled installs KEDA's CRDs in this same release, so on the FIRST
   # install the ScaledObject is a post-install hook (the CRDs did not exist
   # when Helm mapped the release). Ready=True means all of it worked: the
   # CRDs, the operator, the hook, and a postgresql scaler that connected with
   # the TriggerAuthentication's credential and ran its query. Polled: the
   # operator reconciles on its own schedule after it starts.
-  local so_ready="" so_hpa=""
-  for attempt in $(seq 1 60); do
-    so_ready="$(kc -n "$NS" get scaledobject elitea-deepwiki \
-        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-    [ "$so_ready" = "True" ] && break
+  # Inventory's postgresql trigger reads inventory_graph.invocations: Ready
+  # also proves the host's invocation tables exist (engine migration 0009).
+  local so_ready="" so_hpa="" so
+  for so in elitea-deepwiki elitea-inventory; do
+    so_ready=""
+    for attempt in $(seq 1 60); do
+      so_ready="$(kc -n "$NS" get scaledobject "$so" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+      [ "$so_ready" = "True" ] && break
+      sleep 3
+    done
+    if [ "$so_ready" != "True" ]; then
+      kc -n "$NS" get scaledobject -o wide >&2 || true
+      kc -n "$NS" describe scaledobject "$so" >&2 || true
+      fail "ScaledObject ${so} is Ready='${so_ready:-<absent>}', not True"
+    else
+      pass "ScaledObject ${so} is Ready=True (bundled KEDA, postgresql trigger)"
+    fi
+    # KEDA drives the Deployment through an HPA it owns; the chart rendered
+    # no replicas: field, so nothing fights it.
+    so_hpa="$(kc -n "$NS" get hpa "keda-hpa-${so}" -o jsonpath='{.spec.scaleTargetRef.name}' 2>/dev/null || true)"
+    if [ "$so_hpa" != "$so" ]; then
+      fail "KEDA's HPA keda-hpa-${so} targets '${so_hpa:-<absent>}', not ${so}"
+    else
+      pass "KEDA's HPA keda-hpa-${so} scales ${so}"
+    fi
+  done
+
+  # ── 6. helm uninstall with the bundled KEDA does not hang ──────────────────
+  # The LAST check: it removes the release. The pre-delete hook
+  # (templates/keda-cleanup.yaml) deletes the ScaledObjects and waits for
+  # KEDA's operator to run their finalizers BEFORE Helm deletes the
+  # operator and its CRDs. Without it the CRDs (and the namespace) stay in
+  # Terminating. Proof: the uninstall returns, no ScaledObject is left, and
+  # the scaledobjects CRD is gone, not Terminating.
+  say "6. helm uninstall removes the ScaledObjects first, and KEDA's CRDs go"
+  if helm --kube-context "kind-${CLUSTER}" -n "$NS" uninstall "$RELEASE" --timeout 5m; then
+    pass "helm uninstall returned"
+  else
+    fail "helm uninstall failed or timed out"
+  fi
+  local left="" crd=""
+  for attempt in $(seq 1 40); do
+    crd="$(kc get crd scaledobjects.keda.sh -o jsonpath='{.metadata.deletionTimestamp}{"|"}{.metadata.name}' 2>/dev/null || true)"
+    [ -z "$crd" ] && break
     sleep 3
   done
-  if [ "$so_ready" != "True" ]; then
-    kc -n "$NS" get scaledobject -o wide >&2 || true
-    kc -n "$NS" describe scaledobject elitea-deepwiki >&2 || true
-    fail "ScaledObject elitea-deepwiki is Ready='${so_ready:-<absent>}', not True"
+  left="$(kc -n "$NS" get scaledobjects.keda.sh -o name 2>/dev/null || true)"
+  if [ -n "$left" ]; then
+    fail "ScaledObjects left after the uninstall: ${left}"
   else
-    pass "ScaledObject elitea-deepwiki is Ready=True (bundled KEDA, postgresql trigger)"
+    pass "no ScaledObject is left in ${NS}"
   fi
-  # KEDA drives the Deployment through an HPA it owns; the chart rendered no
-  # replicas: field, so nothing fights it.
-  so_hpa="$(kc -n "$NS" get hpa keda-hpa-elitea-deepwiki -o jsonpath='{.spec.scaleTargetRef.name}' 2>/dev/null || true)"
-  if [ "$so_hpa" != "elitea-deepwiki" ]; then
-    fail "KEDA's HPA keda-hpa-elitea-deepwiki targets '${so_hpa:-<absent>}', not elitea-deepwiki"
+  if [ -n "$crd" ]; then
+    kc get crd scaledobjects.keda.sh -o yaml >&2 || true
+    fail "the scaledobjects.keda.sh CRD is still there (${crd}): the uninstall left it Terminating"
   else
-    pass "KEDA's HPA keda-hpa-elitea-deepwiki scales elitea-deepwiki"
+    pass "the scaledobjects.keda.sh CRD is gone"
   fi
 
   echo
@@ -612,7 +649,10 @@ usage: $0 {up|verify|down}
           bootstrap, the chart, and seed the fixtures
   verify  prove: every pod Ready; the provider pod is the host + engine
           sidecar; the facade registered the provider; a fixture generation
-          completes and its pages land in the artifact bucket
+          completes and its pages land in the artifact bucket; the bundled
+          KEDA scales DeepWiki and Inventory; then `helm uninstall` (the
+          last check, it removes the release) does not leave KEDA's CRDs
+          in Terminating
   down    delete the cluster
 USAGE
      exit 2 ;;

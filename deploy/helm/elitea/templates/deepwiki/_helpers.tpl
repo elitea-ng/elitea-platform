@@ -93,7 +93,7 @@ configmap.yaml derives ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET from it.
 */}}
 {{- define "elitea-deepwiki.platformGrpcTarget" -}}
 {{- if and .Values.deepwiki.enabled (include "elitea-deepwiki.platformGrpc" .) -}}
-{{- printf "%s:%d" .Values.deepwiki.service.name (.Values.deepwiki.platformGrpc.port | int) -}}
+{{- printf "%s:%d" (.Values.deepwiki.service.grpcName | default .Values.deepwiki.service.name) (.Values.deepwiki.platformGrpc.port | int) -}}
 {{- end -}}
 {{- end -}}
 
@@ -136,6 +136,17 @@ elitea-main
   certificate. So mtls is mandatory, the allowlist cannot be empty, and the
   HTTPS SPI port is gone.
 */ -}}
+{{- /*
+  More than one replica (scaling): a poll, a cancel, a deletion and the
+  generation slots are fleet-wide only through the shared invocation store
+  (the invocations and host_replicas tables, engine migration 0009). Without
+  the database each replica keeps its invocations in memory: a poll that
+  reaches another replica answers not-found, and each replica admits its own
+  slots. So more than one replica needs the database secret.
+*/ -}}
+{{- if and (gt (int (include "elitea.scaling.maxReplicas" .Values.deepwiki)) 1) (not (get (fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL"))) "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
+{{- fail (printf "deepwiki can run %d replicas (%s), but its host has no invocation store: no database secret is configured (deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL or postgresql.existingSecret). Without it each replica keeps its invocations and its slots in memory, and a poll that reaches another replica answers not-found for a running generation. Configure the database, or keep one replica (deepwiki.autoscaling.enabled=false)." (int (include "elitea.scaling.maxReplicas" .Values.deepwiki)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.deepwiki) "true"))) -}}
+{{- end -}}
 {{- if hasKey (.Values.deepwiki.service | default dict) "port" -}}
 {{- fail "deepwiki.service.port was removed with the HTTPS SPI (#1359): the provider serves gRPC only, on deepwiki.platformGrpc.port. Remove service.port (docs/UPGRADING.md)." -}}
 {{- end -}}

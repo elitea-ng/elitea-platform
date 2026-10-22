@@ -3,7 +3,7 @@
 {{- $source := include "elitea.scaling.gatewaySource" . | trim }}
 {{- if eq $source "keda-prometheus" }}
 {{- $a := .Values.llmGateway.autoscaling }}
-{{- $query := ($a.prometheus | default dict).query | default (printf "sum(%s{namespace=%q})" $a.sseConnectionMetric .Release.Namespace) }}
+{{- $query := ($a.prometheus | default dict).query | default (printf "sum(%s%s)" $a.sseConnectionMetric (include "elitea.scaling.promSelector" (dict "ctx" .))) }}
 # The gateway scaled by KEDA on concurrent /llm streams: the sum of
 # gateway_llm_sse_active_connections (a gauge on :8083/metrics) across the
 # fleet, divided by the streams one replica should hold. KEDA generates the
@@ -43,6 +43,9 @@ spec:
         # An empty result (no series yet) reads as zero, not as an error that
         # would pause scaling.
         ignoreNullValues: "true"
+    # CPU next to the metric: the HPA takes the higher of the two, so the
+    # gateway still scales when the gauge is absent (elitea.scaling.kedaCpuTrigger).
+    {{- include "elitea.scaling.kedaCpuTrigger" $a | nindent 4 }}
 {{- end }}
 {{- end }}
 {{- end }}

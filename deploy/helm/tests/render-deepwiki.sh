@@ -350,11 +350,32 @@ expect "fixture engine image" "$(fx '.spec.template.spec.containers[1].image')" 
 expect "fixture engine runner" "$(fx '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "fixture"
 expect "fixture host runner" "$(fx '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
 expect "fixture migrate image" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate") | .spec.template.spec.containers[0].image' -)" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
-if render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= >/dev/null 2>&1; then
-  note "runner=fixture renders with no database URL secret"
+# One replica: with no database the host has no invocation store, which
+# more than one replica needs (refused below).
+if render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= --set deepwiki.autoscaling.enabled=false >/dev/null 2>&1; then
+  note "runner=fixture renders with no database URL secret (one replica)"
 else
   fail "runner=fixture is refused for a missing database URL, which the fixture never reads"
 fi
+
+# More than one replica shares its invocations and its generation slots
+# through the database (the invocations table). Without the database each
+# replica keeps them in memory, and a poll that reaches another replica
+# answers not-found. The fixture runner isolates this guard from the native
+# runner's database guard.
+echo "== more than one replica needs the invocation store =="
+refuses "more than one replica (autoscaling) with no invocation store" --set deepwiki.engine.runner=fixture --set postgresql.existingSecret=
+refuses "more than one replica (replicaCount) with no invocation store" --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= --set deepwiki.autoscaling.enabled=false --set deepwiki.replicaCount=2
+if output="$(render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= 2>&1)"; then
+  :
+elif grep -q 'has no invocation store' <<<"$output" && grep -q 'deepwiki.autoscaling.enabled=false' <<<"$output"; then
+  note "the refusal names the missing store and the one-replica way out"
+else
+  fail "the multi-replica refusal does not name the store and deepwiki.autoscaling.enabled=false: $output"
+fi
+multi="$(render $COMPLETE --set deepwiki.autoscaling.enabled=false --set deepwiki.replicaCount=2)" \
+  || fail "two replicas with the database do not render: $multi"
+expect "two replicas with the database" "$(printf '%s' "$multi" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.replicas' -)" "2"
 
 # ── The platform listener: the only way back to elitea-main (#1359 U2/U5) ──
 #
@@ -480,6 +501,12 @@ expect "gRPC allowlist" "$(gp '.spec.template.spec.containers[0].env[] | select(
 expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") | .value')" ":9555"
 expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
 expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
+# The headless Service that elitea-main dials: no cluster IP, the same port and
+# the same pods. DNS gives one address for each ready replica.
+hl() { printf '%s' "$grpc" | yq eval-all "select(.kind == \"Service\" and .metadata.name == \"elitea-deepwiki-grpc\") | $1" -; }
+expect "the headless Service has no cluster IP" "$(hl '.spec.clusterIP')" "None"
+expect "the headless Service port" "$(hl '.spec.ports[] | select(.name == "platform-grpc") | .port')" "9555"
+expect "the headless Service selects the Deployment's pods" "$(hl '.spec.selector."app.kubernetes.io/name"')" "elitea-deepwiki"
 expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9555 "
 expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
 refuses "the provider without mutual TLS" --set deepwiki.mtls.enabled=false
@@ -502,23 +529,28 @@ expect "operator material: the allowlist carries the operator's name" "$(printf 
 # ── elitea-main's side of the platform service (#1243) ───────────────────────
 #
 # The caller is configured WITH the service: when the engine serves it and the
-# facade is on, elitea-main's ConfigMap carries the target (<service>:<port>)
-# without the operator stating it. Off, nothing is derived; an explicit value
-# wins; and a target beside a facade that is off is refused, as cmd/elitea-main
+# facade is on, elitea-main's ConfigMap carries the target without the operator
+# stating it. The target is the HEADLESS Service (<grpcName>:<port>), so
+# elitea-main balances its calls over all replicas (round_robin). The server
+# name stays the ClusterIP Service, which the certificate SAN names. Off,
+# nothing is derived; an explicit value wins and then the chart sets no server
+# name; and a target beside a facade that is off is refused, as cmd/elitea-main
 # refuses it at boot.
 
 echo "== elitea-main is told where the platform service is =="
 main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
-expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9443"
-expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9555"
+expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-grpc:9443"
+expect "the default: the server name is the ClusterIP Service (the SAN)" "$(main_env "$manifest" ELITEA_DEEPWIKI_SERVER_NAME)" "elitea-deepwiki-svc"
+expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-grpc:9555"
 explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=deepwiki.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"
 expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
+expect "an explicit target: the chart sets no server name" "$(main_env "$explicit" ELITEA_DEEPWIKI_SERVER_NAME)" ""
 facade_off="$(render $RUNTIME $VECTOR --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
   || fail "the engine with its service on and the facade off does not render: $facade_off"
 # S10: the provider's switch composes the facade too, so there is no "engine
 # on, facade off" install any more: the target is derived for it.
-expect "the provider alone composes the facade, and its target is derived" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9443"
+expect "the provider alone composes the facade, and its target is derived" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-grpc:9443"
 if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then
   fail "a platform target beside a facade that is off renders"
 else

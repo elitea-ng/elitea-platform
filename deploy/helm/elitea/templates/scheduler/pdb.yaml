@@ -1,0 +1,4 @@
+{{- if .Values.scheduler.enabled }}
+{{- /* The active/active pair keeps one replica through a drain; rendered only while replicaCount is above one (elitea.scaling.pdb). */}}
+{{- include "elitea.scaling.pdb" (dict "ctx" . "v" .Values.scheduler "name" (include "elitea-scheduler.fullname" .) "labels" (include "elitea-scheduler.labels" .) "selector" (include "elitea-scheduler.selectorLabels" .)) }}
+{{- end }}

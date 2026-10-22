@@ -46,6 +46,60 @@
 {{- end }}
 
 {{/*
+  elitea.scaling.promSelector — the label selector of a KEDA prometheus
+  query, braces included. Takes (dict "ctx" $ "matchers" (list "app=\"x\"" ...)).
+
+  The release's namespace scopes the query, so two releases in one cluster
+  (or one Prometheus for many clusters) do not add up each other's series. The
+  LABEL that carries the namespace depends on the scrape: a Prometheus
+  Operator PodMonitor writes `namespace`, many annotation-based scrape configs
+  write `kubernetes_namespace`. So the label name is
+  scaling.prometheus.namespaceLabel (default `namespace`). Empty leaves the
+  namespace out: use it only where Prometheus scrapes this namespace alone.
+  scaling.prometheus.extraMatchers adds matchers verbatim (a `cluster` label
+  for a Prometheus shared by several clusters, say).
+
+  A query whose label is wrong reads an empty vector. ignoreNullValues makes
+  that zero, so each ScaledObject also carries a CPU trigger
+  (elitea.scaling.kedaCpuTrigger): the fleet still scales on CPU when the
+  metric is absent.
+*/}}
+{{- define "elitea.scaling.promSelector" -}}
+{{- $p := (.ctx.Values.scaling | default dict).prometheus | default dict -}}
+{{- $label := (hasKey $p "namespaceLabel") | ternary ($p.namespaceLabel | default "" | toString | trim) "namespace" -}}
+{{- $matchers := .matchers | default list -}}
+{{- if $label -}}
+{{- if not (regexMatch "^[a-zA-Z_][a-zA-Z0-9_]*$" $label) -}}
+{{- fail (printf "scaling.prometheus.namespaceLabel must be a Prometheus label name, and it is %q." $label) -}}
+{{- end -}}
+{{- $matchers = append $matchers (printf "%s=%q" $label .ctx.Release.Namespace) -}}
+{{- end -}}
+{{- $extra := $p.extraMatchers | default list -}}
+{{- if kindIs "string" $extra -}}{{- $extra = list $extra -}}{{- end -}}
+{{- range $extra -}}
+{{- with (toString . | trim) -}}{{- $matchers = append $matchers . -}}{{- end -}}
+{{- end -}}
+{{- printf "{%s}" (join "," $matchers) -}}
+{{- end }}
+
+{{/*
+  elitea.scaling.kedaCpuTrigger — the CPU trigger every ScaledObject in this
+  chart carries next to its metric trigger. The HPA KEDA generates takes the
+  HIGHER of the two replica counts, so the metric trigger drives the fleet
+  while its source publishes, and CPU still scales it when the source is
+  absent (a scrape that stopped, a namespace label that does not match, a
+  database the scaler cannot reach). Takes the component's autoscaling values.
+  Needs metrics-server and CPU requests on the scaled containers, as every
+  CPU HPA in this chart does.
+*/}}
+{{- define "elitea.scaling.kedaCpuTrigger" -}}
+- type: cpu
+  metricType: Utilization
+  metadata:
+    value: {{ .targetCPUUtilizationPercentage | default 70 | toString | quote }}
+{{- end }}
+
+{{/*
   elitea.scaling.kedaAnnotations — the annotations EVERY ScaledObject and
   TriggerAuthentication in this chart carries. Takes the root context.
 
@@ -262,6 +316,42 @@ lifecycle:
 {{- end }}
 
 {{/*
+  elitea.scaling.cpuHpa — a CPU HorizontalPodAutoscaler (metrics-server) for a
+  stateless component that publishes no better signal, rendered while
+  <component>.autoscaling.enabled. Takes (dict "v" <values> "field" "<key>"
+  "name" <Deployment name> "labels" <labels>). Without metrics-server the HPA
+  reports FailedGetResourceMetric and holds minReplicas: the fixed count it
+  replaces, not an outage.
+*/}}
+{{- define "elitea.scaling.cpuHpa" -}}
+{{- if include "elitea.scaling.autoscaled" .v }}
+{{- include "elitea.scaling.validateRange" (dict "v" .v "field" .field) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- .labels | nindent 4 }}
+  annotations:
+    elitea.ai/autoscaling-source: cpu
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .name }}
+  minReplicas: {{ int .v.autoscaling.minReplicas }}
+  maxReplicas: {{ int .v.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ int (.v.autoscaling.targetCPUUtilizationPercentage | default 70) }}
+{{- end }}
+{{- end }}
+
+{{/*
   elitea.scaling.podMonitor — a Prometheus Operator PodMonitor for a
   component's metrics port, rendered only where monitoring.coreos.com/v1 is
   served and <component>.metrics.podMonitor.enabled (the default). The same
@@ -326,14 +416,20 @@ prometheus.io/path: {{ .path }}
 
   There is no queue in front of these hosts: an invocation runs on the replica
   that accepted it, start to end. So the load is the number of invocations
-  running, and one replica holds MAX_PARALLEL_WORKERS of them.
-    keda-prometheus  sum(elitea_subapp_invocations_in_flight{app=...}) from the
+  running, and one replica holds MAX_PARALLEL_WORKERS of them. DeepWiki
+  admits a generation against the slots of the WHOLE fleet and refuses it
+  (service_busy) when they are all busy, so the running count never goes
+  above the fleet's slots and alone could never ask for one more replica:
+  both sources add the demand refused in the last 5 minutes.
+    keda-prometheus  sum(elitea_subapp_invocations_in_flight{app=...}) +
+                     increase(elitea_subapp_slot_refusals_total[5m]) from the
                      host's admin /metrics, divided by MAX_PARALLEL_WORKERS.
                      Needs KEDA, scaling.prometheus.serverAddress and a scrape.
-    keda-postgresql  count(*) of the host's invocations rows with finished_at
-                     IS NULL (running), divided by MAX_PARALLEL_WORKERS. Needs
-                     KEDA and the host's own database (DeepWiki only: the
-                     Inventory host keeps its invocations in memory).
+    keda-postgresql  count(*) of the host's invocations rows that are running
+                     (finished_at IS NULL) or were refused busy in the last 5
+                     minutes, divided by MAX_PARALLEL_WORKERS. Needs KEDA and
+                     the host's own database (DeepWiki: invocations;
+                     Inventory: inventory_graph.invocations).
     cpu              a CPU HorizontalPodAutoscaler (metrics-server).
   `auto` takes the first that is available, in that order.
 */}}
@@ -358,13 +454,36 @@ keda-prometheus
 {{- else if eq $want "keda-postgresql" -}}
 {{- include "elitea.scaling.requireKeda" (dict "ctx" .ctx "field" (printf "%s.autoscaling.source=keda-postgresql" .key) "why" "The postgresql trigger is read by the KEDA operator.") -}}
 {{- if not .dbSecret -}}
-{{- fail (printf "%s.autoscaling.source=keda-postgresql needs the host's invocation store, and this host has none: %s" .key (ternary "the Inventory host keeps its invocations in memory (no DATABASE_URL, no invocations table in the inventory_graph schema)." "no database secret is configured (postgresql.existingSecret or deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL)." (eq .key "inventory"))) -}}
+{{- fail (printf "%s.autoscaling.source=keda-postgresql needs the host's invocation store, and this host has none: no database secret is configured (postgresql.existingSecret or %s.secrets.ELITEA_%s_DATABASE_URL)." .key .key (upper .key)) -}}
 {{- end -}}
 keda-postgresql
 {{- else if eq $want "cpu" -}}
 cpu
 {{- else -}}
 {{- fail (printf "%s.autoscaling.source must be auto, keda-prometheus, keda-postgresql or cpu, and it is %q." .key $want) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+  elitea.scaling.workerSource — which scaler the agent worker uses. Its load is
+  the backlog of its JetStream durable consumer, which only KEDA's
+  nats-jetstream scaler reads.
+    keda  a ScaledObject on consumer lag (plus CPU). Needs KEDA.
+    cpu   a CPU HorizontalPodAutoscaler (metrics-server). The fallback: CPU
+          rises later than the backlog, because a turn waits on a model.
+  `auto` (the default) takes keda when KEDA is available, else cpu.
+*/}}
+{{- define "elitea.scaling.workerSource" -}}
+{{- $want := (.Values.worker.autoscaling.source | default "auto") | toString -}}
+{{- if eq $want "auto" -}}
+{{- if include "elitea.scaling.kedaServed" . -}}keda{{- else -}}cpu{{- end -}}
+{{- else if eq $want "keda" -}}
+{{- include "elitea.scaling.requireKeda" (dict "ctx" . "field" "worker.autoscaling.source=keda" "why" "The worker's consumer-lag trigger is read by the KEDA operator. Use source=auto or cpu for a CPU HorizontalPodAutoscaler instead.") -}}
+keda
+{{- else if eq $want "cpu" -}}
+cpu
+{{- else -}}
+{{- fail (printf "worker.autoscaling.source must be auto, keda or cpu, and it is %q." $want) -}}
 {{- end -}}
 {{- end }}
 
@@ -547,24 +666,32 @@ spec:
           stabilizationWindowSeconds: {{ $a.cooldownSeconds | default 600 }}
   triggers:
     {{- if eq $source "keda-prometheus" }}
-    # elitea_subapp_invocations_in_flight from every replica's admin /metrics.
+    # elitea_subapp_invocations_in_flight from every replica's admin /metrics,
+    # plus the generations refused busy in the last 5 minutes. `or vector(0)`
+    # keeps one absent series from making the whole sum empty.
+    {{- $sel := include "elitea.scaling.promSelector" (dict "ctx" $ctx "matchers" (list (printf "app=%q" $app))) }}
     - type: prometheus
       metadata:
         serverAddress: {{ include "elitea.scaling.prometheusAddress" $ctx | quote }}
-        query: {{ ($a.prometheus | default dict).query | default (printf "sum(elitea_subapp_invocations_in_flight{app=%q,namespace=%q})" $app $ctx.Release.Namespace) | quote }}
+        query: {{ ($a.prometheus | default dict).query | default (printf "(sum(elitea_subapp_invocations_in_flight%s) or vector(0)) + (sum(increase(elitea_subapp_slot_refusals_total%s[5m])) or vector(0))" $sel $sel) | quote }}
         threshold: {{ $slots | quote }}
         ignoreNullValues: "true"
     {{- else }}
-    # The running rows of the host's shared invocation store (the table the
-    # engine's migrations own; unqualified, so it resolves through the DSN's
-    # search_path exactly as the host's own statements do).
+    # The unfinished rows (running, and admitted but waiting for a local slot)
+    # of the host's shared invocation store, plus the rows refused busy in the
+    # last 5 minutes: the table the engine's migrations own. DeepWiki's is
+    # unqualified and resolves through the DSN's search_path, as the host's
+    # own statements do; Inventory's is in the inventory_graph schema.
     - type: postgresql
       metadata:
-        query: "SELECT count(*) FROM invocations WHERE finished_at IS NULL"
+        query: {{ printf "SELECT count(*) FROM %s WHERE finished_at IS NULL OR (finished_at > now() - interval '5 minutes' AND result->>'error_category' = 'service_busy')" (.table | default "invocations") | quote }}
         targetQueryValue: {{ $slots | quote }}
       authenticationRef:
         name: {{ .fullname }}-keda-postgresql
     {{- end }}
+    # CPU next to the metric: the HPA takes the higher of the two, so the
+    # host still scales when its metric source is absent.
+    {{- include "elitea.scaling.kedaCpuTrigger" $a | nindent 4 }}
 {{- end }}
 {{- end }}
 {{- with (include "elitea.scaling.pdb" (dict "ctx" $ctx "v" $v "name" .fullname "labels" .labels "selector" .selector)) }}
@@ -574,7 +701,7 @@ spec:
 {{- with (include "elitea.scaling.podMonitor" (dict "ctx" $ctx "v" $v "name" .fullname "labels" .labels "selector" .selector "port" "admin" "path" "/metrics")) }}
 ---
 # Scrapes the host's admin /metrics (elitea_subapp_invocations_in_flight,
-# elitea_subapp_invocation_slots).
+# elitea_subapp_invocation_slots, elitea_subapp_slot_refusals_total).
 {{- . }}
 {{- end }}
 {{- end }}

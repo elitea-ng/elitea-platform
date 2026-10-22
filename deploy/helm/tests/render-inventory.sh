@@ -215,9 +215,15 @@ engine_allow="$(select_one Deployment elitea-inventory "$manifest" \
 engine_db="$(select_one Deployment elitea-inventory "$manifest" \
   '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .valueFrom.secretKeyRef.name')"
 [ "$engine_db" = "elitea-inventory-db" ] && note "engine database URL from Secret $engine_db" || fail "the engine's database URL comes from '$engine_db'"
+# The host reads the engine's database for its invocation store
+# (inventory_graph.invocations), so every replica shares the invocations. It
+# reads the URL from the same Secret as the engine.
 host_db="$(select_one Deployment elitea-inventory "$manifest" \
-  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .name')"
-[ -z "$host_db" ] && note "the host container has no database URL" || fail "the host container receives the database URL"
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .valueFrom.secretKeyRef.name')"
+[ "$host_db" = "elitea-inventory-db" ] && note "host database URL (invocation store) from Secret $host_db" || fail "the host's database URL comes from '$host_db', expected elitea-inventory-db (the engine's Secret); without it the host has no invocation store"
+host_db_plain="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .value')"
+[ -z "$host_db_plain" ] || [ "$host_db_plain" = "null" ] && note "the host's database URL is not plaintext" || fail "the host's database URL is plaintext: $host_db_plain"
 engine_identity="$(select_one Deployment elitea-inventory "$manifest" \
   '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_IDENTITY_SECRET") | .name')"
 [ -z "$engine_identity" ] && note "the engine container has no identity secret" || fail "the engine container receives the identity secret"
@@ -293,7 +299,20 @@ refuses "an unrecognised ENABLED spelling"      --set main.env.ELITEA_INVENTORY_
 refuses "the retired -engine python image tag"  --set inventory.engine.image.tag=1.2.3-engine
 refuses "the retired python image repository"   --set inventory.engine.image.repository=ghcr.io/elitea-ng/elitea-inventory
 refuses "sidecar runner legacy"                 --set inventory.engine.runner=legacy
-refuses "native engine with no database secret" --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret=
+refuses "native engine with no database secret" --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret= --set inventory.autoscaling.enabled=false
+# More than one replica needs the invocation store. Without the database each
+# replica keeps its invocations in memory, and a poll that reaches another
+# replica answers not-found. The fixture runner reads no database, so it
+# isolates this guard from the native runner's guard.
+refuses "more than one replica (autoscaling) with no invocation store" --set inventory.engine.runner=fixture --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret=
+refuses "more than one replica (replicaCount) with no invocation store" --set inventory.engine.runner=fixture --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret= --set inventory.autoscaling.enabled=false --set inventory.replicaCount=2
+if output="$(render $COMPLETE --set inventory.engine.runner=fixture --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret= 2>&1)"; then
+  :
+elif grep -q 'has no invocation store' <<<"$output" && grep -q 'inventory.autoscaling.enabled=false' <<<"$output"; then
+  note "the refusal names the missing store and the one-replica way out"
+else
+  fail "the multi-replica refusal does not name the store and inventory.autoscaling.enabled=false: $output"
+fi
 refuses "native engine with no git allowlist"   --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=
 refuses "sidecar runner with no engine socket"  --set inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET=
 refuses "a socket with no sidecar to answer"    --set inventory.env.ELITEA_INVENTORY_RUNNER=fixture
@@ -329,10 +348,21 @@ fi
 # so each refusal above is paired with the render it must allow.
 
 echo "== the fixture sidecar needs neither database nor allowlist, and gets no Job =="
+# One replica: with no database the host has no invocation store (refused
+# above for more than one replica).
 fx="$(render $COMPLETE --set inventory.engine.runner=fixture \
   --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret= \
+  --set inventory.autoscaling.enabled=false \
   --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=)" \
-  || fail "the fixture sidecar does not render without a database"
+  || fail "the fixture sidecar does not render without a database: $fx"
+fx_host_db="$(select_one Deployment elitea-inventory "$fx" \
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_DATABASE_URL") | .name')"
+[ -z "$fx_host_db" ] && note "no database: the host gets no database URL" || fail "the host gets a database URL with no database secret"
+echo "== more than one replica renders with the database =="
+multi="$(render $COMPLETE --set inventory.autoscaling.enabled=false --set inventory.replicaCount=2)" \
+  || fail "two replicas with the database do not render: $multi"
+multi_replicas="$(select_one Deployment elitea-inventory "$multi" '.spec.replicas')"
+[ "$multi_replicas" = "2" ] && note "two replicas with the database" || fail "two replicas with the database render $multi_replicas replicas"
 if printf '%s' "$fx" | grep -q "name: elitea-inventory-migrate"; then
   fail "a migrate Job rendered with no database secret"
 else
@@ -448,6 +478,12 @@ expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.n
 expect "the engine container gets neither" "$(gp '.spec.template.spec.containers[1].env[].name' | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
 expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
 expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
+# The headless Service that elitea-main dials: no cluster IP, the same port and
+# the same pods. DNS gives one address for each ready replica.
+hl() { printf '%s' "$grpc" | yq eval-all "select(.kind == \"Service\" and .metadata.name == \"elitea-inventory-grpc\") | $1" -; }
+expect "the headless Service has no cluster IP" "$(hl '.spec.clusterIP')" "None"
+expect "the headless Service port" "$(hl '.spec.ports[] | select(.name == "platform-grpc") | .port')" "9555"
+expect "the headless Service selects the Deployment's pods" "$(hl '.spec.selector."app.kubernetes.io/name"')" "elitea-inventory"
 expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9555 "
 expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
 refuses "the provider without mutual TLS" --set inventory.mtls.enabled=false
@@ -470,18 +506,23 @@ expect "operator material: the allowlist carries the operator's name" "$(printf 
 # ── elitea-main's side of the platform service (#1244) ───────────────────────
 #
 # The caller is configured WITH the service: when the engine serves it and the
-# facade is on, elitea-main's ConfigMap carries the target (<service>:<port>)
-# without the operator stating it. Off, nothing is derived; an explicit value
-# wins; and a target beside a facade that is off is refused, as cmd/elitea-main
+# facade is on, elitea-main's ConfigMap carries the target without the operator
+# stating it. The target is the HEADLESS Service (<grpcName>:<port>), so
+# elitea-main balances its calls over all replicas (round_robin). The server
+# name stays the ClusterIP Service, which the certificate SAN names. Off,
+# nothing is derived; an explicit value wins and then the chart sets no server
+# name; and a target beside a facade that is off is refused, as cmd/elitea-main
 # refuses it at boot.
 
 echo "== elitea-main is told where the platform service is =="
 main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
-expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-svc:9443"
-expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-svc:9555"
+expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-grpc:9443"
+expect "the default: the server name is the ClusterIP Service (the SAN)" "$(main_env "$manifest" ELITEA_INVENTORY_SERVER_NAME)" "elitea-inventory-svc"
+expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-grpc:9555"
 explicit="$(render $COMPLETE --set 'inventory.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET=inventory.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"
 expect "an explicit target wins" "$(main_env "$explicit" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "inventory.elsewhere:9443"
+expect "an explicit target: the chart sets no server name" "$(main_env "$explicit" ELITEA_INVENTORY_SERVER_NAME)" ""
 if render --set main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET=elitea-inventory-svc:9443 >/dev/null 2>&1; then
   fail "a platform target beside a facade that is off renders"
 else

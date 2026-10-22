@@ -145,8 +145,8 @@ proxy cannot run safely without. Rendered from deployment.yaml.
 {{- fail (printf "egressProxy.networkPolicy: %q is not an explicit CIDR block" .) -}}
 {{- end -}}
 {{- end -}}
-{{- if lt (int $e.replicaCount) 2 -}}
-{{- fail "egressProxy.replicaCount must be at least 2: one replica makes every rollout an egress outage" -}}
+{{- if lt (int (include "elitea.scaling.minReplicas" $e)) 2 -}}
+{{- fail (printf "egressProxy.%s must be at least 2: one replica makes every rollout an egress outage" (ternary "autoscaling.minReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" $e) "true"))) -}}
 {{- end -}}
 {{- $grace := add (int $e.drainDelaySeconds) (int $e.shutdownTimeoutSeconds) 5 (ternary 10 0 (eq (include "elitea-egress-proxy.auditEnabled" .) "true")) -}}
 {{- if lt (int $e.terminationGracePeriodSeconds) (int $grace) -}}

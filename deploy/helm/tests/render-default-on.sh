@@ -76,6 +76,9 @@ for kind, name in [("Deployment", "elitea-main"), ("Deployment", "elitea-worker"
     need(kind, name)
 
 # elitea-main's wiring is derived from the provider blocks (one switch each).
+# The derived targets name the headless Services, so elitea-main balances its
+# calls over all replicas. The server names stay the ClusterIP Services, which
+# the certificate SANs name.
 cm = need("ConfigMap", "elitea-main-config").get("data", {})
 want_env = {
     "ELITEA_RUNTIME_ENABLED": "true",
@@ -84,12 +87,15 @@ want_env = {
     "ELITEA_DEEPWIKI_CLIENT_KEY_FILE": "/run/elitea-deepwiki/tls.key",
     "ELITEA_DEEPWIKI_CA_FILE": "/run/elitea-deepwiki/ca.crt",
     "ELITEA_DEEPWIKI_GIT_ALLOWLIST": "github.com,*.github.com",
-    "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET": "elitea-deepwiki-svc:9443",
+    "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET": "elitea-deepwiki-grpc:9443",
+    "ELITEA_DEEPWIKI_SERVER_NAME": "elitea-deepwiki-svc",
     "ELITEA_INVENTORY_ENABLED": "true",
     "ELITEA_INVENTORY_CLIENT_CERT_FILE": "/run/elitea-inventory/tls.crt",
     "ELITEA_INVENTORY_CLIENT_KEY_FILE": "/run/elitea-inventory/tls.key",
     "ELITEA_INVENTORY_CA_FILE": "/run/elitea-inventory/ca.crt",
     "ELITEA_INVENTORY_GIT_ALLOWLIST": "github.com,*.github.com",
+    "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET": "elitea-inventory-grpc:9443",
+    "ELITEA_INVENTORY_SERVER_NAME": "elitea-inventory-svc",
     "ELITEA_VECTOR_GRPC_TARGET": "elitea-vector:9470",
     "ELITEA_VECTOR_INTROSPECTION_CLIENTS": "dns:elitea-vector",
 }

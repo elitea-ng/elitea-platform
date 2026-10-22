@@ -993,11 +993,17 @@ autoscaler is free to leave. Per component:
   deepwiki engine  2 + 2 + ELITEA_DEEPWIKI_QUERY_POOL_SIZE
                    + 4 × ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS, when the engine
                    sidecar runs with a database.
+  inventory host   ELITEA_INVENTORY_DATABASE_MAX_CONNS + 1 (the owner claim),
+                   when it has its database (inventory_graph.invocations).
   inventory engine ELITEA_INVENTORY_POOL_SIZE, when the engine sidecar runs
-                   with a database. (The Inventory host has no store.)
-  worker           limits.delivery_max_concurrency AgentState connections,
-                   when postgresql.agentStateSharesServer (the agent-state
-                   database lives on this server; dbInit creates it there).
+                   with a database.
+  worker           limits.agentstate_max_connections AgentState connections
+                   (unset: min(8, delivery_max_concurrency), as the worker
+                   applies), when postgresql.agentStateSharesServer (the
+                   agent-state database lives on this server; dbInit creates
+                   it there). Before the pool had its own size it was
+                   delivery_max_concurrency, and 10 autoscaled replicas held
+                   320 connections.
 
 A pool size that is unset is not "small": every one of these services falls
 back to pgx's max(4, numCPU), which depends on the node the pod lands on. A
@@ -1108,11 +1114,27 @@ interactive psql, backups, and anything else sharing the server.
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if and .Values.inventory.enabled (include "elitea-inventory.sidecar" .) (fromJson (include "elitea-inventory.databaseSecrets" .)) -}}
-{{- $rows = append $rows (dict "name" "inventory engine" "field" "inventory.env.ELITEA_INVENTORY_POOL_SIZE" "pool" (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_POOL_SIZE") "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.inventory)) -}}
+{{- if and .Values.inventory.enabled (fromJson (include "elitea-inventory.databaseSecrets" .)) -}}
+{{- $invReplicas := include "elitea.scaling.maxReplicas" .Values.inventory -}}
+{{- $rows = append $rows (dict "name" "inventory host" "field" "inventory.env.ELITEA_INVENTORY_DATABASE_MAX_CONNS" "pool" (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_DATABASE_MAX_CONNS") "extra" 1 "replicas" $invReplicas) -}}
+{{- if include "elitea-inventory.sidecar" . -}}
+{{- $rows = append $rows (dict "name" "inventory engine" "field" "inventory.env.ELITEA_INVENTORY_POOL_SIZE" "pool" (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_POOL_SIZE") "extra" 0 "replicas" $invReplicas) -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.worker.enabled (dig "agentStateSharesServer" true $pg) -}}
-{{- $rows = append $rows (dict "name" "worker AgentState" "field" "worker.runtime.limits.delivery_max_concurrency" "pool" .Values.worker.runtime.limits.delivery_max_concurrency "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.worker)) -}}
+{{- /*
+  The worker's AgentState pool is limits.agentstate_max_connections; unset,
+  the worker uses min(8, delivery_max_concurrency) (src/config.rs), and so
+  does this count.
+*/ -}}
+{{- $wl := .Values.worker.runtime.limits -}}
+{{- $agentPool := $wl.agentstate_max_connections -}}
+{{- if or (kindIs "invalid" $agentPool) (eq (toString $agentPool) "") -}}
+{{- $agentPool = min 8 (int $wl.delivery_max_concurrency) -}}
+{{- else if gt (int $agentPool) (int $wl.delivery_max_concurrency) -}}
+{{- fail (printf "worker.runtime.limits.agentstate_max_connections (%d) is above delivery_max_concurrency (%d): the worker refuses it at start. A pool larger than the turns that can use it only holds idle connections." (int $agentPool) (int $wl.delivery_max_concurrency)) -}}
+{{- end -}}
+{{- $rows = append $rows (dict "name" "worker AgentState" "field" "worker.runtime.limits.agentstate_max_connections" "pool" $agentPool "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.worker)) -}}
 {{- end -}}
 {{- range $rows -}}
 {{- $raw := .pool | toString | trim -}}

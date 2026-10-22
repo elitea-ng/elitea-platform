@@ -49,17 +49,19 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-deepwiki.serviceAccountName" . }}
-      # Long enough for an in-flight invocation to be recorded as terminal
-      # before the process goes. It does not have to outlast a GENERATION:
-      # invocations are durable (PostgreSQL), and a restarted service
-      # reconciles rows left running by a previous owner into a terminal error
-      # the caller can act on. Draining forever would be the wrong trade.
+      # Long enough for a running generation to FINISH on this replica
+      # (scaling). On SIGTERM the host leaves the Services, stops admitting
+      # (its slots leave the fleet's total), and waits up to
+      # ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS (default 3600) for its invocations;
+      # the engine sidecar keeps serving until it is idle too. A poll or a
+      # cancel for them reaches a sibling, which reads the shared store. What
+      # is left at the deadline is cancelled and recorded terminal.
       #
-      # The host stops its gRPC listener (up to 10s), waits for running
-      # invocations for ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS, then cancels and records
-      # what is left; 10s more for the store and NATS to close.
+      # One clock: the preStop sleep, the gRPC listener's stop (up to 10s), the
+      # drain, then 10s for the store and NATS to close.
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.deepwiki) }}
       {{- $drain := include "elitea.integer" (dict "field" "deepwiki.env.ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" "value" (get $env "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" | default "30" | toString) "min" 0) | int }}
-      {{- include "elitea.scaling.validateGrace" (dict "field" "deepwiki" "grace" .Values.deepwiki.terminationGracePeriodSeconds "parts" (list (list "gRPC stop" 10) (list "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "deepwiki" "grace" .Values.deepwiki.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "gRPC stop" 10) (list "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
       terminationGracePeriodSeconds: {{ int .Values.deepwiki.terminationGracePeriodSeconds }}
       {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.deepwiki "selector" (include "elitea-deepwiki.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.deepwiki.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -144,6 +146,10 @@ spec:
             # Sensitive vars from Kubernetes Secrets, never plaintext in the
             # env map above.
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          # The native sleep (Kubernetes 1.30+): DNS and the endpoints drop this
+          # replica before the host stops its listener, so elitea-main's
+          # round_robin sends no new call to a process that stopped taking them.
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
           # httpGet on the admin port: the gRPC listener requires and verifies a
           # client certificate, and the kubelet presents none. Liveness is
           # /healthz (the process is up); readiness is /readyz, which fails

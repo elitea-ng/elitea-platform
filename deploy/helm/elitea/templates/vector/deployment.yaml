@@ -33,6 +33,14 @@ spec:
       {{- end }}
       serviceAccountName: {{ include "elitea-vector.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- /*
+        Shutdown, on one clock: the preStop sleep takes the replica out of the
+        headless Service (and elitea-main's round_robin) first; then SIGTERM,
+        and the gRPC server finishes the calls it holds (up to 20s) before it
+        exits.
+      */}}
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.vector) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "vector" "grace" .Values.vector.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "gRPC drain" 20))) }}
       terminationGracePeriodSeconds: {{ .Values.vector.terminationGracePeriodSeconds }}
       {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.vector "selector" (include "elitea-vector.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.vector.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -117,6 +125,7 @@ spec:
             - name: SSL_CERT_FILE
               value: {{ .Values.vector.mtls.mountPath }}/ca.crt
             {{- end }}
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
           # The health listener is plain HTTP, so a kubelet probe can use it;
           # the gRPC listener requires a client certificate.
           livenessProbe:

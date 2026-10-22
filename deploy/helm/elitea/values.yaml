@@ -207,18 +207,29 @@ postgresql:
   #   Σ (replica ceiling x connections per replica)
   #       <= maxConnections - reservedConnections
   #
-  # 600 by default, because that is what the shipped defaults add up to:
+  # 600 by default, because that is what the shipped defaults add up to with
+  # EVERY autoscaler at its ceiling (each component autoscales by default):
   #
-  #   elitea-main       10 replicas x (6 primary + 36 runtime + 2 vector) = 440
-  #   llm-gateway        1 x GATEWAY_DATABASE_MAX_CONNS 8               =   8
-  #   scheduler          1 x ELITEA_DATABASE_MAX_CONNS 4                =   4
-  #   deepwiki host      1 x (4 + 1 owner claim)                        =   5
-  #   deepwiki engine    1 x (2 + 2 + query pool 8 + 4 x 1 worker)      =  16
-  #   inventory engine   1 x POOL_SIZE 8                                =   8
-  #   worker AgentState  1 x delivery_max_concurrency 32                =  32
-  #                                                                     -----
-  #                                                                       513
-  #   + reservedConnections 25 = 538, rounded up to 600.
+  #   elitea-main        8 replicas x (6 primary + 36 runtime + 2 vector) = 352
+  #   llm-gateway        4 x GATEWAY_DATABASE_MAX_CONNS 8                 =  32
+  #   scheduler          2 x ELITEA_DATABASE_MAX_CONNS 4                  =   8
+  #   deepwiki host      3 x (4 + 1 owner claim)                          =  15
+  #   deepwiki engine    3 x (2 + 2 + query pool 8 + 4 x 1 worker)        =  48
+  #   inventory host     3 x (ELITEA_INVENTORY_DATABASE_MAX_CONNS 2 + 1)  =   9
+  #   inventory engine   3 x POOL_SIZE 8                                  =  24
+  #   worker AgentState 10 x agentstate_max_connections 8                 =  80
+  #                                                                       -----
+  #                                                                         568
+  #   + reservedConnections 25 = 593, inside 600.
+  #
+  # The worker's AgentState pool is its own setting
+  # (worker.runtime.limits.agentstate_max_connections, default 8), not
+  # delivery_max_concurrency (32): a turn holds a connection only for a short
+  # transaction, never across a model or tool call, so 32 in-flight turns
+  # share 8 connections and wait up to agentstate_acquire_timeout_millis for
+  # one. Before, the pool was sized to delivery_max_concurrency, and 10 worker
+  # replicas alone took 320 connections: the shipped defaults with worker
+  # autoscaling on were refused.
   #
   # That is NOT a stock PostgreSQL's 100: SET THIS TO YOUR SERVER'S
   # max_connections. Below the budget the render names every component's
@@ -1796,13 +1807,16 @@ platform:
 # ── Scaling: autoscaler sources, spread, cluster add-ons (S11) ──────────────
 #
 # WHAT SCALES ON WHAT (the Scaling page of the deployment docs has the table):
-#   worker      KEDA nats-jetstream: the lag of its durable consumer.
-#   deepwiki    KEDA prometheus (invocations in flight) | KEDA postgresql
-#               (running invocation rows) | CPU.
-#   inventory   CPU only, and one replica: its host keeps invocations in
-#               memory (see inventory.autoscaling).
+#   worker      KEDA nats-jetstream (the lag of its durable consumer) | CPU.
+#   deepwiki,   KEDA prometheus (invocations in flight + refused busy) | KEDA
+#   inventory   postgresql (running + refused-busy invocation rows) | CPU. More
+#               than one replica needs the host's database (invocation store).
 #   llmGateway  KEDA prometheus | HPA Pods metric through the adapter
 #               (gateway_llm_sse_active_connections) | CPU.
+#   otelCollector, egressProxy   CPU HPAs.
+#   scheduler   none: an active/active pair (replicaCount 2, at most 2).
+#   Every KEDA ScaledObject has a CPU trigger next to its metric, so it still
+#   scales when the metric source cannot be read.
 #   main, web, vector   CPU HPAs. elitea-main publishes no /metrics, so there
 #               is no custom metric to scale it on.
 #
@@ -1828,12 +1842,20 @@ scaling:
     # http://prometheus-operated.monitoring.svc:9090. Empty: no prometheus
     # trigger renders, and `auto` picks the next source.
     #
-    # The queries match `namespace="<release namespace>"`, the label a
-    # Prometheus Operator PodMonitor (rendered by default where the Operator is
-    # served) gives every series. An annotation-based scrape config that names
-    # it differently (kubernetes_namespace) needs <component>.autoscaling.
-    # prometheus.query set to match, or the trigger reads zero.
     serverAddress: ""
+    # The label that holds the pod's namespace in the scraped series. The
+    # default, `namespace`, is the label a Prometheus Operator PodMonitor
+    # (rendered by default where the Operator is served) gives every series.
+    # An annotation-based scrape config often names it `kubernetes_namespace`:
+    # set that here. Empty: the queries do not filter on the namespace at all
+    # (correct only when one Prometheus scrapes one release). The render
+    # refuses a value that is not a Prometheus label name.
+    namespaceLabel: namespace
+    # More label matchers added to EVERY generated query, for a Prometheus
+    # that scrapes more than one cluster, e.g. ['cluster="prod-eu"']. Each
+    # item is one matcher, verbatim. A component's autoscaling.prometheus.query
+    # replaces its generated query completely (these are not added to it).
+    extraMatchers: []
   # Soft spread for every workload that can run more than one replica (main,
   # web, the gateway, elitea-vector, DeepWiki, Inventory, the worker): over
   # zones, then over nodes, ScheduleAnyway, so a one-zone or one-node cluster
@@ -1860,15 +1882,35 @@ scaling:
 # object once the CRDs exist, and KEDA reconciles it (Ready=True) whenever its
 # operator comes up — measured on kind with Helm 4.3.1 and 3.17.
 #
-# UNINSTALL: delete the release's ScaledObjects first (kubectl delete
-# scaledobject -l app.kubernetes.io/instance=<release>), then the release. A
-# plain `helm uninstall` removes KEDA's operator and its CRDs together, and a
+# UNINSTALL: a pre-delete hook (templates/keda-cleanup.yaml, rendered while
+# keda.enabled) deletes this release's ScaledObjects and
+# TriggerAuthentications and waits for KEDA's operator to run their
+# finalizers, BEFORE Helm removes the operator and the CRDs. Without it, a
 # ScaledObject whose finalizer the operator never got to run keeps the CRD
-# (and the namespace) in Terminating.
+# (and the namespace) in Terminating. When the operator is already gone, the
+# hook removes the finalizers after kedaCleanup.timeoutSeconds. `helm
+# uninstall --no-hooks` (and an Argo CD delete, which does not run Helm
+# hooks) skips it: then delete them first by hand,
+#   kubectl delete scaledobject,triggerauthentication -n <namespace> \
+#     -l app.kubernetes.io/instance=<release>
+# and wait for that to return before the release goes.
 #
 # Every key below is the upstream chart's own (https://github.com/kedacore/charts).
 keda:
   enabled: false
+
+# The pre-delete hook that removes this release's ScaledObjects before KEDA
+# goes (templates/keda-cleanup.yaml). Rendered only while keda.enabled.
+kedaCleanup:
+  # How long the hook waits for KEDA's operator to run the finalizers before
+  # it removes them itself. At least 10.
+  timeoutSeconds: 120
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
 
 # prometheus-adapter, installed BY THIS RELEASE (the pinned
 # prometheus-community chart, aliased prometheusAdapter). It serves the
@@ -3843,11 +3885,13 @@ main:
   # With the runtime plane on by default every replica holds about 44
   # PostgreSQL connections, and maxReplicas is what postgresql.maxConnections
   # is checked against: raise both together, or put elitea-main behind
-  # pgbouncer. values-gke.yaml caps it at 3 for a 4 vCPU Cloud SQL.
+  # pgbouncer. values-gke.yaml caps it at 3 for a 4 vCPU Cloud SQL. 8 (was
+  # 10) so that EVERY autoscaler of the shipped defaults at its ceiling fits
+  # the default postgresql.maxConnections (scaling): 8 x 256 SSE streams.
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 10
+    maxReplicas: 8
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
 
@@ -3981,12 +4025,12 @@ web:
       periodSeconds: 10
       failureThreshold: 3
 
-  # CPU-based HPA is meaningful here (unlike the gateway's I/O-bound streaming or
-  # the scheduler's serialised workers): serving static assets is CPU/network
-  # work that scales linearly with replicas. Off by default so a cluster without
-  # metrics-server does not get a permanently-degraded HPA object.
+  # A CPU HPA: serving static assets is CPU and network work that scales
+  # linearly with replicas. On by default, as for every other component; a
+  # cluster without metrics-server keeps the HPA at minReplicas (it reports
+  # FailedGetResourceMetric and does not scale), which is the old fixed count.
   autoscaling:
-    enabled: false
+    enabled: true
     minReplicas: 2
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
@@ -4035,27 +4079,42 @@ scheduler:
   # (2), (3) and (4) are the reason the image cannot simply be deleted; they
   # have no relocation decision yet.
 
-  # One replica by default; TWO is supported, for availability. Every job is
-  # safe with more than one: the singleton work takes a PostgreSQL advisory
-  # lock, the retention sweep's batches use FOR UPDATE SKIP LOCKED (two
-  # sweepers take disjoint rows), and the budget write-back consumer
-  # deduplicates deltas, so a second replica neither double-applies nor
-  # contends on anything. It buys failover, not throughput: the work is not
-  # CPU-bound. The render refuses more than two, which only adds connections
-  # (env.ELITEA_DATABASE_MAX_CONNS each) to the budget.
-  replicaCount: 1
+  # TWO by default (scaling), for availability: an active/active pair, and a
+  # deliberate fixed size, not an autoscaler. Every job is safe with more than
+  # one: the singleton work takes a PostgreSQL advisory lock, the retention
+  # sweep's batches use FOR UPDATE SKIP LOCKED (two sweepers take disjoint
+  # rows), and the budget write-back consumer deduplicates deltas, so a second
+  # replica neither double-applies nor contends on anything. It buys failover,
+  # not throughput: the work is not CPU-bound and grows with time, not with
+  # load, so there is nothing for an autoscaler to follow. The render refuses
+  # more than two, which only adds connections (env.ELITEA_DATABASE_MAX_CONNS
+  # each) to the budget. 1 is valid for a small install.
+  replicaCount: 2
 
   image:
     repository: ghcr.io/elitea-ng/elitea-scheduler
     # tag comes from the single top-level image.tag
     pullPolicy: IfNotPresent
 
-  # Recreate, by preference: a few seconds of no scheduler at a deploy costs
-  # nothing. Two generations overlapping would also be safe — they share the
-  # durable NATS consumer the way two replicas do, and the jobs are lock- and
-  # dedup-safe — so RollingUpdate is a valid choice, not a hazard.
+  # One pod at a time, so the other keeps the work going through a deploy.
+  # Two generations overlapping are safe — they share the durable NATS
+  # consumer the way two replicas do, and the jobs are lock- and dedup-safe.
+  # Recreate is still valid (a few seconds of no scheduler cost nothing).
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+
+  # With two replicas: one stays through a node drain (rendered only while
+  # replicaCount is above one).
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Pod spread: empty takes scaling.topologySpread's soft zone + node spread
+  # when replicaCount is above one; a list here replaces it.
+  topologySpreadConstraints: []
 
   resources:
     requests:
@@ -4803,8 +4862,13 @@ llmGateway:
     annotations: {}
 
   # Autoscaling on concurrent /llm streams (design §9.5) — CPU/memory is a poor
-  # signal for I/O-bound streaming. OFF by default. Which scaler renders is
-  # `source` (templates/_scaling.tpl, elitea.scaling.gatewaySource):
+  # signal for I/O-bound streaming, so the CPU HPA is only the fallback. ON by
+  # default, 2 to 4 replicas: two for availability (a PDB and a spread come
+  # with them), four because the connection budget counts the ceiling. The
+  # chart derives LLM_BUDGET_EXPECTED_REPLICAS from maxReplicas, so the
+  # degraded-mode cap of each replica is the budget / 4 even while 2 run (the
+  # fleet spends less, never more). Which scaler renders is `source`
+  # (templates/_scaling.tpl, elitea.scaling.gatewaySource):
   #   keda-prometheus  a KEDA ScaledObject whose prometheus trigger sums
   #                    sseConnectionMetric over this namespace and divides by
   #                    targetSSEConnectionsPerPod. Needs KEDA (keda.enabled or
@@ -4817,9 +4881,9 @@ llmGateway:
   #   auto             the first of those that is available.
   # An explicit source without its precondition is refused by name.
   autoscaling:
-    enabled: false
+    enabled: true
     source: auto
-    minReplicas: 1
+    minReplicas: 2
     # 4, not 10: every replica holds GATEWAY_DATABASE_MAX_CONNS (8), and the
     # connection budget counts the ceiling — 10 would take 80 of the default
     # server's 575 and refuse the shipped defaults with autoscaling switched
@@ -5088,6 +5152,13 @@ deepwiki:
     name: elitea-deepwiki-svc
     # No `port` (#1359): the one port is platformGrpc.port below.
     annotations: {}
+    # The HEADLESS Service elitea-main dials (scaling): DNS returns one address
+    # per ready replica and the client sends its calls to them in turn
+    # (round_robin). Through the ClusterIP Service above, one long-lived
+    # HTTP/2 connection takes every call of an elitea-main replica to ONE
+    # host replica. elitea-main still verifies the certificate SAN `name`
+    # (ELITEA_DEEPWIKI_SERVER_NAME), so the server certificate does not change.
+    grpcName: elitea-deepwiki-grpc
 
   # The provider's one listener (#1359): the provider SPI
   # (elitea.subapp.v1.ProviderService — elitea-main's facade, its descriptor
@@ -5148,7 +5219,19 @@ deepwiki:
     ELITEA_DEEPWIKI_QUERY_POOL_SIZE: "8"
     # Seconds the host waits on SIGTERM for running invocations before it
     # cancels them (0 cancels at once). Inside terminationGracePeriodSeconds.
-    ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS: "30"
+    #
+    # LONG on purpose (scaling). A generation runs for minutes to an hour, and
+    # until now a replica that was scaled in or rolled cancelled it after 30s.
+    # On SIGTERM the replica leaves the Services, stops admitting (its slots
+    # leave the fleet's total at once) and finishes the generations it runs.
+    # A poll or a cancel for them reaches a sibling, which reads the shared
+    # store. The other answer, a build that another replica resumes, needs the
+    # request kept in the database: it holds the caller's model credential and
+    # repository settings, and a build is staged and published in one
+    # transaction anyway, so it restarts cleanly. A generation that outlasts
+    # the drain is still cancelled, and says so; raise both values for larger
+    # repositories.
+    ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS: "3600"
     ELITEA_DEEPWIKI_SCRATCH_PATH: /var/scratch/deepwiki
     # The location this host reports in its descriptor: the gRPC listener
     # elitea-main dials (main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET).
@@ -5232,11 +5315,14 @@ deepwiki:
     name: ""
     annotations: {}
 
-  # Shutdown, on one clock: the host stops its gRPC listener (up to 10s),
-  # waits up to <PREFIX>DRAIN_TIMEOUT_SECONDS for running invocations, then
-  # cancels what is left and records it terminal. The render refuses a grace
-  # period shorter than 10 + the drain + 10.
-  terminationGracePeriodSeconds: 60
+  # Shutdown, on one clock: the preStop sleep (endpoints and DNS drop the
+  # replica first), the host stops its gRPC listener (up to 10s), waits up to
+  # <PREFIX>DRAIN_TIMEOUT_SECONDS for running invocations, then cancels what
+  # is left and records it terminal. The render refuses a grace period
+  # shorter than preStop + 10 + the drain + 10.
+  preStop:
+    sleepSeconds: 5
+  terminationGracePeriodSeconds: 3630
 
   resources:
     requests:
@@ -5259,10 +5345,14 @@ deepwiki:
     capabilities:
       drop: ["ALL"]
 
-  # Autoscaling. OFF by default. There is no queue in front of the host: an
-  # invocation runs on the replica that accepted it, start to end, so the
-  # load is the number running, and one replica runs <PREFIX>MAX_PARALLEL_
-  # WORKERS at once. `source` (templates/_scaling.tpl,
+  # Autoscaling, ON by default (scaling). There is no queue in front of the
+  # host: an invocation runs on the replica that accepted it, start to end, so
+  # the load is the number running, and one replica runs <PREFIX>MAX_PARALLEL_
+  # WORKERS generations at once. The slots are FLEET-wide: a generation is
+  # admitted only while the fleet's running generations are below the sum of
+  # the live replicas' slots (one transaction in the shared store), and
+  # /slots reports that fleet total. Each KEDA source also carries a CPU
+  # trigger. `source` (templates/_scaling.tpl,
   # elitea.scaling.subappSource):
   #   keda-prometheus  sum(elitea_subapp_invocations_in_flight{app="elitea-deepwiki"})
   #                    from the host's admin /metrics, threshold
@@ -5278,18 +5368,18 @@ deepwiki:
   # The floor stays at 1: KEDA does not scale these to zero, because the
   # facade's descriptor and health calls need a replica to answer.
   autoscaling:
-    enabled: false
+    enabled: true
     source: auto
     minReplicas: 1
     maxReplicas: 3
     targetCPUUtilizationPercentage: 70
     pollingIntervalSeconds: 30
     # Long: an invocation runs for minutes, and a replica that is scaled in
-    # cancels what it could not finish within its drain.
+    # holds its node for up to its drain.
     cooldownSeconds: 600
     prometheus:
       # Empty: sum(elitea_subapp_invocations_in_flight{app="elitea-deepwiki",
-      # namespace="<release namespace>"}).
+      # <scaling.prometheus.namespaceLabel>="<release namespace>"}).
       query: ""
 
   # Rendered only while the floor (autoscaling.minReplicas, else
@@ -5425,6 +5515,13 @@ inventory:
     name: elitea-inventory-svc
     # No `port` (#1359): the one port is platformGrpc.port below.
     annotations: {}
+    # The HEADLESS Service elitea-main dials (scaling): DNS returns one address
+    # per ready replica and the client sends its calls to them in turn
+    # (round_robin). Through the ClusterIP Service above, one long-lived
+    # HTTP/2 connection takes every call of an elitea-main replica to ONE
+    # host replica. elitea-main still verifies the certificate SAN `name`
+    # (ELITEA_INVENTORY_SERVER_NAME), so the server certificate does not change.
+    grpcName: elitea-inventory-grpc
 
   env:
     ELITEA_SUBAPP: inventory
@@ -5441,17 +5538,19 @@ inventory:
     ELITEA_INVENTORY_RUNNER: "sidecar"
     ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
     ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
-    # The host's invocation-store pool (1..64; + 1 for its owner claim). The
-    # Inventory host has NO store today (it is given no DATABASE_URL, and the
-    # inventory_graph schema has no invocations table), so this is inert and
-    # the budget does not count it; it is rendered so the day the host gets
-    # its store, its size is already a value.
-    ELITEA_INVENTORY_DATABASE_MAX_CONNS: "4"
+    # The host's invocation-store pool (1..64; + 1 for its owner claim): the
+    # inventory_graph.invocations rows every replica shares (engine migration
+    # 0009). One statement per poll, cancel or write, so it stays small.
+    ELITEA_INVENTORY_DATABASE_MAX_CONNS: "2"
     # The engine's PostgreSQL pool (1..64), shared by ingestion and queries:
     # what one replica holds on the inventory database.
     ELITEA_INVENTORY_POOL_SIZE: "8"
-    # Seconds the host waits on SIGTERM for running invocations.
-    ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS: "30"
+    # Seconds the host waits on SIGTERM for running invocations. LONG on
+    # purpose (scaling): a replica that is scaled in or rolled leaves the
+    # Services at once and takes no new invocation, but it finishes the
+    # ingestions it runs, so a scale-in loses no work. A poll or a cancel for
+    # them reaches a sibling, which reads the shared store.
+    ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS: "3600"
     # The location this host reports in its descriptor: the gRPC listener
     # elitea-main dials (main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET).
     ELITEA_INVENTORY_SERVICE_LOCATION_URL: grpcs://elitea-inventory-svc:9443
@@ -5580,11 +5679,14 @@ inventory:
     name: ""
     annotations: {}
 
-  # Shutdown, on one clock: the host stops its gRPC listener (up to 10s),
-  # waits up to <PREFIX>DRAIN_TIMEOUT_SECONDS for running invocations, then
-  # cancels what is left and records it terminal. The render refuses a grace
-  # period shorter than 10 + the drain + 10.
-  terminationGracePeriodSeconds: 60
+  # Shutdown, on one clock: the preStop sleep (endpoints and DNS drop the
+  # replica first), the host stops its gRPC listener (up to 10s), waits up to
+  # <PREFIX>DRAIN_TIMEOUT_SECONDS for running invocations, then cancels what
+  # is left and records it terminal. The render refuses a grace period
+  # shorter than preStop + 10 + the drain + 10.
+  preStop:
+    sleepSeconds: 5
+  terminationGracePeriodSeconds: 3630
 
   resources:
     requests:
@@ -5607,34 +5709,32 @@ inventory:
     capabilities:
       drop: ["ALL"]
 
-  # Autoscaling. OFF by default, and today capped at ONE replica: the render
-  # refuses autoscaling.maxReplicas (or replicaCount) above 1 because the
-  # Inventory host keeps its invocations in memory (see keda-postgresql
-  # below). The values are here so the shape matches DeepWiki's the day the
-  # host gets its store. There is no queue in front of the host: an
-  # invocation runs on the replica that accepted it, start to end, so the
-  # load is the number running, and one replica runs <PREFIX>MAX_PARALLEL_
-  # WORKERS at once. `source` (templates/_scaling.tpl,
-  # elitea.scaling.subappSource):
+  # Autoscaling, ON by default (scaling). The host keeps its invocations in
+  # the engine's database (inventory_graph.invocations, engine migration
+  # 0009), so every replica serves a poll, a cancel or a deletion of any
+  # invocation, and a deletion stops the matching ingestions on every replica
+  # (the cancel fan-out over NATS). The engine serialises ingestion per graph
+  # with a PostgreSQL lock, so two replicas never write one graph at once.
+  # There is no queue in front of the host: an invocation runs on the replica
+  # that accepted it, start to end, so the load is the number running, and the
+  # target per replica is <PREFIX>MAX_PARALLEL_WORKERS. `source`
+  # (templates/_scaling.tpl, elitea.scaling.subappSource):
   #   keda-prometheus  sum(elitea_subapp_invocations_in_flight{app="elitea-inventory"})
   #                    from the host's admin /metrics, threshold
   #                    MAX_PARALLEL_WORKERS. Needs KEDA, scaling.prometheus.
   #                    serverAddress and a scrape (metrics below).
-  #   keda-postgresql  NOT available here: the Inventory host keeps its
-  #                    invocations in memory. For the same reason the render
-  #                    REFUSES more than one Inventory replica (replicaCount,
-  #                    or autoscaling.maxReplicas): a poll that reaches another
-  #                    replica would answer not-found for a running ingestion.
-  #                    Lifting that needs the durable store on the host first.
+  #   keda-postgresql  the unfinished rows of inventory_graph.invocations,
+  #                    same threshold. Needs KEDA and the database secret.
   #   cpu              a CPU HPA (metrics-server).
   #   auto             the first of those that is available.
-  # The floor stays at 1: KEDA does not scale these to zero, because the
-  # facade's descriptor and health calls need a replica to answer.
+  # Each KEDA source also carries a CPU trigger. The floor stays at 1: KEDA
+  # does not scale these to zero, because the facade's descriptor and health
+  # calls need a replica to answer.
   autoscaling:
-    enabled: false
+    enabled: true
     source: auto
     minReplicas: 1
-    maxReplicas: 1
+    maxReplicas: 3
     targetCPUUtilizationPercentage: 70
     pollingIntervalSeconds: 30
     # Long: an invocation runs for minutes, and a replica that is scaled in
@@ -5700,6 +5800,14 @@ egressProxy:
   # At least 2 (the chart refuses less): the pods spread over nodes and zones
   # when the cluster has them, and the PDB keeps one up through a drain.
   replicaCount: 2
+  # A CPU HPA (templates/egressProxy/hpa.yaml): the proxy is stateless, and
+  # copying tunnel bytes is its CPU. While on, replicaCount is not used and
+  # minReplicas must be at least 2, for the same reason as above.
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
@@ -6059,6 +6167,10 @@ vector:
     name: ""
     annotations: {}
 
+  # Shutdown: the preStop sleep, then up to 20s for the gRPC server to finish
+  # the calls it holds. The render refuses a grace period below their sum.
+  preStop:
+    sleepSeconds: 5
   terminationGracePeriodSeconds: 30
 
   resources:
@@ -6325,29 +6437,31 @@ worker:
   # would fight the autoscaler.
   replicaCount: 1
 
-  # Queue-depth autoscaling, through KEDA.
+  # Queue-depth autoscaling, ON by default.
   #
-  # OFF by default, and enabling it requires KEDA: this release's (keda.enabled),
-  # one the cluster already serves, or scaling.keda.clusterInstalled. The chart
-  # REFUSES to install rather than creating an object no controller reads —
-  # this chart has already shipped one autoscaler that silently did nothing
-  # (the gateway HPA named a metric that was never published), and that is the
-  # failure the refusal exists to prevent.
+  # `source` picks the scaler (elitea.scaling.workerSource):
+  #   keda  KEDA's nats-jetstream trigger on the lag of the worker's durable
+  #         consumer, plus a CPU trigger. Needs KEDA: this release's
+  #         (keda.enabled), one the cluster already serves, or
+  #         scaling.keda.clusterInstalled.
+  #   cpu   a CPU HorizontalPodAutoscaler (metrics-server).
+  #   auto  keda when KEDA is available, else cpu (the default).
   #
-  # WHY NOT A NATIVE HPA. The other three autoscalers in this chart scale on
-  # CPU and memory. An agent execution spends most of its life waiting on a
-  # model, so a backlog of thousands of unclaimed commands raises neither. The
-  # lag of the worker's JetStream durable consumer is the signal, and no
-  # native HPA reads it.
+  # WHY THE LAG. An agent execution spends most of its life waiting on a
+  # model, so a backlog of thousands of unclaimed commands raises CPU late or
+  # not at all. CPU is the fallback, not the signal.
   #
   # KEDA's nats-jetstream scaler reads /jsz on the NATS monitoring port (8222,
   # plain HTTP, no credential). The bundled NATS admits the KEDA operator there
-  # (nats.networkPolicy.monitoringFrom); a scaler that cannot reach it reports no
-  # lag, which scales the fleet DOWN while the backlog grows.
+  # (nats.networkPolicy.monitoringFrom); a scaler that cannot reach it reports
+  # no lag, and only the CPU trigger then moves the fleet.
   autoscaling:
-    enabled: false
+    enabled: true
+    source: auto
     minReplicas: 1
     maxReplicas: 10
+    # The CPU trigger (cpu source, and the second trigger of the KEDA one).
+    targetCPUUtilizationPercentage: 70
 
     # The per-replica target of KEDA's nats-jetstream metric, which is
     # num_pending + num_ack_pending of the durable (KEDA v2.10..v2.21
@@ -6805,6 +6919,15 @@ worker:
       output_stream_deadline_millis: 300000
       lease_poll_interval_millis: 10000
       shutdown_timeout_millis: 30000
+      # The AgentState PostgreSQL pool of one replica (checkpoints, sessions,
+      # the sandbox ledger). Every use holds a connection for one statement or
+      # one short transaction, never across a model or tool call, so it does
+      # not need one connection per delivery slot. A turn that finds the pool
+      # busy waits up to agentstate_acquire_timeout_millis. This number, not
+      # delivery_max_concurrency, is what the connection budget counts per
+      # worker replica (1..delivery_max_concurrency).
+      agentstate_max_connections: 8
+      agentstate_acquire_timeout_millis: 30000
 
   resources:
       requests:
@@ -6847,7 +6970,27 @@ otelCollector:
   # for a real sink (otlp/otlphttp exporter to Tempo, a vendor backend, ...) when
   # an environment needs traces to outlive the pod.
 
+  # Used only while autoscaling is off.
   replicaCount: 1
+  # A CPU HPA (templates/otelCollector/hpa.yaml): the collector is stateless,
+  # so any replica takes any span. 1 to 3: telemetry is safe to lose for a
+  # moment, so one replica is the floor. An OTLP/gRPC exporter keeps its
+  # connection, so a new replica takes load as the senders reconnect.
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  # Rendered only while the floor is above one (raise minReplicas to 2 for it).
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Empty takes scaling.topologySpread's soft zone + node spread.
+  topologySpreadConstraints: []
+  # Shutdown: the preStop sleep, then up to 10s to flush the batch processor.
+  preStop:
+    sleepSeconds: 5
+  terminationGracePeriodSeconds: 30
 
   image:
     repository: otel/opentelemetry-collector-contrib
