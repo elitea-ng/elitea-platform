@@ -530,6 +530,78 @@ async fn the_janitor_deletes_what_a_dead_write_staged() {
     assert_eq!(staged_rows(&pool, key).await, 0);
 }
 
+/// A delete whose elitea-vector call fails deletes nothing: the graph, its
+/// recorded generation and its staged ones stay, so no point is left that
+/// nothing lists, and the same call made again deletes both. A delete
+/// without a bearer refuses a graph that holds vectors.
+#[tokio::test]
+async fn a_failed_vector_delete_keeps_the_graph_and_its_records() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("delete_vectors_fail").await else {
+        return;
+    };
+    let key = key(1, 11);
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let vectors = common::entity_vectors(&origin, BEARER);
+    let mut graph = replay();
+    let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+    for id in ids.iter().take(2) {
+        assert!(graph.set_embedding(id, &[1.0, 0.5, 0.0, 0.0]));
+    }
+    graph
+        .metadata
+        .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+    store::save_with(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("write");
+    // A write staged and never settled: listed, its points in the store.
+    let _staged = store::prepare(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("stage");
+    assert_eq!(fake.point_count(), 4);
+    let generation = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT vector_generation FROM inventory_graph.graphs
+              WHERE project_id = 1 AND application_id = 11",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("row")
+        .flatten()
+    };
+    let recorded = generation(pool.clone()).await.expect("a generation");
+
+    // Without a bearer: refused, nothing changed.
+    let refused = store::PgGraphStore::new(pool.clone())
+        .delete(key)
+        .await
+        .expect_err("a graph holding vectors needs vector access");
+    assert!(
+        matches!(&refused, store::StoreError::Vectors(reason) if reason.contains("elitea-vector")),
+        "{refused}"
+    );
+    assert!(store::load(&pool, key).await.expect("load").is_some());
+
+    // elitea-vector fails the delete: rolled back, nothing changed.
+    let graphs = store::PgGraphStore::new(pool.clone()).with_vectors(Some(vectors));
+    fake.fail_call("delete", 1, tonic::Status::unavailable("down"));
+    let failed = graphs
+        .delete(key)
+        .await
+        .expect_err("the vector delete failed");
+    assert!(matches!(failed, store::StoreError::Vectors(_)), "{failed}");
+    assert!(store::load(&pool, key).await.expect("load").is_some());
+    assert_eq!(generation(pool.clone()).await, Some(recorded));
+    assert_eq!(staged_rows(&pool, key).await, 1, "the staged record stays");
+    assert_eq!(fake.point_count(), 4, "no point was deleted");
+
+    // Repeated: the graph, its records and every point go.
+    assert!(graphs.delete(key).await.expect("delete"));
+    assert!(store::load(&pool, key).await.expect("load").is_none());
+    assert_eq!(staged_rows(&pool, key).await, 0);
+    assert_eq!(fake.point_count(), 0);
+}
+
 /// A graph with more entities at or above `min_score` than elitea-vector
 /// returns is ranked from its stored vectors, exactly, in the same order.
 #[tokio::test]

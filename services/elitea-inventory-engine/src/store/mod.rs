@@ -731,14 +731,42 @@ pub async fn stamp(pool: &PgPool, key: GraphKey) -> Result<Option<GraphStamp>> {
 /// [`delete::delete_graph`], which holds the ingestion lease and fences
 /// later writes.
 ///
+/// Without vector access it refuses a graph that holds entity vectors in
+/// elitea-vector (see [`delete_with`]).
+///
 /// # Errors
 ///
-/// [`StoreError::Database`].
+/// [`StoreError::Database`]; [`StoreError::Vectors`] for a graph that holds
+/// entity vectors.
 pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
-    match delete::remove(pool, key, None, delete::Tombstone::No).await? {
+    delete_with(pool, key, None).await
+}
+
+/// [`delete`], with the graph's entity vectors: through `vectors` the
+/// namespace is deleted inside the deletion's transaction, before its
+/// commit, so a failed delete leaves the graph and its generation records
+/// as they were (nothing is deleted, the call can be repeated). Without
+/// `vectors` a graph that holds any vectors (a recorded, stale or staged
+/// generation) is refused: deleting its rows would drop the only record of
+/// points this call cannot delete.
+///
+/// # Errors
+///
+/// [`StoreError::Database`]; [`StoreError::Vectors`] for a failed
+/// elitea-vector delete, or a graph holding vectors without `vectors`.
+pub async fn delete_with(
+    pool: &PgPool,
+    key: GraphKey,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<bool> {
+    let policy = vectors.map_or(delete::Vectors::Refuse, delete::Vectors::Remove);
+    match delete::remove(pool, key, None, policy, delete::Tombstone::No).await? {
         delete::Removal::Done { removed } => Ok(!removed.is_empty()),
+        delete::Removal::VectorsHeld(reason) => Err(StoreError::Vectors(format!(
+            "the graph was not deleted: {reason}"
+        ))),
         // Without a list time nothing can be newer than it.
-        delete::Removal::Newer(_) | delete::Removal::VectorsHeld(_) => Ok(false),
+        delete::Removal::Newer(_) => Ok(false),
     }
 }
 

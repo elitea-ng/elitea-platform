@@ -125,22 +125,12 @@ impl GraphStore for PgGraphStore {
         vectors::rank(&self.pool, key, vector, min_score, self.vectors.as_ref()).await
     }
 
-    /// With vector access, the graph's namespace is emptied too (after the
-    /// rows' commit; a failure is logged: the platform's own deletion of a
-    /// toolkit or project removes the namespace again).
+    /// With vector access, the graph's namespace is emptied too, before the
+    /// rows' commit: a failed delete keeps the graph (and the records of its
+    /// generations) and is the call's error. Without it a graph that holds
+    /// vectors is refused (`store::delete_with`).
     async fn delete(&self, key: GraphKey) -> Result<bool, StoreError> {
-        let deleted = super::delete(&self.pool, key).await?;
-        if let Some(vectors) = &self.vectors
-            && let Err(error) = vectors.remove_all(key).await
-        {
-            tracing::warn!(
-                project_id = key.project_id,
-                application_id = key.application_id,
-                %error,
-                "the deleted graph's entity vectors were not removed"
-            );
-        }
-        Ok(deleted)
+        super::delete_with(&self.pool, key, self.vectors.as_ref()).await
     }
 
     async fn save(&self, key: GraphKey, graph: &Graph) -> Result<i64, StoreError> {
