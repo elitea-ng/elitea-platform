@@ -190,7 +190,7 @@ func TestHealthIsAProjectionAndNotAColumnOnTheRevision(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// The whole reason service_descriptors.go refused: pylon's `healthy` was
+	// The whole reason service_descriptors.go refused: the legacy runtime's `healthy` was
 	// which in-process dict an entry landed in, presented as a fact about the
 	// provider. Storing it on the revision row would reproduce that in durable
 	// form — a boolean with no observation time, which a reader cannot tell

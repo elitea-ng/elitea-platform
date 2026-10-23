@@ -33,7 +33,7 @@ package migrations_test
 // legacyrbac's central default-mode fallback entirely and supply the permission
 // directly. So the whole end-to-end suite passed against a database that
 // already granted what a real deployment lacked. The seed hid the defect. A
-// pylon-backed database and a legacy dump have that same per-project shape,
+// legacy dump has that same per-project shape,
 // which is why only a clean Go bootstrap breaks.
 //
 // So this file asserts against the corpus a real deployment applies, and
@@ -168,7 +168,7 @@ func TestAProjectMemberPassesBothChatGatesOnACleanDatabase(t *testing.T) {
 //
 // Without this case a gate that admitted every caller would pass the positive
 // test unchanged. This case also pins the migration's blast radius: it is the
-// shape of every pylon-backed database, every legacy dump and the end-to-end
+// shape of every legacy dump and the end-to-end
 // stack, so the migration cannot change what their members can do.
 func TestACallerWithoutTheGrantIsRefusedAtBothChatGates(t *testing.T) {
 	pool := newMigratedPool(t)

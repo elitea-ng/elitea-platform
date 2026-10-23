@@ -4,8 +4,8 @@ package migrations_test
 // permission strings no code checks (#6874).
 //
 // Every case runs the ledgered corpus on a fresh database, then runs the
-// migration's own SQL again where a case needs rows that only a pylon-managed
-// database carries. Re-running the real file is the point: a copy of the SQL
+// migration's own SQL again where a case needs rows that only a database the legacy runtime
+// managed carries. Re-running the real file is the point: a copy of the SQL
 // here would measure the copy.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).

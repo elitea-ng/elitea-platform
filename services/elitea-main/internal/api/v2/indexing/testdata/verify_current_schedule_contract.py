@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate or verify frozen current index-schedule observations.
 
-This harness intentionally does not import Elitea/Pylon source. It defines the
+This harness intentionally does not import Elitea or legacy-runtime source. It defines the
 small public validation contract independently, then evaluates the checked-in
 payloads with the installed Pydantic and croniter. Point PYTHONPATH at the
 current scheduling plugin's installed requirements when croniter is not in the
