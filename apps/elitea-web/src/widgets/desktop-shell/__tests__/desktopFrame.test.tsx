@@ -79,7 +79,8 @@ describe('DesktopFrame sidebar', () => {
     const { router } = mount();
 
     const folders = await screen.findAllByTestId('shell-folder');
-    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing', 'docsNo project']);
+    // A folder with threads shows their count after its name.
+    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing2', 'docsNo project']);
     const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     expect(threads.map((thread) => thread.textContent)).toEqual(['quick overview', 'fix the build']);
 
@@ -149,16 +150,24 @@ describe('DesktopFrame sidebar', () => {
     expect(await within(sidebar).findByText('new')).toBeInTheDocument();
   });
 
-  it('reaches the Elitea pages and Settings, and offers the way back to the folders', async () => {
+  it('reaches the Elitea pages and Settings; the title row names the page and has no way "back"', async () => {
     const user = userEvent.setup();
     const { router } = mount();
     const sidebar = await screen.findByTestId('desktop-sidebar');
     await user.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
     expect(await screen.findByTestId('catalog')).toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
     await user.click(within(sidebar).getByRole('button', { name: 'Settings' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
-    await user.click(screen.getByRole('button', { name: 'Local work' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Settings');
+    // The sidebar is the way to everything: the title row carries no "back to Local work" button.
+    const main = screen.getByRole('main');
+    expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
+    expect(within(main).getAllByTestId('title-bar')).toHaveLength(1);
+    // With the sidebar hidden, the row offers it back, and still no "back" button.
+    act(() => useDesktopLayout.getState().setSidebarOpen(false));
+    expect(within(main).getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
+    expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
   });
 });
 

@@ -6,12 +6,12 @@ package repos
 // The chat-history projection still joined `text_message` alone, so the row
 // existed, the transcript rendered it, and the prompt did not mention it: a
 // follow-up question about a file attached one turn earlier had nothing to
-// answer from. Pylon extends the item's stored `content` LIST into the group's
-// content array instead (utils/chat_history.py:67-73).
+// answer from. The legacy runtime extends the item's stored `content` LIST into
+// the group's content array instead (utils/chat_history.py:67-73).
 //
 // These run against real Postgres because every property under test is a
 // property of the SQL: what the join set is, where the chunks land relative to
-// the text, and what the projection does with the payloads pylon's own data
+// the text, and what the projection does with the payloads legacy-era data
 // contains -- NULL and a `'{}'::json` default that is an object, not a list.
 
 import (
@@ -44,11 +44,11 @@ func TestPostgresChatHistoryExtendsAPriorTurnsAttachmentChunksInItemOrder(t *tes
 		"40000000-0000-4000-8000-000000000031",
 		"what does this say?", "execution-history-attach-1",
 	)
-	// order_index 1..n are the attachments of that same question (pylon
-	// enumerates them from 1 — rpc/chat_all.py:303). Their payloads are the
-	// four states real data is in: a scaffold the worker has already extended
-	// with a second chunk, a NULL, the `'{}'::json` pylon default, and an
-	// image chunk — which is now WITHHELD from history (#984, and
+	// order_index 1..n are the attachments of that same question (the legacy
+	// runtime enumerates them from 1 — rpc/chat_all.py:303). Their payloads are
+	// the four states real data is in: a scaffold the worker has already
+	// extended with a second chunk, a NULL, the legacy `'{}'::json` default,
+	// and an image chunk — which is now WITHHELD from history (#984, and
 	// `TestPostgresChatHistoryDoesNotCarryAnEmbeddedImageIntoALaterTurn`).
 	attachPostgresChunksToGroup(t, tx, questionID, 1, `[
         {"type":"text","text":"Bucket: chat-attachments","elitea_attachment":{"needs_content_extraction":true,"name":"conv/report.pdf"}},
@@ -209,7 +209,7 @@ func TestPostgresChatHistoryDropsAGroupWhoseOnlyAttachmentHasNoUsableContent(t *
 		"40000000-0000-4000-8000-000000000031",
 		"", "execution-history-attach-3",
 	)
-	// A NULL payload and pylon's `'{}'::json` default are not arrays.
+	// A NULL payload and the legacy `'{}'::json` default are not arrays.
 	// `jsonb_array_elements` on either raises 22023 and would fail the whole
 	// resolve — so the projection must skip them, and skipping them must leave
 	// nothing behind rather than an empty-content group the worker would send

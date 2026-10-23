@@ -20,12 +20,12 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE INDEX ROW IS INJECTED, AND WHY THAT IS NOT A WEAKER TEST
  * ─────────────────────────────────────────────────────────────────────────────
- * An index metadata row lives in the PROJECT'S OWN PgVector store, written by
+ * An index metadata row lives in the index registry, written by
  * a real indexing run through the index-ingest plane. This stack composes
  * neither: `deploy/docker-compose.e2e-standalone.yml` sets no index-ingest
  * flag, so `GET .../index_meta/...` is answered by the compatibility handler
  * over `p_<project>.index_meta` (measured: `200 []`), and the reviewed
- * PgVector-backed routes — the list, the delete, the schedule writes and this
+ * registry-backed routes — the list, the delete, the schedule writes and this
  * change's configuration PUT — are not mounted at all. Enabling that plane on
  * the shared journeys stack would change what every other indexes journey
  * reads, mid-wave.
@@ -40,13 +40,13 @@
  * the code this change adds.
  *
  * The SERVER half is proved where it can be proved for real:
- * `internal/application/indexmeta/configuration_test.go` (resolution, refusals,
- * redaction), `internal/api/v2/indexing/index_meta_configuration_test.go`
- * (path, method, RBAC, every refusal's status) and
- * `internal/infra/pgvector/index_meta_configuration_integration_test.go`,
- * which runs the real UPDATE against a real PostgreSQL and asserts that the
- * run-owned fields — `state`, `task_id`, `history`, the counters — are left
- * exactly as they were.
+ * `internal/api/v2/indexing/index_meta_configuration_test.go` (path, method,
+ * RBAC, every refusal's status), `index_registry_contract_test.go` beside it
+ * (the save through the index registry) and
+ * `internal/infra/db/repos/index_registry_postgres_integration_test.go`'s
+ * `TestIndexRegistrySaveConfigurationTouchesNothingElse`, which runs the real
+ * UPDATE against a real PostgreSQL and asserts that the run-owned fields —
+ * `state`, `history`, `updated_at` — are left exactly as they were.
  */
 import { expect, test } from '@playwright/test';
 import type { Page, Route } from '@playwright/test';

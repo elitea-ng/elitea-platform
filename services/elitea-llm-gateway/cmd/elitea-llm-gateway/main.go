@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"fmt"
 	"io"
@@ -51,15 +52,24 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
 )
 
 func main() {
-	cfg := config.FromEnv()
+	cfg, cfgErr := config.FromEnv()
 
 	level := new(slog.LevelVar)
 	level.Set(parseLevel(cfg.LogLevel))
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
+
+	// A configuration value that must never fall back to a default is wrong:
+	// stop. Today that is LLM_BUDGET_EXPECTED_REPLICAS, which divides the
+	// NATS-down degraded cap (human decision, DECISIONS.md 2026-10-22).
+	if cfgErr != nil {
+		slog.Error("FATAL: refusing to start", "err", cfgErr)
+		os.Exit(1)
+	}
 
 	// The vault master key gate, before anything opens the database: the same
 	// rule elitea-main enforces (master_key_gate.go). A malformed key always
@@ -104,7 +114,14 @@ func main() {
 		pool          *pgxpool.Pool
 		modelResolver *llmproxy.ModelResolver
 	)
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := databasePoolConfig(cfg.DatabaseURL, os.LookupEnv)
+	if errors.Is(err, errDatabaseMaxConns) {
+		slog.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if err == nil {
+		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+	}
 	if err != nil {
 		logger.Warn("database pool unavailable; provider credentials, models resolver and budget enforcement disabled", "err", err)
 		pool = nil
@@ -144,6 +161,17 @@ func main() {
 	hopMarker := hopmarker.New([]byte(cfg.HopSecret))
 	logHopMarkerMode(logger, hopMarker.Armed())
 
+	// Keyless PLATFORM credentials (GATEWAY_WORKLOAD_IDENTITY_ENABLED). ONE
+	// token source serves both halves — the Account for /llm traffic and the
+	// Handler for the probe routes — so a token cached for an audience is
+	// cached once, and neither half can be armed with a different source. nil
+	// when the mode is off: nothing can then mint a platform token.
+	var identityTokens workloadidentity.Tokens
+	if cfg.WorkloadIdentityEnabled {
+		identityTokens = workloadidentity.NewADC()
+	}
+	logWorkloadIdentityMode(logger, cfg.WorkloadIdentityEnabled, cfg.PublicProjectIDString())
+
 	// BFF.6: assemble the vault-backed Account (BF0.2-account) so bifrost can
 	// resolve real per-project provider credentials. Without a pool the
 	// gateway keeps the zero-provider bootstrap account — it will start, but
@@ -177,7 +205,11 @@ func main() {
 			EgressAllowlist:     cfg.EgressAllowlist,
 			PublicProjectID:     cfg.PublicProjectIDString(),
 			HopMarker:           hopMarker,
-			Logger:              logger,
+			// The flag AND the source: the Account refuses every keyless row
+			// unless both are set (internal/account/workload_identity.go).
+			WorkloadIdentityEnabled: cfg.WorkloadIdentityEnabled,
+			IdentityTokens:          identityTokens,
+			Logger:                  logger,
 		})
 		if aerr != nil {
 			slog.Error("FATAL: vault-backed Account init failed", "err", aerr)
@@ -398,9 +430,10 @@ func main() {
 	// call site. Measured against the standalone compose stack.
 	mux.HandleFunc("/readyz", makeReadyzHandler(plane, plane.unwired, rateLimitsCheck(policyLimiter, natsConfigured, rateRules(policyStore))))
 
-	// The operator's answer to "is the rule I saved actually in force?".
-	mux.HandleFunc("/governance/status",
-		makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), eliteaAccount))
+	// The operator's answer to "is the rule I saved actually in force?". It is
+	// served by GatewayService.GovernanceStatus (grpc_listener.go), the one
+	// way elitea-main reaches this process.
+	governanceStatus := makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), cfg.WorkloadIdentityEnabled, eliteaAccount)
 
 	// The soft-alert event publisher (gateway.events.*, spec §8.3) rides the
 	// same NATS connection as the budget counters; without NATS the alert
@@ -445,11 +478,11 @@ func main() {
 	// bypass; TestMainWiring asserts both are present.
 	// The realtime WebSocket route (issue #323 follow-up). Its four options are
 	// all load-bearing and TestMainWiring asserts each of them:
-	//   - WithRealtimeDialer      without it the route answers 501 and the
-	//                             pylon-indexer relay keeps its own LiteLLM.
+	//   - WithRealtimeDialer      without it the route answers 501 to every
+	//                             session elitea-main's /llm edge forwards.
 	//   - WithRealtimeBudgetRecheck  a session is otherwise gated ONCE for its
 	//                             whole life; bifrost's turn-start signal is one
-	//                             the only known caller never sends.
+	//                             the route's original caller never sent.
 	//   - WithRealtimeSessionLimit   a hijacked connection has no server-side
 	//                             timeout, so nothing else bounds the pool.
 	//   - WithRealtimeOrigins     a WebSocket handshake is not subject to CORS.
@@ -461,6 +494,7 @@ func main() {
 			llmproxy.WithStreamGrace(cfg.StreamGrace),
 			llmproxy.WithStreamDrainLimit(cfg.StreamDrainLimit),
 			llmproxy.WithEgressPolicy(egressPolicy),
+			llmproxy.WithWorkloadIdentity(cfg.WorkloadIdentityEnabled, cfg.PublicProjectIDString(), identityTokens),
 			llmproxy.WithRealtimeDialer(llmproxy.NewBifrostRealtimeDialer(srv.Core(), logger)),
 			llmproxy.WithRealtimeBudgetRecheck(cfg.RealtimeBudgetRecheck),
 			llmproxy.WithRealtimeSessionLimit(cfg.RealtimeMaxSessions),
@@ -497,7 +531,15 @@ func main() {
 		logger.Warn("request log DISABLED: no database pool — the admin Logs view will be empty")
 	}
 
-	mux.Handle("/llm/", api.NewRouterWithLog(handler, requestLogger))
+	// #1359: the /llm surface is served over gRPC only. The router is the
+	// same one the HTTP listener used to mount; GatewayService runs it in
+	// process, so every gate and the request log above still apply. The HTTP
+	// mux keeps /healthz, /readyz and /metrics and nothing else.
+	gatewayGRPC, err := newGatewayGRPC(cfg, api.NewRouterWithLog(handler, requestLogger), governanceStatus, logger)
+	if err != nil {
+		slog.Error("FATAL: refusing to start: the GatewayService gRPC listener cannot be built", "err", err)
+		os.Exit(1)
+	}
 
 	// Issue #315: recover budget enforcement when NATS returns.
 	//
@@ -527,8 +569,9 @@ func main() {
 	})
 	startRateLimitMonitor(ctx, rlMonitor, natsConfigured)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- gatewayGRPC.ListenAndServe() }()
 
 	// A serve error must NOT skip the shutdown sequence: in-flight streams may
 	// still hold recovered provider usage, and exiting straight from here drops
@@ -548,7 +591,9 @@ func main() {
 	// plane.current() and not govStore: a background re-dial can install the
 	// store after this goroutine passed the wiring block, and the drain has to
 	// see the store the handler actually billed through (issue #315).
-	if err := shutdownSequence(context.Background(), handler, srv, handler, handler, plane.current()); err != nil {
+	if err := shutdownSequence(context.Background(), handler,
+		newGatewayServers(srv, gatewayGRPC, cfg.ShutdownTimeout),
+		handler, handler, plane.current()); err != nil {
 		slog.Error("gateway shutdown error", "err", err)
 		failed = true
 	}
@@ -727,6 +772,26 @@ func logHopMarkerMode(logger *slog.Logger, armed bool) {
 		"header", hopmarker.Header)
 }
 
+// logWorkloadIdentityMode states, once at startup, whether the pod lends its
+// own Google identity to keyless platform credentials. The mode is the one
+// deliberate exception to "never use ambient identity", so it is logged like
+// the other guards: an operator must see it from the log alone.
+func logWorkloadIdentityMode(logger *slog.Logger, enabled bool, publicProjectID string) {
+	if !enabled {
+		logger.Info("WORKLOAD IDENTITY OFF: every credential with auth_mode=workload_identity is refused " +
+			"(WORKLOAD_IDENTITY_NOT_ALLOWED). Set GATEWAY_WORKLOAD_IDENTITY_ENABLED=true to arm it")
+		return
+	}
+	if publicProjectID == "" {
+		logger.Warn("WORKLOAD IDENTITY ARMED BUT INERT: ELITEA_AI_PROJECT_ID is unset, so no credential is a " +
+			"platform credential and every auth_mode=workload_identity row is still refused")
+		return
+	}
+	logger.Info("WORKLOAD IDENTITY ARMED: shared credentials of the public project with "+
+		"auth_mode=workload_identity authenticate with this pod's Google identity (ADC). Tenant credentials "+
+		"are still refused", "public_project_id", publicProjectID)
+}
+
 // logLoopBreakerMode states, once at startup, whether the per-(project, model)
 // amplification backstop is armed and with what numbers (issue #12).
 //
@@ -763,8 +828,9 @@ func logLoopBreakerMode(logger *slog.Logger, p llmproxy.LoopBreakerParams) {
 // GovernanceStore + cost.Calculator) and calls Start before returning.
 //
 // FIX #7: cfg.NATSDegradedCapUSD (float64 USD) is converted to int64 nano-USD
-// and set on failmode.Params.DegradedCapNano so the per-replica degraded cap is
-// enforced by the FSM (previously it was silently 0 — never set).
+// and set on failmode.Params.DegradedCapNano so the fleet-wide degraded cap is
+// enforced by the FSM (previously it was silently 0 — never set). Each replica
+// admits failmode.PerReplicaShare(cap, ExpectedReplicas) of it.
 func buildGovernance(
 	ctx context.Context,
 	cfg config.Config,
@@ -776,6 +842,12 @@ func buildGovernance(
 	var degradedCapNano int64
 	if cfg.NATSDegradedCapUSD > 0 {
 		degradedCapNano = int64(math.Round(cfg.NATSDegradedCapUSD * float64(failmode.NanoUSD)))
+	}
+	// The per-request reservation against the share, same conversion. 0 makes
+	// GovernanceStore use failmode.DefaultDegradedReservationNano.
+	var degradedReservationNano int64
+	if cfg.NATSDegradedReservationUSD > 0 {
+		degradedReservationNano = int64(math.Round(cfg.NATSDegradedReservationUSD * float64(failmode.NanoUSD)))
 	}
 
 	db := failmode.NewPoolDB(pool)
@@ -792,16 +864,20 @@ func buildGovernance(
 	rec := failmode.NewReconciler(db, counter, degraded, logger)
 
 	params := failmode.Params{
-		Mode:                failmode.FailMode(cfg.NATSFailMode),
-		PGFreshness:         cfg.PGFreshnessMin,
-		ExpectedReplicas:    cfg.ExpectedReplicas,
-		DegradedCapNano:     degradedCapNano,             // FIX #7
-		DegradedMaxDuration: cfg.NATSDegradedMaxDuration, // FIX #8 consumed by GovernanceStore
+		Mode:             failmode.FailMode(cfg.NATSFailMode),
+		PGFreshness:      cfg.PGFreshnessMin,
+		ExpectedReplicas: cfg.ExpectedReplicas,
+		DegradedCapNano:  degradedCapNano, // FIX #7
+		// DECISIONS.md 2026-10-22: what one admitted NATS-down request holds.
+		DegradedReservationNano: degradedReservationNano,
+		DegradedMaxDuration:     cfg.NATSDegradedMaxDuration, // FIX #8 consumed by GovernanceStore
 	}
 	if params.Mode == "" {
 		params.Mode = failmode.ModeTieredHybrid
 	}
 	if params.ExpectedReplicas < 1 {
+		// main refuses such a value at boot (expectedReplicas). This floor is a
+		// second guard for a caller that builds a Config by hand.
 		params.ExpectedReplicas = 1
 	}
 

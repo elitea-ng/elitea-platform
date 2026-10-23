@@ -17,7 +17,7 @@ import (
 // (centry.project_deletions): it finishes the cleanup of deleted projects whose
 // steps did not all complete. It is ON wherever the project provisioner exists,
 // because a journal row that nothing drains leaves the project's schema, bytes
-// or PgVector database behind for ever. The flag exists to switch it off on a
+// or application data behind for ever. The flag exists to switch it off on a
 // replica that should not run it (an incident, a migration window), not to opt
 // in.
 //

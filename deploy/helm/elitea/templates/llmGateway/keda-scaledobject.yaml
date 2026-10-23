@@ -1,0 +1,51 @@
+{{- if .Values.llmGateway.enabled }}
+{{- if .Values.llmGateway.autoscaling.enabled }}
+{{- $source := include "elitea.scaling.gatewaySource" . | trim }}
+{{- if eq $source "keda-prometheus" }}
+{{- $a := .Values.llmGateway.autoscaling }}
+{{- $query := ($a.prometheus | default dict).query | default (printf "sum(%s%s)" $a.sseConnectionMetric (include "elitea.scaling.promSelector" (dict "ctx" .))) }}
+# The gateway scaled by KEDA on concurrent /llm streams: the sum of
+# gateway_llm_sse_active_connections (a gauge on :8083/metrics) across the
+# fleet, divided by the streams one replica should hold. KEDA generates the
+# HPA (keda-hpa-<name>); there is no second HPA from hpa.yaml.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "elitea-llm-gateway.fullname" . }}
+  labels:
+    {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea.scaling.kedaAnnotations" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "elitea-llm-gateway.fullname" . }}
+  minReplicaCount: {{ $a.minReplicas }}
+  maxReplicaCount: {{ $a.maxReplicas }}
+  pollingInterval: {{ $a.pollingIntervalSeconds | default 15 }}
+  cooldownPeriod: {{ $a.cooldownSeconds | default 300 }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          # In-flight streams run ~120s: scale in slowly, one pod at a time.
+          stabilizationWindowSeconds: {{ $a.cooldownSeconds | default 300 }}
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ include "elitea.scaling.prometheusAddress" . | quote }}
+        query: {{ $query | quote }}
+        # Streams one replica should hold: KEDA asks for ceil(sum / this).
+        threshold: {{ $a.targetSSEConnectionsPerPod | toString | quote }}
+        # An empty result (no series yet) reads as zero, not as an error that
+        # would pause scaling.
+        ignoreNullValues: "true"
+    # CPU next to the metric: the HPA takes the higher of the two, so the
+    # gateway still scales when the gauge is absent (elitea.scaling.kedaCpuTrigger).
+    {{- include "elitea.scaling.kedaCpuTrigger" $a | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

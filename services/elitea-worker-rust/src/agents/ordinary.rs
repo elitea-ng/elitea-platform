@@ -192,7 +192,6 @@ impl OrdinaryNativeAgentAssembler {
         self
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_mcp_connector(mut self, connector: Arc<dyn McpConnector>) -> Self {
         self.mcp_connector = connector;
@@ -378,6 +377,9 @@ impl OrdinaryNativeAgentAssembler {
                     ));
                 let runtime = runtime.with_workspace_toolset(
                     crate::workspace_run::tools::turn_provider(turn, field.shell)
+                        // The edit tools that suit the agent's model, as
+                        // the desktop offers them (#1214).
+                        .with_edit_profile(profile.edit_profile())
                         .with_approved_calls(approved_calls)
                         .toolset(),
                 );

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,8 +140,14 @@ func TestPostgresServiceBackedAgentAdmissionCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mismatchedRepository.AdmitAgentExecution(ctx, postgresAgentCapacityAdmission(attempts)); !errors.Is(err, ErrAdmissionPolicyMismatch) {
+	_, err = mismatchedRepository.AdmitAgentExecution(ctx, postgresAgentCapacityAdmission(attempts))
+	if !errors.Is(err, ErrAdmissionPolicyMismatch) {
 		t.Fatalf("persisted policy mismatch did not fail closed: %v", err)
+	}
+	// #966: the persisted value comes back out of the guard trigger's
+	// message, so the operator sees both sides and the fix.
+	if want := fmt.Sprintf("configured=%d persisted=%d", mismatchedPolicy.MaxOutstanding, policy.MaxOutstanding); !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "elitea-admission-ctl") {
+		t.Fatalf("agent policy mismatch message lacks %q or the fix: %v", want, err)
 	}
 
 	if _, err := pool.Exec(ctx, `

@@ -334,7 +334,7 @@ func TestProjectSelector_BlankValueIsAbsent(t *testing.T) {
 }
 
 // TestProjectSelector_RepeatedHeaderIsAbsent follows the
-// uniqueForwardedIdentityHeader posture in auth.go: when two copies of an
+// posture this service applies to identity-bearing headers: when two copies of an
 // identity-bearing header disagree, no rule can say which copy the caller
 // meant, so the selector is absent.
 func TestProjectSelector_RepeatedHeaderIsAbsent(t *testing.T) {

@@ -42,6 +42,8 @@ export interface ApplicationAnswerActionHandlers {
   readonly onCopy?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
+  /** "Fork from here": a new conversation up to and including this answer. */
+  readonly onFork?: (() => void) | undefined;
   readonly shouldDisableRegenerate?: boolean;
   /**
    * Opens the canvas editor for a `canvas_message` item in this answer — the

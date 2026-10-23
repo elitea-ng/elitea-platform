@@ -27,6 +27,8 @@ use elitea_model_client::chat::ChatClient;
 use elitea_model_client::embeddings::{EmbeddingClient, EmbeddingOptions};
 use elitea_model_client::settings::ModelSettings;
 use elitea_model_client::transport::{Transport, TransportSettings};
+use elitea_platform_rpc::Bearer;
+use elitea_platform_rpc::internal_tools::{InternalToolClient, InvokeToolkit, ToolCallError};
 use serde_json::{Map, Value, json};
 use sqlx::postgres::PgPool;
 use std::sync::Arc;
@@ -44,6 +46,10 @@ pub struct NativeRunner {
     pool: PgPool,
     settings: Arc<Settings>,
     transport: Transport,
+    /// elitea-vector (`ELITEA_INVENTORY_VECTOR_URL`), which holds the entity
+    /// vectors; each invocation reaches it with its own bearer
+    /// ([`NativeRunner::graphs`]).
+    vector_client: Arc<elitea_vector_index::client::VectorClient>,
     views: Arc<crate::retrieval::ViewCache<store::PgGraphStore>>,
     /// The ingestion model calls in flight across this process
     /// (`ELITEA_INVENTORY_MODEL_CONCURRENCY`).
@@ -61,6 +67,7 @@ fn store_error(error: &crate::store::StoreError) -> EngineError {
     let failure = EngineError::new(ErrorType::Runtime, error.to_string());
     match error {
         crate::store::StoreError::Deleted(_) => failure.with_code(codes::TOOLKIT_DELETED),
+        crate::store::StoreError::Contended(_) => failure.with_code(codes::BUSY),
         _ => failure,
     }
 }
@@ -161,10 +168,13 @@ impl NativeRunner {
             .database_url
             .as_ref()
             .ok_or_else(|| invalid("the native runner needs ELITEA_INVENTORY_DATABASE_URL"))?;
-        let pool = store::lazy_pool(dsn.expose(), 8).map_err(|e| invalid(e.to_string()))?;
+        let pool = store::lazy_pool(dsn.expose(), settings.pool_size)
+            .map_err(|e| invalid(e.to_string()))?;
         let transport = Transport::new(&TransportSettings {
             ca_file: settings.callback_ca_file.clone(),
             ca_file_setting: CA_SETTING,
+            client_identity: settings.callback_identity.clone(),
+            model_service: settings.model_service.clone(),
             user_agent: concat!("elitea-inventory-engine/", env!("CARGO_PKG_VERSION")),
             ..TransportSettings::default()
         })?;
@@ -176,13 +186,38 @@ impl NativeRunner {
         let views = Arc::new(crate::retrieval::ViewCache::new(store::PgGraphStore::new(
             pool.clone(),
         )));
+        let vector_client = Arc::new(vector_client(&settings)?);
         Ok(Self {
             pool,
+            vector_client,
             settings: Arc::new(settings),
             transport,
             views,
             model_calls,
         })
+    }
+
+    /// Vector access with the invocation's callback `bearer` (its
+    /// `llm_settings.api_key`); `None` for an empty one.
+    fn vectors_with(&self, bearer: &str) -> Option<store::vectors::EntityVectors> {
+        let bearer = bearer.trim();
+        (!bearer.is_empty()).then(|| {
+            store::vectors::EntityVectors::new((*self.vector_client).clone(), bearer.to_owned())
+        })
+    }
+
+    /// The graph store with this invocation's vector access: the bearer the
+    /// platform minted for it (`params.llm_settings.api_key`, or
+    /// `openai_api_key`; `elitea_vector_index::callback_bearer`, shared with
+    /// `DeepWiki`). Without one (a call that did not come through the
+    /// platform's facade) a write publishes no vector generation and the
+    /// first ranking backfills it.
+    fn graphs(&self, params: &Map<String, Value>) -> store::PgGraphStore {
+        let bearer = elitea_vector_index::callback_bearer(params).unwrap_or_default();
+        self.views
+            .store()
+            .clone()
+            .with_vectors(self.vectors_with(&bearer))
     }
 
     /// Run `tool` of the `inventory` / `inventory_search` family.
@@ -397,7 +432,7 @@ impl NativeRunner {
         params: &Map<String, Value>,
     ) -> Result<Value, EngineError> {
         let (toolkit_id, name) = Self::source_identity(params)?;
-        let graphs = self.views.store();
+        let graphs = self.graphs(params);
         let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
             return Err(busy(
                 "an ingestion of this Inventory toolkit is running; remove the source when it finishes",
@@ -439,7 +474,7 @@ impl NativeRunner {
         context.thinking(format!("Importing {name}"));
         context.checkpoint()?;
         let replace = crate::retrieval::flag(params.get("replace_ingestion_state"));
-        let report = transfer::import_graph(&self.pool, key, text, replace)
+        let report = transfer::import_graph_into(&self.graphs(params), key, text, replace)
             .await
             .map_err(import_error)?;
         if json_format(params) {
@@ -575,7 +610,7 @@ impl NativeRunner {
         }
         context.checkpoint()?;
         context.thinking("Applying type mappings to graph...");
-        let graphs = self.views.store();
+        let graphs = self.graphs(params);
         let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
             return Err(busy(
                 "an ingestion of this Inventory toolkit is running; normalise the types when it finishes",
@@ -642,9 +677,10 @@ impl NativeRunner {
     /// `semantic_search` for an investigation, when the graph has vectors:
     /// the query is embedded with the model the graph was built with, so
     /// the two compare (in that model's query format,
-    /// [`crate::embed::query_text`]), and PostgreSQL ranks the entities
-    /// (pgvector's cosine distance, which is scale-free: unnormalised
-    /// vectors rank as normalised ones).
+    /// [`crate::embed::query_text`]), and elitea-vector ranks the entities
+    /// (`store::vectors::rank`: Qdrant's exact cosine similarity over the
+    /// graph's published vectors, which is scale-free: unnormalised vectors
+    /// rank as normalised ones), with the invocation's bearer.
     fn ranker(
         &self,
         view: &crate::retrieval::view::GraphView,
@@ -664,7 +700,13 @@ impl NativeRunner {
                         ..EmbeddingOptions::default()
                     },
                 );
-                let (stop, graphs) = (stop.clone(), self.views.store().clone());
+                let (stop, graphs) = (
+                    stop.clone(),
+                    self.views
+                        .store()
+                        .clone()
+                        .with_vectors(self.vectors_with(settings.api_key.expose())),
+                );
                 let embed: crate::investigate::Embed = Arc::new(move |query: String| {
                     let (client, stop, graphs) = (client.clone(), stop.clone(), graphs.clone());
                     Box::pin(async move {
@@ -754,7 +796,7 @@ impl NativeRunner {
             .collect();
         let stop = context.stop_signal();
         let call_source = source_caller(
-            self.transport.http_client().clone(),
+            InternalToolClient::new(self.transport.platform_channel()?),
             &settings,
             key.project_id,
         );
@@ -871,8 +913,8 @@ impl NativeRunner {
             embeddings,
             full_rebuild: full_rebuild(params),
         };
-        let outcome = ingest::run(
-            &self.pool,
+        let outcome = ingest::run_in(
+            &self.graphs(params),
             key,
             &source,
             &self.settings.ingest,
@@ -977,54 +1019,105 @@ impl NativeRunner {
     }
 }
 
-/// The `test_tool` route as a source-tool caller: `POST
-/// {platform}/api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit}`
-/// with the invocation's bearer. The platform reloads the toolkit's own
-/// settings and credentials and applies the user's permissions; the engine
-/// sends only the tool and its arguments. Exactly `request_id`,
-/// `tool_name`, `tool_params` and `toolkit_config.toolkit_id`: the
-/// platform's investigate grant (`material.SourceToolGate`) admits that
-/// shape and nothing more, so no model choice (`llm_model`) rides on it.
-fn source_caller(
-    client: reqwest::Client,
+/// The elitea-vector client of `settings` (`ELITEA_INVENTORY_VECTOR_URL`,
+/// required by the native runner): mutual TLS with the callback CA and
+/// client certificate, connected on first use.
+///
+/// # Errors
+///
+/// No URL, a certificate file that cannot be read, or a client that cannot
+/// be built.
+fn vector_client(
+    settings: &Settings,
+) -> Result<elitea_vector_index::client::VectorClient, EngineError> {
+    use elitea_vector_index::client::{ClientConfig, VectorClient};
+    let endpoint = settings.vector_service.clone().ok_or_else(|| {
+        invalid(format!(
+            "the native runner needs {}",
+            crate::config::VECTOR_SERVICE_SETTING
+        ))
+    })?;
+    let read = |path: &std::path::Path, setting: &str| {
+        std::fs::read(path).map_err(|error| {
+            invalid(format!(
+                "{setting} ({}) cannot be read: {error}",
+                path.display()
+            ))
+        })
+    };
+    let plaintext = endpoint.starts_with("http://");
+    let mut config = ClientConfig::new(endpoint);
+    // A loopback http:// endpoint (tests) carries no TLS material.
+    config.allow_insecure = plaintext;
+    if !plaintext {
+        if let Some(ca) = &settings.callback_ca_file {
+            config.ca_pem = Some(read(ca, CA_SETTING)?);
+        }
+        if let Some(identity) = &settings.callback_identity {
+            config.identity_pem = Some((
+                read(&identity.cert_file, identity.cert_file_setting)?,
+                read(&identity.key_file, identity.key_file_setting)?,
+            ));
+        }
+        config.server_name.clone_from(&settings.vector_server_name);
+    }
+    VectorClient::connect_lazy(&config)
+        .map_err(|error| invalid(format!("the elitea-vector client: {error}")))
+}
+
+/// A saved toolkit's tool as a source-tool caller:
+/// `elitea.runtime.v1.InternalToolService/InvokeToolkit` on the platform
+/// listener (#1359 U5), with the invocation's bearer. elitea-main runs its
+/// `test_tool` route (`POST
+/// /api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit}`) in process:
+/// it reloads the toolkit's own settings and credentials and applies the
+/// user's permissions; the engine sends only the tool and its arguments.
+/// Exactly `request_id`, `tool_name`, `tool_params` and
+/// `toolkit_config.toolkit_id`: the platform's investigate grant
+/// (`material.SourceToolGate`) admits that shape and nothing more, so no
+/// model choice (`llm_model`) rides on it. The answer is the route's JSON;
+/// a refusal carries its HTTP status and `{"ok": false, "error"}` body.
+pub(crate) fn source_caller(
+    client: InternalToolClient,
     settings: &ModelSettings,
     project_id: i64,
 ) -> crate::investigate::SourceCall {
-    let platform = settings
-        .api_base
-        .trim_end_matches('/')
-        .trim_end_matches("/v1")
-        .trim_end_matches("/llm")
-        .to_owned();
-    let bearer = settings.api_key.expose().to_owned();
+    let bearer = Bearer::new(settings.api_key.expose());
     Arc::new(
         move |toolkit_id: String, tool: String, arguments: Map<String, Value>| {
-            let url = format!(
-                "{platform}/api/v2/elitea_core/test_tool/prompt_lib/{project_id}/{toolkit_id}"
-            );
             let (client, bearer) = (client.clone(), bearer.clone());
             Box::pin(async move {
-                let body = json!({
-                    "request_id": format!("investigate-{toolkit_id}-{tool}"),
-                    "tool_name": tool,
-                    "tool_params": arguments,
-                    "toolkit_config": {"toolkit_id": toolkit_id},
-                });
-                let response = client
-                    .post(&url)
-                    .bearer_auth(bearer)
-                    .json(&body)
-                    .timeout(std::time::Duration::from_secs(90))
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        EngineError::new(
-                            ErrorType::Runtime,
-                            format!("the source tool call failed: {e}"),
-                        )
-                    })?;
-                let status = response.status().as_u16();
-                let answer: Value = response.json().await.unwrap_or(Value::Null);
+                let failed = |reason: String| {
+                    EngineError::new(
+                        ErrorType::Runtime,
+                        format!("the source tool call failed: {reason}"),
+                    )
+                };
+                let bearer = bearer
+                    .ok_or_else(|| failed("the invocation's bearer is unusable".to_owned()))?;
+                let invoke = InvokeToolkit {
+                    project_id,
+                    request_id: format!("investigate-{toolkit_id}-{tool}"),
+                    tool_params: serde_json::to_vec(&arguments)
+                        .map_err(|e| failed(e.to_string()))?
+                        .into(),
+                    toolkit_id,
+                    tool_name: tool,
+                };
+                let answer = tokio::time::timeout(
+                    std::time::Duration::from_secs(90),
+                    client.invoke_toolkit(&bearer, invoke),
+                )
+                .await
+                .map_err(|_| failed("no answer within 90 seconds".to_owned()))?;
+                let (status, answer): (u16, Value) = match answer {
+                    Ok(result) => (200, serde_json::from_slice(&result).unwrap_or(Value::Null)),
+                    Err(ToolCallError::Refused(refusal)) => (
+                        refusal.http_status,
+                        serde_json::from_slice(&refusal.body).unwrap_or(Value::Null),
+                    ),
+                    Err(error) => return Err(failed(error.to_string())),
+                };
                 if answer["ok"] == json!(true) {
                     return Ok(match &answer["result"] {
                         Value::String(text) => text.clone(),
@@ -1084,8 +1177,8 @@ async fn ask_batch(
             refuse(e.message)
         }
     })?;
-    let reply = mapping_reply(&response).map_err(&refuse)?;
-    admin::mappings_from_reply(&reply).map_err(&refuse)
+    let reply = mapping_reply(&response).map_err(refuse)?;
+    admin::mappings_from_reply(&reply).map_err(refuse)
 }
 
 /// A smart-normalisation batch's reply: the forced tool call's arguments,
@@ -1438,6 +1531,111 @@ mod tests {
         assert_eq!(
             status_text(&status_summary(&json!({"sources": {}}))),
             "No sources have been ingested yet. Use run_ingestion to add data from a toolkit."
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_caller_tests {
+    use super::*;
+    use elitea_platform_rpc::testing::{FakeInternalTools, serve};
+
+    fn settings() -> ModelSettings {
+        ModelSettings::from_llm_settings(&json!({
+            "api_base": "https://elitea-platform.invalid/llm/v1",
+            "api_key": "callback-bearer",
+            "organization": "7",
+            "model_name": "m",
+        }))
+        .expect("settings")
+    }
+
+    fn call(fake: FakeInternalTools) -> crate::investigate::SourceCall {
+        source_caller(
+            InternalToolClient::new(serve(None, Some(fake))),
+            &settings(),
+            7,
+        )
+    }
+
+    fn arguments() -> Map<String, Value> {
+        json!({"file_path": "docs/refunds.md"})
+            .as_object()
+            .cloned()
+            .expect("object")
+    }
+
+    #[tokio::test]
+    async fn progress_is_skipped_and_the_result_is_the_tools_text() {
+        let fake = FakeInternalTools::new("callback-bearer").with_invoke_result(
+            &["queued", "running"],
+            r##"{"ok": true, "result": "# Refund policy", "truncated": false}"##,
+        );
+        let answer = call(fake.clone())("5".to_owned(), "read_file".to_owned(), arguments())
+            .await
+            .expect("an answer");
+        assert_eq!(answer, "# Refund policy");
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].bearer, "callback-bearer");
+        assert_eq!(calls[0].project_id, 7);
+        assert_eq!(calls[0].scope, "5", "the toolkit id");
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&calls[0].arguments).expect("json"),
+            json!({"file_path": "docs/refunds.md"})
+        );
+
+        // A dropped answer and a structured one keep their texts.
+        let fake = FakeInternalTools::new("callback-bearer")
+            .with_invoke_result(&[], r#"{"ok": true, "result": null, "truncated": true}"#);
+        let answer = call(fake)("5".to_owned(), "t".to_owned(), Map::new())
+            .await
+            .expect("an answer");
+        assert_eq!(answer, "The tool's answer was too large to return.");
+        let fake = FakeInternalTools::new("callback-bearer")
+            .with_invoke_result(&[], r#"{"ok": true, "result": {"a": 1}}"#);
+        let answer = call(fake)("5".to_owned(), "t".to_owned(), Map::new())
+            .await
+            .expect("an answer");
+        assert_eq!(answer, r#"{"a": 1}"#);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_names_its_status_and_reason() {
+        let fake = FakeInternalTools::new("callback-bearer")
+            .refusing(403, r#"{"ok": false, "error": "not your toolkit"}"#);
+        let error = call(fake)("5".to_owned(), "read_file".to_owned(), arguments())
+            .await
+            .expect_err("refused");
+        assert_eq!(
+            error.message,
+            "the source tool answered 403: not your toolkit"
+        );
+
+        let fake = FakeInternalTools::new("callback-bearer")
+            .with_invoke_result(&[], r#"{"ok": false, "error": "tool failed"}"#);
+        let error = call(fake)("5".to_owned(), "read_file".to_owned(), arguments())
+            .await
+            .expect_err("not ok");
+        assert_eq!(error.message, "the source tool answered 200: tool failed");
+
+        // No platform: the hop, never a refusal, and never the bearer.
+        let unreachable = source_caller(
+            InternalToolClient::new(
+                tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy(),
+            ),
+            &settings(),
+            7,
+        );
+        let error = unreachable("5".to_owned(), "t".to_owned(), Map::new())
+            .await
+            .expect_err("unreachable");
+        assert!(
+            error.message.starts_with("the source tool call failed:")
+                && !error.message.contains("callback-bearer"),
+            "{}",
+            error.message
         );
     }
 }

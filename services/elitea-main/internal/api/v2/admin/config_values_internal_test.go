@@ -192,10 +192,11 @@ func TestEverySectionIsEitherAvailableOrExplained(t *testing.T) {
 
 // ── The splash HTML body (maintenance_html) ──────────────────────────────────
 //
-// pylon stored `splash_template` as raw bytes and served them verbatim with no
-// sanitisation at all (legacy/plugins/bootstrap/tools/splash.py:164-178). The
-// port keeps the capability and refuses the executable half of it here, at the
-// moment an operator can still fix what they pasted.
+// The legacy runtime stored `splash_template` as raw bytes and served them
+// verbatim with no sanitisation at all
+// (legacy/plugins/bootstrap/tools/splash.py:164-178). The port keeps the
+// capability and refuses the executable half of it here, at the moment an
+// operator can still fix what they pasted.
 //
 // The check is deliberately paired with a client sanitiser rather than trusted
 // alone: this one keeps script out of a row that outlives every renderer, and

@@ -23,7 +23,7 @@ Preparation, compile, content and cancellation grants cannot prove whole-Code ex
 
 ## Two-stage original admission
 
-POST `/executions/{execution_id}/generations/{generation}/code-sandbox/visits` on Main's existing claim-fenced mTLS content listener.
+`RuntimeContentService.RegisterCodeVisit` (it replaced POST `/executions/{execution_id}/generations/{generation}/code-sandbox/visits`, #1359) on Main's claim-fenced mTLS content listener; the claim and fence travel as `elitea-claim-id` / `elitea-claim-fence-bin` metadata.
 The strict request schema is `elitea.sandbox.original-code-visit-request.v1`.
 Fields are activation_id, node_id, graph_thread, step, attempt, node_digest, owning_yaml_sha256,
 exact_configuration_json_base64url, pre_workspace_prepared_job_json_base64url, and required nullable saved_child_scope.
@@ -62,10 +62,12 @@ Compile, preparation and receipt-only observation cannot register it. Historical
 
 ## Owner routes
 
-Use POST `/elitea.runtime.node-code-recovery.v1/jobs/{job_key}/read` to read original committed evidence.
-Use POST `/elitea.runtime.node-code-recovery.v1/jobs/{job_key}/seal-no-effect` for an explicit authorized reconciliation.
-Use the original Supervisor mTLS listener and configured audience. Reject redirects and query parameters.
-Both routes accept strict JSON of at most16KiB. They never provision, hydrate, compile, dispatch or submit code.
+Use `SandboxSupervisorService.CodeOwnerRecoveryRead` to read original committed evidence.
+Use `SandboxSupervisorService.CodeOwnerRecoverySealNoEffect` for an explicit authorized reconciliation.
+(They replaced POST `/elitea.runtime.node-code-recovery.v1/jobs/{job_key}/read` and `/seal-no-effect`, #1359;
+each takes `{job_key, request_json}` and returns `{response_json}`; any non-OK status is a refusal.)
+Use the original Supervisor mTLS listener and configured audience.
+Both RPCs accept strict JSON of at most16KiB. They never provision, hydrate, compile, dispatch or submit code.
 Main presents its verified certificate identity. The certificate must match the signed requester identity.
 
 Request fields are exactly `schema` and `grant`.

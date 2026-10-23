@@ -129,7 +129,7 @@ export function failedProvisioningSteps(failure: ProvisioningFailure): Provision
  *
  * NOT `/admin/...`: creation lives on the projects handler, gated on
  * `projects.projects.project.create`, and answers only on the `administration`
- * mode (any other mode is a 404 there, as it is in pylon).
+ * mode (any other mode is a 404 there, as it is in the legacy runtime).
  *
  * The owner is the AUTHENTICATED CALLER and is never sent — the server reads it
  * from the session and ignores any body field claiming otherwise. So is the

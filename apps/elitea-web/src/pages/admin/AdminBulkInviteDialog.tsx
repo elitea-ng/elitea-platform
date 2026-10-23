@@ -4,7 +4,7 @@
  *
  * ## What it replaces
  *
- * Two pylon console pages, each a textarea over the same write:
+ * Two legacy console pages, each a textarea over the same write:
  * `legacy/plugins/admin/api/v2/invites_bulkusers.py` (with
  * `static/js/invites_bulkusers.js`: a project-id box, a comma-separated roles
  * box, "Add all users", and a read-only log pane) and `invites_bulkprojects.py`
@@ -20,10 +20,11 @@
  *     name per project against `auth_core__project_role` and refuses a name the
  *     project does not define, so a free-text box can only produce a refusal an
  *     operator cannot predict.
- *  3. **The result is a table, not a log blob.** pylon joins English sentences
- *     with newlines into a textarea, so "added" and "was already a member" and
- *     "that project has no such role" are indistinguishable without reading
- *     every line. The server answers a machine-readable `outcome` per pair.
+ *  3. **The result is a table, not a log blob.** The legacy runtime joined
+ *     English sentences with newlines into a textarea, so "added" and "was
+ *     already a member" and "that project has no such role" are
+ *     indistinguishable without reading every line. The server answers a
+ *     machine-readable `outcome` per pair.
  *
  * ## A resolved write is not a successful write
  *

@@ -18,7 +18,7 @@ const PUBLIC_SURFACE = [
   'triggerTypeLabel',
   // REMOVED by #899: the hand-written pipeline-trigger client
   // (`pipelineTriggerQueryKey` / `putPipelineTrigger` /
-  // `usePipelineTriggerQuery`) spoke pylon's deleted
+  // `usePipelineTriggerQuery`) spoke the legacy runtime's deleted
   // `/elitea_core/pipeline_trigger/...` route. Its two replacements are
   // declared in v2.yaml, so callers use the GENERATED client directly.
 ] as const;

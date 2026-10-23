@@ -534,6 +534,9 @@ func writeCurrentConfigurationMutationServiceError(w http.ResponseWriter, err er
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Invalid configuration", field)
 		case configurationapp.CurrentConfigurationMutationUnknownType:
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Unknown configuration type", field)
+		case configurationapp.CurrentConfigurationMutationRetiredType:
+			writeCurrentConfigurationMutationError(
+				w, http.StatusBadRequest, configurationapp.RetiredPgvectorConfigurationMessage, field)
 		case configurationapp.CurrentConfigurationMutationNormalizationRequired:
 			writeCurrentConfigurationMutationError(
 				w,
@@ -543,6 +546,8 @@ func writeCurrentConfigurationMutationServiceError(w http.ResponseWriter, err er
 			)
 		case configurationapp.CurrentConfigurationMutationImmutable:
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Configuration field is immutable", field)
+		case configurationapp.CurrentConfigurationMutationPlatformOnly:
+			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, keylessCredentialPlatformOnlyMessage, field)
 		default:
 			writeCurrentConfigurationMutationError(w, http.StatusInternalServerError, "Unexpected error", "unknown")
 		}

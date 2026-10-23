@@ -290,6 +290,7 @@ impl ProductionAgentRuntime {
             index_runtime,
             extractor,
             workspace_runs,
+            platform_channel,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -346,24 +347,20 @@ impl ProductionAgentRuntime {
                 .map_err(|_| ProductionRuntimeBuildError)?;
         let terminal_recovery = AgentTerminalRecoveryConfig::new(limits.output_max_sessions)
             .map_err(|_| ProductionRuntimeBuildError)?;
-        // The Office families (ADR-0032 P3) reach the platform object API at
-        // `platform_origin`, and only it.
-        let office_runtime =
-            crate::transport::office_host::OfficeRuntime::new(&deployment.platform_origin)
-                .map(|runtime| {
-                    Arc::new(
-                        runtime
-                            .with_public_base_url(deployment.public_base_url.clone())
-                            .with_extractor(extractor.clone()),
-                    )
-                })
-                .ok();
-        if office_runtime.is_none() {
-            tracing::warn!(
-                event = "office_runtime_unavailable",
-                "the Office families are left out: the platform origin is unusable"
-            );
-        }
+        // The Office families (ADR-0032 P3) reach the platform's artifact
+        // store, and the internal MCP builders their tool categories, as
+        // elitea.runtime.v1 services on the platform listener: the model
+        // calls' mTLS channel (#1359 U5).
+        let office_runtime = Some(Arc::new(
+            crate::transport::office_host::OfficeRuntime::new(platform_channel.clone())
+                .with_public_base_url(deployment.public_base_url.clone())
+                .with_extractor(extractor.clone()),
+        ));
+        let mcp_connector: Arc<dyn crate::toolkits::McpConnector> = Arc::new(
+            crate::toolkits::AdkHttpMcpConnector::new().with_internal_tools(
+                elitea_platform_rpc::internal_tools::InternalToolClient::new(platform_channel),
+            ),
+        );
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(
                 Arc::clone(&platform),
@@ -381,7 +378,8 @@ impl ProductionAgentRuntime {
                     .unwrap_or(crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS),
             )
             .with_office_runtime(office_runtime.clone())
-            .with_workspace_runs(workspace_runs),
+            .with_workspace_runs(workspace_runs)
+            .with_mcp_connector(Arc::clone(&mcp_connector)),
         );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(
@@ -410,7 +408,7 @@ impl ProductionAgentRuntime {
             admission,
             preparation,
             terminal_recovery,
-            DirectToolkitRuntime::default(),
+            DirectToolkitRuntime::new(mcp_connector),
             platform,
             index_runtime,
         )

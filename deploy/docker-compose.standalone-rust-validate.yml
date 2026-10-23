@@ -85,8 +85,6 @@ services:
         condition: service_completed_successfully
       elitea-main:
         condition: service_healthy
-      platform-edge:
-        condition: service_started
     restart: unless-stopped
 
   # A second elitea_runtime.workload_sessions row for the same certificate

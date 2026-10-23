@@ -33,6 +33,18 @@ describe('ApprovalDialog', () => {
     expect(screen.getByText('Why: Not on the allow list')).toBeInTheDocument();
   });
 
+  it("shows a rule's justification and which rule asks", () => {
+    renderWithTheme(<ApprovalDialog request={{ ...REQUEST, source: 'workspace', rule: 'workspace#3', justification: 'Resets go through review.' }} queued={0} onRespond={vi.fn()} />);
+    expect(screen.getByText('Why: Resets go through review.')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-rule-source')).toHaveTextContent('Asked by workspace rule 3');
+  });
+
+  it('names the defaults when no rule asks', () => {
+    renderWithTheme(<ApprovalDialog request={{ ...REQUEST, source: 'default' }} queued={0} onRespond={vi.fn()} />);
+    expect(screen.getByText('Why: Not on the allow list')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-rule-source')).toHaveTextContent('Asked by the defaults');
+  });
+
   it('answers with each button', async () => {
     const onRespond = vi.fn();
     const user = userEvent.setup();
@@ -48,6 +60,34 @@ describe('ApprovalDialog', () => {
     ]);
   });
 
+  it('declines and tells the agent why: the text goes only with the denial', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    renderWithTheme(<ApprovalDialog request={REQUEST} queued={0} onRespond={onRespond} />);
+
+    expect(screen.queryByTestId('approval-feedback')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deny' })).toHaveFocus());
+    await user.click(screen.getByRole('button', { name: 'Decline and tell the agent why' }));
+    expect(screen.getByTestId('approval-feedback')).toHaveFocus();
+    await user.type(screen.getByTestId('approval-feedback'), '  Use npm test instead  ');
+    await user.click(screen.getByRole('button', { name: 'Decline and send' }));
+    expect(onRespond.mock.calls).toEqual([['r1', 'deny_with_feedback', 'Use npm test instead']]);
+  });
+
+  it('a decline with an empty reason is a plain deny, and a new request closes the box', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = renderWithTheme(<ApprovalDialog request={REQUEST} queued={0} onRespond={onRespond} />);
+
+    await user.click(screen.getByRole('button', { name: 'Decline and tell the agent why' }));
+    await user.click(screen.getByRole('button', { name: 'Decline and send' }));
+    expect(onRespond.mock.calls).toEqual([['r1', 'deny']]);
+
+    expect(screen.getByTestId('approval-feedback')).toBeInTheDocument();
+    rerender(<ApprovalDialog request={{ ...REQUEST, request_id: 'r2' }} queued={0} onRespond={onRespond} />);
+    expect(screen.queryByTestId('approval-feedback')).not.toBeInTheDocument();
+  });
+
   it('offers "Always allow" only when the request can be remembered', () => {
     renderWithTheme(<ApprovalDialog request={{ ...REQUEST, can_remember: false }} queued={0} onRespond={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
@@ -61,6 +101,26 @@ describe('ApprovalDialog', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Deny' })).toHaveFocus());
     await user.keyboard('{Escape}');
     expect(onRespond).toHaveBeenCalledWith('r1', 'deny');
+  });
+
+  it('Escape in the reason box never denies: it keeps typed text and closes an empty box', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    renderWithTheme(<ApprovalDialog request={REQUEST} queued={0} onRespond={onRespond} />);
+
+    await user.click(screen.getByRole('button', { name: 'Decline and tell the agent why' }));
+    await user.type(screen.getByTestId('approval-feedback'), 'Use npm test');
+    await user.keyboard('{Escape}');
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByTestId('approval-feedback')).toHaveValue('Use npm test');
+
+    await user.clear(screen.getByTestId('approval-feedback'));
+    await user.keyboard('{Escape}');
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('approval-feedback')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deny' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(onRespond.mock.calls).toEqual([['r1', 'deny']]);
   });
 
   it('does not answer on a backdrop click', async () => {

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use elitea_agent_runtime::host::{
     ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, ToolProvider, ToolsetRequest,
 };
-use elitea_local_tools::approvals::{MemoryChoices, WorkspaceSettings};
+use elitea_local_tools::approvals::{MemoryChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::policy::LocalWorkPolicy;
 use elitea_local_tools::provider::LocalToolProvider;
 use elitea_local_tools::session::{LocalSession, SessionConfig};
@@ -165,6 +165,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
         shell: Some(shell),
         deny_read: Vec::new(),
         app_id: None,
+        budgets: elitea_local_tools::budget::Budgets::default(),
     })
     .expect("session");
     let provider = LocalToolProvider::new(session.clone());
@@ -218,8 +219,11 @@ async fn the_toolset_follows_policy_and_plan_mode() {
         "read_file",
         "write_file",
         "edit_file",
+        "multi_edit",
         "apply_patch",
         "search_files",
+        "find_files",
+        "read_output",
         "list_tree",
         "read_document",
         "run_command",
@@ -240,11 +244,20 @@ async fn the_toolset_follows_policy_and_plan_mode() {
             .all(|tool| tool.parameters_schema().is_some())
     );
 
-    fixture.session.set_plan_mode(true);
+    fixture.session.set_profile(PermissionProfile::Plan);
     let plan = names(&tools(&fixture).await);
     assert!(plan.contains(&"read_file".to_owned()));
     assert!(!plan.contains(&"write_file".to_owned()));
     assert!(!plan.contains(&"run_command".to_owned()));
+    // No commands in plan mode: `run_tests` goes with `run_command`, while
+    // `read_output` (read-only) stays.
+    assert!(!plan.contains(&"run_tests".to_owned()));
+    assert!(plan.contains(&"read_output".to_owned()));
+    assert_eq!(plan.last().map(String::as_str), Some("exit_plan_mode"));
+    assert!(
+        !all.contains(&"exit_plan_mode".to_owned()),
+        "plan mode only"
+    );
     let refused = fixture
         .session
         .call("write_file", "c", json!({ "path": "x", "content": "y" }))
@@ -335,6 +348,52 @@ async fn a_turn_reads_checkpoints_changes_and_can_be_undone() {
         "a restore drops every read stamp"
     );
     drop(fixture.dir);
+}
+
+/// `multi_edit` and a Codex envelope run through the provider with the
+/// edit rows' defaults: allowed in the workspace, a `path_deny` file refused.
+#[tokio::test]
+async fn multi_edit_and_codex_envelopes_run_through_the_provider() {
+    let fixture = fixture(open_policy());
+    let root = fixture.session.workspace().root().to_path_buf();
+    std::fs::write(root.join(".env"), "KEY=1\n").expect("env");
+    fixture.session.begin_turn("edits");
+    call(&fixture, "read_file", json!({ "path": "main.rs" })).await;
+    let edited = call(
+        &fixture,
+        "multi_edit",
+        json!({ "path": "main.rs", "edits": [
+            { "old_string": "main", "new_string": "start" },
+            { "old_string": "{}", "new_string": "{ run(); }" }
+        ] }),
+    )
+    .await;
+    assert_eq!(edited["status"], "ok", "{edited}");
+    assert_eq!(edited["snippet"], "     1\tfn start() { run(); }\n");
+    assert_eq!(fixture.person.asked(), 0);
+    let patched = call(
+        &fixture,
+        "apply_patch",
+        json!({ "patch": "*** Begin Patch\n*** Update File: main.rs\n@@\n-fn start() { run(); }\n+fn start() {}\n*** Add File: lib.rs\n+pub fn run() {}\n*** End Patch" }),
+    )
+    .await;
+    assert_eq!(patched["status"], "ok", "{patched}");
+    assert_eq!(patched["changed"], json!(["main.rs", "lib.rs"]));
+    assert_eq!(
+        std::fs::read_to_string(root.join("main.rs")).expect("main"),
+        "fn start() {}\n"
+    );
+    let denied = call(
+        &fixture,
+        "apply_patch",
+        json!({ "patch": "*** Begin Patch\n*** Add File: .env\n+KEY=2\n*** End Patch" }),
+    )
+    .await;
+    assert_eq!(denied["code"], "local_tools.denied", "{denied}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".env")).expect("env"),
+        "KEY=1\n"
+    );
 }
 
 #[tokio::test]
@@ -433,4 +492,233 @@ async fn the_session_channel_is_the_hosts_approval_channel() {
         1,
         "HITL requests go straight to the person"
     );
+}
+
+/// Output over a budget: a large command and a large diff answer within
+/// the budget with an `output_id`, `read_output` pages them, plan mode
+/// keeps it, and the spill files outlive the session (a reopen pages them)
+/// until their retention ends or the conversation is forgotten.
+#[tokio::test]
+async fn large_outputs_spill_and_read_output_pages_them() {
+    let fixture = fixture(open_policy());
+    let ran = call(
+        &fixture,
+        "run_command",
+        json!({ "command": "seq 1 150000", "sandbox": "read-only" }),
+    )
+    .await;
+    assert_eq!(ran["status"], "ok", "{ran}");
+    let shown = ran["stdout"].as_str().expect("stdout").len()
+        + ran["stderr"].as_str().expect("stderr").len();
+    assert!(shown.div_ceil(4) <= 6_000, "{shown}");
+    assert!(ran["stdout_bytes"].as_u64().expect("bytes") > 900_000);
+    let id = ran["output_id"].as_str().expect("output_id").to_owned();
+    let out_dir = fixture.session.spill_store().conversation_dir();
+    let spilled = out_dir.join(format!("{id}.txt"));
+    assert!(out_dir.starts_with(fixture.dir.path().join("app-data/sessions/conv-1/out")));
+    assert!(spilled.is_file());
+    assert!(!spilled.starts_with(fixture.session.workspace().root()));
+
+    fixture.session.set_profile(PermissionProfile::Plan);
+    let page = call(
+        &fixture,
+        "read_output",
+        json!({ "output_id": id, "offset": 149_999 }),
+    )
+    .await;
+    assert_eq!(page["status"], "ok", "{page}");
+    assert_eq!(page["content"], "149999\t149999\n150000\t150000\n");
+    let path = call(
+        &fixture,
+        "read_output",
+        json!({ "output_id": spilled.display().to_string() }),
+    )
+    .await;
+    assert_eq!(path["code"], "local_tools.invalid_argument", "{path}");
+    fixture.session.set_profile(PermissionProfile::Build);
+
+    std::fs::write(
+        fixture.session.workspace().root().join("main.rs"),
+        (0..20_000)
+            .map(|n| "// line ".to_owned() + &n.to_string() + "\n")
+            .collect::<String>(),
+    )
+    .expect("write");
+    let diff = call(&fixture, "git_diff", json!({})).await;
+    assert_eq!(diff["truncated"], true, "{diff}");
+    assert!(diff["output"].as_str().expect("diff").len() <= 8_000 * 4);
+    let diff_id = diff["output_id"]
+        .as_str()
+        .expect("diff output_id")
+        .to_owned();
+    let diff_page = call(&fixture, "read_output", json!({ "output_id": diff_id })).await;
+    assert!(
+        diff_page["content"]
+            .as_str()
+            .expect("content")
+            .contains("diff --git")
+    );
+
+    let Fixture {
+        dir,
+        person,
+        session,
+        provider,
+    } = fixture;
+    drop((person, session, provider));
+    assert!(spilled.is_file(), "the outputs outlive the session");
+    let reopened =
+        elitea_local_tools::budget::SpillStore::new(&dir.path().join("app-data"), "conv-1");
+    assert_eq!(
+        reopened.read(&id).expect("kept").lines().last(),
+        Some("150000")
+    );
+    elitea_local_tools::budget::forget_conversation_outputs(
+        &dir.path().join("app-data"),
+        "conv-1",
+        "unrelated",
+    );
+    assert!(
+        spilled.is_file(),
+        "another conversation's forget keeps them"
+    );
+    reopened.clear();
+    assert!(!out_dir.exists());
+    drop(dir);
+}
+
+/// #1225: `exit_plan_mode` asks the person (never a rule) with `accept` /
+/// `decline` and the plan; a decline keeps plan mode and carries the
+/// person's feedback, bounded; an accept leaves it, and the toolset offers
+/// every tool again.
+#[tokio::test]
+async fn exit_plan_mode_asks_the_person_and_an_accept_leaves_plan_mode() {
+    let fixture = fixture(open_policy());
+    fixture.session.set_profile(PermissionProfile::Plan);
+    let plan = "# Rename\n\n1. Find the callers\n2. Rename";
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "decline".to_owned(),
+        value: json!({ "feedback": format!("Keep the old name as an alias. {}", "x".repeat(4096)) }),
+    });
+    let declined = call(&fixture, "exit_plan_mode", json!({ "plan": plan })).await;
+    assert_eq!(declined["accepted"], false, "{declined}");
+    let feedback = declined["feedback"].as_str().expect("feedback");
+    assert!(feedback.starts_with("Keep the old name as an alias."));
+    assert!(feedback.len() <= elitea_local_tools::session::MAX_FEEDBACK_BYTES);
+    assert_eq!(fixture.session.profile(), PermissionProfile::Plan);
+    {
+        let asked = fixture.person.asked.lock().expect("lock");
+        let request = asked.last().expect("asked");
+        assert_eq!(request.available_actions, ["accept", "decline"]);
+        assert_eq!(request.payload["plan_proposal"]["plan"], plan);
+    }
+    // An approve (a tool card's answer) is not an accept.
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "approve".to_owned(),
+        value: Value::Null,
+    });
+    let not_accepted = call(&fixture, "exit_plan_mode", json!({ "plan": plan })).await;
+    assert_eq!(not_accepted["accepted"], false, "{not_accepted}");
+    assert_eq!(fixture.session.profile(), PermissionProfile::Plan);
+
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "accept".to_owned(),
+        value: Value::Null,
+    });
+    let accepted = call(&fixture, "exit_plan_mode", json!({ "plan": plan })).await;
+    assert_eq!(accepted["accepted"], true, "{accepted}");
+    assert_eq!(fixture.session.profile(), PermissionProfile::Build);
+    let now = names(&tools(&fixture).await);
+    assert!(now.contains(&"write_file".to_owned()) && now.contains(&"run_command".to_owned()));
+    assert!(!now.contains(&"exit_plan_mode".to_owned()));
+    // Out of plan mode it is not offered, and a call is refused unasked.
+    let asked = fixture.person.asked();
+    let refused = fixture
+        .session
+        .call("exit_plan_mode", "c", json!({ "plan": plan }))
+        .await;
+    assert_eq!(refused["code"], "local_tools.denied", "{refused}");
+    assert_eq!(fixture.person.asked(), asked);
+}
+
+/// #1225: a call the person denies with feedback is a typed failure the
+/// model reads: `declined_by_person` and the person's text, bounded. A
+/// denial without feedback is typed too; a rule's refusal is not.
+#[tokio::test]
+async fn a_denial_with_feedback_is_a_typed_failure_with_the_persons_text() {
+    let fixture = fixture(open_policy());
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "reject".to_owned(),
+        value: json!({ "reason": "the person rejected it", "by": "person",
+                       "feedback": "Do not reset; stash nothing, just diff." }),
+    });
+    let denied = call(
+        &fixture,
+        "run_command",
+        json!({ "command": "git reset --hard HEAD" }),
+    )
+    .await;
+    assert_eq!(fixture.person.asked(), 1, "asked: {denied}");
+    assert_eq!(denied["status"], "error");
+    assert_eq!(denied["code"], "local_tools.rejected");
+    assert_eq!(denied["ok"], false);
+    assert_eq!(denied["error"]["code"], "declined_by_person");
+    assert_eq!(
+        denied["error"]["feedback"],
+        "Do not reset; stash nothing, just diff."
+    );
+
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "reject".to_owned(),
+        value: json!({ "reason": "the person rejected it", "by": "person" }),
+    });
+    let plain = call(
+        &fixture,
+        "run_command",
+        json!({ "command": "git reset --hard HEAD" }),
+    )
+    .await;
+    assert_eq!(plain["error"]["code"], "declined_by_person");
+    assert!(plain["error"].get("feedback").is_none());
+
+    // A rule's denial says which layer refused, never "the person".
+    let ruled = call(&fixture, "run_command", json!({ "command": "rm -rf x" })).await;
+    assert!(
+        ruled["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("denied by policy")),
+        "{ruled}"
+    );
+    assert!(
+        ruled.get("error").is_none() && ruled.get("ok").is_none(),
+        "{ruled}"
+    );
+}
+
+/// #1225 × #1224: a `run_tests` approval (a test run with the network)
+/// declined with feedback answers the model the same typed failure, and the
+/// tests do not run.
+#[tokio::test]
+async fn a_run_tests_denial_with_feedback_is_a_typed_failure() {
+    let fixture = fixture(LocalWorkPolicy {
+        network: true,
+        ..open_policy()
+    });
+    let root = fixture.session.workspace().root().to_path_buf();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"declined\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("manifest");
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "reject".to_owned(),
+        value: json!({ "reason": "the person rejected it", "by": "person",
+                       "feedback": "Run them offline." }),
+    });
+    let denied = call(&fixture, "run_tests", json!({ "network": true })).await;
+    assert_eq!(fixture.person.asked(), 1, "asked: {denied}");
+    assert_eq!(denied["code"], "local_tools.rejected", "{denied}");
+    assert_eq!(denied["error"]["code"], "declined_by_person");
+    assert_eq!(denied["error"]["feedback"], "Run them offline.");
+    assert!(!root.join("target").exists(), "the tests did not run");
 }

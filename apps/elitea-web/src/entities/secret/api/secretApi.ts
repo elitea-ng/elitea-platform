@@ -5,8 +5,9 @@
  * (`secretsList` / `secretCreate` / `secretShow` / `secretEdit` /
  * `secretDelete` / `secretHide`).
  *
- * URL SHAPE (#151). pylon serves `/api/v2/<plugin>/<resource-module>/<mode>/
- * <params>`. The plugin is `secrets`; its resource modules are
+ * URL SHAPE (#151). The legacy API is
+ * `/api/v2/<plugin>/<resource-module>/<mode>/<params>`. The plugin is
+ * `secrets`; its resource modules are
  * `legacy/plugins/secrets/api/v2/{secrets,secret,hide}.py`. So the doubled
  * segment is real, and the baseline client agrees
  * (`apps/elitea-ui/src/api/secrets.js:3` → `apiSlicePath = '/secrets'`):
@@ -54,13 +55,13 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * The pylon PLUGIN prefix for this domain. Every path below is
+ * The legacy PLUGIN prefix for this domain. Every path below is
  * `/secrets/<resource-module>/<mode>/<params>` — see the module header.
  */
 const PLUGIN_PREFIX = '/secrets';
 
 /**
- * pylon's `c.DEFAULT_MODE` — the project-scoped handler
+ * The legacy `c.DEFAULT_MODE` — the project-scoped handler
  * (`legacy/plugins/shared/tools/config.py:41`). The only other mode the
  * plugin defines is `administration`, which addresses the global vault and
  * is admin_ui's, not this app's. `prompt_lib` — which this client used

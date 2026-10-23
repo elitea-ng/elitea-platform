@@ -665,8 +665,8 @@ func TestTheArtifactTransportIsDerivedFromTheRequestsLlmSettings(t *testing.T) {
 	// The same derivation the engine performs on its download side. Two
 	// implementations of one legacy rule, so both are pinned.
 	settings := run.ExtractArtifactSettings(llmSettings())
-	if settings.BaseURL != "https://elitea.example" {
-		t.Fatalf("base %q: the /llm/v1 suffix addresses the gateway, not the artifact routes", settings.BaseURL)
+	if settings.APIKey == "" {
+		t.Fatalf("no bearer: %+v", settings)
 	}
 	if settings.ProjectID != "7" {
 		t.Fatalf("project %q", settings.ProjectID)

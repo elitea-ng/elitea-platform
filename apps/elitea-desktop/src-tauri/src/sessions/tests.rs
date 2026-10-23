@@ -98,6 +98,7 @@ async fn another_user_or_deployment_reads_nothing() {
             &mine.key(),
             vec![new("t", text_event("i", "user", "user", "secret plan"))],
             Some("2".into()),
+            &[],
         )
         .await
         .unwrap();
@@ -219,7 +220,7 @@ async fn trims_whole_invocations() {
         ));
         events.push(new(&inv, text_event(&inv, "agent", "model", "answer")));
     }
-    sessions.seed(&key, events, None).await.unwrap();
+    sessions.seed(&key, events, None, &[]).await.unwrap();
     let total: i64 = sessions
         .call("t", {
             let key = key.clone();
@@ -298,6 +299,177 @@ async fn trims_whole_invocations() {
     assert!(rows.iter().all(|r| r.invocation_id == "inv-5"));
 }
 
+fn state_event(invocation: &str, entries: &[(&str, Value)]) -> Event {
+    let mut event = Event::new(invocation);
+    event.author = "agent".into();
+    for (name, value) in entries {
+        event
+            .actions
+            .state_delta
+            .insert((*name).to_owned(), value.clone());
+    }
+    event
+}
+
+async fn session_state(store: &DesktopStateStore, key: &str) -> HashMap<String, Value> {
+    store
+        .sessions()
+        .get(GetRequest {
+            app_name: APP_NAME.into(),
+            user_id: ADK_USER.into(),
+            session_id: key.to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap()
+        .state()
+        .all()
+}
+
+async fn trim_session(sessions: &SessionStore, key: &str, limit: i64) -> bool {
+    sessions
+        .call("t", {
+            let key = key.to_owned();
+            move |conn| {
+                let tx = conn.transaction()?;
+                let trimmed = trim_to(&tx, &key, limit)?;
+                tx.commit()?;
+                Ok(trimmed)
+            }
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_trim_keeps_the_state_the_dropped_invocations_built() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    let big = "x".repeat(2_000);
+    let choice = json!({"name": "gpt-4o", "reasoning_effort": "low"});
+    let mut events = vec![
+        // The thread's model choice, its own invocation (as the turn keeps
+        // it), then a key set and cleared, then one overwritten later.
+        new(
+            "t0",
+            state_event("choice", &[("elitea.model.v1", choice.clone())]),
+        ),
+        new(
+            "t0",
+            state_event("s1", &[("cleared", json!(1)), ("later", json!("old"))]),
+        ),
+        new("t0", state_event("s2", &[("cleared", Value::Null)])),
+    ];
+    for turn in 0..4 {
+        let inv = format!("inv-{turn}");
+        events.push(new(&inv, text_event(&inv, "user", "user", &big)));
+    }
+    events.push(new("t9", state_event("s9", &[("later", json!("new"))])));
+    events.push(new("t9", text_event("inv-9", "user", "user", "newest")));
+    sessions.seed(&key, events, None, &[]).await.unwrap();
+    let before = session_state(&store, &key).await;
+    assert_eq!(before.get("elitea.model.v1"), Some(&choice));
+
+    assert!(trim_session(sessions, &key, 3_000).await);
+    let rows = sessions.rows(&key).await.unwrap();
+    // The text invocations went, and the state events with them; one event
+    // at the head now carries what they had set.
+    assert!(rows.iter().all(|r| r.invocation_id != "choice"), "{rows:?}");
+    assert!(rows.iter().all(|r| r.invocation_id != "inv-0"), "{rows:?}");
+    assert_eq!(rows[0].turn_execution_id, CARRIED_STATE_TURN);
+    assert!(rows[0].event.llm_response.content.is_none());
+    assert_eq!(
+        rows[0].response_message_id.as_deref(),
+        Some(CARRIED_STATE_TURN)
+    );
+    let after = session_state(&store, &key).await;
+    assert_eq!(after.get("elitea.model.v1"), Some(&choice));
+    assert_eq!(after.get("later"), Some(&json!("new")), "a kept event wins");
+    assert_eq!(after.get("cleared"), None);
+    // The same state: a key cleared before is simply absent now.
+    let mut set = before.clone();
+    set.retain(|_, value| !value.is_null());
+    assert_eq!(after, set);
+
+    // A later trim folds the carried event again, with what goes then.
+    assert!(trim_session(sessions, &key, 1).await);
+    let rows = sessions.rows(&key).await.unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0].turn_execution_id, CARRIED_STATE_TURN);
+    assert_eq!(rows[1].invocation_id, "inv-9");
+    assert_eq!(session_state(&store, &key).await, set);
+    // A carried event survives a session reopen (it has an answer id).
+    sessions.open_session(&me, "fp").await.unwrap();
+    assert_eq!(session_state(&store, &key).await, set);
+}
+
+#[tokio::test]
+async fn a_reseed_keeps_only_the_state_its_caller_names() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    let choice = json!({"name": "gpt-4o"});
+    sessions
+        .seed(
+            &key,
+            vec![
+                new(
+                    "t",
+                    state_event("c", &[("elitea.model.v1", choice.clone())]),
+                ),
+                new("t", state_event("p", &[("plan", json!({"steps": []}))])),
+                new("t", text_event("i", "user", "user", "old")),
+            ],
+            Some("1".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    sessions
+        .seed(
+            &key,
+            vec![new("s", text_event("s", "user", "user", "from the server"))],
+            Some("3".into()),
+            &["elitea.model.v1"],
+        )
+        .await
+        .unwrap();
+    let state = session_state(&store, &key).await;
+    assert_eq!(state.get("elitea.model.v1"), Some(&choice));
+    assert_eq!(state.get("plan"), None, "only the named keys stay");
+    let rows = sessions.rows(&key).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].turn_execution_id, CARRIED_STATE_TURN);
+    // A choice cleared since (a state delta of `null`) is not carried.
+    sessions
+        .seed(
+            &key,
+            vec![new(
+                "t",
+                state_event("n", &[("elitea.model.v1", Value::Null)]),
+            )],
+            Some("4".into()),
+            &["elitea.model.v1"],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        session_state(&store, &key).await.get("elitea.model.v1"),
+        Some(&Value::Null)
+    );
+    sessions
+        .seed(&key, Vec::new(), Some("4".into()), &["elitea.model.v1"])
+        .await
+        .unwrap();
+    assert_eq!(sessions.rows(&key).await.unwrap().len(), 0);
+}
+
 #[tokio::test]
 async fn a_session_past_its_size_is_trimmed_and_asks_to_be_seeded_again() {
     let (_dir, store) = open();
@@ -306,7 +478,7 @@ async fn a_session_past_its_size_is_trimmed_and_asks_to_be_seeded_again() {
     let key = me.key();
     sessions.open_session(&me, "fp").await.unwrap();
     sessions
-        .seed(&key, Vec::new(), Some("0".into()))
+        .seed(&key, Vec::new(), Some("0".into()), &[])
         .await
         .unwrap();
     // Appends past 32 MiB: 40 turns of 1 MiB user text (user text is not cut
@@ -373,7 +545,7 @@ async fn a_turn_appends_tagged_events_and_they_survive_a_restart() {
         let opened = sessions.open_session(&me, "fp").await.unwrap();
         assert!(!opened.seeded_from_server);
         sessions
-            .seed(&key, Vec::new(), Some("0".into()))
+            .seed(&key, Vec::new(), Some("0".into()), &[])
             .await
             .unwrap();
         // Nothing but a running turn writes.
@@ -451,7 +623,7 @@ async fn a_cancelled_turn_leaves_nothing_and_a_refused_one_asks_for_a_seed() {
     let key = me.key();
     sessions.open_session(&me, "fp").await.unwrap();
     sessions
-        .seed(&key, Vec::new(), Some("0".into()))
+        .seed(&key, Vec::new(), Some("0".into()), &[])
         .await
         .unwrap();
 
@@ -522,6 +694,7 @@ async fn a_turn_that_never_finished_is_dropped_when_the_session_opens_again() {
             &key,
             vec![new("seeded", text_event("s", "user", "user", "old"))],
             Some("2".into()),
+            &[],
         )
         .await
         .unwrap();
@@ -569,6 +742,7 @@ async fn a_tool_response_is_cut_and_binary_content_is_not_kept() {
                 new("t", image),
             ],
             None,
+            &[],
         )
         .await
         .unwrap();
@@ -620,6 +794,7 @@ async fn a_path_deny_change_drops_the_tool_response_bodies_and_asks_for_a_seed()
                 new("t", text_event("i", "agent", "model", "I read it")),
             ],
             Some("2".into()),
+            &[],
         )
         .await
         .unwrap();
@@ -655,6 +830,7 @@ async fn lifecycle_marks_and_deletes() {
             &key,
             vec![new("t", text_event("i", "user", "user", "x"))],
             Some("2".into()),
+            &[],
         )
         .await
         .unwrap();

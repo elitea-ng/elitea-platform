@@ -36,7 +36,7 @@ func TestNativeAuthFromEnvRefusesBadValuesAndAMissingOrigin(t *testing.T) {
 	// With the origin it composes all three parts.
 	composed, err := nativeAuthFromEnv(context.Background(),
 		nativeEnv(map[string]string{nativeauth.NativeClientsPathEnv: clients}), pool, "https://elitea.example", nil)
-	if err != nil || composed.registry == nil || composed.store == nil || composed.apiTokens() == nil || composed.graphTokens() == nil {
+	if err != nil || composed.registry == nil || composed.store == nil || composed.apiTokens() == nil {
 		t.Fatalf("composed = %+v, %v", composed, err)
 	}
 	// A TTL out of range, or a file that does not parse, refuses boot and
@@ -54,7 +54,7 @@ func TestNativeAuthFromEnvRefusesBadValuesAndAMissingOrigin(t *testing.T) {
 	}
 	// No pool: nothing is composed, and the interfaces stay NIL interfaces.
 	none, err := nativeAuthFromEnv(context.Background(), nativeEnv(nil), nil, "", nil)
-	if err != nil || none.apiTokens() != nil || none.graphTokens() != nil || none.registry != nil {
+	if err != nil || none.apiTokens() != nil || none.registry != nil {
 		t.Fatalf("no pool = %+v, %v", none, err)
 	}
 }

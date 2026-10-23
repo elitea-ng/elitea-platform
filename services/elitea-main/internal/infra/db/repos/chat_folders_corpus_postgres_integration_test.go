@@ -35,13 +35,13 @@ package repos
 // Two of them are specifically about clauses that are absent on purpose, which
 // is the part of the shape a future "obvious tidy-up" is most likely to break:
 //
-//   - `folder_id`'s FK carries NO ON DELETE clause, because pylon nulls each
-//     member conversation's folder_id in application code before deleting the
-//     folder (legacy/plugins/elitea_core/api/v2/folder.py:846-865). So deleting
-//     a folder that still holds a conversation must be REFUSED. Write
-//     ON DELETE CASCADE instead and "folder delete does not take the
-//     conversation with it" fails — with the conversation gone, which is the
-//     data loss this pins.
+//   - `folder_id`'s FK carries NO ON DELETE clause, because the legacy runtime
+//     nulls each member conversation's folder_id in application code before
+//     deleting the folder
+//     (legacy/plugins/elitea_core/api/v2/folder.py:846-865). So deleting a
+//     folder that still holds a conversation must be REFUSED. Write ON DELETE
+//     CASCADE instead and "folder delete does not take the conversation with
+//     it" fails — with the conversation gone, which is the data loss this pins.
 //   - `chat_selected_conversations` has NO unique on `user_id`, which is why
 //     SelectConversation is a DELETE-then-INSERT rather than an upsert. Add the
 //     unique that looks like it belongs and "reselecting replaces" still passes,
@@ -167,7 +167,7 @@ func TestCorpusOnlySchemaSupportsFoldersAndSelectedConversations(t *testing.T) {
 			t.Fatalf("the conversation must survive the refused folder delete: %v", err)
 		}
 
-		// What pylon does instead: unfile, then delete.
+		// What the legacy runtime does instead: unfile, then delete.
 		empty := ""
 		if _, err := conversationsRepo.Update(ctx, chatFoldersCorpusProject, conv.ID, conversations.Conversation{FolderID: &empty}); err != nil {
 			t.Fatalf("unfile conversation: %v", err)

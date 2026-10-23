@@ -7,13 +7,13 @@
  * ## This page is unavailable, and the reason comes from the server
  *
  * A "service descriptor" is not a description of this platform's services. It is
- * one registration in pylon's PROVIDER HUB: an external provider — DeepWiki,
+ * one registration in the legacy PROVIDER HUB: an external provider — DeepWiki,
  * Inventory, an image-generation service — that posts an
  * `ExternalServiceProviderDescriptor` naming its URL and the toolkits it offers,
  * which elitea_core stores, health-checks, and thereafter hands to agents through
  * `lookup_provider`. The four columns the reference table renders come from two
  * different places: `project_id`, `provider_name` and `service_location_url` are
- * the stored key, and `healthy` is which of two IN-PROCESS DICTS on the Pylon
+ * the stored key, and `healthy` is which of two IN-PROCESS DICTS on the legacy
  * plugin module the descriptor landed in when that process last started.
  *
  * This platform has no descriptor store, no provider health probe and no provider
@@ -79,7 +79,7 @@
  * `window.admin_ui_config.permissions` is presentation state and never a gate —
  * see `./adminUiConfig`. The listing is gated server-side on
  * `runtime.airun.serviceproviders` and the two registration verbs on
- * `provider_hub.descriptor.register`, the permissions the pylon originals
+ * `provider_hub.descriptor.register`, the permissions the legacy originals
  * declare, resolved in `administration` mode. Activation is gated separately on
  * `provider_hub.descriptor.activate` (migration 0109): every facade registrar
  * files a registration at boot, so `.register` is handed out freely, while

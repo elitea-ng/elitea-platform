@@ -45,6 +45,7 @@ import {
   CredentialFormSection,
   credentialSectionFieldKeys,
   isCredentialPropertyVisible,
+  isPlatformOnlyCredentialField,
 } from './CredentialFormSection';
 import { CredentialTypeSelector } from './CredentialTypeSelector';
 import { LLM_MODEL_TYPE, connectedInMessage, missingFieldsTooltip } from './llmModelConnectionTest';
@@ -118,7 +119,13 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
         />
       )}
       {Object.entries(c.schemaProperties).map(([fieldKey, property]) => {
-        if (sectionFieldKeys.has(fieldKey) || !isCredentialPropertyVisible(property, c.data)) return null;
+        if (
+          sectionFieldKeys.has(fieldKey) ||
+          isPlatformOnlyCredentialField(c.effectiveType, fieldKey) ||
+          !isCredentialPropertyVisible(property, c.data)
+        ) {
+          return null;
+        }
         return (
           <CredentialSchemaField
             key={fieldKey}

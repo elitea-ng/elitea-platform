@@ -53,14 +53,14 @@ use crate::ingest::{self, Admitted, ClonedRepository};
 use crate::llm::{ChatClient, EmbeddingClient, EmbeddingOptions, Transport, TransportSettings};
 use crate::runner::Context;
 use crate::storage::WikiKey;
-use crate::storage::build::{Build, BuildSpace, WikiRecord};
+use crate::storage::build::{Build, BuildSpace, VectorSpill, WikiRecord};
 use crate::storage::topology::PgTopologyStore;
 use crate::storage::{self, StorageError};
 use crate::structure::index::PlannerIndex;
 use crate::structure::model::LiveModel;
 use crate::structure::{self, PlannerChoice, StructureSettings, analysis};
 use crate::wiki::compose::{VersionClock, build_repo_identifier, normalize_wiki_id};
-use crate::wiki::context::PylonPlugin;
+use crate::wiki::context::PluginMount;
 use crate::wiki::expansion::ExpansionFlags;
 use crate::wiki::index::{GraphFacts, PageIndex};
 use crate::wiki::pages::{PageGenerator, PageSettings};
@@ -169,12 +169,24 @@ pub async fn generate_wiki(
             storage::DSN_ENV
         )));
     };
+    // The build writes its vectors to elitea-vector with the invocation's
+    // callback bearer; a configured store that cannot be used refuses the
+    // run before any work (an index without its vectors would answer
+    // lexically for ever).
+    let dense = storage::dense::DenseAccess::resolve(settings.vector.as_ref(), arguments)
+        .required()
+        .map_err(|why| {
+            runtime(format!(
+                "Repository indexing failed: the wiki's vectors cannot be written to elitea-vector: {why}"
+            ))
+        })?;
     let pool = storage::worker_pool(url.expose(), POOL_CONNECTIONS)
         .map_err(|error| value_error(error.to_string()))?;
     let mut slot: Option<Build> = None;
     let outcome = Pipeline {
         request: &request,
         environment,
+        dense,
         settings,
         context,
         job,
@@ -196,6 +208,8 @@ pub async fn generate_wiki(
 struct Pipeline<'a> {
     request: &'a GenerateRequest,
     environment: Environment,
+    /// Where the build writes its vectors.
+    dense: Option<storage::dense::DenseIndex>,
     settings: &'a Settings,
     context: &'a Context,
     job: &'a Job<'a>,
@@ -281,7 +295,7 @@ impl Pipeline<'_> {
             request.provider_label()
         ));
         let transport = Transport::new(&TransportSettings::from(&settings.model))?;
-        // An artifact folder is read over the same TLS stack.
+        // An artifact folder is read over the model calls' platform channel.
         let objects = transport.clone();
         let chat = ChatClient::new(transport.clone(), request.model.clone());
         let embeddings = EmbeddingClient::new(
@@ -347,7 +361,10 @@ impl Pipeline<'_> {
         // The build: stage, embed.
         let mut space = BuildSpace::new(pool.clone(), settings.build_owner.clone())
             .with_stale_after(settings.build_stale_after)
-            .with_publish_settings(settings.publish);
+            .with_publish_settings(settings.publish)
+            .with_dense(self.dense.clone())
+            // Phase 2's vectors past 64 MiB go to the job's scratch directory.
+            .with_vector_spill(Some(VectorSpill::new(self.job.scratch)));
         if let Some(boot_id) = self.job.boot_id {
             space = space.with_boot_id(boot_id);
         }
@@ -513,7 +530,7 @@ impl Pipeline<'_> {
                     exclude_tests: self.environment.exclude_tests,
                 },
                 budget: CONTEXT_TOKEN_BUDGET,
-                pylon: PylonPlugin::new(Some(root.clone())),
+                plugin_mount: PluginMount::new(Some(root.clone())),
             },
             chat,
             settings: PageSettings::new(repository.clone()),
@@ -582,17 +599,20 @@ impl Pipeline<'_> {
         });
         let outcome = match admitted {
             Admitted::Artifact(target) => match self.request.platform_objects.as_ref() {
-                Some(platform) => {
-                    ingest::ingest_artifact(
-                        &target,
-                        platform,
-                        objects.http_client(),
-                        &self.settings.ingest,
-                        self.job.scratch,
-                        cancel,
-                    )
-                    .await
-                }
+                Some(platform) => match objects.platform_channel() {
+                    Ok(channel) => {
+                        ingest::ingest_artifact(
+                            &target,
+                            platform,
+                            &elitea_platform_rpc::artifacts::ArtifactClient::new(channel),
+                            &self.settings.ingest,
+                            self.job.scratch,
+                            cancel,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
                 None => Err(value_error(
                     "an artifact source needs the platform artifact credentials, and this invocation has none",
                 )),

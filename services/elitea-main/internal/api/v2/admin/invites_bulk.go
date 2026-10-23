@@ -5,8 +5,8 @@ package admin
 //
 // ## What it replaces
 //
-// pylon ships this capability as TWO admin console pages, each a free-text
-// form over the same write:
+// The legacy runtime ships this capability as TWO admin console pages, each a
+// free-text form over the same write:
 //
 //   - legacy/plugins/admin/api/v2/invites_bulkusers.py:36-67 — "add EVERY
 //     platform user to ONE project with these roles". Body
@@ -30,14 +30,14 @@ package admin
 //
 // ## Four deliberate divergences
 //
-//  1. IDS, NOT FREE TEXT. pylon posts `roles` as a comma-separated string and
-//     `projects` as whatever rows the table widget had selected. This takes
-//     `users` and `projects` as id arrays and `role` as ONE role name, which is
-//     what the platform's typed role vocabulary already is
+//  1. IDS, NOT FREE TEXT. The legacy runtime posts `roles` as a comma-separated
+//     string and `projects` as whatever rows the table widget had selected.
+//     This takes `users` and `projects` as id arrays and `role` as ONE role
+//     name, which is what the platform's typed role vocabulary already is
 //     (auth_core__project_role). A textarea of permission strings is the shape
 //     decisions.md §2.5 refuses to carry forward.
 //
-//  2. THE ROLE SET IS ADDED TO, NOT REPLACED. pylon's
+//  2. THE ROLE SET IS ADDED TO, NOT REPLACED. The legacy
 //     `update_roles_for_user` (legacy/plugins/admin/rpc/roles.py:137-148) calls
 //     `auth.update_project_user_roles`, which REPLACES every role the user
 //     holds in the project. Run against "all users" that silently demotes every
@@ -45,18 +45,18 @@ package admin
 //     role and leaves the rest alone, exactly as the project invite already
 //     does (internal/api/v2/eliteacore/users_write.go:387-395).
 //
-//  3. PER-PAIR OUTCOMES, NOT A LOG BLOB. pylon returns `logs` as one English
-//     string, so a caller cannot tell "added" from "was already there" from
-//     "that project has no such role" without matching on prose. Each (user,
-//     project) pair reports a machine-readable `outcome` here, following the
-//     inviteResult precedent in users_write.go:94-103.
+//  3. PER-PAIR OUTCOMES, NOT A LOG BLOB. The legacy runtime returns `logs` as
+//     one English string, so a caller cannot tell "added" from "was already
+//     there" from "that project has no such role" without matching on prose.
+//     Each (user, project) pair reports a machine-readable `outcome` here,
+//     following the inviteResult precedent in users_write.go:94-103.
 //
-//  4. PERSONAL PROJECTS ARE REFUSED. pylon has no such guard: its "add all
-//     users" form would happily write every account into `project_user_9`.
-//     A personal project is one user's own tenant space — the platform
-//     provisions exactly one per account and every resolver treats it as that
-//     account's — so a bulk form may not put a stranger in it. The pair is
-//     refused and says so, rather than being skipped in silence.
+//  4. PERSONAL PROJECTS ARE REFUSED. The legacy runtime has no such guard: its
+//     "add all users" form would happily write every account into
+//     `project_user_9`. A personal project is one user's own tenant space — the
+//     platform provisions exactly one per account and every resolver treats it
+//     as that account's — so a bulk form may not put a stranger in it. The pair
+//     is refused and says so, rather than being skipped in silence.
 //
 // ## Transactionality
 //
@@ -75,12 +75,12 @@ import (
 	"strings"
 )
 
-// The permissions pylon declares on the two forms this route replaces. Both are
-// accepted: the gate is an ANY-of intersection (internal/api/middleware/rbac.go
-// hasIntersection), so an operator who held either console page holds this one.
-// Shared migration 0121 grants both to the administration-mode `super_admin`
-// and `admin`, which is the split legacy/plugins/admin/module.py:511-517 and
-// :527-533 give them.
+// The permissions the legacy runtime declares on the two forms this route
+// replaces. Both are accepted: the gate is an ANY-of intersection
+// (internal/api/middleware/rbac.go hasIntersection), so an operator who held
+// either console page holds this one. Shared migration 0121 grants both to the
+// administration-mode `super_admin` and `admin`, which is the split
+// legacy/plugins/admin/module.py:511-517 and :527-533 give them.
 const (
 	BulkInviteUsersPermission    = "invites.bulkusers"
 	BulkInviteProjectsPermission = "invites.bulkprojects"
@@ -116,7 +116,7 @@ type bulkInviteRequest struct {
 // bulkInviteResult is one (user, project) pair's outcome.
 //
 // `user_email` and `project_name` are carried so a console can render the
-// result without holding both source lists — the same reason pylon's `logs`
+// result without holding both source lists — the same reason the legacy `logs`
 // spelled the names out.
 type bulkInviteResult struct {
 	UserID      int64  `json:"user_id"`
@@ -319,7 +319,7 @@ func (h *Handler) addProjectMembership(ctx context.Context, projectID, userID in
 // with no row is simply absent from the map, which is how the pair loop
 // reports `unknown_user`.
 //
-// `is_system` reproduces pylon's own skip. invites_bulkusers.py:57 tests
+// `is_system` reproduces the legacy skip. invites_bulkusers.py:57 tests
 // `name.startswith(":system:project:")`; this service ALSO carries the
 // `%@centry.user` address the rest of the admin surface filters on
 // (internal/api/v2/admin/projects.go:79's systemProjectMemberPredicate), and

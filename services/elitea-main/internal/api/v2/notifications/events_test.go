@@ -309,7 +309,7 @@ func currentNotificationRequest(ctx context.Context, projectID string) *http.Req
 	request = request.WithContext(auth.ContextWithAuthenticatedUser(
 		request.Context(),
 		auth.User{ID: "42", UserID: "42"},
-		auth.AuthenticationSourceForwarded,
+		auth.AuthenticationSourceSession,
 	))
 	return request
 }

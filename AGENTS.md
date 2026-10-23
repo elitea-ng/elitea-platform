@@ -3,7 +3,7 @@
 ## Scope and maturity
 
 This repository is the greenfield replatform prototype for Elitea. The target is
-one Go modular monolith for the current `pylon_main` and `pylon_auth` product
+one Go modular monolith for the legacy runtime's main and auth product
 domains, plus independently scalable Python workers for LangChain/LangGraph
 execution and indexing. The candidate architecture and approval state are
 indexed in `../elitea-docs/docs/internal/03-architecture/adrs/index.mdx`;
@@ -23,8 +23,10 @@ prototype shortcuts into new code merely to preserve current behavior.
 | Path | Ownership |
 | --- | --- |
 | `services/elitea-main/` | Go API, auth, control plane, persistence, and browser streaming |
-| `apps/elitea-ui/` | EliteaUI Git submodule; make UI changes in its owning repository |
+| `apps/elitea-web/` | The web UI (React SPA); also builds the admin console, maintenance page and embedded docs |
+| `apps/elitea-mobile/` | Mobile app "Elitea AI" (Expo / React Native): a standalone npm project with its own `AGENTS.md`; its API client is generated from `services/elitea-main/api/openapi/v2.yaml`, and `ci-mobile.yml` fails when it is stale |
 | `libs/go/` | Shared Go libraries; keep dependencies narrow and consumer-driven |
+| `libs/ts/client-core/` | `@elitea/client-core`: pure TypeScript that the web, desktop and mobile clients compile from source (brand defaults, chat stream parsing). Its README records what is shared and what is not; `docs/client-feature-parity.md` tracks features across the three clients |
 | `libs/proto/` | Versioned cross-language contracts and generated-code inputs |
 | `deploy/` | Local compose and Kubernetes packaging |
 | `docs/` | Prototype-local implementation notes; architecture decisions belong in `elitea-docs` |
@@ -36,9 +38,9 @@ prototype shortcuts into new code merely to preserve current behavior.
   corrections intentionally break header trust, implicit admin, unscoped or
   unsafe token/session behavior, open redirects, raw errors and cross-tenant
   access; compatibility never requires preserving a vulnerability.
-- Do not preserve Pylon plugin loading, Arbiter pickle payloads, global service
-  locators, internal Python RPC aliases, or hot-installed dependencies as target
-  architecture.
+- Do not preserve, port or reintroduce the legacy runtime's plugin loading,
+  Arbiter pickle payloads, global service locators, internal Python RPC aliases,
+  or hot-installed dependencies as target architecture.
 - Durable asynchronous worker commands use the runtime command bus, NATS
   JetStream (docs/runtime-command-bus.md); PostgreSQL is the authority and the
   bus is transport only.
@@ -96,10 +98,10 @@ prototype shortcuts into new code merely to preserve current behavior.
 - Keep API errors typed and safe for callers. Log internal causes with trace and
   execution identifiers; never return raw `err.Error()` across a trust boundary.
 - Enforce authentication, project authorization, and tenant context before
-  mounting product, admin, or storage handlers. Do not add a pylon bridge back:
-  the shadow comparator, the cutover reverse proxy and endpoint tracker, and the
-  Redis remote-call auth client are deleted (issue #383), and
-  `internal/api/TestNoPylonBridgeWiringReturns` fails if one returns.
+  mounting product, admin, or storage handlers. Do not add a legacy-runtime
+  bridge back: the shadow comparator, the cutover reverse proxy and endpoint
+  tracker, and the Redis remote-call auth client are deleted (issue #383), and
+  `internal/api/TestNoLegacyBridgeWiringReturns` fails if one returns.
 - Use transaction-local tenant selection and repository-owned versioned
   migrations. Never return a pooled connection after releasing it or use
   session-scoped tenant state across requests.

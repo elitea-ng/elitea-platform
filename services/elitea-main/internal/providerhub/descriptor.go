@@ -3,11 +3,11 @@ package providerhub
 // The descriptor document, as a Go model.
 //
 // The authoritative schema is `libs/provider/legacy/v0/
-// ExternalServiceProviderDescriptor.json`, which pylon compiles into a pydantic
-// model at plugin load with `remove_special_field_name_prefix=True`. That flag
-// is why the schema declares `_description`, `_type` and `_required` while
-// every descriptor actually published on the wire spells them `description`,
-// `type` and `required`.
+// ExternalServiceProviderDescriptor.json`, which the legacy runtime compiles
+// into a pydantic model at plugin load with
+// `remove_special_field_name_prefix=True`. That flag is why the schema declares
+// `_description`, `_type` and `_required` while every descriptor actually
+// published on the wire spells them `description`, `type` and `required`.
 //
 // Both spellings are accepted here. A provider that emits the schema literally
 // is valid by the published schema, and a model that only read the unprefixed
@@ -60,9 +60,9 @@ func (t ToolkitDescriptor) Describe() string {
 
 // TypeOverride answers the toolkit type name the provider asked for, if any.
 //
-// pylon reads `toolkit_metadata.type_override` and uses it INSTEAD of the
-// `<provider>_<toolkit>` composition. Nearly every descriptor published today
-// sets it, so a port that only composed the two names would rename every
+// The legacy runtime reads `toolkit_metadata.type_override` and uses it INSTEAD
+// of the `<provider>_<toolkit>` composition. Nearly every descriptor published
+// today sets it, so a port that only composed the two names would rename every
 // existing toolkit type.
 func (t ToolkitDescriptor) TypeOverride() string {
 	override, _ := t.ToolkitMetadata["type_override"].(string)
@@ -93,7 +93,7 @@ type ParameterDescriptor struct {
 
 // DeclaredType answers the parameter type in either spelling. An absent type is
 // reported as the empty string; the projection maps that to an object, which is
-// what pylon's own `else` arm does.
+// what the legacy runtime's own `else` arm does.
 func (p ParameterDescriptor) DeclaredType() string {
 	if p.Type != "" {
 		return p.Type
@@ -152,7 +152,7 @@ type ArgDescriptor struct {
 	LessThan    any    `json:"lt"`
 	LessEq      any    `json:"le"`
 	// HasDefault records that the document carried a `default` key, so a
-	// declared default of null, 0 or "" is kept rather than dropped. pylon
+	// declared default of null, 0 or "" is kept rather than dropped. Legacy
 	// tests `"default" in schema`, not truthiness, for exactly this reason.
 	HasDefault bool `json:"-"`
 }

@@ -55,8 +55,7 @@ func TestCurrentApplicationStartAdmitsAnUnattendedRunWithNoInput(t *testing.T) {
 		ExecutionID: "execution-1", CommandID: "command-1", Created: true,
 	}}
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

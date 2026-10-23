@@ -21,7 +21,7 @@ import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspa
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { createFakeAppIpc, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
-import { AppIpcProvider } from '@/widgets/desktop-shell';
+import { AppIpcProvider, InspectorScope } from '@/widgets/desktop-shell';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -48,7 +48,12 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc, app
     routeTree: rootRoute.addChildren([list, session, chat, createAgent]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
-  const pages = <RouterProvider router={router} />;
+  // The frame's inspector beside the pages (the thread's Changes, Approvals and Index tabs), without the rest of the frame.
+  const pages = (
+    <InspectorScope>
+      <RouterProvider router={router} />
+    </InspectorScope>
+  );
   const withIndex = indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>;
   render(
     <AppProviders>
@@ -93,10 +98,26 @@ beforeEach(() => {
         { id: '42', name: 'Marketing', suspended: false },
       ]),
     ),
+    // What the composer's model chip reads: the agent version's own model, and the project's chat models.
+    http.get(`${BASE}/elitea_core/version/prompt_lib/:project/:app/:version`, ({ params }) =>
+      HttpResponse.json({ id: Number(params['version']), name: 'base', llm_settings: { model_name: 'gpt-4o', pin_model: pinModel } }),
+    ),
+    http.get(`${BASE}/configurations/models/:project`, () =>
+      HttpResponse.json({
+        items: [
+          { name: 'gpt-4o', project_id: 42, supports_reasoning: false },
+          { name: 'gpt-5', project_id: 42, description: 'Thinks first', supports_reasoning: true },
+        ],
+        total: 2,
+      }),
+    ),
   );
 });
+/** The agent version pins its model (`llm_settings.pin_model`). */
+let pinModel = false;
 
 afterEach(() => {
+  pinModel = false;
   resetGeneratedClient();
   resetConfigForTests();
   delete globals['elitea_ui_config'];
@@ -242,6 +263,8 @@ describe('WorkspaceSessionPage', () => {
       http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/9`, () =>
         HttpResponse.json({ items: skills.map((s) => ({ ...s, project_id: '42', type: 'skill' })), total: skills.length, page: 1, page_size: skills.length, total_pages: 1 }),
       ),
+      // The project's own skills (the "/" menu's "Project skills"): none unless a test serves some.
+      http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, () => HttpResponse.json({ items: [], total: 0, page: 1, page_size: 100, total_pages: 0 })),
       http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
         HttpResponse.json({ rows: [{ id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false }], total: 1 }),
       ),
@@ -275,9 +298,9 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(indexIpc.calls.opened).toEqual(['w1']));
     await userEvent.click(within(session).getByRole('button', { name: 'More' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Index settings…' }));
-    // The inspector opens on its Index segment.
+    // The inspector opens on its Index tab.
     expect(await screen.findByTestId('index-panel')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Index' })).toBeChecked();
+    expect(screen.getByRole('tab', { name: 'Index' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('asks to bind a project first when the folder has none', async () => {
@@ -327,9 +350,13 @@ describe('WorkspaceSessionPage', () => {
 
     ipc.emit({ ...at(4), kind: 'approval_request', payload: { request_id: 'r1', tool: 'run_command', title: 'Run cargo build', detail: 'Build it', command: ['cargo', 'build'], reason: 'unlisted', can_remember: true } });
     const dialog = await screen.findByRole('dialog', { name: 'Run cargo build' });
+    // The inspector's Approvals chip counts it.
+    expect(screen.getByTestId('inspector-chip-attention-approvals')).toHaveTextContent('1');
+    expect(screen.getByRole('tab', { name: 'Approvals, 1 waiting', hidden: true })).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Allow once' }));
     expect(ipc.calls.approvals).toEqual([{ requestId: 'r1', decision: 'allow_once' }]);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByTestId('inspector-chip-attention-approvals')).toBeNull();
 
     ipc.emit({ ...at(5), kind: 'tool_result', payload: { call_id: 'c1', ok: true, summary: 'Finished dev profile', truncated: false } });
     ipc.emit({ ...at(6), kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: ['m1'], changed_files: 1 } });
@@ -442,6 +469,150 @@ describe('WorkspaceSessionPage', () => {
     // Reading order: the question first.
     expect(question.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
+  });
+
+  describe('fork', () => {
+    const FORK_UUID = '00000000-0000-4000-8000-000000000088';
+    const forkBodies: unknown[] = [];
+    const forkOfForkBodies: unknown[] = [];
+    function serveFork(status = 201): void {
+      forkBodies.length = 0;
+      forkOfForkBodies.length = 0;
+      server.use(
+        http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/88`, async ({ request }) => {
+          forkOfForkBodies.push(await request.json().catch(() => null));
+          return HttpResponse.json({ error: 'stop here' }, { status: 409 });
+        }),
+        http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/77`, async ({ request }) => {
+          forkBodies.push(await request.json().catch(() => null));
+          if (status !== 201) return HttpResponse.json({ error: 'fork_point_unsettled' }, { status });
+          return HttpResponse.json(
+            {
+              id: 88,
+              uuid: FORK_UUID,
+              name: 'Fix the build (fork)',
+              source: 'local_work',
+              created_at: '2026-10-20T00:00:00',
+              updated_at: '2026-10-20T00:00:00',
+              duration: -1,
+              message_groups_count: 2,
+              is_pinned: false,
+              is_archived: false,
+              forked_from: { conversation_id: 77, message_id: 2, message_uuid: 'a1' },
+              forked_messages: { q1: 'q1-copy', a1: 'a1-copy' },
+            },
+            { status: 201 },
+          );
+        }),
+        http.get(`${BASE}/elitea_core/messages/prompt_lib/42/88`, () => HttpResponse.json({ items: [], total: 0, page: 1, page_size: 100, total_pages: 1 })),
+      );
+    }
+    const answered = (turnId: string, question: string, answer: string): StoredTurn => {
+      const base = recorded(turnId);
+      return {
+        ...base,
+        events: base.events.map((event) =>
+          event.kind === 'done' ? { ...event, payload: { ...event.payload, message_ids: [question, answer] } } : event,
+        ),
+      };
+    };
+
+    it('forks from a recorded turn: the server at its answer, the host up to the turn, then opens the new thread in the folder', async () => {
+      serveProject();
+      serveFork();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1'), answered('t2', 'q2', 'a2')]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      const prompts = await screen.findAllByTestId('your-prompt');
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(prompts[0] as HTMLElement);
+
+      await waitFor(() => expect(forkBodies).toEqual([{ message_id: 'a1' }]));
+      const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+      expect(labels).toEqual(['Copy', '-', 'Fork from Here']);
+      await waitFor(() =>
+        expect(ipc.calls.forks).toEqual([
+          {
+            workspaceId: 'w1',
+            sourceConversationId: '77',
+            targetConversationId: '88',
+            targetConversationUuid: FORK_UUID,
+            upToTurnId: 't1',
+            messageIds: { q1: 'q1-copy', a1: 'a1-copy' },
+          },
+        ]),
+      );
+      // The new thread opens with the turns up to the fork point, and says the files were not rolled back.
+      expect(await screen.findByTestId('fork-notice')).toHaveTextContent('Files stay as they are now.');
+      expect(screen.getAllByTestId('history-turn')).toHaveLength(1);
+      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+      expect(screen.queryByText('Prompt of t2')).toBeNull();
+      expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
+      // The source thread is untouched.
+      expect(await ipc.threadHistory('w1', '77')).toHaveLength(2);
+
+      // A fork of the fork, at the copied turn, names the copy's answer: a message of the new conversation.
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu((await screen.findAllByTestId('your-prompt'))[0] as HTMLElement);
+      await waitFor(() => expect(forkOfForkBodies).toEqual([{ message_id: 'a1-copy' }]));
+    });
+
+    it('forks the whole thread from the ⋯ menu, and still opens it when the local copy fails', async () => {
+      serveProject();
+      serveFork();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1')]);
+      ipc.failNext('forkThreadHistory', 'storage', 'disk full');
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1?conversation=77');
+
+      await screen.findByText('Prompt of t1');
+      await user.click(screen.getByRole('button', { name: 'More' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
+
+      await waitFor(() => expect(forkBodies).toEqual([{}]));
+      expect(ipc.calls.forks[0]).toEqual({
+        workspaceId: 'w1',
+        sourceConversationId: '77',
+        targetConversationId: '88',
+        targetConversationUuid: FORK_UUID,
+        messageIds: { q1: 'q1-copy', a1: 'a1-copy' },
+      });
+      expect(await screen.findByTestId('fork-notice')).toHaveTextContent('the tool history on this computer was not copied');
+      expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
+    });
+
+    it('says why a fork point that is not settled cannot be forked, and stays in the thread', async () => {
+      serveProject();
+      serveFork(409);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1')]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      const prompt = await screen.findByTestId('your-prompt');
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(prompt);
+
+      expect(await screen.findByTestId('fork-error')).toHaveTextContent('a turn is still running or waits for an approval');
+      expect(ipc.calls.forks).toEqual([]);
+      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+    });
+
+    it('offers no fork point on a turn whose answer is not known', async () => {
+      serveProject();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [recorded('t1', { state: 'interrupted', events: recorded('t1').events.slice(0, 2) })]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      fireEvent.contextMenu(await screen.findByTestId('your-prompt'));
+      await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+      const fork = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'label' in item && item.label === 'Fork from Here');
+      expect(fork !== undefined && 'enabled' in fork ? fork.enabled : undefined).toBe(false);
+    });
   });
 
   it('points to the chat when neither this computer nor the server can say what came before', async () => {
@@ -593,6 +764,7 @@ describe('WorkspaceSessionPage', () => {
         earlier: [],
         busy: false,
         startError: null,
+        startErrorCode: null,
         start: () => Promise.resolve(started),
         prewarm: () => undefined,
         retryCommit: () => Promise.resolve(),
@@ -917,7 +1089,7 @@ describe('WorkspaceSessionPage', () => {
 
     // Six commands, a turn and a new thread in one test: the default 5 s is not
     // enough under the coverage shard's instrumentation (30 s below).
-    it('runs the "/" commands: plan, help, agent, new, clear and undo', async () => {
+    it('runs the "/" commands: plan, help, agent, new, clear, compact and undo', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       ipc.setChanges('turn-1', { files: [{ path: 'a.txt', status: 'modified', added: 1, removed: 1, diff: '' }] });
       const user = await ready(ipc);
@@ -925,7 +1097,7 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/help']);
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help']);
       await user.type(input, 'pl{Enter}');
       expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
       await waitFor(() => expect(input).toHaveValue(''));
@@ -942,14 +1114,33 @@ describe('WorkspaceSessionPage', () => {
       await user.type(input, '/undo{Enter}');
       expect(await screen.findByText('The last turn here changed no files.')).toBeInTheDocument();
 
+      // /compact: the next send asks the host to compact first.
+      await user.type(input, '/compact{Enter}');
+      expect(await screen.findByTestId('workspace-compact-next')).toBeInTheDocument();
+
       // A turn that changed a file: /undo asks the same confirmation as the card's button.
       await user.type(input, 'go{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.plan_mode).toBe(true);
+      expect(ipc.calls.started[0]?.compact).toBe(true);
+      await waitFor(() => expect(screen.queryByTestId('workspace-compact-next')).toBeNull());
       ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
       ipc.emit({ turn_id: 'turn-1', seq: 2, kind: 'text_delta', payload: { text: 'changed a.txt' } });
-      ipc.emit({ turn_id: 'turn-1', seq: 3, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
+      ipc.emit({
+        turn_id: 'turn-1',
+        seq: 3,
+        kind: 'usage',
+        payload: {
+          prompt_tokens: 124_000,
+          completion_tokens: 10,
+          total_tokens: 124_010,
+          context: { used_tokens: 124_000, window_tokens: 200_000, phase: 'compacted', compacted: true, compacted_at: '2026-10-21T10:15:00.000Z', window_fallback: false },
+        },
+      });
+      ipc.emit({ turn_id: 'turn-1', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
       expect(await screen.findByText('a.txt')).toBeInTheDocument();
+      // The composer's context meter shows the call's occupancy.
+      expect(await screen.findByTestId('context-meter')).toHaveTextContent('62% of 200K');
       await user.type(input, '/undo{Enter}');
       const dialog = await screen.findByRole('dialog', { name: 'Undo this turn?' });
       await user.click(within(dialog).getByRole('button', { name: 'Undo turn' }));
@@ -976,7 +1167,56 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');
+      expect(ipc.calls.started[1]?.compact).toBeUndefined();
     }, 30_000);
+
+    it('chooses the turn\'s model and effort from the chip, or with /model, and sends it with the turn', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+      const chip = await screen.findByTestId('model-chip');
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-4o'));
+
+      await user.click(chip);
+      await user.click(await screen.findByRole('menuitem', { name: /gpt-5/ }));
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-5'));
+      // gpt-5 supports reasoning: its effort is offered too.
+      await user.click(chip);
+      await user.click(await screen.findByTestId('model-effort-high'));
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-5 · High'));
+
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.model).toEqual({ name: 'gpt-5', reasoning_effort: 'high' });
+      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', model: { name: 'gpt-5', reasoning_effort: 'high', chosen: true, pinned: false } } });
+      ipc.emit({ turn_id: 'turn-1', seq: 2, kind: 'done', payload: { committed: false, conversation_id: '77', message_ids: [], changed_files: 0 } });
+      await waitFor(() => expect(screen.getByTestId('workspace-send-button')).toBeInTheDocument());
+
+      // `/model <name>` as the whole message sets it; nothing goes to the agent.
+      await user.type(input, '/model gpt-4o{Enter}');
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-4o'));
+      expect(chip).not.toHaveTextContent('High');
+      await waitFor(() => expect(input).toHaveValue(''));
+      expect(ipc.calls.started).toHaveLength(1);
+
+      // `/model` alone opens the chip's menu.
+      await user.type(input, '/mod{Enter}');
+      expect(await screen.findByRole('menuitem', { name: /gpt-5/ })).toBeInTheDocument();
+    });
+
+    it('offers no model choice when the agent pins its model, and /model says why', async () => {
+      pinModel = true;
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+      await waitFor(() => expect(screen.queryByTestId('model-chip')).toBeNull());
+      await user.type(input, '/model{Enter}');
+      expect(await screen.findByTestId('workspace-model-fixed')).toBeInTheDocument();
+      await user.type(input, '/model gpt-5{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      // Without a chip the text is a message like any other, sent without a model.
+      expect(ipc.calls.started[0]?.model).toBeUndefined();
+    });
 
     it('lists the agent\'s skills after the commands, filtered, and sends the one the message starts with', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
@@ -988,9 +1228,9 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(8));
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(10));
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
-        '/new', '/plan', '/undo', '/agent', '/clear', '/help', '/code-review', '/style',
+        '/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help', '/code-review', '/style',
       ]);
       expect(within(menu).getByText('Skills')).toBeInTheDocument();
       expect(within(menu).getByText('The house style')).toBeInTheDocument();
@@ -1012,6 +1252,127 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.prompt).toBe('/style tidy the README');
       expect(ipc.calls.started[0]?.skills).toEqual(['style']);
+    });
+
+    it('lists the custom commands by source after the host commands and sends the picked one as a command', async () => {
+      const ipc = createFakeWorkspaceIpc({
+        workspaces: [{ ...FOLDER, project_id: 42 }],
+        commands: [
+          { name: 'standup', description: 'My standup', argument_hint: null, source: 'user', path: 'standup.md', ignored: [] },
+          { name: 'review', description: 'Review the diff', argument_hint: '[files]', source: 'workspace', path: '.claude/commands/review.md', ignored: ['allowed-tools'] },
+        ],
+      });
+      const user = await ready(ipc, [
+        { id: '7', name: 'style', description: 'The house style' },
+        { id: '8', name: 'review', description: 'Hidden by the command' },
+      ]);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(11));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
+        '/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help', '/review', '/standup', '/style',
+      ]);
+      expect(within(menu).getByText('Commands in this workspace')).toBeInTheDocument();
+      expect(within(menu).getByText('Your commands')).toBeInTheDocument();
+      expect(within(menu).getByText('Review the diff · [files] · ignored: allowed-tools')).toBeInTheDocument();
+
+      await user.type(input, 'rev');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/review '));
+      await user.type(input, 'src/a.rs{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/review src/a.rs');
+      expect(ipc.calls.started[0]?.command).toEqual({ name: 'review', arguments: 'src/a.rs' });
+      expect(ipc.calls.started[0]?.skills).toEqual([]);
+    });
+
+    it('lists the custom commands and skills in /help', async () => {
+      const ipc = createFakeWorkspaceIpc({
+        workspaces: [{ ...FOLDER, project_id: 42 }],
+        commands: [{ name: 'standup', description: 'My standup', argument_hint: null, source: 'user', path: 'standup.md', ignored: [] }],
+      });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, '/');
+      await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(screen.getByTestId('workspace-command-menu')).getAllByRole('option')).toHaveLength(10));
+      await user.type(input, 'help');
+      await user.keyboard('{Enter}');
+      const help = await screen.findByTestId('workspace-help');
+      expect(help).toHaveTextContent('/standup — My standup (yours)');
+      expect(help).toHaveTextContent('/style — The house style');
+      expect(help).toHaveTextContent('/new — Start a new conversation');
+    });
+
+    it('offers the project\'s other skills in their own section and sends a picked one by id', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const listed: URL[] = [];
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, ({ request }) => {
+          listed.push(new URL(request.url));
+          return HttpResponse.json({
+            items: [
+              { id: '21', project_id: '42', name: 'deploy', description: 'Ship it', type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+              // The version carries it already: offered once, as the version's.
+              { id: '22', project_id: '42', name: 'Style', type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+            ],
+            total: 2,
+            page: 1,
+            page_size: 100,
+            total_pages: 1,
+          });
+        }),
+      );
+      const input = screen.getByTestId('chat-message-input');
+      // Read only once the composer is used.
+      expect(listed).toHaveLength(0);
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(10));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label')).slice(8)).toEqual(['/style', '/deploy']);
+      expect(within(menu).getByText('Project skills')).toBeInTheDocument();
+      expect(listed[0]?.searchParams.get('page_size')).toBe('100');
+
+      await user.type(input, 'dep');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/deploy '));
+      await user.type(input, 'the release{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/deploy the release');
+      expect(ipc.calls.started[0]?.skills).toEqual([{ source: 'project', id: '21' }]);
+    });
+
+    it('reads every page of the project\'s skills and labels them in /help', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const pages: string[] = [];
+      const row = (id: number, name: string) => ({ id: String(id), project_id: '42', name, type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' });
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, ({ request }) => {
+          const page = new URL(request.url).searchParams.get('page') ?? '1';
+          pages.push(page);
+          // A full first page, then a short second one holding the skill asked for.
+          // bulk-000 shares its id with the agent's "style": the /help rows are keyed by source too.
+          const items = page === '1' ? Array.from({ length: 100 }, (_, i) => row(i === 0 ? 7 : 100 + i, `bulk-${String(i).padStart(3, '0')}`)) : [row(300, 'last-page')];
+          return HttpResponse.json({ items, total: 101, page: Number(page), page_size: 100, total_pages: 2 });
+        }),
+      );
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, '/last');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/last-page']));
+      expect(pages).toEqual(['1', '2']);
+      // /help labels a project skill as the project's, beside the agent's of the same id.
+      await user.clear(input);
+      await user.type(input, '/help{Enter}');
+      const help = await screen.findByTestId('workspace-help');
+      expect(help).toHaveTextContent('/bulk-000 — A skill of this project');
+      expect(help).not.toHaveTextContent('A skill of this agent');
+      expect(help).toHaveTextContent('/style — The house style');
     });
 
     it('sends no skill when the message does not start with one', async () => {

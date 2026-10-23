@@ -2,79 +2,41 @@ use std::future::pending;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{HeaderValue, Request, Response, StatusCode, Version};
-use http_body_util::{BodyExt as _, Full};
-use tonic::body::Body;
+use tonic::{Code, Status};
 
+use super::input_content::content_fake::{ContextAnswer, ContextCall, ContextRoutes, Routes};
 use super::runtime_context::{
     ArtifactDeleteRequest, ArtifactListRequest, ArtifactReadRequest, ArtifactWriteRequest,
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextError, RuntimeContextRpc,
-    RuntimeContextTransportError,
+    RuntimeContextClient, RuntimeContextConfig, RuntimeContextError,
 };
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::protocol::control::test_runtime_context_authority;
 
 const TOKEN: &str = "ephemeral-fixture-token";
 
+/// Answers every call with one fixed reply and records what it was asked.
 struct FakeRpc {
-    captured: Arc<Mutex<Vec<CapturedRequest>>>,
-    response: Mutex<Option<Result<Response<Body>, RuntimeContextTransportError>>>,
+    captured: Arc<Mutex<Vec<ContextCall>>>,
+    reply: Mutex<Option<Result<Vec<u8>, Status>>>,
     hangs: bool,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct CapturedRequest {
-    method: String,
-    path: String,
-    claim: String,
-    fence: String,
-    body_length: usize,
-}
-
-#[async_trait]
-impl RuntimeContextRpc for FakeRpc {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        let (parts, body) = request.into_parts();
-        let body = body
-            .collect()
-            .await
-            .expect("empty runtime-context request body")
-            .to_bytes();
+#[tonic::async_trait]
+impl ContextRoutes for FakeRpc {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, Status> {
         self.captured
             .lock()
-            .expect("captured runtime-context requests")
-            .push(CapturedRequest {
-                method: parts.method.as_str().to_owned(),
-                path: parts.uri.path().to_owned(),
-                claim: parts
-                    .headers
-                    .get("x-elitea-claim-id")
-                    .expect("claim header")
-                    .to_str()
-                    .expect("claim text")
-                    .to_owned(),
-                fence: parts
-                    .headers
-                    .get("x-elitea-fence")
-                    .expect("fence header")
-                    .to_str()
-                    .expect("fence text")
-                    .to_owned(),
-                body_length: body.len(),
-            });
+            .expect("captured runtime-context calls")
+            .push(call);
         if self.hangs {
             return pending().await;
         }
-        self.response
+        self.reply
             .lock()
-            .expect("runtime-context response")
+            .expect("runtime-context reply")
             .take()
-            .expect("one runtime-context response")
+            .expect("one runtime-context reply")
+            .map(ContextAnswer::Json)
     }
 }
 
@@ -114,44 +76,60 @@ fn application_body(project_id: u64, application_id: u64, version_id: u64) -> St
     .to_string()
 }
 
-fn response(raw: &str, status: StatusCode, version: Version) -> Response<Body> {
-    Response::builder()
-        .status(status)
-        .version(version)
-        .header("content-type", "application/json; charset=utf-8")
-        .header("cache-control", "private, no-cache, no-store")
-        .header("pragma", "no-cache")
-        .header("content-length", raw.len())
-        .body(Body::new(Full::new(Bytes::copy_from_slice(raw.as_bytes()))))
-        .expect("runtime-context response")
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a fixture reply is the Result the fake service answers with"
+)]
+fn ok(raw: &str) -> Result<Vec<u8>, Status> {
+    Ok(raw.as_bytes().to_vec())
+}
+
+/// The call the default authority makes on `route`, as the service sees it.
+fn expected_call(route: &str, accept_fields: &[&str]) -> ContextCall {
+    ContextCall {
+        route: route.to_owned(),
+        execution_id: "execution-one".to_owned(),
+        generation: 2,
+        claim: "claim-1".to_owned(),
+        fence: vec![b'f'; 32],
+        body: Vec::new(),
+        accept_fields: accept_fields
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect(),
+    }
 }
 
 fn fake_client(
-    response: Result<Response<Body>, RuntimeContextTransportError>,
+    reply: Result<Vec<u8>, Status>,
     deadline: Duration,
     max_response_bytes: usize,
-) -> (RuntimeContextClient, Arc<Mutex<Vec<CapturedRequest>>>) {
+) -> (RuntimeContextClient, Arc<Mutex<Vec<ContextCall>>>) {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let client = RuntimeContextClient::with_rpc(
-        FakeRpc {
+        Routes(FakeRpc {
             captured: Arc::clone(&captured),
-            response: Mutex::new(Some(response)),
+            reply: Mutex::new(Some(reply)),
             hangs: false,
-        },
+        }),
         config(deadline, max_response_bytes),
     )
     .expect("runtime-context client");
     (client, captured)
 }
 
+fn idle_rpc() -> Routes<FakeRpc> {
+    Routes(FakeRpc {
+        captured: Arc::new(Mutex::new(Vec::new())),
+        reply: Mutex::new(None),
+        hangs: false,
+    })
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn authorized_claim_redeems_exact_python_and_go_route() {
+async fn authorized_claim_redeems_under_its_scope_and_claim_metadata() {
     let raw = body(17, TOKEN);
-    let (client, captured) = fake_client(
-        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
 
     let context = client
         .redeem(&test_runtime_context_authority())
@@ -161,26 +139,15 @@ async fn authorized_claim_redeems_exact_python_and_go_route() {
     assert_eq!(context.project_id(), 17);
     assert_eq!(context.token(), TOKEN);
     assert_eq!(
-        *captured.lock().expect("captured request"),
-        [CapturedRequest {
-            method: "POST".to_owned(),
-            path: "/executions/execution-one/generations/2/runtime-context/elitea-client-token"
-                .to_owned(),
-            claim: "claim-1".to_owned(),
-            fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
-            body_length: 0,
-        }]
+        *captured.lock().expect("captured call"),
+        [expected_call("elitea-client-token", &["workspace"])]
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn exact_child_identity_uses_the_claim_bound_platform_route_once() {
+async fn exact_child_identity_uses_the_claim_bound_platform_call_once() {
     let raw = application_body(17, 31, 41);
-    let (client, captured) = fake_client(
-        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
     let authority = test_runtime_context_authority();
 
     let resolved = client
@@ -199,15 +166,8 @@ async fn exact_child_identity_uses_the_claim_bound_platform_route_once() {
         Some("agent")
     );
     assert_eq!(
-        *captured.lock().expect("captured request"),
-        [CapturedRequest {
-            method: "POST".to_owned(),
-            path: "/executions/execution-one/generations/2/runtime-context/applications/31/versions/41"
-                .to_owned(),
-            claim: "claim-1".to_owned(),
-            fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
-            body_length: 0,
-        }]
+        *captured.lock().expect("captured call"),
+        [expected_call("applications/31/versions/41", &[])]
     );
 }
 
@@ -217,11 +177,7 @@ async fn saved_agent_fingerprint_uses_only_the_authenticated_top_level_digest() 
     raw["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
     raw["version_details"]["meta"] =
         serde_json::json!({"frozen_definition_sha256":"34".repeat(32)});
-    let (client, _) = fake_client(
-        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
     let loaded = client
         .load_application_version(&test_runtime_context_authority(), 31, 41)
         .await
@@ -238,11 +194,7 @@ async fn legacy_response_cannot_mint_fingerprint_from_editable_version_metadata(
     raw["version_details"]["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
     raw["version_details"]["meta"] =
         serde_json::json!({"frozen_definition_sha256":"34".repeat(32)});
-    let (client, _) = fake_client(
-        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
     let loaded = client
         .load_application_version(&test_runtime_context_authority(), 31, 41)
         .await
@@ -268,11 +220,7 @@ async fn present_saved_agent_fingerprint_requires_exact_lowercase_hex() {
         let mut raw: serde_json::Value =
             serde_json::from_str(&application_body(17, 31, 41)).unwrap();
         raw["frozen_definition_sha256"] = digest;
-        let (client, _) = fake_client(
-            Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
         assert!(matches!(
             client
                 .load_application_version(&test_runtime_context_authority(), 31, 41)
@@ -292,11 +240,7 @@ async fn saved_agent_fingerprint_preserves_opaque_digest_across_credential_redem
         raw["version_details"]["tools"] = serde_json::json!([
             {"settings":{"headers":{"Authorization":credential}}}
         ]);
-        let (client, _) = fake_client(
-            Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
         let loaded = client
             .load_application_version(&test_runtime_context_authority(), 31, 41)
             .await
@@ -312,11 +256,7 @@ async fn saved_agent_fingerprint_keeps_claim_bound_identity_validation() {
         let mut raw: serde_json::Value =
             serde_json::from_str(&application_body(project, application, version)).unwrap();
         raw["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
-        let (client, _) = fake_client(
-            Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
         assert!(matches!(
             client
                 .load_application_version(&test_runtime_context_authority(), 31, 41)
@@ -367,11 +307,7 @@ async fn saved_agent_fingerprint_accepts_the_main_public_definition_vector() {
         "version_details":details,
         "frozen_definition_sha256":fixture.frozen_definition_sha256,
     });
-    let (client, _) = fake_client(
-        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
     let loaded = client
         .load_application_version(
             &test_runtime_context_authority(),
@@ -397,11 +333,7 @@ async fn saved_agent_fingerprint_accepts_the_main_public_definition_vector() {
 async fn syntactically_valid_zero_definition_digest_remains_opaque() {
     let mut raw: serde_json::Value = serde_json::from_str(&application_body(17, 31, 41)).unwrap();
     raw["frozen_definition_sha256"] = serde_json::json!("0".repeat(64));
-    let (client, _) = fake_client(
-        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, _) = fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
     let loaded = client
         .load_application_version(&test_runtime_context_authority(), 31, 41)
         .await
@@ -420,18 +352,14 @@ async fn child_identity_and_materialized_response_are_exact_and_bounded() {
     let authority = test_runtime_context_authority();
     let raw = application_body(17, 31, 41);
     for (application_id, version_id) in [(0, 41), (31, 0)] {
-        let (client, captured) = fake_client(
-            Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
         assert!(
             client
                 .load_application_version(&authority, application_id, version_id)
                 .await
                 .is_err()
         );
-        assert!(captured.lock().expect("captured request").is_empty());
+        assert!(captured.lock().expect("captured call").is_empty());
     }
 
     for raw in [
@@ -440,11 +368,7 @@ async fn child_identity_and_materialized_response_are_exact_and_bounded() {
         application_body(17, 31, 42),
         r#"{"schema_version":"elitea.runtime.application-version.v1","project_id":17,"application_id":31,"version_id":41,"version_details":{},"extra":true}"#.to_owned(),
     ] {
-        let (client, _) = fake_client(
-            Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, _) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
         assert!(
             client
                 .load_application_version(&authority, 31, 41)
@@ -456,17 +380,17 @@ async fn child_identity_and_materialized_response_are_exact_and_bounded() {
 
 /// A deleted child version must fail the turn once, not look transient.
 ///
-/// Main answers 404 for an agent/version pair the claim was allowed to read
-/// but that no longer exists, and keeps it distinct from the 403 it uses for a
-/// rejected claim (`internal/infra/storage/content_server.go`). Collapsing 404
-/// into `dependency_unavailable` made a DELETED reference retryable, so a
-/// parent whose child version was removed spent its whole retry budget on a
-/// failure whose reason was already known.
+/// Main answers `NotFound` for an agent/version pair the claim was allowed to
+/// read but that no longer exists, and keeps it distinct from the
+/// `PermissionDenied` it uses for a rejected claim
+/// (`internal/infra/storage/content_server.go`). Collapsing it into
+/// `dependency_unavailable` made a DELETED reference retryable, so a parent
+/// whose child version was removed spent its whole retry budget on a failure
+/// whose reason was already known.
 #[tokio::test(flavor = "current_thread")]
 async fn a_deleted_nested_application_version_is_terminal_and_not_retryable() {
-    let raw = application_body(17, 31, 41);
     let (client, _) = fake_client(
-        Ok(response(&raw, StatusCode::NOT_FOUND, Version::HTTP_2)),
+        Err(Status::not_found("deleted")),
         Duration::from_secs(1),
         32 * 1_024,
     );
@@ -486,70 +410,64 @@ async fn a_deleted_nested_application_version_is_terminal_and_not_retryable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn status_protocol_cache_and_length_fail_closed() {
-    let raw = body(17, TOKEN);
-    for (candidate, expected_code, retryable) in [
+async fn refusals_map_to_the_variants_the_http_statuses_produced() {
+    for (code, expected_code, retryable) in [
         (
-            response(&raw, StatusCode::OK, Version::HTTP_11),
-            "runtime_context.dependency_unavailable",
-            true,
-        ),
-        (
-            response(&raw, StatusCode::FOUND, Version::HTTP_2),
-            "runtime_context.dependency_unavailable",
-            true,
-        ),
-        (
-            response(&raw, StatusCode::UNAUTHORIZED, Version::HTTP_2),
+            Code::Unauthenticated,
             "runtime_context.authorization_failed",
             false,
         ),
         (
-            response(&raw, StatusCode::NOT_FOUND, Version::HTTP_2),
-            "runtime_context.not_found",
+            Code::PermissionDenied,
+            "runtime_context.authorization_failed",
             false,
         ),
+        (Code::NotFound, "runtime_context.not_found", false),
+        (Code::Unimplemented, "runtime_context.not_found", false),
         (
-            response(&raw, StatusCode::SERVICE_UNAVAILABLE, Version::HTTP_2),
+            Code::FailedPrecondition,
             "runtime_context.dependency_unavailable",
             true,
         ),
+        (
+            Code::Aborted,
+            "runtime_context.dependency_unavailable",
+            true,
+        ),
+        (
+            Code::Internal,
+            "runtime_context.dependency_unavailable",
+            true,
+        ),
+        (
+            Code::Unavailable,
+            "runtime_context.dependency_unavailable",
+            true,
+        ),
+        (Code::DeadlineExceeded, "runtime_context.timeout", true),
     ] {
-        let (client, _) = fake_client(Ok(candidate), Duration::from_secs(1), 32 * 1_024);
+        let (client, _) = fake_client(
+            Err(Status::new(code, "refused")),
+            Duration::from_secs(1),
+            32 * 1_024,
+        );
         let Err(error) = client.redeem(&test_runtime_context_authority()).await else {
-            panic!("invalid runtime-context response must fail")
+            panic!("a refused runtime context must fail")
         };
-        assert_eq!(error.code(), expected_code);
-        assert_eq!(error.retryable(), retryable);
+        assert_eq!(error.code(), expected_code, "{code:?}");
+        assert_eq!(error.retryable(), retryable, "{code:?}");
     }
+}
 
-    let mut wrong_cache = response(&raw, StatusCode::OK, Version::HTTP_2);
-    wrong_cache.headers_mut().insert(
-        "cache-control",
-        HeaderValue::from_static("private, no-store"),
-    );
-    let (client, _) = fake_client(Ok(wrong_cache), Duration::from_secs(1), 32 * 1_024);
+#[tokio::test(flavor = "current_thread")]
+async fn response_documents_are_bounded() {
+    let raw = body(17, TOKEN);
+    let (client, _) = fake_client(ok(&raw), Duration::from_secs(1), raw.len() - 1);
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
-        Err(RuntimeContextError::InvalidResponse(_))
+        Err(RuntimeContextError::ResourceExhausted(_))
     ));
-
-    let mut wrong_length = response(&raw, StatusCode::OK, Version::HTTP_2);
-    wrong_length.headers_mut().insert(
-        "content-length",
-        HeaderValue::from_str(&(raw.len() + 1).to_string()).expect("content length"),
-    );
-    let (client, _) = fake_client(Ok(wrong_length), Duration::from_secs(1), 32 * 1_024);
-    assert!(matches!(
-        client.redeem(&test_runtime_context_authority()).await,
-        Err(RuntimeContextError::InvalidResponse(_))
-    ));
-
-    let (client, _) = fake_client(
-        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        raw.len() - 1,
-    );
+    let (client, _) = fake_client(ok(""), Duration::from_secs(1), 32 * 1_024);
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
         Err(RuntimeContextError::ResourceExhausted(_))
@@ -565,11 +483,7 @@ async fn unique_schema_project_and_secret_shape_are_authoritative() {
         body(17, "bad\ncredential"),
         r#"{"schema_version":"wrong","project_id":17,"token":"fixture"}"#.to_owned(),
     ] {
-        let (client, _) = fake_client(
-            Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, _) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
         assert!(
             client
                 .redeem(&test_runtime_context_authority())
@@ -581,14 +495,13 @@ async fn unique_schema_project_and_secret_shape_are_authoritative() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn timeout_transport_and_errors_are_bounded_and_redacted() {
-    let captured = Arc::new(Mutex::new(Vec::new()));
     let client = RuntimeContextClient::with_rpc(
-        FakeRpc {
-            captured,
-            response: Mutex::new(None),
+        Routes(FakeRpc {
+            captured: Arc::new(Mutex::new(Vec::new())),
+            reply: Mutex::new(None),
             hangs: true,
-        },
-        config(Duration::from_millis(1), 32 * 1_024),
+        }),
+        config(Duration::from_millis(20), 32 * 1_024),
     )
     .expect("runtime-context client");
     let Err(error) = client.redeem(&test_runtime_context_authority()).await else {
@@ -598,7 +511,7 @@ async fn timeout_transport_and_errors_are_bounded_and_redacted() {
     assert!(error.retryable());
 
     let (client, _) = fake_client(
-        Err(RuntimeContextTransportError::Unavailable),
+        Err(Status::unavailable(format!("{TOKEN} ZmZm"))),
         Duration::from_secs(1),
         32 * 1_024,
     );
@@ -621,11 +534,7 @@ fn configuration_bounds_and_origin_canonicalization_match_worker_policy() {
         "https://content.internal?query=1",
     ] {
         let result = RuntimeContextClient::with_rpc(
-            FakeRpc {
-                captured: Arc::new(Mutex::new(Vec::new())),
-                response: Mutex::new(None),
-                hangs: false,
-            },
+            idle_rpc(),
             RuntimeContextConfig {
                 origin: origin.to_owned(),
                 deadline: Duration::from_secs(1),
@@ -647,14 +556,7 @@ fn configuration_bounds_and_origin_canonicalization_match_worker_policy() {
         (Duration::from_secs(1), 0),
         (Duration::from_secs(1), 32 * 1_024 + 1),
     ] {
-        let result = RuntimeContextClient::with_rpc(
-            FakeRpc {
-                captured: Arc::new(Mutex::new(Vec::new())),
-                response: Mutex::new(None),
-                hangs: false,
-            },
-            config(deadline, maximum),
-        );
+        let result = RuntimeContextClient::with_rpc(idle_rpc(), config(deadline, maximum));
         assert!(matches!(
             result,
             Err(RuntimeContextError::InvalidConfiguration(_))
@@ -696,7 +598,7 @@ fn runtime_context_failures_preserve_terminal_taxonomy() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The `artifact` toolkit family's four routes (#906)
+// The `artifact` toolkit family's four calls (#906)
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn artifact_read_body(project_id: u64, content: &str, over_limit: bool) -> String {
@@ -716,11 +618,11 @@ fn artifact_read_body(project_id: u64, content: &str, over_limit: bool) -> Strin
     .to_string()
 }
 
-/// Each of the four operations is its own path segment under one claim
-/// contract, and each carries a BODY — the bucket, the key and the document
-/// do not belong in a path.
+/// Each of the four operations is its own RPC under one claim contract, and
+/// each carries a DOCUMENT — the bucket, the key and the content travel in
+/// it, not beside it.
 #[tokio::test(flavor = "current_thread")]
-async fn artifact_operations_use_one_claim_bound_route_each() {
+async fn artifact_operations_use_one_claim_bound_call_each() {
     let raw = serde_json::json!({
         "schema_version": "elitea.runtime.artifact-list.v1",
         "project_id": 17,
@@ -734,11 +636,7 @@ async fn artifact_operations_use_one_claim_bound_route_each() {
         "truncated": false,
     })
     .to_string();
-    let (client, captured) = fake_client(
-        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
 
     let listed = client
         .list_artifacts(
@@ -756,26 +654,21 @@ async fn artifact_operations_use_one_claim_bound_route_each() {
 
     assert_eq!(listed.files.len(), 1);
     assert_eq!(listed.files[0].name, "reports/one.txt");
-    let captured = captured.lock().expect("captured request");
-    assert_eq!(
-        captured[0].path,
-        "/executions/execution-one/generations/2/runtime-context/artifacts/list"
-    );
+    let captured = captured.lock().expect("captured call");
+    assert_eq!(captured[0].route, "artifacts/list");
     assert_eq!(captured[0].claim, "claim-1");
-    assert!(captured[0].body_length > 0);
+    let request: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert_eq!(request["bucket"], "agent-artifacts");
+    assert_eq!(request["prefix"], "reports/");
 }
 
-/// A file over the agent-path cap comes back as a MEASUREMENT with a 200, and
+/// A file over the agent-path cap comes back as a MEASUREMENT on success, and
 /// it must carry no content: a refusal that returned the file anyway would
 /// have capped nothing.
 #[tokio::test(flavor = "current_thread")]
 async fn an_over_cap_artifact_read_returns_the_measurement_without_content() {
     let raw = artifact_read_body(17, "", true);
-    let (client, _captured) = fake_client(
-        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
 
     let outcome = client
         .read_artifact(
@@ -789,7 +682,7 @@ async fn an_over_cap_artifact_read_returns_the_measurement_without_content() {
         .expect("claim-bound artifact read");
 
     assert!(outcome.over_limit);
-    assert!(outcome.content.is_empty());
+    assert_eq!(outcome.content, "");
     assert_eq!(outcome.max_chars, 200_000);
     assert_eq!(outcome.char_length, 300_000);
 }
@@ -802,11 +695,7 @@ async fn an_over_cap_artifact_read_returns_the_measurement_without_content() {
 async fn an_artifact_read_that_contradicts_its_own_verdict_is_refused() {
     for (content, over_limit) in [("", false), ("data", true)] {
         let raw = artifact_read_body(17, content, over_limit);
-        let (client, _captured) = fake_client(
-            Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-            Duration::from_secs(1),
-            32 * 1_024,
-        );
+        let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
         let Err(error) = client
             .read_artifact(
                 &test_runtime_context_authority(),
@@ -824,7 +713,7 @@ async fn an_artifact_read_that_contradicts_its_own_verdict_is_refused() {
 }
 
 /// A response naming another project is an authorization failure, not a
-/// decoding quirk: two of these four routes CHANGE a bucket, so a silent
+/// decoding quirk: two of these four calls CHANGE a bucket, so a silent
 /// mismatch would be a write into a tenant this turn never had.
 #[tokio::test(flavor = "current_thread")]
 async fn an_artifact_write_for_another_project_is_refused() {
@@ -837,11 +726,7 @@ async fn an_artifact_write_for_another_project_is_refused() {
         "byte_length": 4,
     })
     .to_string();
-    let (client, _captured) = fake_client(
-        Ok(response(&raw, StatusCode::OK, Version::HTTP_2)),
-        Duration::from_secs(1),
-        32 * 1_024,
-    );
+    let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
 
     let Err(error) = client
         .write_artifact(
@@ -859,16 +744,13 @@ async fn an_artifact_write_for_another_project_is_refused() {
     assert_eq!(error.code(), "runtime_context.authorization_failed");
 }
 
-/// 422 is the DOCUMENT's refusal and it is terminal, never retryable: the tool
-/// tells the model to write less instead of sending the identical body again.
+/// `FailedPrecondition` is the DOCUMENT's refusal and it is terminal, never
+/// retryable: the tool tells the model to write less instead of sending the
+/// identical body again.
 #[tokio::test(flavor = "current_thread")]
 async fn a_refused_artifact_document_is_terminal() {
     let (client, _captured) = fake_client(
-        Ok(response(
-            "{}",
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Version::HTTP_2,
-        )),
+        Err(Status::failed_precondition("too large")),
         Duration::from_secs(1),
         32 * 1_024,
     );

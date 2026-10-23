@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package elitea.subapp.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1";
+
+// ProviderService is the provider SPI of a sub-application host (ADR-0023):
+// the toolkit tools a sub-application (DeepWiki, Inventory) offers users,
+// reached by elitea-main's facade. It replaced the SPI's HTTP surface
+// (/descriptor, /health, /ready, /slots, /tools/{t}/{tool}/invoke, the poll
+// and the cancel) in issue #1359: internal service-to-service traffic is
+// gRPC over mutual TLS, never HTTP.
+//
+// TRANSPORT AND AUTHORISATION. It is served on the host's platform gRPC
+// listener, beside PlatformOperations, behind the same TLS configuration
+// (RequireAndVerifyClientCert) and the same caller allowlist
+// (`<PREFIX>PLATFORM_CLIENTS`): a call whose verified client certificate names
+// no allowed identity is refused before it reaches a handler. On top of
+// that, every call except Health carries the caller's signed identity in
+// metadata — the X-Elitea-* identity plane of ADR-0022 decision 5, lower-cased:
+//
+//   x-elitea-project-id, x-elitea-user-id, x-elitea-tenant-id,
+//   x-elitea-execution-id, x-elitea-identity-signature
+//
+// The signature is the same HMAC over the same canonical string the HTTP hop
+// carried. The host verifies it and hands the runner the identity it
+// vouches for; a call with a missing or invalid signature is UNAUTHENTICATED.
+//
+// BODIES ARE THE FROZEN JSON. The descriptor, the slots report, the accepted
+// invocation and every poll body are documents the browser reads through the
+// facade, pinned byte for byte by conformance/provider/fixtures. They travel
+// here as the JSON bytes the HTTP surface wrote, so the facade can answer
+// the browser with exactly what it answered before.
+service ProviderService {
+  // Describe answers the provider's descriptor document.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // Health is the provider's health and readiness. It needs no identity
+  // signature (the registrar probes it), but it does need an allowed client
+  // certificate.
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  // Slots is the provider's capacity report.
+  rpc Slots(SlotsRequest) returns (SlotsResponse);
+
+  // Invoke accepts one tool call. The first event is always the acceptance
+  // (status "Started" and the invocation id); the invocation then runs
+  // whether or not the caller keeps the stream: closing the stream does NOT
+  // cancel it (Cancel does). With `follow` false the stream ends after the
+  // acceptance, and the caller reads the invocation with GetInvocation —
+  // what the facade does, because the browser polls it through the facade
+  // and a poll may land on any elitea-main replica. With `follow` true the
+  // stream carries every poll body as the invocation produces events and
+  // ends with the terminal one.
+  //
+  // An unknown toolkit or tool is accepted and terminates as
+  // resource_not_found, as the HTTP surface did (the fixtures record it).
+  // A request that is not a JSON object is INVALID_ARGUMENT.
+  rpc Invoke(InvokeRequest) returns (stream InvokeEvent);
+
+  // GetInvocation reads one invocation: its poll body, with the events that
+  // accumulated since the previous read (custom_events are read once). Any
+  // replica of the host answers it from the shared invocation store.
+  // NOT_FOUND for an invocation the store does not know.
+  rpc GetInvocation(GetInvocationRequest) returns (GetInvocationResponse);
+
+  // Cancel requests a cooperative stop. It is recorded in the shared store
+  // and fanned out to every replica (NATS, `elitea.subapp.<app>.cancel.<id>`),
+  // so the replica running the invocation stops it wherever the call lands.
+  // NOT_FOUND for an invocation the store does not know.
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  // The descriptor, as the application supplies it (not HTML-escaped).
+  bytes descriptor_json = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  // "UP" while the process serves.
+  string status = 1;
+  // The health document (providerVersion, uptime, plugin, configuration,
+  // extra_info) as JSON.
+  bytes health_json = 2;
+  // Readiness: true when every check passed.
+  bool ready = 3;
+  // The readiness checks by name.
+  map<string, bool> checks = 4;
+}
+
+message SlotsRequest {}
+
+message SlotsResponse {
+  // The capacity report as JSON (available, total, active, can_start, …).
+  bytes slots_json = 1;
+}
+
+message InvokeRequest {
+  // The toolkit and the tool, as the facade's route names them.
+  string toolkit = 1;
+  string tool = 2;
+  // The request body: a JSON object (configuration + parameters).
+  bytes request_json = 3;
+  // Stream the invocation to its end rather than only its acceptance.
+  bool follow = 4;
+}
+
+message InvokeEvent {
+  string invocation_id = 1;
+  // The wire status of this body: Started, InProgress, Completed, Error.
+  string status = 2;
+  // The body as JSON: the acceptance first, then poll bodies.
+  bytes body_json = 3;
+  // True on the last event of a followed invocation.
+  bool terminal = 4;
+}
+
+message GetInvocationRequest {
+  string toolkit = 1;
+  string tool = 2;
+  string invocation_id = 3;
+}
+
+message GetInvocationResponse {
+  // The poll body as JSON.
+  bytes body_json = 1;
+  // True when the invocation has ended.
+  bool terminal = 2;
+}
+
+message CancelRequest {
+  string toolkit = 1;
+  string tool = 2;
+  string invocation_id = 3;
+}
+
+message CancelResponse {}

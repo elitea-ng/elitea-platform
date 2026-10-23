@@ -17,7 +17,7 @@ import (
 
 // The public catalogue list — `GET /elitea_core/public_applications/prompt_lib`.
 //
-// The pylon route this replaces (legacy/plugins/elitea_core/api/v2/
+// The legacy route this replaces (legacy/plugins/elitea_core/api/v2/
 // public_applications.py, which calls utils/application_utils.py's
 // list_applications_api) accepts a search string, a status list, an agent-type
 // filter, a sort key with a direction, and limit/offset pagination, and answers
@@ -97,7 +97,7 @@ func parsePublicApplicationsFilter(values url.Values) (publicApplicationsFilter,
 	}
 
 	if f.SortBy == "" {
-		// The pylon default. Rows created in one batch share a created_at, so
+		// The legacy default. Rows created in one batch share a created_at, so
 		// the id tiebreak below keeps the order stable and keeps the answer
 		// identical to the old hard `ORDER BY a.id DESC` for such a batch.
 		f.SortBy = "created_at"
@@ -167,7 +167,7 @@ func parsePublicApplicationsFilter(values url.Values) (publicApplicationsFilter,
 
 // parseBoolParam reads the truthy spellings a browser query string carries.
 // Anything else — including the empty string — is false, which matches the
-// pylon default of `request.args.get('my_liked', False)`.
+// legacy default of `request.args.get('my_liked', False)`.
 func parseBoolParam(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "on":
@@ -206,8 +206,8 @@ func publicApplicationsWhere(schema string, f publicApplicationsFilter, userID i
 	}
 
 	if f.Query != "" {
-		// ILIKE over name and description, the pair pylon searches. The pattern
-		// is a bind parameter, so a caller's % or _ only affects its own match.
+		// ILIKE over name and description, the pair the legacy runtime searches. The
+		// pattern is a bind parameter, so a caller's % or _ only affects its own match.
 		pattern := args.add("%" + f.Query + "%")
 		fmt.Fprintf(&b, ` AND (a.name ILIKE %s OR COALESCE(a.description, '') ILIKE %s)`, pattern, pattern)
 	}

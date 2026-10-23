@@ -8,14 +8,11 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 
@@ -269,26 +266,13 @@ func (s *Server) RedialNATS(ctx context.Context) (NATSClient, error) {
 	return nc, nil
 }
 
-// ListenAndServe starts the HTTP server. When TLSCertFile and TLSKeyFile are
-// both configured it switches to TLS; if TLSCAFile is also set the server
-// requires and verifies client certificates (mTLS). Falls back to plain HTTP
-// when the cert/key paths are unset (local/dev).
-//
-// FIX #10: wire GATEWAY_TLS_CERT_FILE / GATEWAY_TLS_KEY_FILE / GATEWAY_TLS_CA_FILE.
+// ListenAndServe starts the HTTP server. It serves /healthz, /readyz and
+// /metrics only, for the kubelet and the scraper, in plain HTTP (#1359): the
+// /llm surface and everything a caller can act on is served by the
+// GatewayService gRPC listener, which always requires mutual TLS. The
+// GATEWAY_TLS_* material belongs to that listener.
 func (s *Server) ListenAndServe() error {
-	s.logger.Info("gateway listening", "addr", s.cfg.HTTPAddr)
-	if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
-		tlsCfg, err := buildTLSConfig(s.cfg)
-		if err != nil {
-			return fmt.Errorf("gateway tls config: %w", err)
-		}
-		s.http.TLSConfig = tlsCfg
-		s.logger.Info("gateway TLS enabled", "cert", s.cfg.TLSCertFile, "mtls", s.cfg.TLSCAFile != "")
-		if err := s.http.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	}
+	s.logger.Info("gateway health and metrics listening", "addr", s.cfg.HTTPAddr)
 	if err := s.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -306,47 +290,6 @@ func redactURL(raw string) string {
 	}
 	u.User = nil
 	return u.String()
-}
-
-// buildTLSConfig builds a *tls.Config for the server. When cfg.TLSCAFile is
-// set the server requires and verifies client certificates (mTLS).
-func buildTLSConfig(cfg config.Config) (*tls.Config, error) {
-	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		// Advertise http/1.1 ONLY. This is a correctness requirement of the
-		// realtime WebSocket route (/llm/v1/realtime), not a tuning choice.
-		//
-		// ListenAndServeTLS adds "h2" to NextProtos when the field is empty, so
-		// the listener negotiated HTTP/2 with any client that offered it. A
-		// WebSocket upgrade needs the raw TCP connection, and net/http gets it
-		// by hijacking the ResponseWriter — but an HTTP/2 ResponseWriter serves
-		// ONE STREAM of a multiplexed connection, so it implements neither
-		// http.Hijacker nor an Unwrap chain that reaches one. RFC 8441
-		// (extended CONNECT) is the HTTP/2 way to carry WebSocket, and neither
-		// net/http nor this gateway implements it.
-		//
-		// Without this line the failure is an opaque "not a hijacker" error
-		// raised deep inside the accept, AFTER the caller believed the
-		// handshake had started. With it, an h2-only client fails at ALPN with
-		// a protocol-negotiation error naming the cause.
-		//
-		// Production survives today only because elitea-main's proxy transport
-		// pins http/1.1; a direct in-cluster h2 client does not.
-		NextProtos: []string{"http/1.1"},
-	}
-	if cfg.TLSCAFile != "" {
-		caBytes, err := os.ReadFile(cfg.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read CA file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caBytes) {
-			return nil, fmt.Errorf("no valid certificates found in CA file %q", cfg.TLSCAFile)
-		}
-		tlsCfg.ClientCAs = pool
-		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
-	}
-	return tlsCfg, nil
 }
 
 // Shutdown drains in-flight streams and releases every resource, HTTP first

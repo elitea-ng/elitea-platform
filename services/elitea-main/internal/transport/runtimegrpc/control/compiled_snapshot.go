@@ -49,8 +49,8 @@ func (s *Server) AuthorizeRustCompiledSnapshot(ctx context.Context, r *runtimev1
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "The execution fence is malformed.")
 	}
-	desired, err := s.claims.ObserveDesiredState(ctx, fence)
-	if err != nil || desired != domain.DesiredRunning {
+	observed, err := s.claims.ObserveDesiredState(ctx, fence)
+	if err != nil || observed.DesiredState != domain.DesiredRunning {
 		return nil, status.Error(codes.PermissionDenied, "The active execution does not permit compiled snapshot work.")
 	}
 	command, err := s.verifier.Verify(ctx, r.SignedCommand)

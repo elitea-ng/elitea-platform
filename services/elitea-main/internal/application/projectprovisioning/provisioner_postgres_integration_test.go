@@ -27,11 +27,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -542,9 +543,9 @@ func TestProvisionRejectsAnEmptyNameAndAnUnknownOwner(t *testing.T) {
 }
 
 // TestProvisionRefusesAnUnknownAdministrator pins the deliberate narrowing
-// documented on createProjectAdmin: pylon CREATES an account for an unknown
-// address; this does not, and it must fail loudly rather than answer 201 with an
-// administrator who has no access.
+// documented on createProjectAdmin: the legacy runtime CREATES an account for
+// an unknown address; this does not, and it must fail loudly rather than answer
+// 201 with an administrator who has no access.
 func TestProvisionRefusesAnUnknownAdministrator(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -662,7 +663,7 @@ func TestDeprovisionRemovesEverythingProvisionCreated(t *testing.T) {
 // with it — removeProjectPermissions deletes auth_core__project_role, and
 // auth_core__project_user_role cascades from the role — so it must take every
 // binding too. elitea_identity.token_project_binding.project_id carries no
-// foreign key, because centry.project is pylon-owned, so nothing revokes these
+// foreign key, because centry.project is legacy-owned, so nothing revokes these
 // rows for us.
 //
 // The surviving binding is the half that makes this test discriminate. A

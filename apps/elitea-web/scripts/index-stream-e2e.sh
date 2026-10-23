@@ -55,9 +55,10 @@ echo "→ Bringing up ${PROJECT} on :${PORT}…"
 # journey is that the backend serves REAL argument schemas, and a stale
 # elitea-main image serves the `{"type":"object"}` placeholder — which reads as
 # "the form is broken" rather than "the harness ran last week's binary".
-# STANDALONE_SKIP_BUILD=1: the continuous-integration job already built and
-# loaded every image (.github/actions/build-stack-images) and asserted each is
-# present; see the same guard in chat-stream-e2e.sh.
+# STANDALONE_SKIP_BUILD=1: the continuous-integration job already put every
+# image in the local store (pulled by digest through
+# .github/actions/pull-stack-images, or built in-job on a fork pull request)
+# and asserted each is present; see the same guard in chat-stream-e2e.sh.
 if [ "${STANDALONE_SKIP_BUILD:-0}" = "1" ]; then
   echo "→ STANDALONE_SKIP_BUILD=1: images were built and asserted by the caller; not rebuilding"
 else

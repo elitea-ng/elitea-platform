@@ -12,17 +12,17 @@
  * ## What this dialog does NOT let the caller choose
  *
  * The OWNER and the granted ROLE. Both are server-side facts: the owner is the
- * authenticated caller (`g.auth.id` in pylon, the session principal here), and
- * the role is hardcoded `admin`. Neither is a body field, and offering either
- * here would be a privilege decision made in a form.
+ * authenticated caller (`g.auth.id` in the legacy runtime, the session
+ * principal here), and the role is hardcoded `admin`. Neither is a body field,
+ * and offering either here would be a privilege decision made in a form.
  *
  * ## Why a failure is rendered as a LIST
  *
- * Provisioning is nine steps. When one fails the server compensates the rest
- * and answers with both lists, so "could not create the project" is never the
- * whole answer — `step project_pgvector did not complete` is. The steps that
- * SUCCEEDED are dropped from the report (nine green lines bury the one red
- * one); the ones that never ran are kept, because a step that was deliberately
+ * Provisioning is a sequence of steps. When one fails the server compensates
+ * the rest and answers with both lists, so "could not create the project" is
+ * never the whole answer — `step artifact_buckets did not complete` is. The
+ * steps that SUCCEEDED are dropped from the report (a column of green lines
+ * buries the one red one); the ones that never ran are kept, because a step that was deliberately
  * held back is the thing an operator has to act on.
  */
 import { useCallback, useEffect, useState } from 'react';

@@ -39,7 +39,6 @@ use http_body_util::{BodyExt as _, Full};
 use tokio::time::timeout;
 use tonic::body::Body;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
-use tower::ServiceExt as _;
 use tracing::Instrument as _;
 use zeroize::Zeroizing;
 
@@ -49,6 +48,11 @@ use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
 const MODEL_ROUTE: &str = elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 const MAX_ORIGIN_BYTES: usize = 2_048;
+/// One gRPC message the platform listener receives (its own cap).
+const MAX_MODEL_MESSAGE_BYTES: usize = 16 * 1_024 * 1_024;
+/// One gRPC message the platform listener sends: up to the gateway's 64 MiB
+/// unary cap plus its head (elitea-main runtimegrpc.PlatformMaxSendMessageBytes).
+const MAX_MODEL_ANSWER_BYTES: usize = 65 * 1_024 * 1_024;
 const MAX_MODEL_NAME_BYTES: usize = 256;
 const MAX_INSTRUCTION_BYTES: usize = crate::agents::request::MAX_AGENT_INSTRUCTION_BYTES;
 const MAX_REQUEST_BYTES: usize = 8 * 1_024 * 1_024;
@@ -212,28 +216,50 @@ pub(crate) trait ModelGatewayTransport: Send + Sync {
     ) -> Result<Response<Body>, ModelGatewayTransportError>;
 }
 
+/// The production transport: each `/llm/v1` request is one
+/// `elitea.llm.v1.ModelService` call on the platform listener (#1359 U2).
+/// The facades still build and read HTTP-shaped messages, because the
+/// service carries the provider-native bytes and answers what the HTTP edge
+/// answered (a refusal included), so their bounded parsing is unchanged. No
+/// HTTP request leaves the worker.
 #[derive(Clone)]
-struct TonicModelGatewayTransport {
-    channel: Channel,
+struct GrpcModelGatewayTransport {
+    client: elitea_model_rpc::ModelServiceClient<Channel>,
+    /// The largest request body the facades build (their own cap).
+    max_request_bytes: usize,
 }
 
 #[async_trait]
-impl ModelGatewayTransport for TonicModelGatewayTransport {
+impl ModelGatewayTransport for GrpcModelGatewayTransport {
     async fn post(
         &self,
         request: Request<Body>,
     ) -> Result<Response<Body>, ModelGatewayTransportError> {
-        self.channel
-            .clone()
-            .oneshot(request)
+        let route = elitea_model_rpc::Route::from_path(request.uri().path())
+            .ok_or(ModelGatewayTransportError::Unavailable)?;
+        let (parts, body) = request.into_parts();
+        let body = http_body_util::Limited::new(body, self.max_request_bytes)
+            .collect()
             .await
-            .map_err(ModelGatewayTransportError::Tonic)
+            .map_err(|_| ModelGatewayTransportError::Unavailable)?
+            .to_bytes();
+        let call = elitea_model_rpc::ModelRequest::from_http_parts(&parts.headers, body)
+            .map_err(|_| ModelGatewayTransportError::Unavailable)?;
+        let answer = elitea_model_rpc::call(&mut self.client.clone(), route, call)
+            .await
+            .map_err(|_| ModelGatewayTransportError::Unavailable)?;
+        let frames =
+            tokio_stream::StreamExt::map(answer.body, |chunk| chunk.map(hyper::body::Frame::data));
+        let mut response = Response::new(Body::new(http_body_util::StreamBody::new(frames)));
+        *response.status_mut() = answer.status;
+        *response.version_mut() = Version::HTTP_2;
+        *response.headers_mut() = answer.headers;
+        Ok(response)
     }
 }
 
 pub(crate) enum ModelGatewayTransportError {
     Unavailable,
-    Tonic(tonic::transport::Error),
 }
 
 impl fmt::Debug for ModelGatewayTransportError {
@@ -252,15 +278,27 @@ impl std::error::Error for ModelGatewayTransportError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Unavailable => None,
-            Self::Tonic(error) => Some(error),
         }
     }
+}
+
+/// The `ModelService` client over `channel`, with the platform listener's
+/// message limits: it sends at most what the listener receives, and decodes
+/// a unary answer as large as the listener sends.
+fn model_service_client(channel: Channel) -> elitea_model_rpc::ModelServiceClient<Channel> {
+    elitea_model_rpc::ModelServiceClient::new(channel)
+        .max_decoding_message_size(MAX_MODEL_ANSWER_BYTES)
+        .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES)
 }
 
 /// Shared connection pool for claim-scoped model invocations.
 pub(crate) struct ModelGatewayClient {
     pub(super) transport: Arc<dyn ModelGatewayTransport>,
     pub(super) config: ModelGatewayConfig,
+    /// The channel to the platform listener the model calls ride, shared by
+    /// the worker's other elitea-main services there (the artifact store and
+    /// the internal tools, #1359 U5). `None` for a test transport.
+    platform: Option<Channel>,
 }
 
 impl ModelGatewayClient {
@@ -284,7 +322,11 @@ impl ModelGatewayClient {
             .map_err(|_| ModelFacadeError::DependencyUnavailable)?;
         config.origin = origin;
         Ok(Self {
-            transport: Arc::new(TonicModelGatewayTransport { channel }),
+            platform: Some(channel.clone()),
+            transport: Arc::new(GrpcModelGatewayTransport {
+                client: model_service_client(channel),
+                max_request_bytes: config.max_request_bytes,
+            }),
             config,
         })
     }
@@ -298,7 +340,13 @@ impl ModelGatewayClient {
         Ok(Self {
             transport: Arc::new(transport),
             config,
+            platform: None,
         })
+    }
+
+    /// The channel to the platform listener, when this client opened one.
+    pub(crate) fn platform_channel(&self) -> Option<Channel> {
+        self.platform.clone()
     }
 
     /// Consume one ephemeral claim credential into one single-use ADK model.
@@ -533,7 +581,7 @@ impl Llm for EliteaOpenAiCompatibleModel {
     ) -> Result<LlmResponseStream, AdkError> {
         let turn = self
             .calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.invocation.max_model_turns).then_some(current + 1)
             })
             .map(|current| current + 1)
@@ -2021,6 +2069,23 @@ pub(crate) fn test_model_gateway_client(
         config,
     )?;
     Ok((client, captured))
+}
+
+/// The production gRPC transport over an already open channel (the tests'
+/// plaintext loopback channel to a test `ModelService`).
+#[cfg(test)]
+pub(crate) fn test_grpc_model_gateway_client(
+    channel: Channel,
+    config: ModelGatewayConfig,
+) -> Result<ModelGatewayClient, ModelFacadeError> {
+    let max_request_bytes = config.max_request_bytes;
+    ModelGatewayClient::with_rpc(
+        GrpcModelGatewayTransport {
+            client: model_service_client(channel),
+            max_request_bytes,
+        },
+        config,
+    )
 }
 
 #[cfg(test)]

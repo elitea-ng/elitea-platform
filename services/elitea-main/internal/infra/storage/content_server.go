@@ -1,50 +1,38 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"mime"
-	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
-	"github.com/go-chi/chi/v5"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 const (
 	defaultMaxInputContentBytes = 256 * 1024
 	defaultMaxContentRequests   = 16
 	maxRuntimeGeneration        = uint64(1<<63 - 1)
-	claimIDHeader               = "X-Elitea-Claim-Id"
-	fenceHeader                 = "X-Elitea-Fence"
-	// runtimeContextAcceptHeader names the OPTIONAL runtime-context fields the
-	// worker is able to read. It exists because both workers refuse a response
-	// that carries a key they do not know: the Python worker compares the key
-	// set (transport/runtime_context.py) and the native worker parses with
-	// `deny_unknown_fields` (src/transport/runtime_context.rs). A new field
-	// served unconditionally would therefore fail every token redemption on
-	// every worker pod a rolling deploy has not yet replaced, which is an
-	// outage of all agent execution and not a compatibility inconvenience.
-	//
-	// The value is a comma-separated list of field names. An unknown name is
-	// ignored, so the header never refuses a request.
-	runtimeContextAcceptHeader = "X-Elitea-Runtime-Context-Accept"
-	// runtimeContextFieldSecretsHeader is the accept-list name for the
-	// project's `X-SECRET` value (#408).
+	// runtimeContextFieldSecretsHeader is the accept-list name
+	// (GetEliteaClientTokenRequestV1.accept_fields) for the project's
+	// `X-SECRET` value (#408).
 	runtimeContextFieldSecretsHeader = "secrets-header-value"
-	SourceContentDigestHeader        = "X-Elitea-Source-Content-Digest"
-	SourceContentLengthHeader        = "X-Elitea-Source-Content-Length"
-	SourceImmutableVersionHeader     = "X-Elitea-Source-Immutable-Version"
 )
 
 var (
@@ -108,6 +96,9 @@ type ContentMaterializer interface {
 }
 
 type ContentServer struct {
+	// Every RPC is implemented; the embedding only satisfies forward compatibility.
+	runtimev1.UnimplementedRuntimeContentServiceServer
+
 	codePlatformPump    *CodePlatformPump
 	runtimeHTTPActions  *RuntimeHTTPActionService
 	codeWorkspaces      *CodeWorkspaceService
@@ -364,159 +355,66 @@ func (s *ContentServer) WithCodeDebugArtifacts(debug *RuntimeCodeDebugArtifactSe
 	return s
 }
 
-// Routes exposes only the internal, claim-bound input data plane.
-func (s *ContentServer) Routes() http.Handler {
-	r := chi.NewRouter()
-	if s.codeWorkspaceReads != nil {
-		r.Post("/sandbox-workspaces/{manifestSHA256}/read-manifest", s.PostCodeWorkspaceManifest)
-		r.Post("/sandbox-workspaces/{manifestSHA256}/files/{contentSHA256}/read", s.PostCodeWorkspaceFile)
-	}
-	if s.codeWorkspaces != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/code-workspace", s.PostCodeWorkspace)
-	}
-	if s.codeDebug != nil {
-		r.Mount("/executions/{executionID}/generations/{generation}/code-debug", s.codeDebug.Routes())
-	}
-	if s.codePlatformPump != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/code-platform/step", s.PostCodePlatformStep)
-		r.Post("/executions/{executionID}/generations/{generation}/code-platform/effects", s.PostCodePlatformEffects)
-	}
-	if s.nodeRecovery != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/control", s.PostNodeRecoveryControl)
-		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/ack", s.PostNodeRecoveryAck)
-	}
-	if s.originalCodeIntents != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/code-sandbox/visits", s.PostOriginalCodeVisit)
-		r.Post("/executions/{executionID}/generations/{generation}/code-sandbox/intents", s.PostOriginalCodeIntent)
-	}
-
-	if s.nodeRecoveryResults != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/results/{contentID}/versions/{version}", s.PostNodeRecoveryResult)
-	}
-	if s.compiledSnapshots != nil {
-		r.Mount("/sandbox-compiled-snapshots", s.compiledSnapshots.Routes())
-	}
-	if s.sandboxBundles != nil {
-		r.Mount("/sandbox-bundles", s.sandboxBundles.Routes())
-		r.Mount("/sandbox-native-bundles", s.sandboxBundles.NativeRoutes())
-	}
-	if s.toolkitArtifacts != nil {
-		r.Put("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.PutToolkitDiscoveryArtifact)
-		r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.GetToolkitDiscoveryArtifact)
-	}
-	r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}", s.Get)
-	if s.runtimeToken != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/elitea-client-token", s.PostEliteaClientToken)
-	}
-	if s.runtimeHTTPActions != nil {
-		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/http-actions", s.PostHTTPAction)
-	}
-	if s.runtimeVersions != nil {
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/applications/{applicationID}/versions/{versionID}",
-			s.PostApplicationVersion,
-		)
-	}
-	if s.runtimeObjects != nil {
-		// {name} is ONE path parameter holding a key that contains slashes
-		// (`{conversationUUID}/{filename}`), percent-encoded by the client.
-		// chi routes on r.URL.RawPath when it is non-empty, so `%2F` stays one
-		// segment here and PostAttachmentObject unescapes it — the same
-		// mechanism the immutable input route already relies on for
-		// {contentID} and {version}, which is why claimPathPart exists.
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/attachments/{bucket}/{name}",
-			s.PostAttachmentObject,
-		)
-	}
-	if s.runtimeBuilders != nil {
-		// The only two routes on this listener that take a request BODY.
-		// Everything else here is a read whose whole selection fits in the
-		// path, which is why parseExecutionClaim's callers all refuse a body
-		// outright; these two carry the document being written, so they read
-		// one under an explicit cap instead.
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/skills",
-			s.PostSkillWrite,
-		)
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/project-context",
-			s.PostProjectContextWrite,
-		)
-	}
-	if s.runtimeArtifacts != nil {
-		// The `artifact` toolkit family's four operations (#906). They carry
-		// a BODY like the two builder writes above, and for the same reason:
-		// a bucket name, a key and — for the write — the document itself do
-		// not belong in a path, and one of them is the payload rather than a
-		// selection. The operation is the last path segment so the four share
-		// one prefix and one claim contract.
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/list",
-			s.PostArtifactList,
-		)
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/read",
-			s.PostArtifactRead,
-		)
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/write",
-			s.PostArtifactWrite,
-		)
-		r.Post(
-			"/executions/{executionID}/generations/{generation}/runtime-context/artifacts/delete",
-			s.PostArtifactDelete,
-		)
-	}
-	return r
+// Register registers the content plane on server: the gRPC
+// elitea.runtime.v1.RuntimeContentService of the content listener (#1359 U4,
+// ELITEA_RUNTIME_CONTENT_ADDRESS). Every With* setter must run before it.
+// An RPC whose dependency was never composed answers Unimplemented, as the
+// HTTPS listener this replaced left its route unregistered.
+func (s *ContentServer) Register(server grpc.ServiceRegistrar) {
+	runtimev1.RegisterRuntimeContentServiceServer(server, s)
 }
 
-func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	claim, err := parseContentClaim(r)
+// contentChunkBytes is the payload of one chunk on the content plane's
+// streams: small enough that a chunk never approaches the message caps,
+// large enough that a 32 MiB file is a few hundred messages.
+const contentChunkBytes = 64 * 1024
+
+// GetInput streams one claim-bound, source-verified agent input: one header,
+// then chunks. The whole input is read and verified (length and digest)
+// before the header is sent, so corrupt storage never yields a stream that
+// starts successfully.
+func (s *ContentServer) GetInput(request *runtimev1.GetInputRequestV1, stream grpc.ServerStreamingServer[runtimev1.GetInputResponseV1]) error {
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
+		return err
 	}
-	authorization, err := s.authorizer.AuthorizeContent(r.Context(), claim)
+	defer release()
+	ctx := stream.Context()
+	claim, err := parseContentClaim(ctx, request.GetScope(), request.GetContentId(), request.GetImmutableVersion())
+	if err != nil {
+		return contentStatus(codes.Unauthenticated)
+	}
+	authorization, err := s.authorizer.AuthorizeContent(ctx, claim)
 	if err != nil || authorization.ResourceProjectID == "" || authorization.InputBundleID == "" || authorization.CapabilityID == "" || authorization.SemanticRole == "" || authorization.ExpectedMediaType == "" || authorization.ExpectedLength <= 0 {
-		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
-		return
+		return contentStatus(codes.PermissionDenied)
 	}
 	mediaType, parameters, err := mime.ParseMediaType(authorization.ExpectedMediaType)
 	if err != nil || mediaType != authorization.ExpectedMediaType || len(parameters) != 0 {
-		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
-		return
+		return contentStatus(codes.PermissionDenied)
 	}
 	if authorization.ExpectedLength > s.maxBytes {
-		s.logInputFailure(r, claim, "source_limit", http.StatusRequestEntityTooLarge, nil)
-		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-		return
+		s.logInputFailure(ctx, claim, "source_limit", codes.ResourceExhausted, nil)
+		return contentStatus(codes.ResourceExhausted)
 	}
 
 	content, err := s.store.OpenContent(
-		r.Context(),
+		ctx,
 		authorization.ResourceProjectID,
 		authorization.InputBundleID,
 		claim.ContentID,
 		claim.ImmutableVersion,
 	)
 	if errors.Is(err, ErrContentNotFound) {
-		s.logInputFailure(r, claim, "source_open", http.StatusNotFound, err)
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-		return
+		s.logInputFailure(ctx, claim, "source_open", codes.NotFound, err)
+		return contentStatus(codes.NotFound)
 	}
 	if err != nil {
-		s.logInputFailure(r, claim, "source_open", http.StatusInternalServerError, err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		s.logInputFailure(ctx, claim, "source_open", codes.Internal, err)
+		return contentStatus(codes.Internal)
 	}
 	defer func() {
 		if closeErr := content.Close(); closeErr != nil {
-			s.logger.WarnContext(r.Context(), "input content close failed")
+			s.logger.WarnContext(ctx, "input content close failed")
 		}
 	}()
 
@@ -525,278 +423,210 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 	// artifact paths use a separately resumable streaming contract.
 	data, err := io.ReadAll(io.LimitReader(content, s.maxBytes+1))
 	if err != nil || int64(len(data)) != authorization.ExpectedLength || int64(len(data)) > s.maxBytes {
-		s.logInputFailure(r, claim, "source_read", http.StatusInternalServerError, err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		s.logInputFailure(ctx, claim, "source_read", codes.Internal, err)
+		return contentStatus(codes.Internal)
 	}
 	digest := sha256.Sum256(data)
 	if subtle.ConstantTimeCompare(digest[:], authorization.ExpectedDigest[:]) != 1 {
-		s.logInputFailure(r, claim, "source_digest", http.StatusInternalServerError, nil)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		s.logInputFailure(ctx, claim, "source_digest", codes.Internal, nil)
+		return contentStatus(codes.Internal)
 	}
 
 	responseData := data
 	if s.materializer != nil && !authorization.InspectionOnly {
-		responseData, err = s.materializer.MaterializeContent(r.Context(), authorization, data, s.maxBytes)
+		responseData, err = s.materializer.MaterializeContent(ctx, authorization, data, s.maxBytes)
 		if err != nil {
-			status := http.StatusServiceUnavailable
+			code := codes.Unavailable
 			if errors.Is(err, ErrContentRejected) {
-				status = http.StatusUnprocessableEntity
+				code = codes.FailedPrecondition
 			}
-			s.logInputFailure(r, claim, "materialization", status, err)
-			http.Error(w, http.StatusText(status), status)
-			return
+			s.logInputFailure(ctx, claim, "materialization", code, err)
+			return contentStatus(code)
 		}
 		if len(responseData) == 0 || int64(len(responseData)) > s.maxBytes {
-			s.logInputFailure(r, claim, "materialization_size", http.StatusUnprocessableEntity, nil)
-			http.Error(w, http.StatusText(http.StatusUnprocessableEntity), http.StatusUnprocessableEntity)
-			return
+			s.logInputFailure(ctx, claim, "materialization_size", codes.FailedPrecondition, nil)
+			return contentStatus(codes.FailedPrecondition)
 		}
 	}
 	responseDigest := sha256.Sum256(responseData)
 	defer clearContentBytes(responseData)
 
-	w.Header().Set("Content-Type", authorization.ExpectedMediaType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(responseData)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(responseDigest))
-	w.Header().Set(SourceContentDigestHeader, formatSHA256Digest(digest))
-	w.Header().Set(SourceContentLengthHeader, strconv.FormatInt(authorization.ExpectedLength, 10))
-	w.Header().Set(SourceImmutableVersionHeader, claim.ImmutableVersion)
-	w.Header().Set("Cache-Control", "private, no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(responseData)
+	if err := stream.Send(&runtimev1.GetInputResponseV1{Part: &runtimev1.GetInputResponseV1_Header{Header: &runtimev1.InputContentHeaderV1{
+		MediaType:              authorization.ExpectedMediaType,
+		Length:                 uint64(len(responseData)),
+		Sha256:                 responseDigest[:],
+		SourceSha256:           digest[:],
+		SourceLength:           uint64(authorization.ExpectedLength),
+		SourceImmutableVersion: claim.ImmutableVersion,
+	}}}); err != nil {
+		return err
+	}
+	for offset := 0; offset < len(responseData); offset += contentChunkBytes {
+		end := min(offset+contentChunkBytes, len(responseData))
+		if err := stream.Send(&runtimev1.GetInputResponseV1{Part: &runtimev1.GetInputResponseV1_Chunk{Chunk: responseData[offset:end]}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Record fixed failure fields. Content, credentials, and error text stay private.
-func (s *ContentServer) logInputFailure(r *http.Request, claim ContentClaim, boundary string, status int, err error) {
-	s.logger.ErrorContext(r.Context(), "runtime input content failed",
+func (s *ContentServer) logInputFailure(ctx context.Context, claim ContentClaim, boundary string, code codes.Code, err error) {
+	s.logger.ErrorContext(ctx, "runtime input content failed",
 		"execution_id", claim.ExecutionID,
 		"generation", claim.Generation,
 		"boundary", boundary,
-		"status", status,
+		"code", code.String(),
 		"stage", runtimeContextUnavailableStage(err),
 	)
 }
 
-func (s *ContentServer) PostEliteaClientToken(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
+// GetEliteaClientToken serves the Elitea client-token runtime context of the
+// claimed execution.
+func (s *ContentServer) GetEliteaClientToken(ctx context.Context, request *runtimev1.GetEliteaClientTokenRequestV1) (*runtimev1.GetEliteaClientTokenResponseV1, error) {
+	if s.runtimeToken == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	defer s.release()
-	if s.runtimeToken == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	claim, err := parseExecutionClaim(r)
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
+		return nil, err
 	}
-	// The worker gets only the optional fields it said it can read. See
-	// runtimeContextAcceptHeader above for why silence means "no".
-	value, err := s.runtimeToken.ResolveAccepting(r.Context(), claim, RuntimeContextAccept{
-		SecretsHeaderValue: runtimeContextAccepts(r, runtimeContextFieldSecretsHeader),
-		Workspace:          runtimeContextAccepts(r, workspaceruntime.RuntimeContextField),
+	defer release()
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
+	if err != nil {
+		return nil, contentStatus(codes.Unauthenticated)
+	}
+	// The worker gets only the optional fields it said it can read: both
+	// workers refuse a response that carries a key they do not know (the
+	// native worker parses with `deny_unknown_fields`), so a field served
+	// unconditionally would fail every redemption on a pod a rolling deploy
+	// has not replaced yet. Silence means "no"; an unknown name is ignored.
+	value, err := s.runtimeToken.ResolveAccepting(ctx, claim, RuntimeContextAccept{
+		SecretsHeaderValue: acceptsField(request.GetAcceptFields(), runtimeContextFieldSecretsHeader),
+		Workspace:          acceptsField(request.GetAcceptFields(), workspaceruntime.RuntimeContextField),
 	})
 	if err != nil {
-		status := http.StatusServiceUnavailable
+		code := codes.Unavailable
 		if errors.Is(err, ErrContentUnauthorized) {
-			status = http.StatusForbidden
+			code = codes.PermissionDenied
 		} else if errors.Is(err, ErrContentUnavailable) {
-			s.logger.WarnContext(
-				r.Context(),
-				"runtime context unavailable",
-				"stage",
-				runtimeContextUnavailableStage(err),
-			)
+			s.logger.WarnContext(ctx, "runtime context unavailable", "stage", runtimeContextUnavailableStage(err))
 		}
-		http.Error(w, http.StatusText(status), status)
-		return
+		return nil, contentStatus(code)
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeContextResponseBytes {
 		clearContentBytes(encoded)
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return
+		return nil, contentStatus(codes.Unavailable)
 	}
-	defer clearContentBytes(encoded)
-	digest := sha256.Sum256(encoded)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(digest))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(encoded)
+	return &runtimev1.GetEliteaClientTokenResponseV1{ContextJson: encoded}, nil
 }
 
-// PostApplicationVersion serves one frozen nested (agent-as-tool) child
+// GetApplicationVersion serves one frozen nested (agent-as-tool) child
 // definition under the live claim that already authorized the parent turn.
-//
-// It is the exact server twin of PostEliteaClientToken above — same claim
-// parsing, same concurrency gate, same private-no-cache headers, same error
-// taxonomy — and that symmetry is the point: the worker reaches both routes
-// over one mTLS channel with one authority, and a route that authorized
-// differently would be a second, weaker contract on the same connection.
-func (s *ContentServer) PostApplicationVersion(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
+// It authorizes exactly as GetEliteaClientToken does: one channel, one
+// authority.
+func (s *ContentServer) GetApplicationVersion(ctx context.Context, request *runtimev1.GetApplicationVersionRequestV1) (*runtimev1.GetApplicationVersionResponseV1, error) {
+	if s.runtimeVersions == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	defer s.release()
-	if s.runtimeVersions == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	claim, err := parseExecutionClaim(r)
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
+		return nil, err
 	}
-	applicationID, applicationIDOK := claimPathIdentity(r, "applicationID")
-	versionID, versionIDOK := claimPathIdentity(r, "versionID")
-	if !applicationIDOK || !versionIDOK {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	value, err := s.runtimeVersions.Resolve(r.Context(), claim, applicationID, versionID)
+	defer release()
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		status := http.StatusServiceUnavailable
+		return nil, contentStatus(codes.Unauthenticated)
+	}
+	if request.GetApplicationId() == 0 || request.GetVersionId() == 0 {
+		return nil, contentStatus(codes.InvalidArgument)
+	}
+	value, err := s.runtimeVersions.Resolve(ctx, claim, request.GetApplicationId(), request.GetVersionId())
+	if err != nil {
+		code := codes.Unavailable
 		switch {
 		case errors.Is(err, ErrContentUnauthorized):
-			status = http.StatusForbidden
+			code = codes.PermissionDenied
 		case errors.Is(err, ErrContentNotFound):
 			// The claim was good and the agent/version pair was not. Kept
-			// distinct from 403 so an operator can tell a stale nested
-			// reference from a rejected claim; the worker collapses both into
-			// its own failure taxonomy either way.
-			status = http.StatusNotFound
+			// distinct from PermissionDenied so an operator can tell a stale
+			// nested reference from a rejected claim.
+			code = codes.NotFound
 		case errors.Is(err, ErrContentUnavailable):
-			s.logger.WarnContext(
-				r.Context(),
-				"nested application version unavailable",
-				"stage",
-				runtimeContextUnavailableStage(err),
-			)
+			s.logger.WarnContext(ctx, "nested application version unavailable", "stage", runtimeContextUnavailableStage(err))
 		}
-		http.Error(w, http.StatusText(status), status)
-		return
+		return nil, contentStatus(code)
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeApplicationVersionResponseBytes {
 		// Refused, never trimmed: the body is one indivisible definition, and a
-		// truncated one would either fail the client's JSON decode or, worse,
-		// parse into an agent missing tools its author attached.
+		// truncated one would parse into an agent missing tools its author
+		// attached.
 		clearContentBytes(encoded)
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return
+		return nil, contentStatus(codes.Unavailable)
 	}
-	defer clearContentBytes(encoded)
-	digest := sha256.Sum256(encoded)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(digest))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(encoded); err != nil {
-		s.logger.WarnContext(r.Context(), "nested application version write failed")
-	}
+	return &runtimev1.GetApplicationVersionResponseV1{VersionJson: encoded}, nil
 }
 
-// PostAttachmentObject serves one stored chat attachment's text under the live
+// GetAttachmentObject serves one stored chat attachment's text under the live
 // claim that already authorized the turn the file rides on.
 //
-// It is the server twin of PostApplicationVersion above — same claim parsing,
-// same concurrency gate, same private-no-cache headers, same error taxonomy
-// plus one status — and that symmetry is the point: the worker reaches every
-// runtime-context route over one mTLS channel with one authority, and a route
-// that authorized differently would be a second, weaker contract on the same
-// connection.
-//
-// THE ONE ADDED STATUS IS 422. A stored object with no text this route can
-// serve — encrypted, an image, an unsupported or malformed format, over the
-// input limit, or without a text layer — is neither a rejected claim nor a
-// missing file, and the difference matters operationally: 404 says the
-// reference is stale and someone should look at the row, while 422 says the
-// file is exactly what it claims to be and this route will never be able to
-// read it. The 422 body carries the reason
-// (elitea.runtime.attachment-unreadable.v1). The worker maps 422 to a
-// terminal "unreadable" outcome — never to dependency_unavailable — and tells
-// the model why, so neither ever fails a turn.
-func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !acquireSlot(w, s.attachmentRequests) {
-		return
+// A stored object with no text this RPC can serve — encrypted, an image, an
+// unsupported or malformed format, over the input limit, or without a text
+// layer — is neither a rejected claim nor a missing file: it is a successful
+// call that names the reason (elitea.runtime.attachment-unreadable.v1), which
+// the worker maps to a terminal "unreadable" outcome and tells the model.
+func (s *ContentServer) GetAttachmentObject(ctx context.Context, request *runtimev1.GetAttachmentObjectRequestV1) (*runtimev1.GetAttachmentObjectResponseV1, error) {
+	if s.runtimeObjects == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	defer func() { <-s.attachmentRequests }()
-	if s.runtimeObjects == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	claim, err := parseExecutionClaim(r)
+	// The attachment RPC's OWN pool: one read can wait for an extraction, so
+	// in the shared pool a burst of first-time PDFs would refuse every token,
+	// version and artifact call on the listener.
+	release, err := acquireContentSlot(s.attachmentRequests)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
+		return nil, err
 	}
-	bucket, bucketErr := claimPathPart(r, "bucket")
-	name, nameErr := claimPathPart(r, "name")
-	if bucketErr != nil || nameErr != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	value, err := s.runtimeObjects.Resolve(r.Context(), claim, bucket, name)
+	defer release()
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		status := http.StatusServiceUnavailable
+		return nil, contentStatus(codes.Unauthenticated)
+	}
+	if !boundedClaimPart(request.GetBucket()) || !boundedClaimPart(request.GetName()) {
+		return nil, contentStatus(codes.InvalidArgument)
+	}
+	value, err := s.runtimeObjects.Resolve(ctx, claim, request.GetBucket(), request.GetName())
+	if err != nil {
+		code := codes.Unavailable
 		switch {
 		case errors.Is(err, ErrContentUnauthorized):
-			// Also the CROSS-CONVERSATION refusal. It is deliberately the same
-			// 403 a stale or foreign claim gets: a caller must not be able to
-			// learn, from the status alone, that an object exists in a
-			// conversation it does not hold a claim for.
-			status = http.StatusForbidden
+			// Also the CROSS-CONVERSATION refusal: deliberately the same
+			// refusal a stale or foreign claim gets, so a caller cannot learn
+			// that an object exists in a conversation it holds no claim for.
+			code = codes.PermissionDenied
 		case errors.Is(err, ErrContentNotFound):
-			// A JSON body, so the worker can tell "this object is gone"
-			// from a 404 for the ROUTE: a listener built without a Go
-			// object store has no attachment route at all, and that file
-			// still exists.
-			s.writeAttachmentReason(w, r, http.StatusNotFound, attachmentReasonNotFound)
-			return
+			code = codes.NotFound
 		case errors.Is(err, ErrContentRejected):
-			// The body names the reason, so the worker can tell the model
-			// WHY the file has no text rather than only that it has none.
-			s.writeAttachmentUnreadable(w, r, err)
-			return
+			reason := string(ReasonAttachmentUnreadable)
+			var refusal *AttachmentUnreadableError
+			if errors.As(err, &refusal) && refusal.Reason != "" {
+				reason = string(refusal.Reason)
+			}
+			return &runtimev1.GetAttachmentObjectResponseV1{Outcome: &runtimev1.GetAttachmentObjectResponseV1_UnreadableReason{UnreadableReason: reason}}, nil
 		case errors.Is(err, ErrContentUnavailable):
-			s.logger.WarnContext(
-				r.Context(),
-				"attachment object unavailable",
-				"stage",
-				runtimeContextUnavailableStage(err),
-			)
+			s.logger.WarnContext(ctx, "attachment object unavailable", "stage", runtimeContextUnavailableStage(err))
 		}
-		http.Error(w, http.StatusText(status), status)
-		return
+		return nil, contentStatus(code)
 	}
 	encoded, err := encodeAttachmentDocument(value)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeAttachmentObjectResponseBytes {
 		// Refused, never trimmed. A truncated document is worse than an
 		// unread one: the model is shown a prefix and told it is the file.
 		clearContentBytes(encoded)
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return
+		return nil, contentStatus(codes.Unavailable)
 	}
-	defer clearContentBytes(encoded)
-	digest := sha256.Sum256(encoded)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(digest))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(encoded); err != nil {
-		s.logger.WarnContext(r.Context(), "attachment object write failed")
-	}
+	return &runtimev1.GetAttachmentObjectResponseV1{Outcome: &runtimev1.GetAttachmentObjectResponseV1_DocumentJson{DocumentJson: encoded}}, nil
 }
 
 // encodeAttachmentDocument encodes without HTML escaping. The default
@@ -813,322 +643,247 @@ func encodeAttachmentDocument(value any) ([]byte, error) {
 	return []byte(strings.TrimSuffix(buffer.String(), "\n")), nil
 }
 
-// attachmentReasonNotFound is the 404 body's reason: the claim and the
-// conversation were accepted, and there is no such object.
-const attachmentReasonNotFound = "not_found"
-
-// writeAttachmentUnreadable answers 422 with the refusal's reason. A
-// rejection that names no reason is reported as "unreadable", which claims
-// nothing about the file.
-func (s *ContentServer) writeAttachmentUnreadable(w http.ResponseWriter, r *http.Request, err error) {
-	reason := string(ReasonAttachmentUnreadable)
-	var refusal *AttachmentUnreadableError
-	if errors.As(err, &refusal) && refusal.Reason != "" {
-		reason = string(refusal.Reason)
+// WriteSkill creates or updates one Skill from the conversation the claim
+// authorizes (#940 A8, `skills_builder`). It keeps every property the reads
+// have — same claim, same concurrency gate, same error taxonomy — and adds a
+// bounded request document, refused rather than truncated.
+func (s *ContentServer) WriteSkill(ctx context.Context, request *runtimev1.WriteSkillRequestV1) (*runtimev1.WriteSkillResponseV1, error) {
+	var document RuntimeSkillWriteRequest
+	claim, release, err := s.builderRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
+	if err != nil {
+		return nil, err
 	}
-	s.writeAttachmentReason(w, r, http.StatusUnprocessableEntity, reason)
+	defer release()
+	value, err := s.runtimeBuilders.WriteSkill(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "skill write unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeBuilderResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.WriteSkillResponseV1{ResponseJson: encoded}, nil
 }
 
-// writeAttachmentReason answers status with the small reason document
-// (elitea.runtime.attachment-unreadable.v1).
-func (s *ContentServer) writeAttachmentReason(w http.ResponseWriter, r *http.Request, status int, reason string) {
-	encoded, encodeErr := json.Marshal(RuntimeAttachmentUnreadable{
-		SchemaVersion: RuntimeAttachmentUnreadableSchemaVersion,
-		Reason:        reason,
-	})
-	if encodeErr != nil {
-		http.Error(w, http.StatusText(status), status)
-		return
+// WriteProjectContext writes the claimed project's Project Context (#940 A8,
+// `project_context_builder`). Twin of WriteSkill.
+func (s *ContentServer) WriteProjectContext(ctx context.Context, request *runtimev1.WriteProjectContextRequestV1) (*runtimev1.WriteProjectContextResponseV1, error) {
+	var document RuntimeProjectContextWriteRequest
+	claim, release, err := s.builderRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
+	if err != nil {
+		return nil, err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	if _, writeErr := w.Write(encoded); writeErr != nil {
-		s.logger.WarnContext(r.Context(), "attachment reason write failed")
+	defer release()
+	value, err := s.runtimeBuilders.WriteProjectContext(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "project context write unavailable")
 	}
+	encoded, err := runtimeResponse(value, maxRuntimeBuilderResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.WriteProjectContextResponseV1{ResponseJson: encoded}, nil
 }
 
-// PostSkillWrite creates or updates one Skill from the conversation the claim
-// authorizes (#940 A8, `skills_builder`).
-//
-// It is the first WRITE on this listener, and it keeps every property the
-// reads have: same claim parsing, same concurrency gate, same private
-// no-cache headers, same error taxonomy. What it adds is a bounded request
-// body — refused, never truncated, for the same reason the attachment read
-// refuses an oversized file rather than sending a prefix.
-func (s *ContentServer) PostSkillWrite(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
+func (s *ContentServer) builderRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {
 	if s.runtimeBuilders == nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
+		return ContentClaim{}, nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
-	}
-	var request RuntimeSkillWriteRequest
-	if !decodeBuilderRequest(w, r, &request) {
-		return
-	}
-	value, err := s.runtimeBuilders.WriteSkill(r.Context(), claim, request)
-	if err != nil {
-		s.writeBuilderError(w, r, err, "skill write unavailable")
-		return
-	}
-	s.writeBuilderResponse(w, r, value, "skill write response failed")
+	return s.claimedDocument(ctx, scope, raw, target, maxRuntimeBuilderRequestBytes)
 }
 
-// PostProjectContextWrite writes the claimed project's Project Context
-// (#940 A8, `project_context_builder`). Twin of PostSkillWrite above.
-func (s *ContentServer) PostProjectContextWrite(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	if s.runtimeBuilders == nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	claim, err := parseExecutionClaim(r)
+// ListArtifacts, ReadArtifact, WriteArtifact and DeleteArtifact are the
+// `artifact` toolkit family's four operations (#906). They are twins of
+// WriteSkill in every respect that authorizes anything and differ only in the
+// document each carries.
+func (s *ContentServer) ListArtifacts(ctx context.Context, request *runtimev1.ListArtifactsRequestV1) (*runtimev1.ListArtifactsResponseV1, error) {
+	var document RuntimeArtifactListRequest
+	claim, release, err := s.artifactRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
+		return nil, err
 	}
-	var request RuntimeProjectContextWriteRequest
-	if !decodeBuilderRequest(w, r, &request) {
-		return
-	}
-	value, err := s.runtimeBuilders.WriteProjectContext(r.Context(), claim, request)
+	defer release()
+	value, err := s.runtimeArtifacts.List(ctx, claim, document)
 	if err != nil {
-		s.writeBuilderError(w, r, err, "project context write unavailable")
-		return
+		return nil, s.builderError(ctx, err, "artifact listing unavailable")
 	}
-	s.writeBuilderResponse(w, r, value, "project context write response failed")
+	encoded, err := runtimeResponse(value, maxRuntimeArtifactResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.ListArtifactsResponseV1{ResponseJson: encoded}, nil
 }
 
-// PostArtifactList, PostArtifactRead, PostArtifactWrite and PostArtifactDelete
-// are the `artifact` toolkit family's four operations (#906).
-//
-// They are twins of PostSkillWrite above in every respect that authorizes
-// anything — same claim parsing, same concurrency gate, same private no-cache
-// headers, same bounded body refused rather than truncated, same error
-// taxonomy — and differ only in the document each carries. The symmetry is the
-// point: one mTLS channel, one authority, and no route on it that authorizes
-// differently from its neighbours.
-func (s *ContentServer) PostArtifactList(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	var request RuntimeArtifactListRequest
-	claim, ok := s.artifactRequest(w, r, &request)
-	if !ok {
-		return
-	}
-	value, err := s.runtimeArtifacts.List(r.Context(), claim, request)
+func (s *ContentServer) ReadArtifact(ctx context.Context, request *runtimev1.ReadArtifactRequestV1) (*runtimev1.ReadArtifactResponseV1, error) {
+	var document RuntimeArtifactReadRequest
+	claim, release, err := s.artifactRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
 	if err != nil {
-		s.writeBuilderError(w, r, err, "artifact listing unavailable")
-		return
+		return nil, err
 	}
-	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact listing response failed")
+	defer release()
+	value, err := s.runtimeArtifacts.Read(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "artifact read unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeArtifactResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.ReadArtifactResponseV1{ResponseJson: encoded}, nil
 }
 
-func (s *ContentServer) PostArtifactRead(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	var request RuntimeArtifactReadRequest
-	claim, ok := s.artifactRequest(w, r, &request)
-	if !ok {
-		return
-	}
-	value, err := s.runtimeArtifacts.Read(r.Context(), claim, request)
+func (s *ContentServer) WriteArtifact(ctx context.Context, request *runtimev1.WriteArtifactRequestV1) (*runtimev1.WriteArtifactResponseV1, error) {
+	var document RuntimeArtifactWriteRequest
+	claim, release, err := s.artifactRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
 	if err != nil {
-		s.writeBuilderError(w, r, err, "artifact read unavailable")
-		return
+		return nil, err
 	}
-	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact read response failed")
+	defer release()
+	value, err := s.runtimeArtifacts.Write(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "artifact write unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeArtifactResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.WriteArtifactResponseV1{ResponseJson: encoded}, nil
 }
 
-func (s *ContentServer) PostArtifactWrite(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	var request RuntimeArtifactWriteRequest
-	claim, ok := s.artifactRequest(w, r, &request)
-	if !ok {
-		return
-	}
-	value, err := s.runtimeArtifacts.Write(r.Context(), claim, request)
+func (s *ContentServer) DeleteArtifact(ctx context.Context, request *runtimev1.DeleteArtifactRequestV1) (*runtimev1.DeleteArtifactResponseV1, error) {
+	var document RuntimeArtifactDeleteRequest
+	claim, release, err := s.artifactRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
 	if err != nil {
-		s.writeBuilderError(w, r, err, "artifact write unavailable")
-		return
+		return nil, err
 	}
-	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact write response failed")
+	defer release()
+	value, err := s.runtimeArtifacts.Delete(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "artifact delete unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeArtifactResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.DeleteArtifactResponseV1{ResponseJson: encoded}, nil
 }
 
-func (s *ContentServer) PostArtifactDelete(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	var request RuntimeArtifactDeleteRequest
-	claim, ok := s.artifactRequest(w, r, &request)
-	if !ok {
-		return
-	}
-	value, err := s.runtimeArtifacts.Delete(r.Context(), claim, request)
-	if err != nil {
-		s.writeBuilderError(w, r, err, "artifact delete unavailable")
-		return
-	}
-	s.writeRuntimeResponse(w, r, value, maxRuntimeArtifactResponseBytes, "artifact delete response failed")
-}
-
-// artifactRequest is the claim-and-body half all four artifact routes share.
-//
-// Four copies of it would be four places for one to drift out of step with the
-// others, and the thing that would drift is the authorization. It writes the
-// refusal itself and returns ok=false; the caller returns immediately.
-func (s *ContentServer) artifactRequest(
-	w http.ResponseWriter,
-	r *http.Request,
-	target any,
-) (ContentClaim, bool) {
+// artifactRequest is the claim-and-document half all four artifact RPCs
+// share: four copies would be four places for the authorization to drift.
+func (s *ContentServer) artifactRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {
 	if s.runtimeArtifacts == nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return ContentClaim{}, false
+		return ContentClaim{}, nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
+	return s.claimedDocument(ctx, scope, raw, target, maxRuntimeArtifactRequestBytes)
+}
+
+// claimedDocument takes a shared-pool slot, parses the claim and decodes one
+// bounded JSON document refusing unknown keys — the mirror of the worker's
+// own `deny_unknown_fields`, so a version skew fails loudly instead of
+// half-applying a write. The caller runs release when done.
+func (s *ContentServer) claimedDocument(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any, maxBytes int64) (ContentClaim, func(), error) {
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return ContentClaim{}, false
+		return ContentClaim{}, nil, err
 	}
-	if !decodeRuntimeRequest(w, r, target, maxRuntimeArtifactRequestBytes) {
-		return ContentClaim{}, false
+	claim, err := parseExecutionClaim(ctx, scope)
+	if err != nil {
+		release()
+		return ContentClaim{}, nil, contentStatus(codes.Unauthenticated)
 	}
-	return claim, true
+	if int64(len(raw)) > maxBytes {
+		release()
+		return ContentClaim{}, nil, contentStatus(codes.ResourceExhausted)
+	}
+	if err := decodeStrictDocument(raw, target); err != nil {
+		release()
+		return ContentClaim{}, nil, contentStatus(codes.InvalidArgument)
+	}
+	return claim, release, nil
 }
 
-// decodeBuilderRequest reads one bounded JSON body, refusing unknown keys.
-//
-// DisallowUnknownFields is the mirror of the worker”'s own
-// `deny_unknown_fields` on every response: both directions refuse a document
-// carrying a field the other side does not know, so a version skew fails
-// loudly at the edge instead of half-applying a write.
-func decodeBuilderRequest(w http.ResponseWriter, r *http.Request, target any) bool {
-	return decodeRuntimeRequest(w, r, target, maxRuntimeBuilderRequestBytes)
-}
-
-// decodeRuntimeRequest is decodeBuilderRequest with the cap named by the
-// caller: the two builder writes carry prompt-sized documents, the artifact
-// write carries a file, and one number could not honestly bound both.
-func decodeRuntimeRequest(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) bool {
-	if r.ContentLength > maxBytes {
-		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-		return false
-	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBytes+1))
+// decodeStrictDocument decodes exactly one JSON value, refusing unknown keys
+// and trailing data.
+func decodeStrictDocument(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return false
+		return err
 	}
-	return true
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing data after the document")
+	}
+	return nil
 }
 
-// writeBuilderError maps one builder failure onto the listener”'s shared
-// taxonomy. 422 (ErrContentRejected) is the write-side addition and it is
-// deliberately NOT an error the worker fails a turn on: it means the document
-// the model composed cannot be stored as written, which the model can read and
-// retry from.
-func (s *ContentServer) writeBuilderError(w http.ResponseWriter, r *http.Request, err error, message string) {
-	status := http.StatusServiceUnavailable
+// builderError maps one builder or artifact failure onto the shared
+// taxonomy. FailedPrecondition (ErrContentRejected) means the document the
+// model composed cannot be stored as written, which the model can read and
+// retry from — the worker does not fail the turn on it.
+func (s *ContentServer) builderError(ctx context.Context, err error, message string) error {
+	code := codes.Unavailable
 	switch {
 	case errors.Is(err, ErrContentUnauthorized):
-		status = http.StatusForbidden
+		code = codes.PermissionDenied
 	case errors.Is(err, ErrContentNotFound):
-		status = http.StatusNotFound
+		code = codes.NotFound
 	case errors.Is(err, ErrContentRejected):
-		status = http.StatusUnprocessableEntity
+		code = codes.FailedPrecondition
 	case errors.Is(err, ErrContentUnavailable):
-		s.logger.WarnContext(r.Context(), message, "stage", runtimeContextUnavailableStage(err))
+		s.logger.WarnContext(ctx, message, "stage", runtimeContextUnavailableStage(err))
 	}
-	http.Error(w, http.StatusText(status), status)
+	return contentStatus(code)
 }
 
-func (s *ContentServer) writeBuilderResponse(w http.ResponseWriter, r *http.Request, value any, message string) {
-	s.writeRuntimeResponse(w, r, value, maxRuntimeBuilderResponseBytes, message)
-}
-
-// writeRuntimeResponse is writeBuilderResponse with the envelope ceiling named
-// by the caller. An over-cap body is REFUSED rather than trimmed, for the
-// reason PostApplicationVersion states: the document is indivisible, and a
-// truncated one either fails the client's decode or — worse — parses into
-// something that looks complete.
-func (s *ContentServer) writeRuntimeResponse(
-	w http.ResponseWriter,
-	r *http.Request,
-	value any,
-	maxBytes int,
-	message string,
-) {
+// runtimeResponse encodes one indivisible response document. An over-cap
+// document is REFUSED rather than trimmed: a truncated one either fails the
+// client's decode or parses into something that looks complete.
+func runtimeResponse(value any, maxBytes int) ([]byte, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxBytes {
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return
+		return nil, contentStatus(codes.Unavailable)
 	}
-	digest := sha256.Sum256(encoded)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(digest))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(encoded); err != nil {
-		s.logger.WarnContext(r.Context(), message)
-	}
+	return encoded, nil
 }
 
-func (s *ContentServer) acquire(w http.ResponseWriter) bool {
-	return acquireSlot(w, s.requests)
-}
-
-func acquireSlot(w http.ResponseWriter, slots chan struct{}) bool {
+// acquireContentSlot takes one slot of a fixed pool without queueing: a full
+// pool is Unavailable, which every client retries.
+func acquireContentSlot(slots chan struct{}) (func(), error) {
 	select {
 	case slots <- struct{}{}:
-		return true
+		return func() { <-slots }, nil
 	default:
-		w.Header().Set("Retry-After", "1")
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return false
+		return nil, grpcstatus.Error(codes.Unavailable, "The runtime content service is busy. Retry.")
 	}
 }
 
-func (s *ContentServer) release() {
-	<-s.requests
-}
-
-func setPrivateNoCacheHeaders(header http.Header) {
-	header.Set("Cache-Control", "no-store, no-cache, must-revalidate")
-	header.Set("Pragma", "no-cache")
-	header.Set("Expires", "0")
-}
-
-func formatSHA256Digest(digest [sha256.Size]byte) string {
-	return "sha-256=:" + base64.StdEncoding.EncodeToString(digest[:]) + ":"
+// contentStatus is the content plane's refusal: a fixed message per code,
+// never the error text (which may name storage paths, claims or tenants).
+func contentStatus(code codes.Code) error {
+	message := "The runtime content request failed."
+	switch code {
+	case codes.InvalidArgument:
+		message = "The runtime content request is malformed."
+	case codes.Unauthenticated:
+		message = "A verified workload and a well-formed claim are required."
+	case codes.PermissionDenied:
+		message = "The claim or grant is not accepted."
+	case codes.NotFound:
+		message = "The requested content does not exist."
+	case codes.Aborted:
+		message = "The request conflicts with the durable execution state."
+	case codes.ResourceExhausted:
+		message = "The content exceeds its limit."
+	case codes.FailedPrecondition:
+		message = "The content cannot be served or stored as written."
+	case codes.DeadlineExceeded:
+		message = "The content transfer was interrupted. Retry."
+	case codes.Unavailable:
+		message = "The runtime content service is unavailable. Retry."
+	case codes.Unimplemented:
+		message = "This deployment does not serve this content."
+	}
+	return grpcstatus.Error(code, message)
 }
 
 func clearContentBytes(value []byte) {
@@ -1137,46 +892,68 @@ func clearContentBytes(value []byte) {
 	}
 }
 
-func parseContentClaim(r *http.Request) (ContentClaim, error) {
-	claim, err := parseExecutionClaim(r)
+// contentPeer is the verified TLS state of the call: the listener requires a
+// runtime-CA client certificate at the handshake, so a call without one never
+// reaches a handler, and this refuses one that somehow does.
+func contentPeer(ctx context.Context) (*tls.ConnectionState, bool) {
+	info, ok := peer.FromContext(ctx)
+	if !ok || info == nil {
+		return nil, false
+	}
+	var state tls.ConnectionState
+	switch auth := info.AuthInfo.(type) {
+	case credentials.TLSInfo:
+		state = auth.State
+	case *credentials.TLSInfo:
+		if auth == nil {
+			return nil, false
+		}
+		state = auth.State
+	default:
+		return nil, false
+	}
+	if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || len(state.PeerCertificates) == 0 {
+		return nil, false
+	}
+	return &state, true
+}
+
+func parseContentClaim(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, contentID, version string) (ContentClaim, error) {
+	claim, err := parseExecutionClaim(ctx, scope)
 	if err != nil {
 		return ContentClaim{}, err
 	}
-	claim.ContentID, err = claimPathPart(r, "contentID")
-	if err != nil {
-		return ContentClaim{}, err
-	}
-	claim.ImmutableVersion, err = claimPathPart(r, "version")
-	if err != nil {
+	if !boundedClaimPart(contentID) || !boundedClaimPart(version) {
 		return ContentClaim{}, fmt.Errorf("%w: incomplete claim", ErrContentUnauthorized)
 	}
+	claim.ContentID = contentID
+	claim.ImmutableVersion = version
 	return claim, nil
 }
 
-func parseExecutionClaim(r *http.Request) (ContentClaim, error) {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+// parseExecutionClaim binds the verified peer certificate, the scope's
+// execution and generation, and the claim id and fence of the call's metadata
+// (grpcauth.ContentClaim) into one claim. It authorizes nothing by itself:
+// every consumer checks the claim against the durable execution state.
+func parseExecutionClaim(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1) (ContentClaim, error) {
+	state, ok := contentPeer(ctx)
+	if !ok {
 		return ContentClaim{}, ErrContentUnauthorized
 	}
-	generationText := chi.URLParam(r, "generation")
-	generation, err := strconv.ParseUint(generationText, 10, 64)
-	if err != nil || generation == 0 || generation > maxRuntimeGeneration || strconv.FormatUint(generation, 10) != generationText {
+	generation := scope.GetGeneration()
+	if generation == 0 || generation > maxRuntimeGeneration {
 		return ContentClaim{}, ErrContentUnauthorized
 	}
-	claimID, claimIDOK := singleHeader(r.Header, claimIDHeader)
-	fenceText, fenceOK := singleHeader(r.Header, fenceHeader)
-	fence, err := base64.RawURLEncoding.DecodeString(fenceText)
-	if !claimIDOK || !fenceOK || err != nil || len(fence) != sha256.Size || base64.RawURLEncoding.EncodeToString(fence) != fenceText {
-		return ContentClaim{}, ErrContentUnauthorized
-	}
-	if !boundedClaimPart(claimID) {
+	executionID := scope.GetExecutionId()
+	if !boundedClaimPart(executionID) {
 		return ContentClaim{}, fmt.Errorf("%w: incomplete claim", ErrContentUnauthorized)
 	}
-	executionID, err := claimPathPart(r, "executionID")
-	if err != nil {
-		return ContentClaim{}, err
+	claimID, fence, err := grpcauth.ContentClaim(ctx)
+	if err != nil || len(fence) != sha256.Size || !boundedClaimPart(claimID) {
+		return ContentClaim{}, ErrContentUnauthorized
 	}
 	return ContentClaim{
-		PeerCertificate: r.TLS.VerifiedChains[0][0],
+		PeerCertificate: state.VerifiedChains[0][0],
 		ExecutionID:     executionID,
 		Generation:      generation,
 		ClaimID:         claimID,
@@ -1184,55 +961,20 @@ func parseExecutionClaim(r *http.Request) (ContentClaim, error) {
 	}, nil
 }
 
-func claimPathPart(r *http.Request, name string) (string, error) {
-	value, err := url.PathUnescape(chi.URLParam(r, name))
-	if err != nil || !boundedClaimPart(value) {
-		return "", fmt.Errorf("%w: incomplete claim", ErrContentUnauthorized)
-	}
-	return value, nil
-}
-
-// claimPathIdentity reads one canonical positive integer path segment.
-//
-// Canonical, not merely parseable: the worker formats these with plain
-// `{application_id}` interpolation (runtime_context.rs:454-456), so "007" or
-// "+7" never come from it. Admitting them would let two spellings of the same
-// identity address one agent, and the response echoes the identity back for the
-// client to compare (:554-564) — a comparison that only means something while
-// exactly one spelling reaches the query.
-func claimPathIdentity(r *http.Request, name string) (uint64, bool) {
-	text := chi.URLParam(r, name)
-	value, err := strconv.ParseUint(text, 10, 64)
-	if err != nil || value == 0 || strconv.FormatUint(value, 10) != text {
-		return 0, false
-	}
-	return value, true
-}
-
-// runtimeContextAccepts reports whether the request asked for one optional
-// runtime-context field by name.
-//
-// It reads every value of the header, not one, because a proxy is free to split
-// a comma list across repeated header lines. Names are compared case-blind and
-// with the surrounding space removed, and an empty or absent header accepts
-// nothing.
-func runtimeContextAccepts(r *http.Request, field string) bool {
-	for _, line := range r.Header.Values(runtimeContextAcceptHeader) {
-		for _, name := range strings.Split(line, ",") {
+// acceptsField reports whether the call asked for one optional
+// runtime-context field by name, case-blind and trimmed.
+// acceptsField reads accept_fields. Each repeated entry is itself split on
+// commas, so a caller that joins names into one entry (the old HTTP accept
+// header's shape) and one that sends each name separately are read alike.
+func acceptsField(fields []string, field string) bool {
+	for _, entry := range fields {
+		for name := range strings.SplitSeq(entry, ",") {
 			if strings.EqualFold(strings.TrimSpace(name), field) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-func singleHeader(header http.Header, name string) (string, bool) {
-	values := header.Values(name)
-	if len(values) != 1 {
-		return "", false
-	}
-	return values[0], true
 }
 
 func boundedClaimPart(value string) bool {

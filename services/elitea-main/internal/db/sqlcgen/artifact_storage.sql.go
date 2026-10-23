@@ -474,6 +474,37 @@ func (q *Queries) MarkArtifactBucketNotified(ctx context.Context, id int64) (int
 	return result.RowsAffected(), nil
 }
 
+const reserveArtifactObjectKey = `-- name: ReserveArtifactObjectKey :execrows
+INSERT INTO elitea_storage.objects (bucket_id, key, byte_length, media_type, expires_at)
+VALUES ($1, $2, 0, $3, $4)
+ON CONFLICT (bucket_id, key) DO NOTHING
+`
+
+type ReserveArtifactObjectKeyParams struct {
+	BucketID  int64              `db:"bucket_id" json:"bucket_id"`
+	Key       string             `db:"key" json:"key"`
+	MediaType string             `db:"media_type" json:"media_type"`
+	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+}
+
+// Claims (bucket_id, key) for a write that has not happened yet, and never
+// touches a row that already holds the key: objects_bucket_key_uniq decides
+// between two concurrent claims, so exactly one of them affects a row. The
+// placeholder is overwritten by UpsertArtifactObject once the bytes are
+// stored (#1059).
+func (q *Queries) ReserveArtifactObjectKey(ctx context.Context, arg ReserveArtifactObjectKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, reserveArtifactObjectKey,
+		arg.BucketID,
+		arg.Key,
+		arg.MediaType,
+		arg.ExpiresAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setArtifactBucketPinned = `-- name: SetArtifactBucketPinned :one
 UPDATE elitea_storage.buckets
 SET is_pinned = $2, updated_at = now()

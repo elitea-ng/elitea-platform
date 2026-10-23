@@ -14,68 +14,23 @@
  * an `ExecutionEventData` straight into its socket-shaped handler
  * (`useToolkitChatSocket.hooks.ts:65-67`).
  *
- * `SocketMessageType` is the FULL baseline vocabulary
+ * `SocketMessageType` (`FRAME_TYPE` of `@elitea/client-core/stream`) is the FULL baseline vocabulary
  * (`EliteaUI/src/common/constants.js:157-192`), not the subset the current
  * reducer slice handles. Listing every member is deliberate: an unhandled type
  * must be visibly unhandled — a trimmed enum turns "not ported yet" into
  * "unknown frame", which is how a half-migrated surface drops output silently.
  */
 
+import { FRAME_TYPE } from '@elitea/client-core/stream';
+
 import type { MessageItemWire } from '@/entities/message/lib/wire';
 
-/** Every `type` the chat stream can carry. Ported verbatim from the baseline. */
-export const SocketMessageType = {
-  AgentStart: 'agent_start',
-  AgentContextStatus: 'agent_context_status',
-  AgentResponse: 'agent_response',
-  FullMessage: 'full_message',
-  AgentResultChunk: 'agent_result_chunk',
-  AgentException: 'agent_exception',
-  AgentToolStart: 'agent_tool_start',
-  AgentToolEnd: 'agent_tool_end',
-  AgentToolError: 'agent_tool_error',
-  /**
-   * Client contract 1.2 (#1066): the tool call paused for the user — a
-   * sensitive-tool approval or a clarifying question — and did NOT fail. The
-   * pause itself arrives next as `agent_hitl_interrupt`.
-   */
-  AgentToolPaused: 'agent_tool_paused',
-  /**
-   * One slice of a tool result too large for a single output frame (#956).
-   * See `chatStreamToolOutputChunks.ts`; the completed call that follows
-   * carries `tool_output_chunks` instead of the text.
-   */
-  AgentToolOutputChunk: 'agent_tool_output_chunk',
-  AgentRequiresConfirmation: 'agent_requires_confirmation',
-  AgentHitlInterrupt: 'agent_hitl_interrupt',
-  AgentNodeRecoveryRequired: 'agent_node_recovery_required',
-  McpAuthorizationRequired: 'mcp_authorization_required',
-  AgentLlmStart: 'agent_llm_start',
-  AgentLlmChunk: 'agent_llm_chunk',
-  AgentLlmEnd: 'agent_llm_end',
-  AgentOnFunctionToolNode: 'agent_on_function_tool_node',
-  AgentOnToolNode: 'agent_on_tool_node',
-  AgentOnTransitionalEdge: 'agent_on_transitional_edge',
-  AgentOnConditionalEdge: 'agent_on_conditional_edge',
-  AgentOnDecisionEdge: 'agent_on_decision_edge',
-  References: 'references',
-  Chunk: 'chunk',
-  AIMessageChunk: 'AIMessageChunk',
-  ChatUserMessage: 'chat_user_message',
-  StartTask: 'start_task',
-  Freeform: 'freeform',
-  Error: 'error',
-  LlmError: 'llm_error',
-  PipelineFinish: 'pipeline_finish',
-  AgentThinkingStep: 'agent_thinking_step',
-  AgentThinkingStepUpdate: 'agent_thinking_step_update',
-  ChatPredictSummaryStarted: 'chat_predict_summary_started',
-  ChatPredictSummaryFinished: 'chat_predict_summary_finished',
-  SwarmChildMessage: 'swarm_child_message',
-  AgentSwarmAgentStart: 'agent_swarm_agent_start',
-  AgentSwarmAgentResponse: 'agent_swarm_agent_response',
-  AgentSwarmHandoff: 'agent_swarm_handoff',
-} as const;
+/**
+ * Every `type` the chat stream can carry. The vocabulary is shared with the
+ * mobile client (`@elitea/client-core/stream`'s `FRAME_TYPE`); this name is
+ * kept for the call sites here.
+ */
+export const SocketMessageType = FRAME_TYPE;
 
 /**
  * The types that CHANGE MESSAGE STATE. Everything else in `SocketMessageType`

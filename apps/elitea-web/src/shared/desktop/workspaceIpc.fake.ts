@@ -9,11 +9,13 @@ import type {
   ApprovalDecision,
   RestorePreview,
   StoredTurn,
+  ThreadForkRequest,
   TurnChanges,
   TurnPrewarmRequest,
   TurnStartRequest,
   TurnStarted,
   TurnStatus,
+  CustomCommand,
   Workspace,
   WorkspaceFile,
   WorkspaceIpc,
@@ -24,6 +26,7 @@ type FailableCommand =
   | 'remove'
   | 'bindProject'
   | 'files'
+  | 'commands'
   | 'startTurn'
   | 'cancelTurn'
   | 'turnStatus'
@@ -33,6 +36,7 @@ type FailableCommand =
   | 'restorePreview'
   | 'threadHistory'
   | 'deleteThreadHistory'
+  | 'forkThreadHistory'
   | 'retryCommit';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
@@ -43,9 +47,10 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     prewarmed: TurnPrewarmRequest[];
     commitRetries: string[];
     cancelled: string[];
-    approvals: { requestId: string; decision: ApprovalDecision }[];
+    approvals: { requestId: string; decision: ApprovalDecision; feedback?: string | undefined }[];
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
     fileQueries: { workspaceId: string; query: string; limit?: number }[];
+    forks: ThreadForkRequest[];
   };
   /** What `turn_changes` answers; `latest` defaults to true, `undone` to false. */
   setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
@@ -66,6 +71,8 @@ export interface FakeOptions {
   nextOpen?: Workspace | null;
   /** Every workspace's files for `workspace_files`; the fake answers the ones whose path contains the query. */
   files?: WorkspaceFile[];
+  /** What `commands_list` answers for every workspace (default: none). */
+  commands?: CustomCommand[];
 }
 
 /** What the host refuses a restore with, given the turn's offer. */
@@ -86,7 +93,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [] };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const failure = (command: FailableCommand): Promise<never> | undefined => {
@@ -127,6 +134,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const found = (options.files ?? []).filter((file) => file.path.toLowerCase().includes(needle));
       return Promise.resolve(found.slice(0, limit ?? 50));
     },
+    commands() {
+      return failure('commands') ?? Promise.resolve([...(options.commands ?? [])]);
+    },
     retryCommit(executionId) {
       calls.commitRetries.push(executionId);
       return failure('retryCommit') ?? Promise.resolve();
@@ -153,8 +163,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       if (failed !== undefined) return failed;
       return Promise.resolve(statuses.get(turnId) ?? { state: 'running', done: null });
     },
-    respondApproval(requestId, decision) {
-      calls.approvals.push({ requestId, decision });
+    respondApproval(requestId, decision, feedback) {
+      calls.approvals.push(feedback === undefined ? { requestId, decision } : { requestId, decision, feedback });
       const failed = failure('respondApproval');
       if (failed !== undefined) return failed;
       return Promise.resolve();
@@ -191,6 +201,27 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const deleted = history.get(key)?.length ?? 0;
       history.delete(key);
       return Promise.resolve(deleted);
+    },
+    forkThreadHistory(request) {
+      calls.forks.push(request);
+      const failed = failure('forkThreadHistory');
+      if (failed !== undefined) return failed;
+      const source = history.get(historyKey(request.workspaceId, request.sourceConversationId)) ?? [];
+      const end = request.upToTurnId === undefined ? source.length : source.findIndex((turn) => turn.turn_id === request.upToTurnId) + 1;
+      if (end === 0 && request.upToTurnId !== undefined) return Promise.reject(new WorkspaceIpcError('turn_unknown', 'That turn is not in this thread.'));
+      const renamed = (ids: readonly string[]): string[] => ids.map((id) => request.messageIds?.[id] ?? id);
+      const copied = source.slice(0, end).map((turn, index) => ({
+        ...turn,
+        // As the host does: a copied `done` names the fork's messages.
+        events: turn.events.map((event) =>
+          event.kind === 'done' ? { ...event, payload: { ...event.payload, message_ids: renamed(event.payload.message_ids) } } : event,
+        ),
+        turn_id: `${turn.turn_id}-fork-${String(index)}`,
+        conversation_id: request.targetConversationId,
+        conversation_uuid: request.targetConversationUuid,
+      }));
+      if (copied.length > 0) history.set(historyKey(request.workspaceId, request.targetConversationId), copied);
+      return Promise.resolve(copied.length);
     },
     onEvent(handler) {
       handlers.add(handler);

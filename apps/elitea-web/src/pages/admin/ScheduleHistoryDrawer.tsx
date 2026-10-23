@@ -3,7 +3,7 @@
  *
  * ## This is reuse, not a new read
  *
- * A schedule execution IS an audit event: the pylon scheduler opens a
+ * A schedule execution IS an audit event: the legacy scheduler opens a
  * `Schedule: {name} -> {rpc_func}` span with `telemetry.data_type =
  * schedule_execution` (`legacy/plugins/scheduling/models/schedule.py`), and the
  * tracing plugin writes it to `centry.audit_events` with `event_type =

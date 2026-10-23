@@ -3,7 +3,7 @@ package projectprovisioning_test
 // The project's `X-SECRET` value (#408), at the two levels that own it.
 //
 // A project vault with no `secrets_header_value` accepts the literal string
-// "secret" on the version-details route, because pylon's check_secret_header
+// "secret" on the version-details route, because the legacy check_secret_header
 // reads `secrets.get("secrets_header_value", "secret")` and the Go port
 // reproduces that fallback. Every project the Go provisioner created was in
 // that state: EnsureProjectVault creates an EMPTY vault.
@@ -167,10 +167,9 @@ func TestBackfillGivesAnExistingProjectAHeaderValue(t *testing.T) {
 	secrets := v2secrets.NewHandler(pool)
 
 	// Put the project back in the state every project was in: a readable vault
-	// holding no value. StoreProjectSecrets rewrites the vault, so writing an
-	// empty value is the shape a pre-#408 project has.
-	if err := secrets.StoreProjectSecrets(ctx, projectID,
-		map[string]string{v2secrets.SecretsHeaderValueName: ""}); err != nil {
+	// holding no value. StoreSecret rewrites the vault, so writing an empty
+	// value is the shape a pre-#408 project has.
+	if err := secrets.StoreSecret(ctx, nil, projectID, v2secrets.SecretsHeaderValueName, ""); err != nil {
 		t.Fatalf("clear the header value: %v", err)
 	}
 

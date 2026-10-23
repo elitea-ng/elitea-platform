@@ -459,7 +459,7 @@ func (m *modelPG) ledgerRows(eventID string) int {
 }
 
 // modelMaxDeliver is the budget-writeback consumer's MaxDeliver from
-// deploy/helm/nats-bootstrap/values.yaml before the deferral backoff existed.
+// deploy/helm/elitea/values.yaml natsBootstrap before the deferral backoff existed.
 // The modelled consumer drops a delta after that many deliveries, as JetStream
 // does, so a deferral storm shows up as lost money.
 const modelMaxDeliver = 10

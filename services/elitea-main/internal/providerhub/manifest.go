@@ -9,10 +9,10 @@ package providerhub
 // listing reports the digest. The manifest itself was write-only.
 //
 // The toolkit catalogue needs the document, because a provider's descriptor is
-// where its toolkits are declared. pylon reads the same document from process
-// memory (`elitea_core.present_providers`, filled by an Arbiter registration)
-// and projects `provided_toolkits` into toolkit type schemas. This service has
-// no such memory, so the table is the source.
+// where its toolkits are declared. The legacy runtime reads the same document
+// from process memory (`elitea_core.present_providers`, filled by an Arbiter
+// registration) and projects `provided_toolkits` into toolkit type schemas.
+// This service has no such memory, so the table is the source.
 
 import (
 	"context"

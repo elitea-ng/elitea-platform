@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -129,7 +130,6 @@ func TestCurrentAgentCancelRouteReturns204ForReplayAndRejectsOtherMethods(t *tes
 
 func TestCurrentAgentCancelRouteRejectsIncompleteComposition(t *testing.T) {
 	principal := currentStartPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentStartPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentStartPermissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
@@ -138,10 +138,10 @@ func TestCurrentAgentCancelRouteRejectsIncompleteComposition(t *testing.T) {
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
-		"missing canceller":  {authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing principal":  {canceller: &currentAgentCancellerStub{}, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing canceller":  {authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}, permissions: permissions},
+		"missing principal":  {canceller: &currentAgentCancellerStub{}, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing peer":       {canceller: &currentAgentCancellerStub{}, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
-		"missing permission": {canceller: &currentAgentCancellerStub{}, authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}},
+		"missing permission": {canceller: &currentAgentCancellerStub{}, authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewCurrentAgentCancelRoute(test.canceller, test.authConfig, test.permissions); !errors.Is(err, ErrInvalidCurrentAgentCancelRoute) {
@@ -161,12 +161,7 @@ func newCurrentAgentCancelRoute(
 		canceller,
 		apimw.AuthConfig{
 			PrincipalValidator: currentStartPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil }),
-			ForwardedIdentityVerifier: currentStartPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions:       authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -178,8 +173,7 @@ func newCurrentAgentCancelRoute(
 
 func currentAgentCancelRequest(method, projectID, responseID string) *http.Request {
 	request := httptest.NewRequest(method, "/api/v2/elitea_core/task/prompt_lib/"+projectID+"/"+responseID, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
-	"net/http"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type NodeRecoveryControl struct {
@@ -127,80 +129,89 @@ func (s *ContentServer) WithNodeRecoveryControl(control NodeRecoveryControlStore
 	return s
 }
 
-func (s *ContentServer) PostNodeRecoveryControl(w http.ResponseWriter, r *http.Request) {
-	if s.nodeRecovery == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" {
-		http.Error(w, "Invalid node recovery control request", http.StatusBadRequest)
-		return
+// PollNodeRecovery answers the claimed execution's node recovery control.
+func (s *ContentServer) PollNodeRecovery(ctx context.Context, request *runtimev1.PollNodeRecoveryRequestV1) (*runtimev1.PollNodeRecoveryResponseV1, error) {
+	if s.nodeRecovery == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		http.Error(w, "Node recovery claim denied", http.StatusForbidden)
-		return
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Node recovery claim denied")
 	}
-	if !s.takeNodeRecoverySlot(w) {
-		return
-	}
-	defer func() { <-s.requests }()
-	outcome, err := s.nodeRecovery.PollNodeRecovery(r.Context(), claim)
+	release, err := takeNodeRecoverySlot(s.requests)
 	if err != nil {
-		writeNodeRecoveryControlError(w, err)
-		return
+		return nil, err
 	}
-	writeNodeRecoveryJSON(w, outcome)
+	defer release()
+	outcome, err := s.nodeRecovery.PollNodeRecovery(ctx, claim)
+	if err != nil {
+		return nil, nodeRecoveryControlStatus(err)
+	}
+	encoded, err := nodeRecoveryJSON(outcome)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.PollNodeRecoveryResponseV1{ControlJson: encoded}, nil
 }
 
-func (s *ContentServer) PostNodeRecoveryAck(w http.ResponseWriter, r *http.Request) {
-	if s.nodeRecovery == nil || r.URL.RawQuery != "" {
-		http.NotFound(w, r)
-		return
+// AcknowledgeNodeRecovery records the worker's acknowledgement of one
+// recovery control.
+func (s *ContentServer) AcknowledgeNodeRecovery(ctx context.Context, request *runtimev1.AcknowledgeNodeRecoveryRequestV1) (*runtimev1.AcknowledgeNodeRecoveryResponseV1, error) {
+	if s.nodeRecovery == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		http.Error(w, "Node recovery claim denied", http.StatusForbidden)
-		return
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Node recovery claim denied")
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
-	if err != nil {
-		http.Error(w, "Invalid node recovery acknowledgement", http.StatusBadRequest)
-		return
+	raw := request.GetAckJson()
+	invalid := grpcstatus.Error(codes.InvalidArgument, "Invalid node recovery acknowledgement")
+	if len(raw) > 8192 {
+		return nil, invalid
 	}
 	var ack NodeRecoveryAck
 	if domain.DecodeStrictNullableObject(raw, &ack, []string{"request_id", "activation_id", "expected_revision", "receipt_sha256", "applied_revision", "continuation_receipt", "terminal_stop_reason", "failure_route_continuation"}, []string{"continuation_receipt", "terminal_stop_reason", "failure_route_continuation"}) != nil || !ack.Validate() {
-		http.Error(w, "Invalid node recovery acknowledgement", http.StatusBadRequest)
-		return
+		return nil, invalid
 	}
-	if !s.takeNodeRecoverySlot(w) {
-		return
-	}
-	defer func() { <-s.requests }()
-	outcome, err := s.nodeRecovery.AcknowledgeNodeRecovery(r.Context(), claim, ack)
+	release, err := takeNodeRecoverySlot(s.requests)
 	if err != nil {
-		writeNodeRecoveryControlError(w, err)
-		return
+		return nil, err
 	}
-	writeNodeRecoveryJSON(w, outcome)
+	defer release()
+	outcome, err := s.nodeRecovery.AcknowledgeNodeRecovery(ctx, claim, ack)
+	if err != nil {
+		return nil, nodeRecoveryControlStatus(err)
+	}
+	encoded, err := nodeRecoveryJSON(outcome)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.AcknowledgeNodeRecoveryResponseV1{OutcomeJson: encoded}, nil
 }
 
-func (s *ContentServer) takeNodeRecoverySlot(w http.ResponseWriter) bool {
+func takeNodeRecoverySlot(slots chan struct{}) (func(), error) {
 	select {
-	case s.requests <- struct{}{}:
-		return true
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
 	default:
-		http.Error(w, "Node recovery control is busy", http.StatusServiceUnavailable)
-		return false
+		return nil, grpcstatus.Error(codes.Unavailable, "Node recovery control is busy")
 	}
 }
 
-func writeNodeRecoveryControlError(w http.ResponseWriter, err error) {
-	status := http.StatusServiceUnavailable
+// nodeRecoveryControlStatus: a refused claim or a rejected state is a
+// conflict with the durable recovery state (Aborted); anything else is
+// retryable.
+func nodeRecoveryControlStatus(err error) error {
 	if errors.Is(err, ErrContentUnauthorized) || errors.Is(err, ErrContentRejected) {
-		status = http.StatusConflict
+		return grpcstatus.Error(codes.Aborted, "Node recovery control is unavailable")
 	}
-	http.Error(w, "Node recovery control is unavailable", status)
+	return grpcstatus.Error(codes.Unavailable, "Node recovery control is unavailable")
 }
 
-func writeNodeRecoveryJSON(w http.ResponseWriter, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(value)
+func nodeRecoveryJSON(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "Node recovery control is unavailable")
+	}
+	return encoded, nil
 }

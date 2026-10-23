@@ -6,8 +6,11 @@ use uuid::Uuid;
 
 use crate::pb;
 
-/// Every collection this service owns starts with this prefix.
-pub const COLLECTION_PREFIX: &str = "emb_";
+/// The prefix of the shared collections (toolkit indexes, `DeepWiki`,
+/// memory): `emb_<slug>_<dimension>`.
+pub const SHARED_PREFIX: &str = "emb_";
+/// The prefix of the Inventory collections: `inv_<slug>_<dimension>`.
+pub const INVENTORY_PREFIX: &str = "inv_";
 /// The named dense vector of every point.
 pub const DENSE_VECTOR: &str = "dense";
 /// The named sparse vector that Qdrant fills with BM25 term weights.
@@ -54,6 +57,117 @@ pub const KEYWORD_INDEXES: [&str; 10] = [
     key::TOOLKIT_ID,
 ];
 
+/// The storage format of a collection's dense vectors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DenseDatatype {
+    /// Half precision: half the memory, scores within ~1e-3 of float32.
+    Float16,
+    /// Full precision: the caller's vector as sent (normalised for cosine).
+    Float32,
+}
+
+/// How the collections of one [`Family`] are made and searched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollectionLayout {
+    /// The collection name prefix; the name is `<prefix><slug>_<dimension>`.
+    pub prefix: &'static str,
+    /// The dense vectors' storage format.
+    pub datatype: DenseDatatype,
+    /// Whether the dense vectors have an int8 scalar-quantized copy in RAM
+    /// (searched first, rescored against the originals).
+    pub quantized: bool,
+    /// Whether points carry the BM25 sparse vector `bm25`, so the family
+    /// serves `HybridSearch`.
+    pub bm25: bool,
+    /// Whether a dense search is an exact scan of the scope (Qdrant
+    /// `exact: true`) rather than an HNSW walk.
+    pub exact_search: bool,
+}
+
+/// A family of collections: the sources that share one storage format.
+///
+/// Every operation resolves its collections from `(family, space)`, never
+/// from the space alone, so a point of one family can never be written to,
+/// read from, counted in or deleted from a collection of the other: the two
+/// families have disjoint name prefixes.
+///
+/// | family      | sources                          | name                         | dense    | int8 | BM25 | search |
+/// |-------------|----------------------------------|------------------------------|----------|------|------|--------|
+/// | `Shared`    | toolkit index, `DeepWiki`, memory | `emb_<slug>_<dimension>` | float16  | yes  | yes  | HNSW   |
+/// | `Inventory` | inventory                        | `inv_<slug>_<dimension>`     | float32  | no   | no   | exact  |
+///
+/// Inventory is apart because its conformance suite pins cosine scores to
+/// 1e-6: float16 storage and int8 quantization each move a score by more
+/// than that, and an HNSW walk can miss a neighbour the exact ranking has.
+/// Its graphs are small (hundreds to low thousands of entities per tenant),
+/// so an exact scan of the tenant's points costs little, and the ranking is
+/// then exactly the cosine ranking. It has no BM25 vector: it never asks for
+/// hybrid search, which is refused for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Family {
+    /// Toolkit indexes, `DeepWiki` and memory (ADR-0031 decision 2).
+    Shared,
+    /// Inventory (ADR-0031 decision 7).
+    Inventory,
+}
+
+impl Family {
+    /// Every family.
+    pub const ALL: [Self; 2] = [Self::Shared, Self::Inventory];
+
+    /// How this family's collections are made and searched.
+    #[must_use]
+    pub const fn layout(self) -> CollectionLayout {
+        match self {
+            Self::Shared => CollectionLayout {
+                prefix: SHARED_PREFIX,
+                datatype: DenseDatatype::Float16,
+                quantized: true,
+                bm25: true,
+                exact_search: false,
+            },
+            Self::Inventory => CollectionLayout {
+                prefix: INVENTORY_PREFIX,
+                datatype: DenseDatatype::Float32,
+                quantized: false,
+                bm25: false,
+                exact_search: true,
+            },
+        }
+    }
+
+    /// The family of a source; `None` for an unset source.
+    #[must_use]
+    pub const fn of(source: pb::Source) -> Option<Self> {
+        match source {
+            pb::Source::ToolkitIndex | pb::Source::Deepwiki | pb::Source::Memory => {
+                Some(Self::Shared)
+            }
+            pb::Source::Inventory => Some(Self::Inventory),
+            pb::Source::Unspecified => None,
+        }
+    }
+
+    /// The family of a source as the protocol sends it.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for an unset or unknown source.
+    pub fn of_raw(source: i32) -> Result<Self, Status> {
+        pb::Source::try_from(source)
+            .ok()
+            .and_then(Self::of)
+            .ok_or_else(|| Status::invalid_argument("source is required"))
+    }
+
+    /// The family a collection name belongs to, by its prefix.
+    #[must_use]
+    pub fn of_collection(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|family| name.starts_with(family.layout().prefix))
+    }
+}
+
 /// One embedding space: a model slug and a dimension.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Space {
@@ -92,10 +206,11 @@ impl Space {
         })
     }
 
-    /// The collection name, `emb_<slug>_<dimension>`.
+    /// The name of this space's collection in `family`:
+    /// `<prefix><slug>_<dimension>` (see [`Family`]).
     #[must_use]
-    pub fn collection(&self) -> String {
-        format!("{COLLECTION_PREFIX}{}_{}", self.slug, self.dimension)
+    pub fn collection(&self, family: Family) -> String {
+        format!("{}{}_{}", family.layout().prefix, self.slug, self.dimension)
     }
 
     /// The model slug.
@@ -110,17 +225,18 @@ impl Space {
         self.dimension
     }
 
-    /// Parses a collection name back into a space. A name this service did
-    /// not make gives `None`.
+    /// Parses a collection name back into its family and space. A name this
+    /// service did not make gives `None`.
     #[must_use]
-    pub fn from_collection(name: &str) -> Option<Self> {
-        let rest = name.strip_prefix(COLLECTION_PREFIX)?;
+    pub fn from_collection(name: &str) -> Option<(Family, Self)> {
+        let family = Family::of_collection(name)?;
+        let rest = name.strip_prefix(family.layout().prefix)?;
         let (slug, dimension) = rest.rsplit_once('_')?;
-        let dimension = dimension.parse::<u32>().ok()?;
-        if dimension.to_string() != rest.rsplit_once('_')?.1 {
+        let parsed = dimension.parse::<u32>().ok()?;
+        if parsed.to_string() != dimension {
             return None;
         }
-        Self::new(slug, dimension).ok()
+        Self::new(slug, parsed).ok().map(|space| (family, space))
     }
 
     /// The protocol form.
@@ -146,16 +262,13 @@ fn valid_slug(slug: &str) -> bool {
 /// The payload value of a source.
 ///
 /// # Errors
-/// `INVALID_ARGUMENT` for an unset source; `FAILED_PRECONDITION` for
-/// `inventory`, which ADR-0031 decision 7 reserves.
+/// `INVALID_ARGUMENT` for an unset or unknown source.
 pub fn source_keyword(source: i32) -> Result<&'static str, Status> {
     match pb::Source::try_from(source) {
         Ok(pb::Source::ToolkitIndex) => Ok("toolkit_index"),
         Ok(pb::Source::Deepwiki) => Ok("deepwiki"),
+        Ok(pb::Source::Inventory) => Ok("inventory"),
         Ok(pb::Source::Memory) => Ok("memory"),
-        Ok(pb::Source::Inventory) => Err(Status::failed_precondition(
-            "source inventory is reserved and not served",
-        )),
         Ok(pb::Source::Unspecified) | Err(_) => Err(Status::invalid_argument("source is required")),
     }
 }
@@ -329,11 +442,51 @@ mod tests {
     #[test]
     fn collection_names_round_trip() {
         let space = Space::new("text-embedding-3-small", 1536).expect("space");
-        assert_eq!(space.collection(), "emb_text-embedding-3-small_1536");
-        assert_eq!(Space::from_collection(&space.collection()), Some(space));
+        assert_eq!(
+            space.collection(Family::Shared),
+            "emb_text-embedding-3-small_1536"
+        );
+        assert_eq!(
+            space.collection(Family::Inventory),
+            "inv_text-embedding-3-small_1536"
+        );
+        for family in Family::ALL {
+            assert_eq!(
+                Space::from_collection(&space.collection(family)),
+                Some((family, space.clone()))
+            );
+        }
         assert_eq!(Space::from_collection("other_x_3"), None);
         assert_eq!(Space::from_collection("emb_x_03"), None);
+        assert_eq!(Space::from_collection("inv_x_03"), None);
         assert_eq!(Space::from_collection("emb_x"), None);
+    }
+
+    #[test]
+    fn every_source_has_one_family_and_inventory_is_float32_exact_without_bm25() {
+        for source in [
+            pb::Source::ToolkitIndex,
+            pb::Source::Deepwiki,
+            pb::Source::Memory,
+        ] {
+            assert_eq!(Family::of(source), Some(Family::Shared), "{source:?}");
+        }
+        assert_eq!(Family::of(pb::Source::Inventory), Some(Family::Inventory));
+        assert_eq!(Family::of(pb::Source::Unspecified), None);
+        assert_eq!(
+            Family::of_raw(99).expect_err("unknown").code(),
+            tonic::Code::InvalidArgument
+        );
+
+        let shared = Family::Shared.layout();
+        assert_eq!(shared.datatype, DenseDatatype::Float16);
+        assert!(shared.quantized && shared.bm25 && !shared.exact_search);
+        let inventory = Family::Inventory.layout();
+        assert_eq!(inventory.datatype, DenseDatatype::Float32);
+        assert!(!inventory.quantized && !inventory.bm25 && inventory.exact_search);
+        // Disjoint prefixes: no name belongs to two families.
+        assert!(!SHARED_PREFIX.starts_with(INVENTORY_PREFIX));
+        assert!(!INVENTORY_PREFIX.starts_with(SHARED_PREFIX));
     }
 
     #[test]
@@ -451,13 +604,12 @@ mod tests {
     }
 
     #[test]
-    fn inventory_is_reserved() {
+    fn inventory_is_served() {
         assert_eq!(
-            source_keyword(pb::Source::Inventory as i32)
-                .expect_err("reserved")
-                .code(),
-            tonic::Code::FailedPrecondition
+            source_keyword(pb::Source::Inventory as i32).expect("served"),
+            "inventory"
         );
+        assert_eq!(source_from_keyword("inventory"), pb::Source::Inventory);
         assert!(source_keyword(0).is_err());
         assert_eq!(
             source_keyword(pb::Source::Deepwiki as i32).expect("ok"),

@@ -2,7 +2,7 @@ package cost
 
 import "strings"
 
-// defaultPriceEntry is one row of the pylon-parity default price table. Prices
+// defaultPriceEntry is one row of the legacy-parity default price table. Prices
 // are nano-USD per 1,000,000 tokens (the USD-per-1M value × NanoUSD, written as
 // an exact integer literal so no float rounding enters the money path).
 type defaultPriceEntry struct {
@@ -11,13 +11,13 @@ type defaultPriceEntry struct {
 	outputNano int64
 }
 
-// defaultPriceTable mirrors pylon gateway_analytics.MODEL_PRICING_DEFAULTS
+// defaultPriceTable mirrors the legacy gateway_analytics.MODEL_PRICING_DEFAULTS
 // (values in USD per 1M tokens) scaled to nano-USD. ORDER IS LOAD-BEARING:
-// pylon iterates the dict in insertion order and matches the FIRST prefix that
+// the legacy runtime iterates the dict in insertion order and matches the FIRST prefix that
 // model_name.startswith(prefix) — so "gpt-4o-mini" MUST precede "gpt-4o" which
 // MUST precede "gpt-4-turbo" / "gpt-4", or a shorter prefix would greedily
 // shadow a longer, more-specific one. A Go map would iterate randomly and break
-// parity; this ordered slice preserves the exact pylon semantics.
+// parity; this ordered slice preserves the exact legacy semantics.
 //
 // USD/1M → nano-USD/1M: multiply by 1e9. e.g. 0.15 → 150_000_000; 2.50 →
 // 2_500_000_000; 0.075 → 75_000_000.
@@ -47,7 +47,7 @@ var defaultPriceTable = []defaultPriceEntry{
 	{"mistral-small", 100_000_000, 300_000_000},
 }
 
-// fallbackInputNano / fallbackOutputNano are pylon's ultimate default when no
+// fallbackInputNano / fallbackOutputNano are the legacy runtime's ultimate default when no
 // prefix matches: 1.0 / 3.0 USD per 1M tokens.
 const (
 	fallbackInputNano  int64 = 1_000_000_000
@@ -70,8 +70,8 @@ const (
 // it. Price.AudioFromCatalog is the flag that keeps the two apart, and
 // defaultPrice leaves it false by returning a Price with no audio fields set.
 
-// defaultPrice returns the pylon-parity default TOKEN price for a model name,
-// matching the FIRST prefix (case-insensitive, insertion order) as pylon does,
+// defaultPrice returns the legacy-parity default TOKEN price for a model name,
+// matching the FIRST prefix (case-insensitive, insertion order) as the legacy runtime does,
 // else the ultimate 1.0/3.0 USD fallback. Source is "default" on a table hit and
 // "fallback" on the ultimate default, so a metering gap is observable.
 //

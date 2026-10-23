@@ -22,6 +22,7 @@ import { HttpResponse, http } from 'msw';
 import {
   getGetBrandingSettingsMockHandler,
   getListBrandingPackageVersionsMockHandler,
+  getResetBrandingSettingsMockHandler,
   getSaveBrandingSettingsMockHandler,
   getUploadBrandingAssetMockHandler,
 } from '@/shared/api/generated/admin/admin.msw';
@@ -61,6 +62,7 @@ const STORED: BrandingSettings = {
 };
 
 let savedBodies: Array<Record<string, unknown>> = [];
+let resets = 0;
 let uploads: Array<{ kind: string; contentType: string }> = [];
 
 function useBrandingHandlers(): void {
@@ -74,6 +76,10 @@ function useBrandingHandlers(): void {
       const body = (await request.json()) as { values: Record<string, unknown> };
       savedBodies.push(body.values);
       return { ...STORED, values: body.values, saved: true };
+    }),
+    getResetBrandingSettingsMockHandler(() => {
+      resets += 1;
+      return { ...STORED, values: emptyBrandingValues(), layers: { file: false, database: false }, effective: null, saved: true };
     }),
     getUploadBrandingAssetMockHandler(({ params, request }) => {
       // The body is not parsed: undici's multipart parser rejects jsdom's
@@ -121,6 +127,7 @@ async function productName(): Promise<HTMLInputElement> {
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
   savedBodies = [];
+  resets = 0;
   uploads = [];
   useBrandingHandlers();
 });
@@ -241,20 +248,41 @@ describe('AdminBranding', () => {
     expect(screen.getByTestId('branding-save')).toBeEnabled();
   });
 
-  it('resets every key to inherit after a confirmation, the unedited ones too', async () => {
+  it('resets through the server DELETE after a confirmation, writing no values', async () => {
     renderBranding();
     await productName();
     await userEvent.click(screen.getByTestId('branding-reset'));
     await userEvent.click(await screen.findByTestId('branding-reset-confirm'));
-    await waitFor(() => expect(savedBodies).toHaveLength(1));
-    // The server upserts only the keys it is sent: a reset that omitted
-    // `scheme_tokens` left every imported colour in place (live, 2026-10-05).
-    expect(savedBodies[0]).toEqual({
-      ...emptyBrandingValues(),
-      scheme_tokens: {},
-      sender_name: '',
-      support_email: '',
-    });
+    await waitFor(() => expect(resets).toBe(1));
+    // The server deletes every row of the section (issue 1057): the client no
+    // longer has to know each key — `scheme_tokens` included — to clear it.
+    expect(savedBodies).toHaveLength(0);
     expect(await screen.findByTestId('branding-toast-success')).toHaveTextContent('Branding reset');
+  });
+
+  it('clears imported scheme tokens when the brand colour changes, and says so first', async () => {
+    renderBranding();
+    await productName();
+    expect(screen.queryByTestId('branding-scheme-tokens-notice')).not.toBeInTheDocument();
+    const hue = screen.getByTestId('branding-field-brand_hue');
+    await userEvent.clear(hue);
+    await userEvent.type(hue, NEW_HUE);
+    // STORED carries a package import's tokens, which the resolver applies
+    // after the hue: without clearing them the live app would keep them.
+    expect(await screen.findByTestId('branding-scheme-tokens-notice')).toHaveTextContent('imported package');
+    await userEvent.click(screen.getByTestId('branding-save'));
+    await waitFor(() => expect(savedBodies).toHaveLength(1));
+    expect(savedBodies[0]?.['brand_hue']).toBe(NEW_HUE);
+    expect(savedBodies[0]?.['scheme_tokens']).toEqual({});
+  });
+
+  it('leaves imported scheme tokens alone on a save that keeps the brand colour', async () => {
+    renderBranding();
+    const name = await productName();
+    await userEvent.type(name, ' Corp');
+    expect(screen.queryByTestId('branding-scheme-tokens-notice')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('branding-save'));
+    await waitFor(() => expect(savedBodies).toHaveLength(1));
+    expect(savedBodies[0]).not.toHaveProperty('scheme_tokens');
   });
 });

@@ -52,6 +52,11 @@ type App struct {
 	// the message that says what replaces it. The host refuses to start on
 	// one, so an old setting fails loudly instead of reading as unknown.
 	Retired map[string]string
+	// StoreSchema is the database schema of the durable invocation store
+	// (spi.WithSchema), used when <PREFIX>DATABASE_URL is set: the schema
+	// where the application's engine migrations create the invocation
+	// tables. Empty leaves the table names unqualified.
+	StoreSchema string
 }
 
 // sharedRunners are offered by every application: the default that refuses
@@ -114,6 +119,10 @@ var registry = []App{
 		EnvPrefix:  inventory.EnvPrefix,
 		Descriptor: inventory.Descriptor,
 		Toolkits:   inventory.Toolkits,
+		// The engine's migration 0009 creates the invocation tables in its
+		// own schema, next to the graph tables. DeepWiki's 0002 and 0009
+		// create them unqualified in the deepwiki database (StoreSchema "").
+		StoreSchema: "inventory_graph",
 		Runners: map[string]RunnerFactory{
 			// The ingest-and-read path over a canned knowledge graph: what a
 			// browser journey runs against on a stack with no engine image.

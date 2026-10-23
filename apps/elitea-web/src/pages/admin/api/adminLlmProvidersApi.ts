@@ -230,9 +230,9 @@ export function useCreateAdminLlmProvider(): UseMutationResult<void, Error, LlmP
 /**
  * `PUT /admin/gateway/providers/{id}` — a PARTIAL update.
  *
- * Only the fields the body carries are written. That is the delegated handler's
- * contract and it is load-bearing here: sending a whole `data` object on an
- * edit whose secret field the operator left blank would erase the stored key.
+ * Only the fields the body carries are written, and on this surface that holds
+ * INSIDE `data` too: the server lays the stored `data` under the body's, so a
+ * secret field the operator left blank (omitted) keeps the stored key.
  */
 export function useUpdateAdminLlmProvider(): UseMutationResult<
   void,

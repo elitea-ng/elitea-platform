@@ -94,10 +94,10 @@ func TestTheSameSubjectKeepsItsAccount(t *testing.T) {
 
 /* ── what must STAY adoptable ──────────────────────────────────────────── */
 
-// A pylon-created account holds a BARE ref: the raw subject with no prefix
+// A legacy-created account holds a BARE ref: the raw subject with no prefix
 // (legacy/plugins/auth_init/rpc/processor.py:55). A namespace-blind guard would
 // refuse every such account with 409 on its first login here.
-func TestAPylonBareRefAccountIsStillAdoptable(t *testing.T) {
+func TestABareProviderRefAccountIsStillAdoptable(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx := context.Background()
 

@@ -4,16 +4,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, Response, StatusCode, Version};
-use http_body_util::Full;
-use tonic::body::Body;
+use tonic::Status;
 
-use super::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextError, RuntimeContextRpc,
-    RuntimeContextTransportError,
-};
+use super::input_content::content_fake::{ContextAnswer, ContextCall, ContextRoutes, Routes};
+use super::runtime_context::{RuntimeContextClient, RuntimeContextConfig, RuntimeContextError};
 use crate::protocol::control::test_runtime_context_authority;
 
 struct AcceptCapture {
@@ -21,38 +15,24 @@ struct AcceptCapture {
     body: String,
 }
 
-#[async_trait]
-impl RuntimeContextRpc for AcceptCapture {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        self.accept.lock().expect("accept").extend(
-            request
-                .headers()
-                .get_all("x-elitea-runtime-context-accept")
-                .iter()
-                .map(|value| value.to_str().expect("ascii").to_owned()),
-        );
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", self.body.len())
-            .body(Body::new(Full::new(Bytes::from(self.body.clone()))))
-            .expect("response"))
+#[tonic::async_trait]
+impl ContextRoutes for AcceptCapture {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, Status> {
+        self.accept
+            .lock()
+            .expect("accept")
+            .extend(call.accept_fields);
+        Ok(ContextAnswer::Json(self.body.clone().into_bytes()))
     }
 }
 
 fn fake(body: &serde_json::Value) -> (RuntimeContextClient, Arc<Mutex<Vec<String>>>) {
     let accept = Arc::new(Mutex::new(Vec::new()));
     let client = RuntimeContextClient::with_rpc(
-        AcceptCapture {
+        Routes(AcceptCapture {
             accept: Arc::clone(&accept),
             body: body.to_string(),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal:443".to_owned(),
             deadline: Duration::from_secs(1),

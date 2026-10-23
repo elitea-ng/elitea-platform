@@ -66,7 +66,7 @@ case "${DEEPWIKI_REAL_ENGINE:-native}" in
     exit 1
     ;;
 esac
-export DEEPWIKI_ENGINE_IMAGE="${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki-engine-native:local}"
+export DEEPWIKI_ENGINE_IMAGE="${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local}"
 ENGINE_CONTAINERFILE="${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile"
 ENGINE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.deepwiki-native-real-engine.yml"
 NATIVE_OWNER_REPO="${DEEPWIKI_NATIVE_REPOSITORY:-kharkevich-engineering-lab/floe}"

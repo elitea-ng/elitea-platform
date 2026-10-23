@@ -8,7 +8,7 @@ package repos
 // `internal_tools`, and the panel reads its state back from the details
 // response (apps/elitea-web/src/widgets/chat-box/ui/hooks/
 // useChatBoxInternalTools.ts:56-62, src/pages/chat/useChatPageData.ts:142).
-// Pylon accepted the key on PUT and answered it on GET
+// The legacy runtime accepted the key on PUT and answered it on GET
 // (legacy/plugins/elitea_core/api/v2/conversation.py:123).
 //
 // This repository wrote `'{}'::jsonb` on create and never read or wrote the

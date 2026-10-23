@@ -80,9 +80,9 @@
 --
 -- WHY A FOREIGN KEY IS POSSIBLE NOW, WHEN 0128 REFUSED ONE
 --
--- 0128 refused the foreign key because `centry.project` is a pylon-owned table.
--- The refusal was measured against the wrong risk. The table is present in
--- every database this repository can migrate: the tenant runner refuses to
+-- 0128 refused the foreign key because `centry.project` is a legacy-owned
+-- table. The refusal was measured against the wrong risk. The table is present
+-- in every database this repository can migrate: the tenant runner refuses to
 -- apply anything until it reads the project row
 -- (internal/infra/db/migrate/runner.go ApplyTenant), and the bootstrap schema
 -- creates the table for a standalone deployment

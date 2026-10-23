@@ -55,10 +55,17 @@ async function openArtifacts(page: Page): Promise<void> {
   expect(response?.status(), 'the artifacts page must be served at /app/artifacts').toBeLessThan(400);
 }
 
+// Settles on the SHELL, not on the URL: the URL commits before the boot
+// traffic (config.js, route chunks, /auth/info) has finished, and in WebKit a
+// navigation fired into that traffic drops the next document's loads. P3
+// measured it 3/3 on one run: "Importing a module script failed", then
+// "System env missing", then the OIDC authorize page. Every caller here
+// either navigates again or reads rows next, so it waits for the shell first.
 async function reenterArtifacts(page: Page, url: string): Promise<void> {
   await page.waitForLoadState('networkidle');
   await page.goto(url);
   await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+  await expect(page.getByTestId('sidebar-collapse-toggle')).toBeVisible({ timeout: 30_000 });
 }
 
 /** The project the app itself selected, read from the store the app writes. */

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::api::{ApiError, Bearer, Credentials, PlatformApi};
 use super::approvals::UiDecision;
 use super::definition::RemoteToolSpec;
+use super::environment;
 use super::events::{AgentEvent, VecEmitter};
 use super::remote_tools::{self, RemoteContext, RetryPolicy};
 use super::turn::{AgentHost, HostDeps, PolicySource, TURNS_KEPT_PER_WORKSPACE, TurnRequest};
@@ -136,6 +137,14 @@ pub(crate) fn tool_call(id: &str, name: &str, args: &Value) -> Res {
     ])
 }
 
+/// The model catalogue of project 1: `gpt-test` with a `window` window.
+pub(crate) fn catalogue(window: u64) -> Value {
+    json!({"total": 1, "items": [{
+        "name": "gpt-test", "project_id": 1, "section": "llm",
+        "context_window": window, "max_output_tokens": window / 8,
+    }]})
+}
+
 /// The platform: one agent, one conversation, a model that writes a local
 /// file, then calls the remote toolkit (sensitive: 409 first), then answers.
 fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) -> Res {
@@ -145,6 +154,10 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
         let path = req.path.as_str();
         if path == "/api/v2/social/author" {
             return Res::json(200, &json!({"id": 1, "name": "Me"}));
+        }
+        // The model catalogue: the agent's model has a 200k window.
+        if path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(200, &catalogue(200_000));
         }
         if path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9" {
             return Res::json(200, &resolved(&details, withheld));
@@ -278,6 +291,8 @@ fn build_host(
             index: Some(index.clone()),
             sandbox_deny,
             app_id: Some(TEST_APP_ID.to_owned()),
+            user_rules_dir: Some(app.join("config")),
+            user_commands_dir: Some(app.join("config/commands")),
         })
         .unwrap(),
     );
@@ -288,7 +303,7 @@ fn build_host(
         .lock()
         .unwrap()
         .replace(Box::new(move |event: &AgentEvent| {
-            if event.kind == "approval_request" {
+            if event.kind == "approval_request" || event.kind == "plan_proposed" {
                 let id = event.payload["request_id"].as_str().unwrap().to_owned();
                 let _ = answers.send(id);
             }
@@ -297,7 +312,7 @@ fn build_host(
         let host = host.clone();
         async move {
             while let Some(id) = questions.recv().await {
-                assert!(host.respond(&id, decision));
+                assert!(host.respond(&id, decision.clone()));
             }
         }
     });
@@ -332,7 +347,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         &policy,
         &emitter,
         &index,
-        decision,
+        decision.clone(),
     );
     Harness {
         server,
@@ -360,12 +375,24 @@ fn request(workspace_id: &str) -> TurnRequest {
         plan_mode: false,
         mentions: Vec::new(),
         skills: Vec::new(),
+        compact: false,
+        model: None,
+        project_skills: Vec::new(),
+        command: None,
     }
 }
 
+/// How many 10 ms polls the turn-settling helpers below wait: 30 s. A
+/// healthy turn here settles in well under a second, so the bound only
+/// decides how a loaded CI runner is told apart from a hung turn. At 5 s, a
+/// Linux runner running the whole suite in parallel left the two MCP
+/// authorization turns mid-`write_file` and failed them, although the same
+/// tests pass in about 0.15 s locally and in main's runs.
+const SETTLE_POLLS: usize = 3_000;
+
 /// Until a turn's `done` event (only the event: its commit may still run).
 async fn done_event(emitter: &VecEmitter) -> Vec<AgentEvent> {
-    for _ in 0..500 {
+    for _ in 0..SETTLE_POLLS {
         let events = emitter.all();
         if events.iter().any(|event| event.kind == "done") {
             return events;
@@ -376,7 +403,7 @@ async fn done_event(emitter: &VecEmitter) -> Vec<AgentEvent> {
 }
 
 async fn done_event_of(emitter: &VecEmitter, turn_id: &str) {
-    for _ in 0..500 {
+    for _ in 0..SETTLE_POLLS {
         if emitter
             .all()
             .iter()
@@ -397,7 +424,7 @@ fn settled_done(h: &Harness, turn_id: &str) -> Value {
 
 /// Until no commit of `host` is queued or running (they run after `done`).
 async fn commits_settled(host: &AgentHost) {
-    for _ in 0..500 {
+    for _ in 0..SETTLE_POLLS {
         if host.unsaved_commits().0 == 0 {
             return;
         }
@@ -622,7 +649,10 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         body["user_message"]["content"],
         "Write notes and file a bug"
     );
-    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(
+        body["assistant_message"],
+        json!({"content": "Done.", "model_name": "gpt-test"})
+    );
     let tool_calls = body["tool_calls"].as_object().unwrap();
     assert_eq!(tool_calls.len(), 2);
     assert_eq!(tool_calls["call-local"]["tool_name"], "write_file");
@@ -738,6 +768,98 @@ async fn a_pipeline_and_nested_agents_are_refused_locally() {
     assert_eq!(code, "nested_agents_unsupported");
 }
 
+fn platform_mcp_tool(with_ref: bool) -> Value {
+    let mut tool = json!({
+        "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+        "server_name": "mcp_elitea_internal_applications",
+        "name": "Elitea Applications", "toolkit_name": "Elitea Applications",
+        "description": "Read and change Elitea project resources through authorized platform tools."
+    });
+    if with_ref {
+        tool["selected_tools"] = json!([]);
+        tool["all_tools"] = json!(true);
+        tool["toolkit_ref"] = json!({"toolkit_id": 0, "project_id": 1, "ref": TOOLKIT_REF});
+    }
+    tool
+}
+
+/// Issue 1231: an agent that selects a platform MCP server runs locally when
+/// the platform gives the server a `toolkit_ref`; the model calls the
+/// server's tools through `executeRemoteToolkitTool` with toolkit id 0.
+#[tokio::test]
+async fn platform_mcp_with_ref_is_admitted_as_remote_tool() {
+    let details = json!({
+        "instructions": "List the agents.",
+        "agent_type": "openai",
+        "llm_settings": {"model_name": "gpt-test"},
+        "tools": [platform_mcp_tool(true)]
+    });
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let inner = platform(details, &[]);
+        let model_calls = model_calls.clone();
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                return match model_calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => tool_call(
+                        "call-platform",
+                        "Elitea_Applications_call",
+                        &json!({"tool_name": "get_elitea_core_applications", "arguments": {"limit": 5}}),
+                    ),
+                    _ => sse(&[json!({"choices": [{"delta": {"content": "Two agents."}, "finish_reason": "stop"}]})]),
+                };
+            }
+            if req.path == "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/0" {
+                return Res::json(
+                    200,
+                    &json!({"ok": true, "status": "ok", "toolkit_id": 0,
+                        "toolkit_type": "mcp_elitea_internal_applications",
+                        "tool_name": "get_elitea_core_applications", "result": {"total": 2}}),
+                );
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let call = events.iter().find(|e| e.kind == "tool_call").unwrap();
+    assert_eq!(call.payload["tool"], "Elitea_Applications_call");
+    assert_eq!(call.payload["remote"], true);
+    let result = events.iter().find(|e| e.kind == "tool_result").unwrap();
+    assert_eq!(result.payload["ok"], true, "{:?}", result.payload);
+    let remote = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/0");
+    assert_eq!(remote.len(), 1);
+    let body: Value = serde_json::from_str(&remote[0].body).unwrap();
+    assert_eq!(
+        body,
+        json!({"execution_id": EXECUTION, "application_id": 5, "version_id": 9,
+            "toolkit_ref": TOOLKIT_REF, "tool_name": "get_elitea_core_applications",
+            "arguments": {"limit": 5}})
+    );
+    assert!(!remote[0].headers["idempotency-key"].is_empty());
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let commit: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(commit["assistant_message"]["content"], "Two agents.");
+}
+
+/// A platform older than client contract 1.16 sends no `toolkit_ref`: the
+/// server cannot be reached locally, and the turn is refused before it opens.
+#[tokio::test]
+async fn platform_mcp_without_ref_is_still_refused() {
+    let details = json!({
+        "llm_settings": {"model_name": "m"},
+        "tools": [platform_mcp_tool(false)]
+    });
+    let (code, h) = refused(details, &[], allowed()).await;
+    assert_eq!(code, "platform_mcp_unsupported");
+    assert!(seen(&h.server, "/remote_toolkit_call/prompt_lib/1/0").is_empty());
+}
+
 #[tokio::test]
 async fn local_work_off_refuses_before_any_request() {
     for policy in [None, Some(json!({"allowed": false, "shell": true}))] {
@@ -840,6 +962,72 @@ async fn answering_platform() -> MockServer {
         inner(req)
     })
     .await
+}
+
+/// #1214: a GPT-5 agent's turn is offered `write_file` and `apply_patch`
+/// described as the Codex envelope, not the str-replace tools; a Claude
+/// agent's turn (the default fixture's model is neither) is offered all.
+#[tokio::test]
+async fn the_edit_tools_follow_the_agents_model() {
+    let offered = |details: Value| async move {
+        let inner = platform(details, &[]);
+        let server = serve(move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                return sse(&[
+                    json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}),
+                ]);
+            }
+            inner(req)
+        })
+        .await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let llm = seen(&h.server, "/llm/v1/chat/completions");
+        let body: Value = serde_json::from_str(&llm[0].body).unwrap();
+        body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["function"]["name"].as_str().unwrap().to_owned(),
+                    t["function"]["description"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut gpt5 = agent_details();
+    gpt5["llm_settings"]["model_name"] = json!("gpt-5");
+    let tools = offered(gpt5.clone()).await;
+    let names: Vec<&str> = tools.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(
+        names.contains(&"write_file") && names.contains(&"apply_patch"),
+        "{names:?}"
+    );
+    assert!(
+        !names.contains(&"edit_file") && !names.contains(&"multi_edit"),
+        "{names:?}"
+    );
+    let apply = &tools
+        .iter()
+        .find(|(name, _)| name == "apply_patch")
+        .unwrap()
+        .1;
+    assert!(apply.contains("*** Begin Patch"), "{apply}");
+
+    let tools = offered(agent_details()).await;
+    let names: Vec<&str> = tools.iter().map(|(name, _)| name.as_str()).collect();
+    for tool in ["write_file", "edit_file", "multi_edit", "apply_patch"] {
+        assert!(names.contains(&tool), "{tool} in {names:?}");
+    }
+    // meta.edit_format pins it.
+    gpt5["meta"] = json!({"edit_format": "str_replace"});
+    let tools = offered(gpt5).await;
+    assert!(tools.iter().any(|(name, _)| name == "multi_edit"));
 }
 
 #[tokio::test]
@@ -977,15 +1165,9 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
             attempts: 3,
             delay: Duration::from_millis(5),
         },
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
     };
-    let spec = RemoteToolSpec {
-        exposed_name: "Jira_call".into(),
-        toolkit_id: 3,
-        toolkit_ref: TOOLKIT_REF.into(),
-        toolkit_name: "Jira".into(),
-        description: String::new(),
-        tool_name: None,
-    };
+    let spec = jira_spec();
     let result = remote_tools::call(&context, &spec, "c1", "search", json!({"q": 1})).await;
     assert_eq!(result, json!({"status": "ok", "result": "fine"}));
     let seen = server.seen();
@@ -995,6 +1177,482 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
         seen[1].headers["idempotency-key"]
     );
     assert_eq!(seen[0].body, seen[1].body);
+}
+
+fn jira_spec() -> RemoteToolSpec {
+    RemoteToolSpec {
+        exposed_name: "Jira_call".into(),
+        toolkit_id: 3,
+        toolkit_ref: TOOLKIT_REF.into(),
+        toolkit_name: "Jira".into(),
+        toolkit_type: "jira".into(),
+        description: String::new(),
+        tool_name: None,
+        tools: Vec::new(),
+    }
+}
+
+/// A token-shaped value the 409 carries in every field a careless host
+/// could forward; it must reach no event, log line or commit.
+const PLANTED_TOKEN: &str = "eyJhbGciOiJSUzI1NiJ9.pl4nted-0auth-T0ken.c4n4ry";
+
+/// `mcp_authorization_required` as executeRemoteToolkitTool answers it,
+/// with the token planted everywhere the server's OAuth metadata could put
+/// one.
+fn mcp_authorization_required(reference: Option<&str>) -> Res {
+    let mut retry = json!({"tool_name": "create_issue",
+        "tool_params": {"summary": "Bug", "refresh_token": PLANTED_TOKEN}});
+    if let Some(reference) = reference {
+        retry["mcp_authorization_reference"] = json!(reference);
+    }
+    Res::json(
+        409,
+        &json!({
+            "ok": false, "error": "mcp_authorization_required", "toolkit_id": 3,
+            "toolkit_type": "jira", "tool_name": "create_issue",
+            "message": format!("sign in (access_token={PLANTED_TOKEN})"),
+            "access_token": PLANTED_TOKEN,
+            "authorization_required": {
+                "tool_name": "create_issue", "toolkit_name": "Jira", "toolkit_type": "jira", "toolkit_id": 3,
+                "server_url": format!("https://user:{PLANTED_TOKEN}@mcp.example.com/mcp?access_token={PLANTED_TOKEN}#{PLANTED_TOKEN}"),
+                "resource_metadata_url": format!("https://mcp.example.com/.well-known/oauth?t={PLANTED_TOKEN}"),
+                "www_authenticate": format!("Bearer error=\"invalid_token\", token=\"{PLANTED_TOKEN}\""),
+                "resource_metadata": {"client_secret": PLANTED_TOKEN, "access_token": PLANTED_TOKEN},
+                "access_token": PLANTED_TOKEN
+            },
+            "authorization_retry": retry
+        }),
+    )
+}
+
+/// An approval channel that records every question and answers `decision`
+/// (`None`: never answers).
+struct Answering {
+    decision: Option<&'static str>,
+    asked: Mutex<Vec<elitea_agent_runtime::host::ApprovalRequest>>,
+}
+
+#[async_trait]
+impl elitea_agent_runtime::host::ApprovalChannel for Answering {
+    async fn request(
+        &self,
+        request: elitea_agent_runtime::host::ApprovalRequest,
+    ) -> Result<elitea_agent_runtime::host::ApprovalOutcome, elitea_agent_runtime::host::HostError>
+    {
+        self.asked.lock().unwrap().push(request);
+        let Some(action) = self.decision else {
+            return std::future::pending().await;
+        };
+        Ok(elitea_agent_runtime::host::ApprovalOutcome::Decided {
+            action: action.to_owned(),
+            value: json!({}),
+        })
+    }
+}
+
+async fn remote_context(
+    server: &MockServer,
+    prompt: Arc<dyn elitea_agent_runtime::host::ApprovalChannel>,
+    authorization_wait: Duration,
+) -> RemoteContext {
+    RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new(server.origin.clone())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt,
+        retry: RetryPolicy {
+            attempts: 3,
+            delay: Duration::from_millis(5),
+        },
+        authorization_wait,
+    }
+}
+
+/// Issue 1231: an MCP server that needs the person's sign-in asks once (the
+/// toolkit's web page to sign in on, the server's address without its
+/// query), then, on Continue, sends the call again as a NEW call (its own
+/// Idempotency-Key) with the authorisation reference the 409 named.
+#[tokio::test]
+async fn mcp_authorization_required_asks_then_retries_with_new_key() {
+    const REFERENCE: &str = "mcpref_0123456789abcdef0123456789abcdef0123";
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let calls = calls.clone();
+        move |_req: &Req| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                mcp_authorization_required(Some(REFERENCE))
+            } else {
+                Res::json(
+                    200,
+                    &json!({"ok": true, "status": "ok", "result": {"key": "J-1"}}),
+                )
+            }
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let context = remote_context(&server, prompt.clone(), Duration::from_secs(5)).await;
+    let result = remote_tools::call(
+        &context,
+        &jira_spec(),
+        "c1",
+        "create_issue",
+        json!({"summary": "Bug"}),
+    )
+    .await;
+    assert_eq!(result, json!({"status": "ok", "result": {"key": "J-1"}}));
+
+    let asked = prompt.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].subject, "c1");
+    assert_eq!(asked[0].available_actions, ["continue", "cancel"]);
+    let question = &asked[0].payload["mcp_authorization"];
+    assert_eq!(question["toolkit"], "Jira");
+    assert_eq!(question["server_url"], "https://mcp.example.com/mcp");
+    assert_eq!(question["authorize_path"], "/app/1/toolkits/all/3");
+    assert!(!asked[0].payload.to_string().contains(PLANTED_TOKEN));
+
+    let seen = server.seen();
+    assert_eq!(seen.len(), 2);
+    assert_ne!(
+        seen[0].headers["idempotency-key"],
+        seen[1].headers["idempotency-key"]
+    );
+    let first: Value = serde_json::from_str(&seen[0].body).unwrap();
+    let second: Value = serde_json::from_str(&seen[1].body).unwrap();
+    assert!(first.get("mcp_authorization_reference").is_none());
+    assert_eq!(second["mcp_authorization_reference"], REFERENCE);
+    assert_eq!(second["arguments"], json!({"summary": "Bug"}));
+    assert_eq!(second["tool_name"], "create_issue");
+}
+
+/// The sign-in page is the MCP page when the PLATFORM says the toolkit is an
+/// MCP server (the 409's `authorization_required.toolkit_type`, `mcp` or
+/// `mcp_*`), whatever the definition's type guessed; the definition's type
+/// decides only when the 409 names none, or names another toolkit. The
+/// toolkit id is always the definition's.
+#[tokio::test]
+async fn mcp_authorization_page_follows_the_platforms_toolkit_type() {
+    for (required, spec_type, want) in [
+        (
+            json!({"toolkit_type": "mcp", "toolkit_id": "7"}),
+            "jira",
+            "/app/1/mcps/all/7",
+        ),
+        (
+            json!({"toolkit_type": "mcp_github", "toolkit_id": 7}),
+            "jira",
+            "/app/1/mcps/all/7",
+        ),
+        (
+            json!({"toolkit_type": "jira", "toolkit_id": "7"}),
+            "mcp",
+            "/app/1/toolkits/all/7",
+        ),
+        (
+            json!({"toolkit_type": "mcpish"}),
+            "jira",
+            "/app/1/toolkits/all/7",
+        ),
+        (json!({"toolkit_name": "Jira"}), "mcp", "/app/1/mcps/all/7"),
+        (
+            json!({"toolkit_type": "jira", "toolkit_id": "8"}),
+            "mcp",
+            "/app/1/mcps/all/7",
+        ),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let server = serve({
+            let calls = calls.clone();
+            let required = required.clone();
+            move |_req: &Req| {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Res::json(
+                        409,
+                        &json!({"ok": false, "error": "mcp_authorization_required", "authorization_required": required}),
+                    )
+                } else {
+                    Res::json(200, &json!({"ok": true, "status": "ok", "result": {}}))
+                }
+            }
+        })
+        .await;
+        let prompt = Arc::new(Answering {
+            decision: Some("approve"),
+            asked: Mutex::default(),
+        });
+        let context = remote_context(&server, prompt.clone(), Duration::from_secs(5)).await;
+        let spec = RemoteToolSpec {
+            toolkit_type: spec_type.into(),
+            toolkit_id: 7,
+            ..jira_spec()
+        };
+        remote_tools::call(&context, &spec, "c2", "x", json!({})).await;
+        assert_eq!(
+            prompt.asked.lock().unwrap()[0].payload["mcp_authorization"]["authorize_path"],
+            want,
+            "{required} with a definition type {spec_type}"
+        );
+    }
+}
+
+/// The generic tool of a platform server names its tools to the model: in
+/// its description and as the `tool_name` enum.
+#[test]
+fn a_platform_servers_generic_tool_names_its_tools() {
+    use adk_core::Tool as _;
+    let spec = RemoteToolSpec {
+        exposed_name: "Elitea_Applications_call".into(),
+        toolkit_id: 0,
+        toolkit_name: "Elitea Applications".into(),
+        toolkit_type: "mcp_elitea_internal_applications".into(),
+        tools: vec![
+            super::definition::RemoteToolInfo {
+                name: "get_elitea_core_applications".into(),
+                description: "List the project's agents.".into(),
+            },
+            super::definition::RemoteToolInfo {
+                name: "post_elitea_core_applications".into(),
+                description: String::new(),
+            },
+        ],
+        ..jira_spec()
+    };
+    let context = Arc::new(RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+        retry: RetryPolicy::default(),
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+    });
+    let tool = remote_tools::RemoteToolkitTool::new(spec, context);
+    assert!(
+        tool.description()
+            .contains("- get_elitea_core_applications: List the project's agents.")
+    );
+    assert!(
+        tool.description()
+            .contains("- post_elitea_core_applications")
+    );
+    let schema = tool.parameters_schema().unwrap();
+    assert_eq!(
+        schema["properties"]["tool_name"]["enum"],
+        json!([
+            "get_elitea_core_applications",
+            "post_elitea_core_applications"
+        ])
+    );
+    // A toolkit with no named tools keeps a free `tool_name`.
+    let plain = remote_tools::RemoteToolkitTool::new(
+        jira_spec(),
+        Arc::new(RemoteContext {
+            api: Arc::new(
+                PlatformApi::new(
+                    Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                    "0.1.0",
+                )
+                .unwrap(),
+            ),
+            project_id: 1,
+            execution_id: EXECUTION.into(),
+            application_id: 5,
+            version_id: 9,
+            prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+            retry: RetryPolicy::default(),
+            authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        }),
+    );
+    assert!(
+        plain.parameters_schema().unwrap()["properties"]["tool_name"]
+            .get("enum")
+            .is_none()
+    );
+}
+
+/// A sign-in nobody answers within the wait is closed by the host's own
+/// prompt: the card goes (`approval_closed` for its request id), the turn's
+/// exchanges record a `timeout`, the broker forgets it (a late Continue is
+/// answered "no longer open"), and the tool call ends.
+#[tokio::test]
+async fn mcp_authorization_timeout_closes_and_records_the_question() {
+    let server = serve(|_req: &Req| mcp_authorization_required(None)).await;
+    let broker = Arc::new(super::approvals::ApprovalBroker::default());
+    let prompt = Arc::new(super::approvals::UiPrompt::new(broker.clone()));
+    let emitter = Arc::new(VecEmitter::default());
+    let binding = super::approvals::TurnBinding {
+        events: Arc::new(super::events::TurnEvents::new("t1".into(), emitter.clone())),
+        recorder: Arc::new(super::recorder::Recorder::default()),
+    };
+    prompt.bind(Some(binding.clone()));
+    let context = remote_context(&server, prompt, Duration::from_millis(50)).await;
+    let result = remote_tools::call(&context, &jira_spec(), "c1", "create_issue", json!({})).await;
+    assert_eq!(result["code"], "authorization_timeout");
+    assert_eq!(server.seen().len(), 1);
+
+    let events = emitter.all();
+    let asked = events
+        .iter()
+        .find(|e| e.kind == "approval_request")
+        .unwrap();
+    let request_id = asked.payload["request_id"].as_str().unwrap();
+    let closed = events.iter().find(|e| e.kind == "approval_closed").unwrap();
+    assert_eq!(closed.payload["request_id"], request_id);
+    assert!(!broker.respond(request_id, UiDecision::AllowOnce));
+    let exchanges = binding.recorder.hitl_exchanges();
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(exchanges[0]["kind"], "mcp_authorization");
+    assert_eq!(exchanges[0]["decision"], "timeout");
+    assert_eq!(exchanges[0]["tool_run_id"], "c1");
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains(PLANTED_TOKEN)
+    );
+}
+
+/// Cancel, and no answer within the wait, end that tool call only (the
+/// model reads why); nothing is sent again.
+#[tokio::test]
+async fn mcp_authorization_cancel_ends_only_the_tool_call() {
+    let server = serve(|_req: &Req| mcp_authorization_required(None)).await;
+    let cancelling = Arc::new(Answering {
+        decision: Some("reject"),
+        asked: Mutex::default(),
+    });
+    let context = remote_context(&server, cancelling, Duration::from_secs(5)).await;
+    let result = remote_tools::call(&context, &jira_spec(), "c1", "create_issue", json!({})).await;
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["code"], "authorization_cancelled");
+    assert_eq!(server.seen().len(), 1);
+
+    let silent = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let context = remote_context(&server, silent, Duration::from_millis(50)).await;
+    let result = remote_tools::call(&context, &jira_spec(), "c1", "create_issue", json!({})).await;
+    assert_eq!(result["code"], "authorization_timeout");
+    assert_eq!(server.seen().len(), 2);
+
+    // In a turn: the cancelled call is a failed tool step, and the turn
+    // goes on to the model's answer and commits.
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        move |req: &Req| {
+            if req.path == "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/3" {
+                return mcp_authorization_required(None);
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let ask = events
+        .iter()
+        .find(|e| e.kind == "approval_request")
+        .unwrap();
+    assert_eq!(ask.payload["kind"], "mcp_authorization");
+    assert_eq!(ask.payload["call_id"], "call-remote");
+    let results: Vec<_> = events.iter().filter(|e| e.kind == "tool_result").collect();
+    assert_eq!(results[1].payload["ok"], false);
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(
+        body["assistant_message"],
+        json!({"content": "Done.", "model_name": "gpt-test"})
+    );
+    assert_eq!(body["hitl_exchanges"][0]["kind"], "mcp_authorization");
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
+}
+
+/// The canary: a 409 whose every field carries a token-shaped value. The
+/// person continues, the server asks again (the second ask ends the call),
+/// and the value is in no event, no log line and no commit.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_authorization_tokens_never_reach_events_logs_or_the_commit() {
+    crate::testutil::capture_log();
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        move |req: &Req| {
+            if req.path == "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/3" {
+                return mcp_authorization_required(None);
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let remote = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3");
+    assert_eq!(remote.len(), 2, "asked once, sent again once");
+    let results: Vec<_> = events.iter().filter(|e| e.kind == "tool_result").collect();
+    assert_eq!(results[1].payload["ok"], false);
+    let asks: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "approval_request")
+        .collect();
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0].payload["server_url"], "https://mcp.example.com/mcp");
+    for event in h.emitter.all() {
+        assert!(
+            !serde_json::to_string(&event.payload)
+                .unwrap()
+                .contains(PLANTED_TOKEN),
+            "{} carries the token",
+            event.kind
+        );
+    }
+    for commit in seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    ) {
+        assert!(
+            !commit.body.contains(PLANTED_TOKEN),
+            "the commit carries it"
+        );
+    }
+    // The model's next request holds the tool's result: no token either.
+    for llm in seen(&h.server, "/llm/v1/chat/completions") {
+        assert!(!llm.body.contains(PLANTED_TOKEN), "the model saw it");
+    }
+    assert!(
+        !crate::testutil::LOG
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(PLANTED_TOKEN)),
+        "a log line carries the token"
+    );
 }
 
 /// ADR-0029 decision 2: no crate in this binary may turn on serde_json's
@@ -1234,9 +1892,10 @@ fn git_in(dir: &std::path::Path, args: &[&str]) {
 }
 
 /// The first `/llm` request's system prompt: the agent's instructions, the
-/// host's environment section (folder name, branch, changed files,
-/// enforcement, network; no absolute path), then the untrusted parts
-/// (the picked skill, AGENTS.md, both nonce-framed), then the memory.
+/// host's environment section (enforcement, network; no absolute path),
+/// then the untrusted parts (the picked skill, AGENTS.md, both
+/// nonce-framed), then the environment's volatile part (date, folder name,
+/// branch, changed files) and the memory.
 #[tokio::test]
 async fn system_prompt_order_env_before_untrusted() {
     let server = serve(platform(agent_details(), &[])).await;
@@ -1265,18 +1924,24 @@ async fn system_prompt_order_env_before_untrusted() {
         at("## Environment\n"),
         at("name=\"Style\">\nWrite tersely."),
         at("Run task test."),
+        at("## Environment (this turn)\n"),
         at("Memory: the user likes tea."),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
     let environment = &system[order[1]..];
     let environment = &environment[..environment.find("\n\n## ").unwrap()];
+    // The volatile lines (date, git) come last, after AGENTS.md (#1314).
+    let current = &system[order[4]..order[5]];
     let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
     assert!(
-        environment.contains(&format!(
+        current.contains(&format!(
             "- Workspace: {folder} (git: branch main, 2 changed files)"
         )),
-        "{environment}"
+        "{current}"
     );
+    assert!(current.contains("- Today: "), "{current}");
+    assert!(!current.contains("nonce="), "{current}");
+    assert!(!environment.contains("- Today: "), "{environment}");
     assert!(
         environment.contains("- Sandbox: workspace-write, "),
         "{environment}"
@@ -1295,6 +1960,286 @@ async fn system_prompt_order_env_before_untrusted() {
             assert!(!system.contains(spelling.as_ref()), "{spelling}: {system}");
         }
     }
+}
+
+/// A command file of the workspace.
+fn write_command(h: &Harness, path: &str, text: &str) {
+    let path = h.folder.path().join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn command_pick(name: &str, arguments: &str) -> super::slash_commands::CommandPick {
+    super::slash_commands::CommandPick {
+        name: name.into(),
+        arguments: arguments.into(),
+    }
+}
+
+/// The person's message in the first `/llm` request.
+fn first_user_message(server: &MockServer) -> String {
+    let llm = seen(server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    first["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| message["content"].to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn commands_are_listed_with_their_source_workspace_shadowing_the_persons() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(
+        &h,
+        ".claude/commands/review.md",
+        "---\ndescription: Review the diff\nallowed-tools: Bash(*)\n---\nReview $ARGUMENTS.",
+    );
+    // The person's folder is created (0700) by the first listing.
+    assert_eq!(h.host.commands_list(&h.workspace_id).unwrap().len(), 1);
+    let user = h.app.path().join("config/commands");
+    assert!(user.is_dir());
+    std::fs::write(user.join("review.md"), "my review").unwrap();
+    std::fs::write(user.join("standup.md"), "my standup").unwrap();
+    let listed = h.host.commands_list(&h.workspace_id).unwrap();
+    let rows: Vec<(&str, &str, &str)> = listed
+        .iter()
+        .map(|c| (c.name.as_str(), c.source.as_str(), c.path.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("review", "workspace", ".claude/commands/review.md"),
+            ("standup", "user", "standup.md"),
+        ]
+    );
+    assert_eq!(listed[0].description.as_deref(), Some("Review the diff"));
+    assert_eq!(listed[0].ignored, ["allowed-tools"]);
+    let wire = serde_json::to_value(&listed[0]).unwrap();
+    assert_eq!(wire["source"], "workspace");
+    assert_eq!(wire["argument_hint"], Value::Null);
+    assert_eq!(
+        h.host.commands_list("nope").unwrap_err().code,
+        "workspace_unknown"
+    );
+    // Under the policy: no local work, no listing.
+    h.policy.set(None);
+    assert_eq!(
+        h.host.commands_list(&h.workspace_id).unwrap_err().code,
+        "local_work_disabled"
+    );
+}
+
+#[tokio::test]
+async fn command_turn_sends_framed_expansion_and_records_literal() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(
+        &h,
+        ".claude/commands/review.md",
+        "---\nallowed-tools: Bash(*)\nmodel: other-model\n---\nReview $1 against the checklist ($ARGUMENTS).\n!`rm -rf /`",
+    );
+    std::fs::write(h.folder.path().join("README.md"), "x").unwrap();
+    let mut req = request(&h.workspace_id);
+    // What the UI typed is not trusted: the host spells the literal itself.
+    req.prompt = "anything".into();
+    req.command = Some(command_pick("review", " src/a.rs  carefully "));
+    req.mentions = vec!["README.md".into()];
+    let started = h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let literal = "/review src/a.rs  carefully";
+    let with_mentions = format!("{literal}\n\nFiles the user referenced:\n- README.md");
+    // The model gets the framed expansion, then the arguments as typed.
+    let message = first_user_message(&h.server);
+    assert!(
+        message.contains("## Command /review (from the workspace, .claude/commands/review.md)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Review src/a.rs against the checklist (src/a.rs  carefully).\\n!`rm -rf /`\\n</command_template nonce=\\\""),
+        "{message}"
+    );
+    assert!(
+        message.contains("<command_template nonce=\\\""),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "Arguments: src/a.rs  carefully\\n\\nFiles the user referenced:\\n- README.md"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("allowed-tools"), "{message}");
+    // The front matter's model is not used.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    assert_eq!(first["model"], "gpt-test");
+    // The start, the commit and the history keep what the person typed.
+    let start = &seen(
+        &h.server,
+        "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+    )[0];
+    let start_body: Value = serde_json::from_str(&start.body).unwrap();
+    assert_eq!(start_body["user_input"], with_mentions);
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["user_message"]["content"], with_mentions);
+    assert!(!commit.body.contains("command_template"));
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let turn = turns.iter().find(|t| t.turn_id == started.turn_id).unwrap();
+    assert_eq!(turn.prompt, literal);
+}
+
+#[tokio::test]
+async fn command_changed_after_list_is_reread() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(&h, ".elitea/commands/ship.md", "OLD TEMPLATE");
+    let listed = h.host.commands_list(&h.workspace_id).unwrap();
+    assert_eq!(listed[0].description.as_deref(), Some("OLD TEMPLATE"));
+    write_command(&h, ".elitea/commands/ship.md", "NEW TEMPLATE");
+    let mut req = request(&h.workspace_id);
+    req.command = Some(command_pick("ship", ""));
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let message = first_user_message(&h.server);
+    assert!(message.contains("NEW TEMPLATE"), "{message}");
+    assert!(!message.contains("OLD TEMPLATE"), "{message}");
+    assert!(!message.contains("Arguments:"), "{message}");
+}
+
+#[tokio::test]
+async fn unknown_command_is_refused() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // A symlinked or denied command file is as good as absent.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("evil.md"), "OUTSIDE").unwrap();
+    std::fs::create_dir_all(h.folder.path().join(".claude/commands")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("evil.md"),
+        h.folder.path().join(".claude/commands/evil.md"),
+    )
+    .unwrap();
+    for name in ["deploy", "evil"] {
+        let mut req = request(&h.workspace_id);
+        req.command = Some(command_pick(name, "now"));
+        let error = h.host.start(req).await.unwrap_err();
+        assert_eq!(error.code, "command_unknown", "{name}");
+        assert!(
+            error.message.contains(&format!("/{name}")),
+            "{}",
+            error.message
+        );
+    }
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    let mut req = request(&h.workspace_id);
+    req.command = Some(command_pick("../evil", ""));
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
+    assert!(h.server.seen().is_empty(), "refused before any request");
+}
+
+/// The platform with project skills: 12 "Deploy", 13 large, 14 not the person's.
+fn with_project_skills(
+    inner: impl Fn(&Req) -> Res + Send + Sync + 'static,
+) -> impl Fn(&Req) -> Res + Send + Sync + 'static {
+    move |req: &Req| match req.path.as_str() {
+        "/api/v2/elitea_core/skill/prompt_lib/1/12" => Res::json(
+            200,
+            &json!({"id": "12", "project_id": "1", "name": "Deploy", "type": "skill",
+                "is_default": false, "instructions": "Deploy with care.",
+                "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z"}),
+        ),
+        "/api/v2/elitea_core/skill/prompt_lib/1/13" => Res::json(
+            200,
+            &json!({"id": "13", "name": "Huge", "instructions": "h".repeat(super::skills::MAX_SKILL_BYTES)}),
+        ),
+        "/api/v2/elitea_core/skill/prompt_lib/1/14" => {
+            Res::json(403, &json!({"error": "forbidden", "message": "no"}))
+        }
+        _ => inner(req),
+    }
+}
+
+#[tokio::test]
+async fn project_skill_is_fetched_by_host_not_ui() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.prompt = "/Deploy the release".into();
+    // The UI names the skill by id only; whatever text it might hold is not read.
+    // Picked twice (either spelling of the id), it is read once.
+    req.project_skills = vec![json!("12"), json!(12)];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let fetched = seen(&h.server, "/elitea_core/skill/prompt_lib/1/12");
+    assert_eq!(fetched.len(), 1);
+    assert_eq!(fetched[0].method, "GET");
+    assert_eq!(
+        fetched[0].headers.get("authorization").map(String::as_str),
+        Some("Bearer elnat_test_token")
+    );
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        system.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
+        "{system}"
+    );
+    // Applied to this turn only: the load_skill catalogue stays the version's.
+    assert!(system.contains("Available skill: Style."), "{system}");
+    assert!(!system.contains("Available skill: Deploy"), "{system}");
+    // A skill the person cannot read is refused before the turn starts.
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.project_skills = vec![json!(14)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "skill_unknown");
+    assert!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn project_skill_counts_toward_skill_limits() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // Five picks at most, version and project skills together: refused
+    // before any request.
+    let mut req = request(&h.workspace_id);
+    req.skills = vec!["style".into()];
+    req.project_skills = vec![json!(12), json!(12), json!(12), json!(12), json!(12)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    // 64 KiB of skill text together: the version's "Style" and the project's
+    // "Huge" are over it, refused (not cut) before the turn starts.
+    let mut req = request(&h.workspace_id);
+    req.skills = vec!["style".into()];
+    req.project_skills = vec![json!(13)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "skill_too_large");
+    assert!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty()
+    );
+    // Alone it fits.
+    let mut req = request(&h.workspace_id);
+    req.project_skills = vec![json!(13)];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
 }
 
 #[tokio::test]
@@ -1729,6 +2674,20 @@ async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
     assert!(!after[0].live, "but the turn is no longer reviewable");
     assert_eq!(seen(&h.server, "/social/author").len(), 2);
 
+    // A thread's spilled outputs are its own (a turn scopes the
+    // workspace's store to its thread); another thread of the folder has
+    // its own.
+    let session = h
+        .host
+        .local_session_for_tests(&h.workspace_id, h.folder.path().to_owned());
+    let store = session.spill_store();
+    store.set_conversation(Some("42"));
+    let ours = store.spill("the turn's output\n").unwrap();
+    store.set_conversation(Some("43"));
+    let theirs = store.spill("another thread's output\n").unwrap();
+    store.set_conversation(Some("42"));
+    assert_eq!(store.ids(), std::slice::from_ref(&ours));
+
     assert_eq!(
         h.host
             .delete_thread_history(&h.workspace_id, "42")
@@ -1743,6 +2702,14 @@ async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
             .unwrap()
             .is_empty()
     );
+    // Deleting the thread's history removed its outputs, not the other's.
+    assert!(store.ids().is_empty());
+    assert_eq!(
+        store.read(&ours).unwrap_err().code(),
+        elitea_local_tools::error::ErrorCode::OutputExpired
+    );
+    store.set_conversation(Some("43"));
+    assert_eq!(store.ids(), [theirs]);
 }
 
 #[tokio::test]
@@ -2549,7 +3516,7 @@ impl Harness {
             &policy,
             &emitter,
             &index,
-            decision,
+            decision.clone(),
         );
         Self {
             server,
@@ -2973,6 +3940,8 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
             index: None,
             sandbox_deny: super::turn::app_dirs_for_sandbox([Some(h.app.path().to_owned())]),
             app_id: Some(TEST_APP_ID.to_owned()),
+            user_rules_dir: None,
+            user_commands_dir: None,
         })
         .unwrap(),
     )
@@ -3375,7 +4344,10 @@ async fn step_limit_asks_to_continue_and_continues_same_session() {
         body["user_message"]["content"],
         "Write notes and file a bug"
     );
-    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(
+        body["assistant_message"],
+        json!({"content": "Done.", "model_name": "gpt-test"})
+    );
     assert_eq!(body["tool_calls"].as_object().unwrap().len(), 3);
     assert_eq!(body["hitl_exchanges"][0]["kind"], "continue");
     assert_eq!(body["hitl_exchanges"][0]["decision"], "approve");
@@ -3409,7 +4381,7 @@ async fn continue_is_capped() {
     assert_eq!(commits[0]["hitl_exchanges"].as_array().unwrap().len(), 3);
     assert_eq!(
         commits[0]["assistant_message"],
-        json!({"content": "The agent stopped after using its 2 steps."})
+        json!({"content": "The agent stopped after using its 2 steps.", "model_name": "gpt-test"})
     );
     let done_status = of_kind(&events, "status")
         .into_iter()
@@ -3501,6 +4473,7 @@ async fn the_workspace_step_limit_wins_over_the_agents() {
             &h.workspace_id,
             crate::workspaces::AgentSettings {
                 step_limit: Some(10),
+                ..crate::workspaces::AgentSettings::default()
             },
         )
         .unwrap();
@@ -4446,4 +5419,1542 @@ async fn a_failed_commit_releases_the_workspace() {
     let events = until_done(&h).await;
     assert_eq!(of_kind(&events, "commit_failed").len(), 1);
     assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
+}
+
+// ---- Approval rule files (#1216) ----
+
+/// A private rules file (`0600` in a `0700` directory), as the host writes.
+fn write_rules(path: &std::path::Path, text: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(path, text).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// A rules file in the workspace's data dir (and the person's in the app
+/// config) decides the session's calls; a change is picked up at the next
+/// look (a turn's start). On main the session ran on
+/// `WorkspaceSettings::default()` and ignored both.
+#[tokio::test]
+async fn workspace_rules_are_loaded() {
+    use elitea_local_tools::approvals::{Source, Verdict};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let root = h.folder.path().to_owned();
+    // Open the workspace's session, as a turn does.
+    let _ = h.host.sandbox_request(&h.workspace_id, root.clone());
+    let before = h.host.explain_command(&h.workspace_id, "echo hi").unwrap();
+    assert_eq!(
+        (before.verdict, before.source),
+        (Verdict::Allow, Source::Default)
+    );
+
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["echo"],"decision":"forbidden",
+            "justification":"Print with printf instead.","match":["echo hi"]}]}"#,
+    );
+    write_rules(
+        &h.app.path().join("config/rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["cargo",["test","check"]],"match":["cargo test"]},
+            {"pattern":["git","reset"],"decision":"prompt"}]}"#,
+    );
+    let forbidden = h.host.explain_command(&h.workspace_id, "echo hi").unwrap();
+    assert_eq!(
+        (forbidden.verdict, forbidden.source),
+        (Verdict::Deny, Source::Workspace)
+    );
+    assert_eq!(forbidden.reason, "Print with printf instead.");
+    assert_eq!(forbidden.rule.unwrap().label(), "workspace#1");
+    let user = h
+        .host
+        .explain_command(&h.workspace_id, "git reset --soft HEAD~1")
+        .unwrap();
+    assert_eq!((user.verdict, user.source), (Verdict::Ask, Source::User));
+    assert_eq!(user.rule.unwrap().label(), "user#2");
+
+    // A broken workspace file loads nothing; the user's rules still apply.
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["echo"],"decision":"forbidden","match":["printf x"]}]}"#,
+    );
+    let after = h.host.explain_command(&h.workspace_id, "echo hi").unwrap();
+    assert_eq!(
+        (after.verdict, after.source),
+        (Verdict::Allow, Source::Default)
+    );
+    let states = h.host.rule_files().states(&h.workspace_id);
+    let error = states[0].error.as_ref().expect("the error is shown");
+    assert_eq!(error.rule_index, Some(1));
+    assert_eq!(error.example.as_deref(), Some("printf x"));
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "git reset x")
+            .unwrap()
+            .source,
+        Source::User
+    );
+}
+
+/// A repository's `.elitea/rules.json` is a proposal: never loaded into a
+/// session until the person imports it into the workspace's rules.
+#[tokio::test]
+async fn repository_rules_are_only_proposed() {
+    use elitea_local_tools::approvals::{Source, Verdict};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let root = h.folder.path().to_owned();
+    std::fs::create_dir_all(root.join(".elitea")).unwrap();
+    // The repository tries to grant itself `rm -rf` and to forbid `ls`.
+    std::fs::write(
+        root.join(".elitea/rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["git","reset"]},{"pattern":["ls"],"decision":"forbidden"}]}"#,
+    )
+    .unwrap();
+    let _ = h.host.sandbox_request(&h.workspace_id, root.clone());
+    let reset = h
+        .host
+        .explain_command(&h.workspace_id, "git reset --hard")
+        .unwrap();
+    assert_eq!(
+        (reset.verdict, reset.source),
+        (Verdict::Ask, Source::Default)
+    );
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "ls")
+            .unwrap()
+            .source,
+        Source::Default
+    );
+    let (folder, deny) = h.host.rules_folder(&h.workspace_id).unwrap();
+    let proposal = crate::rules::RuleFiles::proposed(&folder, &deny).unwrap();
+    assert_eq!(proposal.count, 2);
+    assert!(
+        h.host.rule_files().states(&h.workspace_id)[0]
+            .file
+            .as_ref()
+            .unwrap()
+            .rules
+            .is_empty()
+    );
+    // The person imports it: copied into the workspace's rules (host data).
+    h.host
+        .rule_files()
+        .import_proposed(&h.workspace_id, &folder, &deny, &proposal.digest)
+        .unwrap();
+    assert!(
+        h.workspaces
+            .data_dir(&h.workspace_id)
+            .join("rules.json")
+            .is_file()
+    );
+    let reset = h
+        .host
+        .explain_command(&h.workspace_id, "git reset --hard")
+        .unwrap();
+    assert_eq!(
+        (reset.verdict, reset.source),
+        (Verdict::Allow, Source::Workspace)
+    );
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "ls")
+            .unwrap()
+            .verdict,
+        Verdict::Deny
+    );
+}
+
+/// "Always allow" in the dialog appends a prefix rule to the workspace's
+/// rules file, with the approved command as its `match` example.
+#[tokio::test]
+async fn always_allow_appends_a_workspace_prefix_rule() {
+    use elitea_local_tools::approvals::{Source, ToolCall, ToolKind};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let root = h.folder.path().to_owned();
+    let session = h.host.local_session_for_tests(&h.workspace_id, root);
+    let call = ToolCall {
+        command: Some("git reset --hard v1".into()),
+        ..ToolCall::new(ToolKind::RunCommand)
+    };
+    session.rules().remember(&call, Some("git reset")).unwrap();
+    let path = h.workspaces.data_dir(&h.workspace_id).join("rules.json");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let rule = &file["rules"][0];
+    assert_eq!(rule["decision"], "allow");
+    assert_eq!(rule["pattern"].as_array().unwrap().len(), 2);
+    assert_eq!(rule["match"][0].as_array().unwrap().len(), 4, "{rule}");
+    assert!(
+        rule["justification"]
+            .as_str()
+            .unwrap()
+            .starts_with("Allowed from the approval dialog on ")
+    );
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "git reset --hard x")
+            .unwrap()
+            .source,
+        Source::Workspace
+    );
+}
+
+/// A workspace `forbidden` rule refuses the model's command with the
+/// rule's justification in the tool result, so the model can take the
+/// alternative instead of retrying; no approval is asked.
+#[tokio::test]
+async fn a_forbidden_rule_reaches_the_model_with_its_justification() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-publish",
+                    "run_command",
+                    &json!({"command": "sh -c 'npm publish --tag next'"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Opened a PR instead."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["npm","publish"],"decision":"forbidden",
+            "justification":"Publishing goes through the release pipeline; open a PR instead.",
+            "match":["npm publish --tag next"]}]}"#,
+    );
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "refused inline"
+    );
+    let bodies = llm_bodies(&h.server);
+    let second = bodies[1].to_string();
+    assert!(second.contains("forbidden_by_rule"), "{second}");
+    assert!(second.contains("workspace#1"), "{second}");
+    assert!(
+        second.contains("Publishing goes through the release pipeline; open a PR instead."),
+        "{second}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Context compaction (#1217)
+// ---------------------------------------------------------------------------
+
+/// A v1 `context_summary` record, as a summary model answers it.
+fn summary_record(objective: &str) -> String {
+    json!({"version": 1, "objective": objective, "constraints": [], "decisions": [],
+        "key_facts": ["big.txt holds numbered lines."], "completed_work": [],
+        "open_work": ["Answer the question."], "next_steps": [], "unresolved_issues": [],
+        "references": []})
+    .to_string()
+}
+
+/// A summary call: no tools, one user message holding the template.
+fn is_summary_call(body: &Value) -> bool {
+    body.get("tools").is_none()
+}
+
+/// The compaction tests' model: "read big.txt N times" reads it N times,
+/// then answers; a summary call answers [`summary_record`]; anything else
+/// is "ok". `summaries` counts the summary calls.
+fn reading_script(summaries: Arc<AtomicUsize>) -> Script {
+    let remaining = Arc::new(AtomicUsize::new(0));
+    Box::new(move |body: &Value| {
+        if is_summary_call(body) {
+            summaries.fetch_add(1, Ordering::SeqCst);
+            return say(&summary_record("Read big.txt and report."));
+        }
+        let last = last_message(body);
+        if last["role"] == "tool" {
+            if remaining.load(Ordering::SeqCst) == 0 {
+                return say("Done reading.");
+            }
+            remaining.fetch_sub(1, Ordering::SeqCst);
+            let n = remaining.load(Ordering::SeqCst);
+            return tool_call(
+                &format!("call-read-{n}"),
+                "read_file",
+                &json!({"path": "big.txt"}),
+            );
+        }
+        let prompt = last["content"].as_str().unwrap_or_default();
+        if let Some(times) = prompt
+            .strip_prefix("read big.txt ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            remaining.store(times - 1, Ordering::SeqCst);
+            return tool_call("call-read-first", "read_file", &json!({"path": "big.txt"}));
+        }
+        say("ok")
+    })
+}
+
+/// [`memory_platform`] whose catalogue gives `gpt-test` a `window` window.
+async fn small_window_platform(
+    window: u64,
+    convo: Arc<Mutex<Convo>>,
+    script: Script,
+) -> MockServer {
+    let inner = memory_platform(convo, script);
+    serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(200, &catalogue(window));
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn all_commit_bodies(server: &MockServer) -> Vec<Value> {
+    seen(server, "")
+        .iter()
+        .filter(|req| req.path.contains("/local_turn_commit/"))
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+fn write_big(h: &Harness) {
+    let text: String = (0..100)
+        .map(|n| format!("line {n} of the big file, padded to be long enough\n"))
+        .collect();
+    std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
+}
+
+/// The agent's requests (summary calls left out).
+fn agent_bodies(server: &MockServer) -> Vec<Value> {
+    llm_bodies(server)
+        .into_iter()
+        .filter(|body| !is_summary_call(body))
+        .collect()
+}
+
+/// Every tool result answers a call the same request made before it.
+fn assert_paired(body: &Value) {
+    let mut called = std::collections::HashSet::new();
+    for message in body["messages"].as_array().unwrap() {
+        for call in message["tool_calls"].as_array().into_iter().flatten() {
+            called.insert(call["id"].as_str().unwrap().to_owned());
+        }
+        if message["role"] == "tool" {
+            let id = message["tool_call_id"].as_str().unwrap();
+            assert!(called.contains(id), "orphaned result {id}: {body}");
+        }
+    }
+}
+
+/// The first message after the system one, as text.
+fn first_message(body: &Value) -> String {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] != "system")
+        .map(|m| m["content"].to_string())
+        .unwrap_or_default()
+}
+
+const SUMMARY_MARK: &str = "[context summary v1]";
+
+/// The events of one turn, in order.
+fn events_of(h: &Harness, turn_id: &str) -> Vec<AgentEvent> {
+    h.emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.turn_id == turn_id)
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn long_session_compacts_under_small_window() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let server = small_window_platform(8_192, convo, reading_script(summaries.clone())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_big(&h);
+    for prompt in [
+        "read big.txt 2 times",
+        "read big.txt 2 times",
+        "read big.txt 8 times",
+    ] {
+        let started = h.host.start(turn(&h, prompt)).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let events = events_of(&h, &started.turn_id);
+        assert!(of_kind(&events, "error").is_empty(), "{events:?}");
+    }
+    commits_settled(&h.host).await;
+    assert!(
+        summaries.load(Ordering::SeqCst) >= 1,
+        "the session never compacted"
+    );
+    let bodies = agent_bodies(&h.server);
+    // 3 + 3 + 9 model steps: the session kept running through compactions.
+    assert_eq!(bodies.len(), 15);
+    for body in &bodies {
+        assert_paired(body);
+        // Within the 8k window: every request after the first compaction
+        // fits (a token is 4 bytes in the estimate).
+        if first_message(body).contains(SUMMARY_MARK) {
+            assert!(
+                body.to_string().len() / 4 <= 8_192,
+                "{}",
+                body.to_string().len()
+            );
+        }
+    }
+    assert!(
+        bodies
+            .iter()
+            .any(|body| first_message(body).contains(SUMMARY_MARK)),
+        "no request started from the summary"
+    );
+    let commits = all_commit_bodies(&h.server);
+    assert_eq!(commits.len(), 3);
+    assert_eq!(
+        commits[2]["assistant_message"]["content"], "Done reading.",
+        "{}",
+        commits[2]
+    );
+}
+
+#[tokio::test]
+async fn compaction_marker_reused_next_turn() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
+    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
+    // leaves room for the next turn's prompt and it would compact again.
+    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_big(&h);
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    let after_first = summaries.load(Ordering::SeqCst);
+    assert!(after_first >= 1, "the first turn never compacted");
+    // The marker is in the session, after the events it covers.
+    let rows = h.session_rows();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.3 == super::context::MARKER_AUTHOR)
+            .count(),
+        after_first,
+        "{rows:?}"
+    );
+    run_turn(&h, "what next?").await;
+    commits_settled(&h.host).await;
+    // No second summarisation of the same events: the next turn starts
+    // from the stored summary.
+    assert_eq!(summaries.load(Ordering::SeqCst), after_first);
+    let last = agent_bodies(&h.server).pop().unwrap();
+    assert!(first_message(&last).contains(SUMMARY_MARK), "{last}");
+    assert!(last.to_string().contains("what next?"));
+    assert!(
+        !last.to_string().contains("call-read-first"),
+        "folded events came back: {last}"
+    );
+    assert_paired(&last);
+}
+
+/// A model that refuses a request as too long: `always`, or until the
+/// request starts from a summary.
+fn overflowing_script(summaries: Arc<AtomicUsize>, always: bool) -> Script {
+    let inner = reading_script(summaries);
+    Box::new(move |body: &Value| {
+        let prompt = body.to_string();
+        if !is_summary_call(body)
+            && prompt.contains("overflow")
+            && (always || !first_message(body).contains(SUMMARY_MARK))
+        {
+            return Res::json(
+                400,
+                &json!({"error": {"message": "This model's maximum context length is 8192 tokens.",
+                    "type": "invalid_request_error", "code": "context_length_exceeded"}}),
+            );
+        }
+        if prompt.contains("overflow") && !is_summary_call(body) {
+            return say("Fits now.");
+        }
+        inner(body)
+    })
+}
+
+#[tokio::test]
+async fn overflow_compacts_and_retries_once() {
+    for always in [false, true] {
+        let convo = Arc::new(Mutex::new(Convo::default()));
+        let summaries = Arc::new(AtomicUsize::new(0));
+        let server = small_window_platform(
+            200_000,
+            convo,
+            overflowing_script(summaries.clone(), always),
+        )
+        .await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        write_big(&h);
+        run_turn(&h, "read big.txt 2 times").await;
+        assert_eq!(
+            summaries.load(Ordering::SeqCst),
+            0,
+            "a 200k window needs no compaction"
+        );
+        let before = agent_bodies(&h.server).len();
+        let started = h.host.start(turn(&h, "overflow, please")).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let events = events_of(&h, &started.turn_id);
+        commits_settled(&h.host).await;
+        // One compaction, one retry: two requests for the step.
+        assert_eq!(summaries.load(Ordering::SeqCst), 1, "always={always}");
+        assert_eq!(agent_bodies(&h.server).len() - before, 2, "always={always}");
+        let errors: Vec<Value> = of_kind(&events, "error")
+            .into_iter()
+            .filter(|error| error["code"] == "context_overflow")
+            .collect();
+        let commits = all_commit_bodies(&h.server);
+        let last = commits.last().unwrap();
+        if always {
+            assert_eq!(errors.len(), 1, "{events:?}");
+            assert!(
+                errors[0]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Start a new thread")
+            );
+            assert_eq!(last["assistant_message"]["is_error"], true);
+        } else {
+            assert!(errors.is_empty(), "{events:?}");
+            assert_eq!(last["assistant_message"]["content"], "Fits now.");
+        }
+    }
+}
+
+fn say_with_usage(text: &str) -> Res {
+    sse(&[
+        json!({"choices": [{"delta": {"content": text}}]}),
+        json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        json!({"choices": [], "usage": {"prompt_tokens": 1000, "completion_tokens": 5, "total_tokens": 1005}}),
+    ])
+}
+
+#[tokio::test]
+async fn commit_carries_context_summary() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let inner = reading_script(summaries.clone());
+    let script: Script = Box::new(move |body: &Value| {
+        let last = last_message(body);
+        if !is_summary_call(body) && last["content"].to_string().contains("go on") {
+            return say_with_usage("Going on.");
+        }
+        inner(body)
+    });
+    let server = small_window_platform(200_000, convo, script).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_big(&h);
+    run_turn(&h, "read big.txt 2 times").await;
+    commits_settled(&h.host).await;
+    assert!(
+        all_commit_bodies(&h.server)[0]
+            .get("context_summary")
+            .is_none()
+    );
+    // `/compact`: the next turn compacts first, whatever its size.
+    let started = h
+        .host
+        .start(TurnRequest {
+            compact: true,
+            ..turn(&h, "go on")
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let events = events_of(&h, &started.turn_id);
+    commits_settled(&h.host).await;
+    assert_eq!(summaries.load(Ordering::SeqCst), 1);
+    let commit = all_commit_bodies(&h.server).pop().unwrap();
+    let summary = &commit["context_summary"];
+    assert_eq!(summary["version"], 1, "{commit}");
+    assert_eq!(summary["objective"], "Read big.txt and report.");
+    let facts = summary["key_facts"].to_string();
+    assert!(
+        facts.contains("files_touched") && facts.contains("big.txt"),
+        "{facts}"
+    );
+    assert!(summary.to_string().len() <= 32 * 1024);
+    // The meter: the step's usage carries the request's occupancy.
+    let usage = of_kind(&events, "usage");
+    let context = &usage.last().expect("a usage event")["context"];
+    assert_eq!(context["window_tokens"], 200_000);
+    assert_eq!(context["compacted"], true);
+    assert!(context["compacted_at"].is_string());
+    assert!(context["used_tokens"].as_u64().unwrap() > 0);
+    assert_eq!(context["window_fallback"], false);
+    assert!(
+        !context.to_string().contains("big.txt"),
+        "no content in the meter"
+    );
+    // The summary call's phase reached the meter while it ran, before the
+    // step's usage: a `context` event per phase change.
+    let phases: Vec<(u64, String)> = events
+        .iter()
+        .filter(|event| event.kind == "context")
+        .map(|event| {
+            (
+                event.seq,
+                event.payload["phase"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(phases[0].1, "compacting", "{phases:?}");
+    assert_eq!(phases[1].1, "compacted", "{phases:?}");
+    let first_usage = events.iter().find(|event| event.kind == "usage").unwrap();
+    assert!(phases[1].0 < first_usage.seq);
+}
+
+#[tokio::test]
+async fn a_transient_catalogue_answer_is_asked_again_next_turn() {
+    // 429 first: the turn runs on the fallback and the next turn asks
+    // again; the 200 then is kept for the session.
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let inner = memory_platform(convo, reading_script(Arc::new(AtomicUsize::new(0))));
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = asked.clone();
+    let server = serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                Res::json(429, &json!({"error": "slow down"}))
+            } else {
+                Res::json(200, &catalogue(200_000))
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for _ in 0..3 {
+        run_turn(&h, "hello").await;
+        commits_settled(&h.host).await;
+    }
+    assert_eq!(asked.load(Ordering::SeqCst), 2);
+}
+
+/// `run_tests` (#1224) is a command tool: offered with the shell policy,
+/// gone with it (as `run_command` is), and the environment preamble names
+/// the detected test command and points the model at it only with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_tests_is_offered_only_with_shell() {
+    for shell in [true, false] {
+        let server = answering_platform().await;
+        let policy =
+            json!({"allowed": true, "shell": shell, "max_sandbox_mode": "workspace-write"});
+        let h = harness(server, Some(policy), UiDecision::AllowOnce).await;
+        std::fs::write(
+            h.folder.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let turn = h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done_of(&h, &turn.turn_id).await;
+        let tools = offered_tools(&h.server);
+        assert_eq!(tools.contains(&"run_tests".to_owned()), shell, "{tools:?}");
+        assert_eq!(
+            tools.contains(&"run_command".to_owned()),
+            shell,
+            "{tools:?}"
+        );
+        let llm = seen(&h.server, "/llm/v1/chat/completions");
+        let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+        let system = first["messages"][0]["content"].as_str().unwrap();
+        // Without the shell the commands cannot run: no line naming them.
+        assert_eq!(
+            system.contains("- Project: cargo crate; tests: cargo test; check: cargo check"),
+            shell,
+            "{system}"
+        );
+        assert_eq!(
+            system.contains("run the project's tests with run_tests"),
+            shell,
+            "{system}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #1225: plan mode as a profile, `exit_plan_mode`, and the planner.
+// ---------------------------------------------------------------------------
+
+const PLAN_MARKDOWN: &str = "# Notes\n\n1. Write notes.txt\n2. Say done";
+
+/// A model that proposes a plan, then (after the answer) writes a file, then
+/// answers; every request is seen by `seen`.
+async fn planning_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "exit_plan_mode",
+                    &json!({ "plan": PLAN_MARKDOWN }),
+                ),
+                1 => tool_call(
+                    "call-write",
+                    "write_file",
+                    &json!({"path": "notes.txt", "content": "hello\n"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn tool_names_of(request: &Req) -> Vec<String> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The tool messages of a model request, as the model reads them.
+fn tool_messages(request: &Req) -> Vec<Value> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| {
+            let content = m["content"].as_str().unwrap_or_default();
+            serde_json::from_str(content).unwrap_or(Value::String(content.to_owned()))
+        })
+        .collect()
+}
+
+/// Accept continues the SAME run on the SAME session in Build: the next
+/// model step is offered the write tools and the remote toolkits (adk
+/// resolves the toolsets again after the tool batch), the write lands, one
+/// turn is committed, and the UI hears `plan_proposed` then `plan_accepted`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepting_the_plan_continues_the_same_session_in_build_mode() {
+    let h = harness(planning_platform().await, allowed(), UiDecision::Accept).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(llm.len(), 3, "one run: plan, write, answer");
+    let planning = tool_names_of(&llm[0]);
+    for name in [
+        "exit_plan_mode",
+        "update_plan",
+        "complete_step",
+        "read_file",
+    ] {
+        assert!(planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    for name in ["write_file", "run_command", "Jira_create_issue"] {
+        assert!(!planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    let building = tool_names_of(&llm[1]);
+    for name in [
+        "write_file",
+        "run_command",
+        "Jira_create_issue",
+        "update_plan",
+    ] {
+        assert!(building.iter().any(|t| t == name), "{name}: {building:?}");
+    }
+    assert!(!building.iter().any(|t| t == "exit_plan_mode"));
+    assert_eq!(tool_messages(&llm[1])[0]["accepted"], true);
+    // The model's instructions follow the mode: the planning step reads the
+    // plan-mode environment only; every step after the accept also reads
+    // the build-mode one, with the write tools' rules.
+    let system = |request: &Req| -> String {
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        body["messages"][0]["content"].as_str().unwrap().to_owned()
+    };
+    let planning_system = system(&llm[0]);
+    assert!(planning_system.contains("- Mode: plan (read-only)"));
+    assert!(!planning_system.contains(environment::ACCEPTED_PLAN_HEADING));
+    for step in &llm[1..] {
+        let text = system(step);
+        assert_eq!(
+            text.matches(environment::ACCEPTED_PLAN_HEADING).count(),
+            1,
+            "{text}"
+        );
+        let accepted = &text[text.find(environment::ACCEPTED_PLAN_HEADING).unwrap()..];
+        for present in [
+            "plan mode is over",
+            "denied paths and .git are not writable",
+            "never use sudo",
+            "edit_file",
+        ] {
+            assert!(accepted.contains(present), "{present}: {accepted}");
+        }
+        assert!(!accepted.contains("- Mode: plan"), "{accepted}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("notes.txt")).unwrap(),
+        "hello\n"
+    );
+
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let proposed = events.iter().find(|e| e.kind == "plan_proposed").unwrap();
+    assert_eq!(proposed.payload["plan"], PLAN_MARKDOWN);
+    assert_eq!(proposed.payload["call_id"], "call-plan");
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("plan_proposed") < at("plan_accepted"));
+    // The model wrote no plan: the host copied the accepted one in, once.
+    let seeded: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(seeded.len(), 1);
+    assert_eq!(seeded[0].payload["plan"]["title"], "Notes");
+    assert_eq!(
+        seeded[0].payload["plan"]["steps"],
+        json!([
+            {"n": 1, "step": "Write notes.txt", "status": "pending"},
+            {"n": 2, "step": "Say done", "status": "pending"}
+        ])
+    );
+    assert_eq!(kinds.iter().filter(|k| **k == "done").count(), 1);
+    assert!(
+        !events.iter().any(|e| e.kind == "approval_request"),
+        "the plan is a plan card, never a tool approval"
+    );
+    // One local turn started, one committed, the plan's exchange in it.
+    assert_eq!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["kind"], "plan_approval");
+    assert_eq!(exchange["decision"], "accept");
+    assert_eq!(exchange["tool_run_id"], "call-plan");
+}
+
+/// Decline with feedback: the model reads the person's text as the tool's
+/// answer, stays in plan mode (no write tool on the next step), and nothing
+/// is changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declining_the_plan_returns_the_feedback_and_stays_in_plan_mode() {
+    let h = harness(
+        planning_platform().await,
+        allowed(),
+        UiDecision::Decline(Some("Keep the old file too.".into())),
+    )
+    .await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answer = &tool_messages(&llm[1])[0];
+    assert_eq!(answer["accepted"], false, "{answer}");
+    assert_eq!(answer["feedback"], "Keep the old file too.");
+    assert!(!tool_names_of(&llm[1]).iter().any(|t| t == "write_file"));
+    assert!(tool_names_of(&llm[1]).iter().any(|t| t == "exit_plan_mode"));
+    assert!(!h.folder.path().join("notes.txt").exists());
+    assert!(!events.iter().any(|e| e.kind == "plan_accepted"));
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["decision"], "decline");
+    assert_eq!(exchange["value"], "Keep the old file too.");
+}
+
+/// #1225: denying a call with feedback returns `declined_by_person` and the
+/// person's text as the call's result, the model's next request carries
+/// it, and the HITL exchange records the denial with the feedback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deny_with_feedback_reaches_the_model() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(
+        server,
+        allowed(),
+        UiDecision::DenyWithFeedback("File it tomorrow, not now.".into()),
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answers = tool_messages(&llm[2]);
+    let declined = &answers[1];
+    assert_eq!(declined["ok"], false, "{declined}");
+    assert_eq!(declined["error"]["code"], "declined_by_person");
+    assert_eq!(declined["error"]["feedback"], "File it tomorrow, not now.");
+    // The remote call was never confirmed.
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
+    assert_eq!(
+        body["hitl_exchanges"][0]["value"],
+        "File it tomorrow, not now."
+    );
+}
+
+#[test]
+fn feedback_travels_only_with_a_denial_and_is_bounded_and_clean() {
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", None),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("  ")),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("no\u{0}pe")),
+        Some(UiDecision::DenyWithFeedback("nope".into()))
+    );
+    assert_eq!(
+        UiDecision::parse("allow_once", Some("ignored")),
+        Some(UiDecision::AllowOnce)
+    );
+    let long = "é".repeat(3000);
+    let Some(UiDecision::DenyWithFeedback(cut)) =
+        UiDecision::parse("deny_with_feedback", Some(&long))
+    else {
+        panic!("a denial");
+    };
+    assert!(cut.len() <= 2048 && cut.chars().all(|c| c == 'é'));
+    assert_eq!(UiDecision::parse("approve_with_feedback", Some("x")), None);
+}
+
+/// #1225 conformance (ADR-0029 Verification): the same Codex-shaped
+/// `update_plan` call as the worker's
+/// `ordinary_tests::internal_tools_graph::a_codex_shaped_update_plan_answers_as_on_the_desktop`
+/// gets the same answer here; the todo pane gets `plan_updated`, live and
+/// from the thread history after a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_plan_conforms_to_the_cloud_and_the_pane_replays_it() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "update_plan",
+                    &json!({
+                        "title": "Rename X",
+                        "steps": [
+                            {"step": "Find the callers", "status": "in_progress"},
+                            "Rename it"
+                        ]
+                    }),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Planned."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(
+        tool_messages(&llm[1])[0],
+        "Plan created:\n\n📋 Rename X\n   Progress: 0/2 completed, 1 in progress\n\n   ▶ 1. Find the callers (in progress)\n   ☐ 2. Rename it"
+    );
+    let expected = json!({"plan": {
+        "title": "Rename X",
+        "status": "in_progress",
+        "steps": [
+            {"n": 1, "step": "Find the callers", "status": "in_progress"},
+            {"n": 2, "step": "Rename it", "status": "pending"}
+        ]
+    }});
+    let updated: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].payload, expected);
+
+    let h = h.restarted(false).await;
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let replayed: Vec<_> = turns[0]
+        .events
+        .iter()
+        .filter(|e| e.kind == "plan_updated")
+        .collect();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].payload, expected);
+}
+
+/// The chat models of project 1 for the model-choice tests (#1228):
+/// the agent's `gpt-test`, `gpt-other` (reasoning, 128 output tokens),
+/// `gpt-blocked` (listed, but the gateway refuses it for this project) and
+/// `gpt-plain` (it cannot reason).
+fn chat_models() -> Value {
+    json!({"total": 4, "items": [
+        {"name": "gpt-test", "project_id": 1, "context_window": 200_000, "max_output_tokens": 25_000},
+        {"name": "gpt-other", "project_id": 1, "context_window": 64_000, "max_output_tokens": 128,
+         "supports_reasoning": true},
+        {"name": "gpt-blocked", "project_id": 1, "context_window": 64_000},
+        {"name": "gpt-plain", "project_id": 1, "context_window": 64_000,
+         "supports_reasoning": false},
+    ]})
+}
+
+/// [`memory_platform`] with [`chat_models`] as its catalogue, and a gateway
+/// that refuses `gpt-blocked` as a model the project may not use.
+fn choosing_platform(details: Value) -> impl Fn(&Req) -> Res {
+    choosing_platform_with(details, Box::new(|_: &Value| say("ok")))
+}
+
+/// [`choosing_platform`] whose `/llm` answers with `script`.
+fn choosing_platform_with(details: Value, script: Script) -> impl Fn(&Req) -> Res {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let inner = memory_platform(convo, script);
+    move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(200, &chat_models());
+        }
+        if req.path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9" {
+            return Res::json(200, &resolved(&details, &[]));
+        }
+        if req.path == "/llm/v1/chat/completions" {
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            if body["model"] == "gpt-blocked" {
+                return Res::json(
+                    403,
+                    &json!({"error": {"type": "forbidden", "code": "model_forbidden",
+                        "message": "the project may not use this model"}}),
+                );
+            }
+        }
+        inner(req)
+    }
+}
+
+fn choose(name: &str, effort: Option<&str>) -> Option<super::definition::ModelChoice> {
+    Some(super::definition::ModelChoice::parse(name, effort).unwrap())
+}
+
+fn local_commits(server: &MockServer) -> Vec<Value> {
+    seen(server, "")
+        .iter()
+        .filter(|req| req.path.contains("/local_turn_commit/"))
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+fn local_starts(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path.contains("/local_turn/prompt_lib/"))
+        .count()
+}
+
+#[tokio::test]
+async fn model_override_reaches_the_gateway_body() {
+    let server = serve(choosing_platform(agent_details())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // The person picks gpt-other with a high effort for this turn.
+    let started = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-other", Some("high")),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    // Then two more turns that name no model: the thread keeps the choice,
+    // across a restart of the app too.
+    run_turn(&h, "and again").await;
+    let h = h.restarted(false).await;
+    run_turn(&h, "after the restart").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    for body in &bodies {
+        assert_eq!(body["model"], "gpt-other");
+        assert_eq!(body["reasoning_effort"], "high");
+        // The agent's 256 tokens, at most the chosen model's 128.
+        assert_eq!(body["max_completion_tokens"], 128);
+        assert!(body.get("temperature").is_none());
+    }
+    // Each turn names its model; each commit carries it.
+    let running: Vec<Value> = of_kind(&h.emitter.all(), "status")
+        .into_iter()
+        .filter(|status| status["phase"] == "running")
+        .collect();
+    assert_eq!(running.len(), 3);
+    for status in &running {
+        assert_eq!(
+            status["model"],
+            json!({"name": "gpt-other", "reasoning_effort": "high", "chosen": true, "pinned": false})
+        );
+    }
+    let commits = local_commits(&h.server);
+    assert_eq!(commits.len(), 3);
+    for commit in &commits {
+        assert_eq!(commit["assistant_message"]["model_name"], "gpt-other");
+    }
+    // Choosing the agent's own model again goes back to it, for good.
+    run_turn_with(&h, "back", choose("gpt-test", None)).await;
+    run_turn(&h, "still back").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies[3]["model"], "gpt-test");
+    assert_eq!(bodies[4]["model"], "gpt-test");
+    assert_eq!(bodies[4]["max_completion_tokens"], 256);
+    assert!(bodies[4].get("reasoning_effort").is_none());
+}
+
+async fn run_turn_with(h: &Harness, prompt: &str, model: Option<super::definition::ModelChoice>) {
+    let started = h
+        .host
+        .start(TurnRequest {
+            model,
+            ..turn(h, prompt)
+        })
+        .await
+        .unwrap();
+    until_done_of(h, &started.turn_id).await;
+}
+
+#[tokio::test]
+async fn pinned_model_refuses_override() {
+    let mut details = agent_details();
+    details["llm_settings"]["pin_model"] = json!(true);
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let error = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-other", None),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "model_pinned");
+    assert_eq!(
+        local_starts(&h.server),
+        0,
+        "a refused turn opens no execution"
+    );
+    // The agent's own model is no override: the turn runs.
+    run_turn_with(&h, "explain", choose("gpt-test", None)).await;
+    let running: Vec<Value> = of_kind(&h.emitter.all(), "status")
+        .into_iter()
+        .filter(|status| status["phase"] == "running")
+        .collect();
+    assert_eq!(running[0]["model"]["pinned"], true);
+    assert_eq!(llm_bodies(&h.server)[0]["model"], "gpt-test");
+}
+
+#[tokio::test]
+async fn unknown_override_is_refused_before_start() {
+    let server = serve(choosing_platform(agent_details())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let error = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-nowhere", None),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "model_unavailable");
+    assert_eq!(local_starts(&h.server), 0, "no local_turn start was made");
+    assert!(llm_bodies(&h.server).is_empty());
+    // A workspace whose settings turn the choice off refuses it too.
+    h.workspaces
+        .set_agent_settings(
+            &h.workspace_id,
+            crate::workspaces::AgentSettings {
+                allow_model_override: Some(false),
+                ..crate::workspaces::AgentSettings::default()
+            },
+        )
+        .unwrap();
+    let error = h
+        .host
+        .start(TurnRequest {
+            model: choose("gpt-other", None),
+            ..turn(&h, "explain")
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "model_override_disabled");
+    assert_eq!(local_starts(&h.server), 0);
+}
+
+#[tokio::test]
+async fn an_override_the_gateway_refuses_fails_the_turn_cleanly() {
+    let server = serve(choosing_platform(agent_details())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "explain", choose("gpt-blocked", None)).await;
+    commits_settled(&h.host).await;
+    let events = h.emitter.all();
+    let error = of_kind(&events, "error");
+    assert_eq!(error[0]["code"], "model_gateway.forbidden");
+    let commits = local_commits(&h.server);
+    assert_eq!(commits[0]["assistant_message"]["is_error"], true);
+    assert_eq!(commits[0]["assistant_message"]["model_name"], "gpt-blocked");
+}
+
+/// A streamed answer that reasons (`reasoning`, in two chunks) before it
+/// says `text` or, with `call`, calls `write_file`.
+fn reasoned(reasoning: &str, text: &str, call: bool) -> Res {
+    let (first, second) = reasoning.split_at(reasoning.len() / 2);
+    let mut chunks = vec![
+        json!({"choices": [{"delta": {"reasoning_content": first}}]}),
+        json!({"choices": [{"delta": {"reasoning_content": second}}]}),
+    ];
+    if call {
+        chunks.push(
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-think",
+            "type": "function", "function": {"name": "write_file",
+            "arguments": json!({"path": "a.txt", "content": "a"}).to_string()}}]}}]}),
+        );
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}));
+    } else {
+        chunks.push(json!({"choices": [{"delta": {"content": text}}]}));
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}));
+    }
+    chunks.push(
+        json!({"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 7,
+        "total_tokens": 16, "completion_tokens_details": {"reasoning_tokens": 5}}}),
+    );
+    sse(&chunks)
+}
+
+#[tokio::test]
+async fn thinking_delta_events_and_thinking_steps_commit() {
+    let script: Script = Box::new(|body: &Value| {
+        if last_message(body)["role"] == "tool" {
+            reasoned("The file is written; say so.", "Wrote a.txt.", false)
+        } else {
+            reasoned("I should write a.txt first.", "", true)
+        }
+    });
+    let server = serve(choosing_platform_with(agent_details(), script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "write a.txt", choose("gpt-other", Some("medium"))).await;
+    commits_settled(&h.host).await;
+    let events = h.emitter.all();
+    // Reasoning streams as it comes, and each block closes before the
+    // step's answer or calls.
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e.kind)
+        .filter(|kind| {
+            matches!(
+                *kind,
+                "thinking_delta" | "thinking_end" | "text_delta" | "tool_call"
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "thinking_delta",
+            "thinking_delta",
+            "thinking_end",
+            "tool_call",
+            "thinking_delta",
+            "thinking_delta",
+            "thinking_end",
+            "text_delta",
+        ]
+    );
+    let thought: String = of_kind(&events, "thinking_delta")
+        .iter()
+        .map(|delta| delta["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        thought,
+        "I should write a.txt first.The file is written; say so."
+    );
+    assert_eq!(of_kind(&events, "thinking_end")[0]["chars"], 27);
+    // Reasoning tokens ride on usage.
+    assert_eq!(of_kind(&events, "usage")[0]["reasoning_tokens"], 5);
+    // The commit carries one thinking step per model step, in order, in the
+    // runtime's shape, with the model it ran on.
+    let commit = &local_commits(&h.server)[0];
+    let steps = commit["thinking_steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["thinking"], "I should write a.txt first.");
+    assert_eq!(steps[1]["thinking"], "The file is written; say so.");
+    for step in steps {
+        assert_eq!(step["type"], "ChatGeneration");
+        assert_eq!(
+            step["message"]["response_metadata"]["model_name"],
+            "gpt-other"
+        );
+        assert!(step["timestamp_start"].is_string() && step["timestamp_finish"].is_string());
+        assert!(step["tool_run_id"].is_string());
+    }
+    // The thread's history keeps the reasoning, merged like text, for the
+    // transcript's replay.
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let stored: String = turns[0]
+        .events
+        .iter()
+        .filter(|event| event.kind == "thinking_delta")
+        .map(|event| event.payload["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(stored, thought);
+    assert!(
+        turns[0]
+            .events
+            .iter()
+            .any(|event| event.kind == "thinking_end")
+    );
+}
+
+#[tokio::test]
+async fn reasoning_not_replayed_on_openai_chat() {
+    let script: Script = Box::new(|_: &Value| reasoned("A private chain of thought.", "ok", false));
+    let server = serve(choosing_platform_with(agent_details(), script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "first").await;
+    run_turn(&h, "second").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 2);
+    let second = bodies[1].to_string();
+    assert!(second.contains("first"), "the history is replayed");
+    assert!(
+        !second.contains("private chain of thought"),
+        "reasoning never goes back on the chat route: {second}"
+    );
+    // The session keeps it (its event log, for a provider that needs it).
+    let conn = rusqlite::Connection::open_with_flags(
+        h.app.path().join(crate::sessions::FILE_NAME),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE event LIKE '%private chain of thought%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(kept >= 1);
+}
+
+fn catalogue_reads(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path.starts_with("/api/v2/configurations/models/"))
+        .count()
+}
+
+const VERSION_PATH: &str = "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9";
+
+/// The unconditional reads of the agent version (a revalidation is not one).
+fn version_reads(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path == VERSION_PATH && !req.headers.contains_key("if-none-match"))
+        .count()
+}
+
+fn running_models(h: &Harness) -> Vec<Value> {
+    of_kind(&h.emitter.all(), "status")
+        .into_iter()
+        .filter(|status| status["phase"] == "running")
+        .map(|status| status["model"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_kept_choice_the_catalogue_no_longer_lists_is_dropped() {
+    let gone = Arc::new(AtomicBool::new(false));
+    let inner = choosing_platform(agent_details());
+    let server = serve({
+        let gone = gone.clone();
+        move |req: &Req| {
+            if gone.load(Ordering::SeqCst)
+                && req.path.starts_with("/api/v2/configurations/models/1?")
+            {
+                return Res::json(
+                    200,
+                    &json!({"total": 1, "items": [{"name": "gpt-test", "project_id": 1}]}),
+                );
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "explain", choose("gpt-other", None)).await;
+    // The project stops offering gpt-other; a new app session reads its
+    // catalogue again.
+    gone.store(true, Ordering::SeqCst);
+    let h = h.restarted(false).await;
+    run_turn(&h, "kept?").await;
+    run_turn(&h, "and now?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies[0]["model"], "gpt-other");
+    assert_eq!(bodies[1]["model"], "gpt-test", "back on the agent's model");
+    assert_eq!(bodies[2]["model"], "gpt-test", "and the choice is gone");
+    let notices: Vec<String> = of_kind(&h.emitter.all(), "status")
+        .iter()
+        .filter_map(|status| status["message"].as_str().map(str::to_owned))
+        .filter(|message| message.contains("gpt-other"))
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let running = running_models(&h);
+    assert_eq!(running.last().unwrap()["chosen"], false);
+}
+
+#[tokio::test]
+async fn a_model_refusal_keeps_the_cached_version() {
+    let mut details = agent_details();
+    details["llm_settings"]["pin_model"] = json!(true);
+    // A version answered with a tag, so the session keeps it.
+    let inner = choosing_platform(details);
+    let server = serve(move |req: &Req| {
+        let tag = "\"v1\"".to_owned();
+        if req.path != VERSION_PATH {
+            return inner(req);
+        }
+        if req.headers.get("if-none-match") == Some(&tag) {
+            return Res {
+                status: 304,
+                headers: vec![("ETag", tag)],
+                body: String::new(),
+                raw: Vec::new(),
+            };
+        }
+        let mut res = inner(req);
+        res.headers.push(("ETag", tag));
+        res
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "first").await;
+    let reads = version_reads(&h.server);
+    assert_eq!(reads, 1);
+    for _ in 0..2 {
+        let error = h
+            .host
+            .start(TurnRequest {
+                model: choose("gpt-other", None),
+                ..turn(&h, "explain")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "model_pinned");
+    }
+    assert_eq!(
+        version_reads(&h.server),
+        reads,
+        "a refused choice neither re-reads nor evicts the version"
+    );
+    // The next turn still starts from the kept version (a revalidation).
+    run_turn(&h, "after").await;
+    assert_eq!(version_reads(&h.server), reads);
+}
+
+#[tokio::test]
+async fn an_effort_on_the_agents_own_model_keeps_its_frozen_limits() {
+    let mut details = agent_details();
+    details["model_context_limits"] = json!({
+        "context_window_tokens": 50_000, "max_output_tokens": 100,
+        "context_window_fallback": false, "max_output_fallback": false,
+    });
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "think hard", choose("gpt-test", Some("high"))).await;
+    let body = &llm_bodies(&h.server)[0];
+    assert_eq!(body["model"], "gpt-test");
+    assert_eq!(body["reasoning_effort"], "high");
+    // The frozen 100 output tokens, not the catalogue's 25 000.
+    assert_eq!(body["max_completion_tokens"], 100);
+}
+
+#[tokio::test]
+async fn frozen_limits_and_no_choice_read_no_catalogue() {
+    let mut details = agent_details();
+    details["model_context_limits"] = json!({
+        "context_window_tokens": 50_000, "max_output_tokens": 1_000,
+        "context_window_fallback": false, "max_output_fallback": false,
+    });
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "one").await;
+    run_turn(&h, "two").await;
+    assert_eq!(catalogue_reads(&h.server), 0);
+    // A chosen model reads it once, for its check and its limits both.
+    run_turn_with(&h, "three", choose("gpt-other", None)).await;
+    assert_eq!(catalogue_reads(&h.server), 1);
+}
+
+#[tokio::test]
+async fn a_model_that_cannot_reason_gets_no_effort_and_keeps_the_temperature() {
+    let mut details = agent_details();
+    details["llm_settings"]["temperature"] = json!(0.5);
+    let server = serve(choosing_platform(details)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "plain", choose("gpt-plain", Some("high"))).await;
+    run_turn_with(&h, "reasoning", choose("gpt-other", Some("high"))).await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies[0]["model"], "gpt-plain");
+    assert!(bodies[0].get("reasoning_effort").is_none(), "{}", bodies[0]);
+    assert_eq!(bodies[0]["temperature"], 0.5);
+    // A model that reasons gets the effort, and no temperature beside it.
+    assert_eq!(bodies[1]["reasoning_effort"], "high");
+    assert!(bodies[1].get("temperature").is_none());
+    assert_eq!(running_models(&h)[0]["chosen"], true);
 }

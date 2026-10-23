@@ -14,6 +14,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
 import { foldProgress } from '@/features/workspace-index';
+import { isPlanEvent, type PlanEvent } from '@/shared/desktop/planEvents';
 import type { AgentEvent, ApprovalRequestPayload, TurnDonePayload, TurnPhase } from '@/shared/desktop/workspaceIpc';
 import type { HandoffEvent } from '@/shared/desktop/handoffIpc';
 import type { IndexEvent, IndexStatus } from '@/shared/desktop/indexIpc';
@@ -170,19 +171,45 @@ function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
   return { ...turn, phase, tool: null, approvals: [], finished: turn.commit === 'none' };
 }
 
+const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<AgentEvent['kind']>(['text_delta', 'thinking_delta', 'thinking_end', 'context']);
+
+/** Streamed text and reasoning, and the composer's meter (`context`): nothing the feed shows. */
+function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text_delta' | 'thinking_delta' | 'thinking_end' | 'context' }> {
+  return QUIET_KINDS.has(event.kind);
+}
+
+function withPhase(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
+  return TERMINAL_PHASES.has(phase) ? ended(turn, phase) : { ...turn, phase };
+}
+
+/** A proposed plan waits for the person like an approval (IPC.md "Plan mode"); `answerApproval` or the turn's end closes it. */
+function foldPlan(turn: TrackedTurn, event: PlanEvent): TrackedTurn {
+  switch (event.kind) {
+    case 'plan_proposed': {
+      const requestId = event.payload.request_id;
+      return { ...turn, approvals: [...turn.approvals.filter((a) => a.requestId !== requestId), { requestId, tool: 'plan', title: 'Plan' }] };
+    }
+    case 'plan_updated':
+    case 'plan_accepted':
+      return turn;
+  }
+}
+
 /** Folds one agent event into a turn. Pure. */
 export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
+  if (changesNothing(event)) return turn;
+  if (isPlanEvent(event)) return foldPlan(turn, event);
   switch (event.kind) {
     case 'status':
-      return TERMINAL_PHASES.has(event.payload.phase) ? ended(turn, event.payload.phase) : { ...turn, phase: event.payload.phase };
+      return withPhase(turn, event.payload.phase);
     case 'tool_call':
       return { ...turn, tool: event.payload.tool, steps: turn.steps + 1 };
     case 'tool_result':
       return { ...turn, tool: null };
-    case 'text_delta':
-      return turn;
     case 'approval_request':
       return withApproval(turn, event.payload);
+    case 'approval_closed':
+      return { ...turn, approvals: turn.approvals.filter((a) => a.requestId !== event.payload.request_id) };
     case 'error':
       return ended(turn, 'error');
     case 'done':

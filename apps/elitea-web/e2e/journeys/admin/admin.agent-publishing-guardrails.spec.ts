@@ -31,11 +31,10 @@
  *  - ELITEA-0020 (publish blocked, empty whitelist) is exactly
  *    `admin.features.spec.ts`'s J36c — recorded DUP, not repeated.
  *  - ELITEA-1694 through ELITEA-1698 (the PGVector Configuration dropdown on
- *    the agent/toolkit form) are a different area entirely — they belong
- *    under `e2e/journeys/toolkits/`, owned by a concurrent package this run.
- *    Recorded REROUTE toolkits, with the real field name
- *    (`pgvector_configuration`, `features/toolkits/ui/form/ToolBase/
- *    ToolConfluence.tsx` / `ToolJira.tsx`) for whoever picks them up.
+ *    the agent/toolkit form) are a different area entirely, and the field
+ *    they cover (`pgvector_configuration`) has since been removed from the
+ *    product: toolkit indexes are kept in the platform vector store and need
+ *    no configuration. Recorded DROPPED.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE EXCEPTION CASE IS ASSERTED AT THE GUARDRAIL, NOT THROUGH A REAL

@@ -11,8 +11,8 @@ import (
 
 // TestPostgresCurrentIndexMetaTerminalClaimRecovery crosses the real source
 // discovery CTE, SKIP LOCKED replica exclusion, durable lease expiry and
-// reclaim. PgVector materialization is covered by its separate integration
-// test.
+// reclaim. The registry terminal write is covered by
+// index_registry_postgres_integration_test.go.
 func TestPostgresCurrentIndexMetaTerminalClaimRecovery(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 

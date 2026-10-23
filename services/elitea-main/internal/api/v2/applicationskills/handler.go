@@ -50,7 +50,7 @@ type CurrentApplicationSkill struct {
 	VersionMissing bool            `json:"version_missing"`
 	IconMeta       json.RawMessage `json:"icon_meta"`
 	// CreatedAt carries skills.created_at for the published `items` half of
-	// the envelope. It is `json:"-"` on purpose: the Pylon dict has no such
+	// the envelope. It is `json:"-"` on purpose: the legacy dict has no such
 	// key, and adding one would break the byte parity the rest of this type
 	// exists to hold.
 	CreatedAt time.Time `json:"-"`
@@ -173,10 +173,10 @@ func NewCurrentApplicationSkillsRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentApplicationSkillsRoute, error) {
-	// ForwardedIdentityVerifier is OPTIONAL, PrincipalValidator is not. See
-	// internal/api/v2/indextypes/handler.go for the full reason: only the Form
-	// plane builds a verifier, an OIDC or SAML install authenticates the same
-	// caller through a cookie or a bearer token, and this route is the ONLY
+	// Only PrincipalValidator is mandatory. See
+	// internal/api/v2/indextypes/handler.go for the full reason: an OIDC or
+	// SAML install authenticates the caller through a cookie or a bearer
+	// token, not through the Form plane, and this route is the ONLY
 	// handler for its path now that the prototype fallback is deleted (#395).
 	if reader == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidCurrentApplicationSkillsRoute
@@ -215,7 +215,7 @@ type currentApplicationSkillsHandler struct {
 
 // currentApplicationSkillsResponse answers BOTH shipped clients from one body.
 //
-// The Pylon keys `skills` and `max_skills` are unchanged, byte for byte:
+// The legacy keys `skills` and `max_skills` are unchanged, byte for byte:
 // apps/elitea-ui reads them (features/skill/ui/ApplicationSkills.jsx and the
 // two mention hooks read `data.skills` and `data.max_skills`), and the edge
 // cutover this slice was written for depends on them.

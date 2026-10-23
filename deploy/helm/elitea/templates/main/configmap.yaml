@@ -1,11 +1,12 @@
 {{- if .Values.main.enabled }}
+{{- include "elitea.applyFeatureSwitches" . }}{{- /* idempotent; see _feature-switches.tpl */}}
 {{- /*
-  Shared connection addresses, computed once from the top-level `nats`
+  Shared connection addresses, computed once from the `natsClient`
   block and namespace-relative by default. An explicit env entry under this
   component still wins. These are the settings that drifted when each chart
   carried its own default. The live-update plane dials the SAME effective NATS
   the gateway uses (elitea.eventsNatsUrl: an explicit
-  llmGateway.env.GATEWAY_NATS_URL first, then the `nats` block), so one broker
+  llmGateway.env.GATEWAY_NATS_URL first, then the `natsClient` block), so one broker
   serves all three; nothing naming a NATS leaves it unset (no live-update
   plane). A main.secrets entry for it wins and nothing is rendered here.
 */ -}}
@@ -15,7 +16,7 @@
 {{- if and (not (get $env "ELITEA_EVENTS_NATS_URL")) (not (hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL")) $eventsNatsUrl }}{{- $env = merge (deepCopy $env) (dict "ELITEA_EVENTS_NATS_URL" $eventsNatsUrl) }}{{- end }}
 {{- if hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL" }}{{- $env = omit $env "ELITEA_EVENTS_NATS_URL" }}{{- end }}
 {{- /* The chart owns ELITEA_EVENTS_NATS_TLS_* when it mounts the certificate (data below). */ -}}
-{{- $mainNatsTLS := and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+{{- $mainNatsTLS := and .Values.natsClient.tls.enabled (include "elitea-main.usesNats" .) }}
 {{- if $mainNatsTLS }}{{- $env = omit $env "ELITEA_EVENTS_NATS_TLS_CA_FILE" "ELITEA_EVENTS_NATS_TLS_CERT_FILE" "ELITEA_EVENTS_NATS_TLS_KEY_FILE" }}{{- end }}
 {{- /*
   The public project, from the ONE place an operator sets it. Filled only when
@@ -23,12 +24,6 @@
   refuses to start when this variable is PRESENT at all, so a chart that always
   wrote a value here would stop a default install. See elitea.aiProjectId.
 */ -}}
-{{- /*
-  The DeepWiki callback origin through platform-edge (ADR-0027), when
-  deepwiki.callbackViaPlatformEdge fills it in; an explicit value wins.
-*/ -}}
-{{- $deepwikiCallback := include "elitea-deepwiki.callbackBaseUrl" . }}
-{{- if and $deepwikiCallback (not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" $deepwikiCallback) }}{{- end }}
 {{- /*
   ELITEA_CLOUD_EXECUTOR_CONFIGURED (ADR-0034) is DERIVED when empty: true
   exactly when this chart runs the workspace-run supervisor
@@ -95,6 +90,19 @@
 {{- $env = merge (deepCopy $env) (dict "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" $inventoryTarget) }}
 {{- end }}
 {{- /*
+  The derived targets name the HEADLESS Services (<app>.service.grpcName), so
+  elitea-main balances its calls over every host replica. The server
+  certificates name the ClusterIP Services (<app>.service.name), so the SAN
+  elitea-main verifies is set to that name. Only when the target is this
+  chart's own and no server name is set.
+*/ -}}
+{{- if and $deepwikiTarget (eq (get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET" | toString) $deepwikiTarget) (not (get $env "ELITEA_DEEPWIKI_SERVER_NAME")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_SERVER_NAME" .Values.deepwiki.service.name) }}
+{{- end }}
+{{- if and $inventoryTarget (eq (get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" | toString) $inventoryTarget) (not (get $env "ELITEA_INVENTORY_SERVER_NAME")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_INVENTORY_SERVER_NAME" .Values.inventory.service.name) }}
+{{- end }}
+{{- /*
   elitea-main's elitea-vector client (ADR-0031 decision 4): the target and the
   three file paths of the administrator certificate vector.mainClient issues
   and mounts, DERIVED whenever this chart's elitea-vector is on with
@@ -109,6 +117,10 @@
       "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" (printf "%s/tls.crt" $mount)
       "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" (printf "%s/tls.key" $mount)
       "ELITEA_VECTOR_GRPC_CA_FILE" (printf "%s/ca.crt" $mount)) }}
+{{- /* The target is the headless Service; the certificate names the ClusterIP one. */ -}}
+{{- if not (get $env "ELITEA_VECTOR_GRPC_SERVER_NAME") }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_VECTOR_GRPC_SERVER_NAME" .Values.vector.service.name) }}
+{{- end }}
 {{- end }}
 {{- /*
   values.yaml ships the five entries (and the ELITEA_VECTOR_CLEANUP_ABANDON

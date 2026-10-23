@@ -910,8 +910,27 @@ func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
 	return &Runner{
 		RunnerName: "fixture",
 		Tools:      FixtureTools(step),
-		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
+		Artifacts:  ArtifactClientFrom(settings.Callback()),
+		// The fixture serves one canned graph and stores none per tenant, so
+		// a toolkit's or a project's graph deletion truthfully removes
+		// nothing. Answering it (rather than refusing as an engine-less host)
+		// lets toolkit deletion and project deprovisioning complete against
+		// a fixture host.
+		DeleteGraph:         fixtureDeleteGraph,
+		DeleteProjectGraphs: fixtureDeleteProjectGraphs,
 	}
+}
+
+// fixtureDeleteGraph is delete_graph on a host that stores no graph: nothing
+// was there, so nothing was deleted.
+func fixtureDeleteGraph(context.Context, map[string]any, *spi.Context) (map[string]any, error) {
+	return map[string]any{"success": true, "result": `{"deleted": false}`}, nil
+}
+
+// fixtureDeleteProjectGraphs is delete_project_graphs on a host that stores
+// no graph: complete, with no toolkit removed and none busy.
+func fixtureDeleteProjectGraphs(context.Context, map[string]any, *spi.Context) (map[string]any, error) {
+	return map[string]any{"success": true, "result": `{"complete": true, "toolkits": [], "busy_toolkits": [], "by_toolkit": []}`}, nil
 }
 
 // pyRepr is Python's repr() of a string, the quoting the Python engine — and

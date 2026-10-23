@@ -162,7 +162,7 @@ func (f *fakeBinder) KeyValue(_ context.Context, bucket string) (jetstream.KeyVa
 	return stubKV{ttl: f.kvTTL}, nil
 }
 
-// bootstrapStreams is what deploy/helm/nats-bootstrap/files/bootstrap.sh
+// bootstrapStreams is what deploy/helm/elitea/files/nats-bootstrap.sh
 // creates, reduced to the properties bindAssets checks.
 func bootstrapStreams() map[string]jetstream.StreamConfig {
 	return map[string]jetstream.StreamConfig{

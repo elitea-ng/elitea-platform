@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# A local Kubernetes stack for the DeepWiki provider, installed from THIS
-# repository's Helm chart the way it ships to production (ADR-0023):
+# A local Kubernetes stack installed from THIS repository's Helm chart on its
+# SHIPPED DEFAULTS (S10): elitea-main with its runtime plane, elitea-vector and
+# the bundled Qdrant, and the DeepWiki and Inventory providers (ADR-0023):
 #
 #   * the provider pod is TWO containers — the Go sub-application host
 #     (ghcr.io/elitea-ng/elitea-subapp-host) with ELITEA_DEEPWIKI_RUNNER=native,
@@ -10,11 +11,19 @@
 #   * the facade -> provider hop is mutually authenticated, with both
 #     certificates issued by cert-manager from one internal CA ClusterIssuer,
 #     exactly as templates/deepwiki/certificates.yaml asks for;
-#   * the engine sidecar runs the FIXTURE runner, so a generation completes
-#     with no LLM and no git host.
+#   * every runtime-CA certificate (the providers' callback client, the
+#     elitea-vector pair, Qdrant's TLS) is issued by cert-manager from a second
+#     ClusterIssuer, elitea-runtime-ca, backed by gen-runtime-certs.sh's CA:
+#     nothing is minted by hand for the chart;
+#   * both engine sidecars run their FIXTURE runners, so a generation completes
+#     with no LLM and no git host;
+#   * the provider uploads its pages over gRPC on elitea-main's platform
+#     listener (#1359 U5), so elitea-main runs its runtime plane, on the
+#     NATS JetStream the chart bundles (nats + natsBootstrap).
 #
 #   deploy/kind/kind-stack.sh up       # build, load, install, seed  (~6-9 min cold)
-#   deploy/kind/kind-stack.sh verify   # prove the four claims below
+#   deploy/kind/kind-stack.sh verify   # prove the claims below (and that the
+#                                      # bundled KEDA scales DeepWiki, S11)
 #   deploy/kind/kind-stack.sh down     # delete the cluster
 #
 # podman by default (this machine has no docker); KIND_ENGINE=docker switches
@@ -37,6 +46,10 @@ MAIN_IMAGE="ghcr.io/elitea-ng/elitea-main:${TAG}"
 # and no git host) and the migration Job (`migrate`), one image for both.
 # A cold build compiles ~420 crates. See README.md, "Known limits".
 ENGINE_IMAGE="ghcr.io/elitea-ng/elitea-deepwiki-engine-native:${TAG}"
+# The Inventory engine sidecar (inventory.engine.runner=fixture) and its
+# migrate Job, and elitea-vector, the only Qdrant client.
+INVENTORY_ENGINE_IMAGE="ghcr.io/elitea-ng/elitea-inventory-engine:${TAG}"
+VECTOR_IMAGE="ghcr.io/elitea-ng/elitea-vector:${TAG}"
 
 # The seeded credential. The row is written by seed.sql; the bearer is minted
 # from it below.
@@ -105,21 +118,31 @@ build_images() {
     "$ENGINE" build -f "${REPO_ROOT}/services/elitea-main/Containerfile" --target e2e \
       -t "$MAIN_IMAGE" "$REPO_ROOT"
   fi
-  if have_image "$ENGINE_IMAGE"; then
-    note "$ENGINE_IMAGE present"
-  else
-    note "building $ENGINE_IMAGE"
-    "$ENGINE" build -f "${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile" \
-      -t "$ENGINE_IMAGE" "$REPO_ROOT"
-  fi
+  local image containerfile
+  for image in "$ENGINE_IMAGE" "$INVENTORY_ENGINE_IMAGE" "$VECTOR_IMAGE"; do
+    case "$image" in
+      "$ENGINE_IMAGE") containerfile=services/elitea-deepwiki-engine/Containerfile ;;
+      "$INVENTORY_ENGINE_IMAGE") containerfile=services/elitea-inventory-engine/Containerfile ;;
+      *) containerfile=services/elitea-vector/Containerfile ;;
+    esac
+    if have_image "$image"; then
+      note "$image present"
+    else
+      note "building $image"
+      "$ENGINE" build -f "${REPO_ROOT}/${containerfile}" -t "$image" "$REPO_ROOT"
+    fi
+  done
 }
 
 # Third-party images are pulled once to the HOST and side-loaded, so a repeated
 # `up` needs no registry at all.
 INFRA_IMAGES=(
-  docker.io/pgvector/pgvector:0.8.5-pg16-trixie
+  docker.io/library/postgres:18
   docker.io/rustfs/rustfs:latest
   rustfs/rc:latest
+  # The bundled Qdrant (qdrant.image, useUnprivilegedImage). Moves with the
+  # tag in values.yaml.
+  docker.io/qdrant/qdrant:v1.19.2-unprivileged
 )
 
 load_images() {
@@ -144,7 +167,8 @@ except Exception:
   # An explicit template: BSD mktemp reads `-t X` as a prefix, GNU as a
   # template, and this repository has been bitten by that difference.
   archive="$(mktemp "${TMPDIR:-/tmp}/elitea-kind-XXXXXX.tar")"
-  for image in "$MAIN_IMAGE" "$HOST_IMAGE" "$ENGINE_IMAGE" "${INFRA_IMAGES[@]}"; do
+  for image in "$MAIN_IMAGE" "$HOST_IMAGE" "$ENGINE_IMAGE" "$INVENTORY_ENGINE_IMAGE" \
+      "$VECTOR_IMAGE" "${INFRA_IMAGES[@]}"; do
     if printf '%s\n' "$present" | grep -qxF "$image"; then
       note "$image already in the node"
       continue
@@ -192,6 +216,20 @@ install_cert_manager() {
     sleep 2
   done
   kc wait --for=condition=Ready --timeout=120s clusterissuer/elitea-internal-ca
+
+  say "Creating the runtime CA ClusterIssuer (elitea-runtime-ca)"
+  # The CA elitea-main's platform listener verifies clients against, and the
+  # one elitea-vector and Qdrant are issued from: gen-runtime-certs.sh's
+  # runtime-ca, so the chart's Certificates and the hand-held runtime material
+  # share one root. Like the internal CA, a ClusterIssuer's Secret lives in
+  # cert-manager's namespace.
+  bash "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
+  kc -n cert-manager create secret tls elitea-runtime-ca-tls \
+    --cert="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
+    --key="${RUNTIME_MATERIAL_DIR}/runtime-ca.key" \
+    --dry-run=client -o yaml | kc apply -f -
+  kc apply -f "${SCRIPT_DIR}/manifests/runtime-ca-issuer.yaml"
+  kc wait --for=condition=Ready --timeout=120s clusterissuer/elitea-runtime-ca
 }
 
 # The production-authentication material. deploy/scripts/gen-runtime-certs.sh
@@ -209,6 +247,28 @@ ensure_runtime_material() {
   # A cluster made before the runtime Redis was removed still holds its
   # material Secret. Nothing renders a reader for it any more.
   kc -n "$NS" delete secret elitea-runtime-redis-material --ignore-not-found >/dev/null
+
+  # The runtime plane's material (#1359 U5): the platform listener's keypair,
+  # the command-signing keys and the runtime CA, the nine files
+  # values-standalone.yaml lists.
+  local runtime_args=() name
+  for name in runtime-ca.crt command-signing-key.pem command-signing-keyring.json \
+      control-server.crt control-server.key output-server.crt output-server.key \
+      content-server.crt content-server.key; do
+    [ -f "${RUNTIME_MATERIAL_DIR}/${name}" ] || die "missing material: ${RUNTIME_MATERIAL_DIR}/${name}"
+    runtime_args+=("--from-file=${RUNTIME_MATERIAL_DIR}/${name}")
+  done
+  kc -n "$NS" create secret generic elitea-runtime-material "${runtime_args[@]}" \
+    --dry-run=client -o yaml | kc apply -f -
+  # The provider pod reads ONLY runtime-ca.crt from the worker's material
+  # Secret (worker.materialSecretName). No worker runs here, so the Secret
+  # holds that one key and nothing a worker would need.
+  kc -n "$NS" create secret generic elitea-worker-material \
+    --from-file="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
+    --dry-run=client -o yaml | kc apply -f -
+  # No callback client Secret: the chart issues elitea-deepwiki-callback-client
+  # and elitea-inventory-callback-client from the elitea-runtime-ca issuer
+  # (cert-manager takes over the hand-made Secret a pre-S10 cluster holds).
 
   # The three files internal/authcomposition/material.go opens. Their names are
   # the contract: the chart derives every path in the auth document from them.
@@ -238,6 +298,14 @@ install_infra() {
   kc -n "$NS" create secret generic elitea-deepwiki-secrets \
     --from-literal=identity-secret='kind-deepwiki-identity' \
     --dry-run=client -o yaml | kc apply -f -
+  kc -n "$NS" create secret generic elitea-inventory-secrets \
+    --from-literal=identity-secret='kind-inventory-identity' \
+    --dry-run=client -o yaml | kc apply -f -
+  # The bundled Qdrant's API key: Qdrant reads it, and elitea-vector, its only
+  # client, presents it (vector.qdrant.apiKeySecret).
+  kc -n "$NS" create secret generic elitea-qdrant-api \
+    --from-literal=api-key='kind-qdrant-api-key' \
+    --dry-run=client -o yaml | kc apply -f -
   # Non-optional in the chart even with llmGateway.enabled=false.
   kc -n "$NS" create secret generic elitea-main-llm-gateway-secrets \
     --from-literal=gateway-identity-secret='kind-unused-gateway-identity' \
@@ -264,15 +332,30 @@ install_infra() {
   kc -n "$NS" wait --for=condition=complete --timeout=180s job/rustfs-bucket-init
 }
 
+# ONE chart: NATS JetStream and its bootstrap Job are part of the release
+# (nats.enabled, the default), exactly as the published chart installs.
+#
+# No --wait. The bootstrap is a post-install hook (it needs the NATS server,
+# a resource of this same release), and --wait would hold it until every pod
+# is Ready — while elitea-main is not Ready until the bootstrap has created
+# the command-bus streams it binds. Helm still blocks on the pre-install
+# migration hooks and on the post-install bootstrap Job; the rollout wait
+# below then covers the workloads, which restart until the streams exist.
 install_chart() {
-  say "Installing the chart (elitea-main + the DeepWiki provider)"
-  # The migration Jobs are pre-install hooks: elitea-main's own -all-tenants
-  # run, and the provider's `elitea-deepwiki-engine migrate`. --wait covers
-  # both, and the hooks' own timeout is the one that matters for a cold start.
+  say "Installing the chart (NATS, Qdrant, elitea-main, elitea-vector, DeepWiki, Inventory)"
+  # From a clone the chart's dependencies are built from Chart.lock first;
+  # the published OCI chart carries them.
+  bash "${REPO_ROOT}/deploy/helm/elitea/build-deps.sh" >/dev/null
   helm --kube-context "kind-${CLUSTER}" upgrade --install "$RELEASE" "${REPO_ROOT}/deploy/helm/elitea" \
     --namespace "$NS" \
     -f "${SCRIPT_DIR}/values-kind.yaml" \
-    --wait --timeout 15m
+    --timeout 15m
+  kc -n "$NS" rollout status statefulset/elitea-nats --timeout=5m
+  kc -n "$NS" rollout status statefulset/elitea-vectordb --timeout=5m
+  local d
+  for d in $(kc -n "$NS" get deploy -l "app.kubernetes.io/instance=${RELEASE}" -o name); do
+    kc -n "$NS" rollout status "$d" --timeout=10m
+  done
 }
 
 psql_exec() {
@@ -360,20 +443,28 @@ cmd_verify() {
   # The migrate Job's pod carries the same name label, so the component is
   # excluded: with it included the selector's first item is whichever pod the
   # API returns first, and a green run would be luck.
+  # The engine is a NATIVE sidecar: an init container with restartPolicy
+  # Always, so the kubelet stops it only after the host has exited. Its
+  # status must say it is running beside the host, not that it completed.
+  local engine_policy engine_running
   containers="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{.items[0].spec.containers[*].name}')"
-  if [ "$containers" != "elitea-deepwiki engine" ]; then
-    fail "the provider pod's containers are '${containers}'; expected 'elitea-deepwiki engine'"
+      -o jsonpath='{.items[0].spec.containers[*].name} {.items[0].spec.initContainers[*].name}')"
+  engine_policy="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
+      -o jsonpath='{.items[0].spec.initContainers[?(@.name=="engine")].restartPolicy}')"
+  engine_running="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
+      -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="engine")].state.running.startedAt}')"
+  if [ "$containers" != "elitea-deepwiki engine" ] || [ "$engine_policy" != "Always" ] || [ -z "$engine_running" ]; then
+    fail "the provider pod's containers are '${containers}' (engine restartPolicy '${engine_policy}', running since '${engine_running}'); expected 'elitea-deepwiki engine' with the engine a running native sidecar"
   else
     kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{range .items[0].spec.containers[*]}   {.name}{"\t"}{.image}{"\n"}{end}'
-    pass "containers: ${containers}"
+      -o jsonpath='{range .items[0].spec.containers[*]}   {.name}{"\t"}{.image}{"\n"}{end}{range .items[0].spec.initContainers[*]}   {.name}{"\t"}{.image} (native sidecar){"\n"}{end}'
+    pass "containers: ${containers} (the engine is a running native sidecar)"
   fi
   local host_runner engine_runner
   host_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
       -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   engine_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{.items[0].spec.containers[1].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
+      -o jsonpath='{.items[0].spec.initContainers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   if [ "$host_runner" != "native" ] || [ "$engine_runner" != "fixture" ]; then
     fail "runners are host=${host_runner} engine=${engine_runner}; expected native/fixture"
   else
@@ -469,6 +560,74 @@ for o in (b.get("items") or b.get("objects") or []):
   fi
   stop_port_forward
 
+  # ── 5. the bundled KEDA scales DeepWiki and Inventory (S11) ────────────────
+  say "5. the ScaledObjects created on the first install are Ready"
+  # keda.enabled installs KEDA's CRDs in this same release, so on the FIRST
+  # install the ScaledObject is a post-install hook (the CRDs did not exist
+  # when Helm mapped the release). Ready=True means all of it worked: the
+  # CRDs, the operator, the hook, and a postgresql scaler that connected with
+  # the TriggerAuthentication's credential and ran its query. Polled: the
+  # operator reconciles on its own schedule after it starts.
+  # Inventory's postgresql trigger reads inventory_graph.invocations: Ready
+  # also proves the host's invocation tables exist (engine migration 0009).
+  local so_ready="" so_hpa="" so
+  for so in elitea-deepwiki elitea-inventory; do
+    so_ready=""
+    for attempt in $(seq 1 60); do
+      so_ready="$(kc -n "$NS" get scaledobject "$so" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+      [ "$so_ready" = "True" ] && break
+      sleep 3
+    done
+    if [ "$so_ready" != "True" ]; then
+      kc -n "$NS" get scaledobject -o wide >&2 || true
+      kc -n "$NS" describe scaledobject "$so" >&2 || true
+      fail "ScaledObject ${so} is Ready='${so_ready:-<absent>}', not True"
+    else
+      pass "ScaledObject ${so} is Ready=True (bundled KEDA, postgresql trigger)"
+    fi
+    # KEDA drives the Deployment through an HPA it owns; the chart rendered
+    # no replicas: field, so nothing fights it.
+    so_hpa="$(kc -n "$NS" get hpa "keda-hpa-${so}" -o jsonpath='{.spec.scaleTargetRef.name}' 2>/dev/null || true)"
+    if [ "$so_hpa" != "$so" ]; then
+      fail "KEDA's HPA keda-hpa-${so} targets '${so_hpa:-<absent>}', not ${so}"
+    else
+      pass "KEDA's HPA keda-hpa-${so} scales ${so}"
+    fi
+  done
+
+  # ── 6. helm uninstall with the bundled KEDA does not hang ──────────────────
+  # The LAST check: it removes the release. The pre-delete hook
+  # (templates/keda-cleanup.yaml) deletes the ScaledObjects and waits for
+  # KEDA's operator to run their finalizers BEFORE Helm deletes the
+  # operator and its CRDs. Without it the CRDs (and the namespace) stay in
+  # Terminating. Proof: the uninstall returns, no ScaledObject is left, and
+  # the scaledobjects CRD is gone, not Terminating.
+  say "6. helm uninstall removes the ScaledObjects first, and KEDA's CRDs go"
+  if helm --kube-context "kind-${CLUSTER}" -n "$NS" uninstall "$RELEASE" --timeout 5m; then
+    pass "helm uninstall returned"
+  else
+    fail "helm uninstall failed or timed out"
+  fi
+  local left="" crd=""
+  for attempt in $(seq 1 40); do
+    crd="$(kc get crd scaledobjects.keda.sh -o jsonpath='{.metadata.deletionTimestamp}{"|"}{.metadata.name}' 2>/dev/null || true)"
+    [ -z "$crd" ] && break
+    sleep 3
+  done
+  left="$(kc -n "$NS" get scaledobjects.keda.sh -o name 2>/dev/null || true)"
+  if [ -n "$left" ]; then
+    fail "ScaledObjects left after the uninstall: ${left}"
+  else
+    pass "no ScaledObject is left in ${NS}"
+  fi
+  if [ -n "$crd" ]; then
+    kc get crd scaledobjects.keda.sh -o yaml >&2 || true
+    fail "the scaledobjects.keda.sh CRD is still there (${crd}): the uninstall left it Terminating"
+  else
+    pass "the scaledobjects.keda.sh CRD is gone"
+  fi
+
   echo
   if [ "$failures" -ne 0 ]; then
     die "verify: ${failures} check(s) failed"
@@ -482,7 +641,7 @@ cmd_down() {
   say "Deleting the kind cluster ${CLUSTER}"
   kind delete cluster --name "$CLUSTER"
   note "the built images are left in ${ENGINE}; remove them with:"
-  note "  ${ENGINE} rmi ${MAIN_IMAGE} ${HOST_IMAGE} ${ENGINE_IMAGE}"
+  note "  ${ENGINE} rmi ${MAIN_IMAGE} ${HOST_IMAGE} ${ENGINE_IMAGE} ${INVENTORY_ENGINE_IMAGE} ${VECTOR_IMAGE}"
 }
 
 case "${1:-}" in
@@ -494,11 +653,14 @@ case "${1:-}" in
 usage: $0 {up|verify|down}
 
   up      create the kind cluster, build and side-load the images, install
-          cert-manager and the CA issuer, the infrastructure, the chart, and
-          seed the fixtures
+          cert-manager and the CA issuer, the infrastructure, NATS and its
+          bootstrap, the chart, and seed the fixtures
   verify  prove: every pod Ready; the provider pod is the host + engine
           sidecar; the facade registered the provider; a fixture generation
-          completes and its pages land in the artifact bucket
+          completes and its pages land in the artifact bucket; the bundled
+          KEDA scales DeepWiki and Inventory; then `helm uninstall` (the
+          last check, it removes the release) does not leave KEDA's CRDs
+          in Terminating
   down    delete the cluster
 USAGE
      exit 2 ;;

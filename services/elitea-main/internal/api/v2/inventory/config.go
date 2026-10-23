@@ -19,6 +19,20 @@ import (
 // expansion nobody wrote the field projection for.
 var DefaultSourceTypes = []string{"github", "ado_repos"}
 
+// DefaultCallbackTokenTTL is the bearer's lifetime when CallbackTokenTTLEnv is
+// unset: eight hours, DeepWiki's (deepwiki.DefaultCallbackTokenTTL).
+//
+// WHY EIGHT. An ingestion is bounded by nothing on the wall clock: not this
+// facade, not the sub-application host (its engine calls carry no deadline
+// the caller did not set), and the Inventory engine has no CPU cap either.
+// Its bearer is what the engine calls the model, the artifact store and —
+// with ADR-0031 — elitea-vector with, the last of them at the end of the run,
+// so the bearer must outlive the longest ingestion. Two hours was set for
+// "a large repository"; a large repository with model-driven extraction runs
+// past it. The same eight hours as DeepWiki keeps one rule for both engines;
+// the variable still overrides it.
+const DefaultCallbackTokenTTL = 8 * time.Hour
+
 // SourcesConfig is what the rewriter needs beyond its three dependencies.
 type SourcesConfig struct {
 	// GitEgress is the allowlist of hosts a source may be cloned from,
@@ -27,20 +41,15 @@ type SourcesConfig struct {
 	GitEgress material.GitEgressPolicy
 	// SourceTypes is the toolkit types this deployment allows as sources.
 	SourceTypes []string
-	// CallbackBaseURL is the origin the provider reaches back on for
-	// artifacts and models — one value, because the engine derives the
-	// artifact base by stripping `/llm/v1` off it.
-	CallbackBaseURL string
-	// CallbackTokenTTL is the minted bearer's lifetime. Two hours by default:
-	// long enough for a large repository's ingestion, short enough that a
-	// leaked token is not a standing grant.
+	// CallbackTokenTTL is the minted bearer's lifetime. DefaultCallbackTokenTTL
+	// unless CallbackTokenTTLEnv says otherwise.
 	CallbackTokenTTL time.Duration
 }
 
 // SourcesFromEnv reads it. Lenient where a default is honest and strict where
-// one would hide a typo: an unparseable TTL is an error, an unset one is two
-// hours, and an unset allowlist is a fail-closed refusal rather than a silent
-// permit.
+// one would hide a typo: an unparseable TTL is an error, an unset one is
+// DefaultCallbackTokenTTL, and an unset allowlist is a fail-closed refusal
+// rather than a silent permit.
 func SourcesFromEnv(lookup func(string) (string, bool)) (SourcesConfig, error) {
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -52,8 +61,10 @@ func SourcesFromEnv(lookup func(string) (string, bool)) (SourcesConfig, error) {
 	cfg := SourcesConfig{
 		GitEgress:        material.ParseGitEgress(get(GitAllowlistEnv), GitAllowlistEnv),
 		SourceTypes:      DefaultSourceTypes,
-		CallbackBaseURL:  get(CallbackBaseURLEnv),
-		CallbackTokenTTL: 2 * time.Hour,
+		CallbackTokenTTL: DefaultCallbackTokenTTL,
+	}
+	if err := material.RetiredCallbackBaseURL(RetiredCallbackBaseURLEnv, lookup); err != nil {
+		return SourcesConfig{}, err
 	}
 	if raw := get(SourceTypesEnv); raw != "" {
 		cfg.SourceTypes = strings.FieldsFunc(raw, func(r rune) bool {

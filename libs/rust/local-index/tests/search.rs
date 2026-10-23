@@ -175,8 +175,8 @@ async fn chunks_follow_the_files_through_refreshes() {
     // Deleted: its chunks go with it.
     fs::remove_file(opened.folder.path().join("src/tokens.py")).unwrap();
     service.refresh(false).await.unwrap();
-    assert!(store.chunks_of("src/tokens.py").unwrap().is_empty());
-    assert!(paths(service, &request("TokenStore")).is_empty());
+    assert_eq!(store.chunks_of("src/tokens.py").unwrap(), []);
+    assert_eq!(paths(service, &request("TokenStore")), [] as [String; 0]);
     // A full rebuild gives the same chunks.
     let count = store.chunk_count().unwrap();
     service.refresh(true).await.unwrap();
@@ -197,13 +197,7 @@ async fn a_denied_file_leaves_no_chunk() {
     )
     .unwrap();
     service.refresh(false).await.unwrap();
-    assert!(
-        service
-            .store()
-            .chunks_of("docs/guide.md")
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(service.store().chunks_of("docs/guide.md").unwrap(), []);
     assert!(
         paths(&service, &request("rotated sign"))
             .iter()
@@ -309,13 +303,19 @@ async fn staged_chunks_stay_invisible_until_a_build_commits() {
     // A build in flight stages chunks: searches never see them.
     store.stage_chunks(&staged).unwrap();
     assert_eq!(store.chunk_count().unwrap(), before);
-    assert!(store.search_fts("zebraphantom", 10).unwrap().is_empty());
-    assert!(paths(&opened.service, &request("zebraphantom")).is_empty());
+    assert_eq!(
+        store.search_fts("zebraphantom", 10).unwrap(),
+        [] as [(i64, f64); 0]
+    );
+    assert_eq!(
+        paths(&opened.service, &request("zebraphantom")),
+        [] as [String; 0]
+    );
     // The next build starts by clearing them, and its commit only moves
     // chunks of files the run itself read.
     opened.service.refresh(false).await.unwrap();
     assert_eq!(store.chunk_count().unwrap(), before);
-    assert!(store.chunks_of("src/ghost.py").unwrap().is_empty());
+    assert_eq!(store.chunks_of("src/ghost.py").unwrap(), []);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

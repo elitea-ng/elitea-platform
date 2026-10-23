@@ -969,14 +969,14 @@ mod tests {
         assert_eq!(activations.len(), 2);
         assert_eq!(activations[0], activations[1]);
         assert_eq!(runtime.runtime.visits.lock().unwrap().len(), 1);
-        assert!(
+        assert_eq!(
             checkpoints
                 .load("child-code")
                 .await
                 .unwrap()
                 .unwrap()
-                .pending_nodes
-                .is_empty()
+                .pending_nodes,
+            [] as [String; 0]
         );
         recovered
             .invoke(State::new(), ExecutionConfig::new("child-code"))

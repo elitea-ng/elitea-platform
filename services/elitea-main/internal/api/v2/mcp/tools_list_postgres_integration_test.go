@@ -18,9 +18,9 @@ package mcp_test
 //   - the caller's personal project is unioned in, and wins a name collision;
 //   - a project with no rows gets `[]`, not an error and not `null`.
 //
-// The final case drives the whole path with no pylon present: a remote MCP
-// server, the platform's own discovery endpoint, the rows it writes, and the
-// listing a worker then reads.
+// The final case drives the whole path with no legacy runtime present: a remote
+// MCP server, the platform's own discovery endpoint, the rows it writes, and
+// the listing a worker then reads.
 
 import (
 	"context"
@@ -162,8 +162,8 @@ func TestToolsListServesTheStoredServerAndItsTools(t *testing.T) {
 	}
 
 	// The whole point of the store is that a worker can reach it without
-	// pylon. Nothing in this test starts a pylon process, opens a socket, or
-	// seeds a fixture the handler could be reading instead of the tables.
+	// the legacy runtime. Nothing in this test starts a legacy process, opens a
+	// socket, or seeds a fixture the handler could be reading instead of the tables.
 	var storedTools int
 	if err := pool.QueryRow(context.Background(), `
 		SELECT count(*)
@@ -227,9 +227,8 @@ func TestToolsListReturnsAnEmptyArrayForAProjectWithNoServer(t *testing.T) {
 	}
 }
 
-// The mode-less URL is the one the Python execution worker builds, and the one
-// the hybrid edge matches. Both shapes must reach the same handler, or the
-// caller that actually exists gets a 404.
+// The mode-less URL is the one elitea-sdk builds. Both shapes must reach the
+// same handler, or the caller that actually exists gets a 404.
 func TestToolsListServesBothModeShapes(t *testing.T) {
 	pool := newMCPPool(t)
 	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
@@ -278,7 +277,7 @@ func TestToolsListDoesNotServeAnotherProjectsServers(t *testing.T) {
 /* ── the personal-project union ────────────────────────────────────────── */
 
 // seedPersonalProject creates `project_user_<id>` and makes the user a member,
-// which is what the resolver requires (it mirrors pylon's
+// which is what the resolver requires (it mirrors the legacy
 // `projects_get_personal_project_id`).
 func seedPersonalProject(t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
 	t.Helper()
@@ -309,8 +308,8 @@ func seedPersonalProject(t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
 	return projectID
 }
 
-// pylon merges the caller's personal project into every listing, and lets the
-// personal entry WIN a name collision
+// The legacy runtime merges the caller's personal project into every listing,
+// and lets the personal entry WIN a name collision
 // (`{**current_servers, **private_servers}`). Both halves are asserted: a
 // personal-only server appears, and a colliding name serves the personal tools.
 func TestToolsListUnionsThePersonalProjectAndPersonalWinsACollision(t *testing.T) {
@@ -351,12 +350,12 @@ func TestToolsListUnionsThePersonalProjectAndPersonalWinsACollision(t *testing.T
 	}
 }
 
-/* ── the write path, end to end, with no pylon ─────────────────────────── */
+/* ── the write path, end to end, with no legacy runtime ──────────────── */
 
 // fakeMCPServer answers the streamable-HTTP handshake and one tools/list.
 //
 // It stands in for a real MCP server, which is the ONLY external component
-// this path needs. There is no pylon process, no socket.io connection and no
+// this path needs. There is no legacy process, no socket.io connection and no
 // indexer worker anywhere in this test.
 func fakeMCPServer(t *testing.T, tools string) *httptest.Server {
 	t.Helper()
@@ -388,8 +387,8 @@ func fakeMCPServer(t *testing.T, tools string) *httptest.Server {
 	return server
 }
 
-// The acceptance criterion of issue 335, end to end and with no pylon: register
-// an MCP toolkit in a project, then read the project's tool list.
+// The acceptance criterion of issue 335, end to end and with no legacy runtime:
+// register an MCP toolkit in a project, then read the project's tool list.
 //
 // The assertion in the middle is the database, not the status code. If
 // mcp_sync_tools answered 200 and stored nothing — this repository's recurring

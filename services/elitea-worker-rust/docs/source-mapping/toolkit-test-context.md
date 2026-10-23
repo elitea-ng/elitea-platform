@@ -4,8 +4,8 @@
 
 | Current platform source | Required behavior | New platform source |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/elitea_core/rpc/application.py::test_toolkit_tool_sio` | Build toolkit Test context with security policy and optional model selection. | Main `internal/application/toolkitcalltool/{resolver,runtime_context,service}.go` |
-| `projects/centry/pylon_main/plugins/elitea_core/api/v2/test_toolkit_tool.py` | Bind the authenticated project, actor, toolkit, and tool arguments. | Main `internal/api/v2/toolkitrun/response.go::DecodeRequest` |
+| `legacy/centry/<main runtime>/plugins/elitea_core/rpc/application.py::test_toolkit_tool_sio` | Build toolkit Test context with security policy and optional model selection. | Main `internal/application/toolkitcalltool/{resolver,runtime_context,service}.go` |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/test_toolkit_tool.py` | Bind the authenticated project, actor, toolkit, and tool arguments. | Main `internal/api/v2/toolkitrun/response.go::DecodeRequest` |
 | `projects/elitea-sdk/elitea_sdk/runtime/toolkits/security.py` | Enforce configured toolkit blocks and sensitive-tool policy. | Main `internal/domain/guardrails/policy.go`; Rust toolkit delivery and native tool security checks |
 | Python worker `handlers/toolkit_call_tool.py` | Keep toolkit settings, arguments, and runtime context separate. | Main `internal/application/toolkitcalltool/input_bundle.go`; Rust `src/execution/toolkit_delivery.rs` |
 | Current platform credential expansion | Resolve credentials only for an authorized invocation. | Main `internal/infra/storage/configurations_materializer.go::MaterializeContent` |

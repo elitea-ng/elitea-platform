@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn a_short_text_is_one_window_unchanged_and_a_long_one_is_cut_by_tokens() {
-        assert!(split_windows("", 8).unwrap().is_empty());
+        assert_eq!(split_windows("", 8).unwrap(), [] as [String; 0]);
         let short = "héllo wörld";
         assert_eq!(split_windows(short, 64).unwrap(), [short]);
         let long = "alpha beta gamma delta ".repeat(50);

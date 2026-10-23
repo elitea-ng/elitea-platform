@@ -535,12 +535,12 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
  *
  *  - **Service Descriptors** renders nothing but an `Alert`. But the page is
  *    FINISHED: the subsystem it would administer does not exist on this
- *    platform (pylon's provider hub; #201/ADR-0012 replace it with a different
- *    shape), the server answers 501, and the page renders THE SERVER'S OWN
- *    SENTENCE rather than a copy it carries. Pinning it is valuable precisely
- *    because it is the regression this port was built to prevent: if someone
- *    wires that endpoint to a stub returning 200 with an empty array, this
- *    baseline changes. A hardcoded explanation would not have.
+ *    platform (the legacy provider hub; #201/ADR-0012 replace it with a
+ *    different shape), the server answers 501, and the page renders THE
+ *    SERVER'S OWN SENTENCE rather than a copy it carries. Pinning it is
+ *    valuable precisely because it is the regression this port was built to
+ *    prevent: if someone wires that endpoint to a stub returning 200 with an
+ *    empty array, this baseline changes. A hardcoded explanation would not have.
  *  - **Configuration** renders its full section list with every section
  *    `Not available here`. Same argument: the section titles and every reason
  *    string come from the server's schema, so the screen is a photograph of
@@ -584,8 +584,8 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
  *
  *  - Every dialog and drawer (`admin-secret-dialog`, `ProjectMemberDialog`,
  *    `ProjectActivityDrawer`, `ScheduleHistoryDrawer`) and the non-default tabs
- *    (`System Users`, `Internal` secrets, `Tasks`/`Active Tasks`, the three
- *    non-`Pending` App Requests tabs, the three non-default Roles scopes).
+ *    (`System Users`, `Internal` secrets, the three non-`Pending` App
+ *    Requests tabs, the three non-default Roles scopes).
  *    Reachable and worth covering eventually; each is another PNG against the
  *    12MB budget and none is covered by a claim made here.
  */

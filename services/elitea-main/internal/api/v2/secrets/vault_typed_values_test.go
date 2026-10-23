@@ -29,7 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// typedHeaderValues are the non-string JSON values a pylon-written vault can
+// typedHeaderValues are the non-string JSON values a legacy-written vault can
 // hold under any name — `value: Optional[str] = None` stores null.
 var typedHeaderValues = []string{`null`, `true`, `false`, `0`, `42`, `[]`, `{}`}
 

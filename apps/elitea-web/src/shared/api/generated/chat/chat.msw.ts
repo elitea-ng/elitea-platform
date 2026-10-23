@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -55,6 +56,8 @@ import type {
   ConversationListing,
   ConversationMessageListing,
   ConversationParticipant,
+  ConversationReadState,
+  ConversationSummary,
   CreatedConversation,
   ExecutionInterruptDecisionResult,
   ExecutionInterruptList,
@@ -65,6 +68,7 @@ import type {
   MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
+  OkResponse,
   ParticipantCandidatesPage,
   StaticPipelineContinuationReceipt,
   SupportAssistantConfig,
@@ -276,6 +280,128 @@ export const getHeartbeatCanvasPresenceResponseMock = (
   ...overrideResponse,
 });
 
+export const getArchiveConversationResponseMock = (
+  overrideResponse: Partial<Extract<OkResponse, object>> = {},
+): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getUnarchiveConversationResponseMock = (
+  overrideResponse: Partial<Extract<OkResponse, object>> = {},
+): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getMarkConversationReadResponseMock = (
+  overrideResponse: Partial<Extract<ConversationReadState, object>> = {},
+): ConversationReadState => ({
+  conversation_id: faker.number.int(),
+  read_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  last_read_message_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  unread: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getUpdateConversationInternalToolsResponseMock = (
+  overrideResponse: Partial<Extract<UpdatedConversation, object>> = {},
+): UpdatedConversation => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.string.uuid(),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  folder_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  is_private: faker.datatype.boolean(),
+  instructions: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  meta: faker.helpers.arrayElement([{}, undefined]),
+  ...overrideResponse,
+});
+
+export const getForkConversationResponseMock = (
+  overrideResponse: Partial<Extract<ConversationSummary, object>> = {},
+): ConversationSummary => ({
+  id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  duration: faker.number.int(),
+  message_groups_count: faker.number.int(),
+  workspace_executor: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  is_pinned: faker.datatype.boolean(),
+  is_archived: faker.datatype.boolean(),
+  archived_by: faker.helpers.arrayElement([
+    {
+      id: faker.number.int(),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    undefined,
+  ]),
+  archived_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  uuid: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
+  source: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  forked_from: faker.helpers.arrayElement([
+    {
+      conversation_id: faker.number.int(),
+      conversation_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      message_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  forked_messages: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.uuid(),
+    },
+    undefined,
+  ]),
+  activity: faker.helpers.arrayElement([
+    {
+      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      since: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
+  ]),
+  last_activity_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  unread: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  meta: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
 export const getExportConversationResponseMock = (
   overrideResponse: Partial<Extract<string | ConversationExport, object>> = {},
 ): string | ConversationExport =>
@@ -342,6 +468,60 @@ export const getListConversationsResponseMock = (
       undefined,
     ]),
     is_pinned: faker.datatype.boolean(),
+    is_archived: faker.datatype.boolean(),
+    archived_by: faker.helpers.arrayElement([
+      {
+        id: faker.number.int(),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      undefined,
+    ]),
+    archived_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+    uuid: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
+    source: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    forked_from: faker.helpers.arrayElement([
+      {
+        conversation_id: faker.number.int(),
+        conversation_uuid: faker.helpers.arrayElement([
+          faker.string.uuid(),
+          undefined,
+        ]),
+        message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+        message_uuid: faker.helpers.arrayElement([
+          faker.string.uuid(),
+          undefined,
+        ]),
+        name: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
+    forked_messages: faker.helpers.arrayElement([
+      {
+        [faker.string.alphanumeric(5)]: faker.string.uuid(),
+      },
+      undefined,
+    ]),
+    activity: faker.helpers.arrayElement([
+      {
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        since: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      undefined,
+    ]),
+    last_activity_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+    unread: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
     meta: faker.helpers.arrayElement([
       faker.helpers.arrayElement([null]),
       undefined,
@@ -495,6 +675,25 @@ export const getGetConversationResponseMock = (
     undefined,
   ]),
   is_private: faker.datatype.boolean(),
+  forked_from: faker.helpers.arrayElement([
+    {
+      conversation_id: faker.number.int(),
+      conversation_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      message_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
   meta: {
     editor_test: faker.helpers.arrayElement([
       {
@@ -754,7 +953,22 @@ export const getListConversationMessagesResponseMock = (
     ]),
     sent_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
     reply_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
-    metadata: faker.helpers.arrayElement([{}, undefined]),
+    metadata: faker.helpers.arrayElement([
+      {
+        mentioned_user_ids: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => faker.number.int()),
+          undefined,
+        ]),
+        mentions_everyone: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
     message_items: faker.helpers.arrayElement([
       Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
@@ -2016,6 +2230,136 @@ export const getHeartbeatCanvasPresenceMockHandler = (
   );
 };
 
+export const getArchiveConversationMockHandler = (
+  overrideResponse?:
+    | OkResponse
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<OkResponse> | OkResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getArchiveConversationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUnarchiveConversationMockHandler = (
+  overrideResponse?:
+    | OkResponse
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<OkResponse> | OkResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUnarchiveConversationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMarkConversationReadMockHandler = (
+  overrideResponse?:
+    | ConversationReadState
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ConversationReadState> | ConversationReadState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/conversation_read/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkConversationReadResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateConversationInternalToolsMockHandler = (
+  overrideResponse?:
+    | UpdatedConversation
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) => Promise<UpdatedConversation> | UpdatedConversation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/elitea_core/conversation_internal_tools/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateConversationInternalToolsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getForkConversationMockHandler = (
+  overrideResponse?:
+    | ConversationSummary
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConversationSummary> | ConversationSummary),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/conversation_fork/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getForkConversationResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
 export const getExportConversationMockHandler = (
   overrideResponse?:
     | string
@@ -2915,6 +3259,28 @@ export const getDownloadConversationAttachmentMockHandler = (
   );
 };
 
+export const getDeleteConversationAttachmentMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/attachments/prompt_lib/:projectId/:conversationId/:name",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getStreamExecutionEventsMockHandler = (
   overrideResponse?:
     | string
@@ -3209,6 +3575,11 @@ export const getChatMock = () => [
   getGetSupportConversationMockHandler(),
   getStartSupportTurnMockHandler(),
   getHeartbeatCanvasPresenceMockHandler(),
+  getArchiveConversationMockHandler(),
+  getUnarchiveConversationMockHandler(),
+  getMarkConversationReadMockHandler(),
+  getUpdateConversationInternalToolsMockHandler(),
+  getForkConversationMockHandler(),
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),
   getCreateConversationMockHandler(),
@@ -3243,6 +3614,7 @@ export const getChatMock = () => [
   getContinueChatExecutionMockHandler(),
   getUploadConversationAttachmentMockHandler(),
   getDownloadConversationAttachmentMockHandler(),
+  getDeleteConversationAttachmentMockHandler(),
   getStreamExecutionEventsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),

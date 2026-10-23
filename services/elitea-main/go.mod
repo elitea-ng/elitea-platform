@@ -7,6 +7,7 @@ replace github.com/EliteaAI/elitea-platform/libs/proto/gen/go => ../../libs/prot
 replace github.com/EliteaAI/elitea-platform/libs/go/observability => ../../libs/go/observability
 
 require (
+	cel.dev/cel-go v0.32.0
 	cloud.google.com/go/storage v1.66.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
@@ -19,13 +20,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.1
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.4.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.109.1
+	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/google/cel-go v0.30.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klippa-app/go-pdfium v1.19.8
 	github.com/nats-io/nats.go v1.53.1

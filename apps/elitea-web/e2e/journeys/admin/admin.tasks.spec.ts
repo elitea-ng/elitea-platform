@@ -19,12 +19,6 @@
  *  - A settled job carries NO stop button. A control that answers 409 teaches
  *    an operator to ignore it.
  *
- * ## What it does not assert
- *
- * Nothing about the pylon Arbiter task node. `/admin/app/schedules` keeps its
- * own Tasks tab and keeps saying that runtime is absent; journey 33 asserts
- * that, and it stays true.
- *
  * ## The seed
  *
  * There is no API that creates a background job on demand — a runtime job is

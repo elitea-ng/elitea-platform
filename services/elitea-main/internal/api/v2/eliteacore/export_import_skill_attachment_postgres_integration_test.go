@@ -140,7 +140,7 @@ func TestExportImportRoundTripKeepsTheSkillAttachments(t *testing.T) {
 		{
 			// `latest` pinned `reviewed`, and the skill's `base` is in the
 			// document beside it with a different body. A resolver that reached
-			// for `base` first — pylon's fallback order reversed — carries
+			// for `base` first — the legacy fallback order reversed — carries
 			// "the base body of skill one" here and fails.
 			skillName: skillRoundTripPinnedName, versionName: skillRoundTripPinnedVName,
 			instructions: skillRoundTripPinnedBody, entityType: "agent",
@@ -290,7 +290,7 @@ func TestForkReportsASkillItCannotFork(t *testing.T) {
 		t.Fatalf("errors.skills = %+v, want both refused entries", reported)
 	}
 	// The index space is ONE list: the applications, then the skills — the
-	// legacy's own numbering (fork.py concatenates the two arrays and numbers
+	// the legacy runtime's own numbering (fork.py concatenates the two arrays and numbers
 	// every entry by its position in the result). This body sends one
 	// application, so the two skills are at 1 and 2. An entry that reported 0
 	// would name the AGENT, which forked correctly.
@@ -546,9 +546,9 @@ func TestImportRefusesASkillWithNoVersion(t *testing.T) {
 }
 
 // TestImportKeepsTheSkillCapOfAVersion pins the cap the attach route enforces
-// (v2skills.MaxSkillsPerEntityVersion, pylon's MAX_SKILLS_PER_AGENT). The read
-// side renders it as "n/5 skills added" and disables the menu at the limit, so
-// an import that walked past it would leave a counter that says 6/5.
+// (v2skills.MaxSkillsPerEntityVersion, the legacy MAX_SKILLS_PER_AGENT). The
+// read side renders it as "n/5 skills added" and disables the menu at the
+// limit, so an import that walked past it would leave a counter that says 6/5.
 func TestImportKeepsTheSkillCapOfAVersion(t *testing.T) {
 	pool := newImportLinkPool(t)
 	router := importLinkRouter(eliteacore.NewHandler(pool))
@@ -603,9 +603,9 @@ func TestImportKeepsTheSkillCapOfAVersion(t *testing.T) {
 // entry on the agent's Skills panel, on the skill list and in the skill editor,
 // while chat ran correctly because it reads `skill_version_id` and not the name.
 //
-// The route is reached from the product with no pylon anywhere: `skillBlocks`
-// writes `version: <name>` into the markdown this service hands the user, and
-// `buildSkillsFromFrontmatter`
+// The route is reached from the product with no legacy runtime anywhere:
+// `skillBlocks` writes `version: <name>` into the markdown this service hands
+// the user, and `buildSkillsFromFrontmatter`
 // (apps/elitea-ui .../importWizardParser.helpers.js:142) reads it back as
 // `name: block.version || 'base'`.
 //

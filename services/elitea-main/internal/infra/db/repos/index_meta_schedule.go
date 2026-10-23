@@ -16,8 +16,9 @@ import (
 )
 
 // CurrentIndexMetaScheduleRepository owns only the second current DELETE
-// transaction in p_<project_id>. PgVector deletion is deliberately outside
-// this repository and commits before this method is called.
+// transaction in p_<project_id>. The index itself is deliberately outside
+// this repository: indexregistry.Service.Delete tombstones the registry row
+// (and attempts the elitea-vector deletion) before this method is called.
 type CurrentIndexMetaScheduleRepository struct {
 	projects projectStore
 }

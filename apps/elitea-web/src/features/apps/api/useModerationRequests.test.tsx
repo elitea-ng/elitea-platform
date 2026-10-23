@@ -145,12 +145,12 @@ describe('useModerationRequests', () => {
   });
 
   it('reads the {total, rows} envelope the real endpoint returns, newest row first', async () => {
-    // The shape unit A14's Go handler answers with, and pylon's before it. Until
-    // A14 the Go side returned a bare `{"status":"approved"}` from a static
-    // stub, and this hook read only that. Against a real server it found no
-    // `status` field and fell through to NONE. The "Pending approval" state on
-    // a catalogue card was therefore unreachable. The card kept offering
-    // "Request Access" after the request had been filed.
+    // The shape unit A14's Go handler answers with, and the legacy runtime's
+    // before it. Until A14 the Go side returned a bare `{"status":"approved"}`
+    // from a static stub, and this hook read only that. Against a real server it
+    // found no `status` field and fell through to NONE. The "Pending approval"
+    // state on a catalogue card was therefore unreachable. The card kept
+    // offering "Request Access" after the request had been filed.
     server.use(
       http.get('*/admin/moderation_status/default/:projectId/:entityId', () =>
         HttpResponse.json({
@@ -169,6 +169,21 @@ describe('useModerationRequests', () => {
     // `rows[0]`, not `rows[1]`: the server orders newest first and the state the
     // card wants is the most recent request, not the first one ever made.
     expect(result.current.getRequestStatus('inventory')).toBe(REQUEST_STATUS.PENDING);
+  });
+
+  it('reads a bare {status} body as NONE, not as that status', async () => {
+    // The stub's old shape. Only a legacy runtime answered with it, and this
+    // hook no longer reads it: a body that is not the envelope is no answer.
+    server.use(
+      http.get('*/admin/moderation_status/default/:projectId/:entityId', () =>
+        HttpResponse.json({ status: REQUEST_STATUS.APPROVED }),
+      ),
+    );
+
+    const { result } = renderHookWithRouter(() => useModerationRequests(), { projectId: 'proj-1' });
+
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.getRequestStatus('inventory')).toBe(REQUEST_STATUS.NONE);
   });
 
   it('reports NONE when the envelope carries no rows', async () => {

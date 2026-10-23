@@ -5,12 +5,12 @@
 // WHAT THIS REPLACES. router.go's NOTE(#126) recorded this path among the
 // routes that stood behind a nil `RouterConfig.Predictor` gate nothing ever
 // assigned. Their only implementation was the prototype Redis RPC client to
-// pylon-indexer, which published raw JSON onto a channel served through
+// the legacy indexer, which published raw JSON onto a channel served through
 // arbiter's gzip(pickle(...)) codec — every call was dropped on decode — so
 // #126 deleted the transport rather than repairing it. The capability stayed
 // open as this issue.
 //
-// BLOCKING ONLY, ON PURPOSE. Legacy's predict_sio_llm has two modes: blocking
+// BLOCKING ONLY, ON PURPOSE. The legacy runtime's predict_sio_llm has two modes: blocking
 // (await_task_timeout > 0, the answer comes back in the HTTP response) and
 // async (await_task_timeout == 0, a task id comes back and the tokens arrive
 // over the socket.io `application_predict` event). The async half is NOT
@@ -21,10 +21,10 @@
 // the response body, whatever `await_task_timeout` says — see
 // resolveRequestTimeout for the bounded meaning it is given instead.
 //
-// THE LLM HOP. The completion is performed by services/elitea-llm-gateway over
-// the same mTLS-internal transport, with the same signed identity headers, the
-// /llm reverse proxy and the configurations check-connection client already
-// use (internal/llmproxy.NewMTLSTransport + SignIdentityHeaders). The gateway
+// THE LLM HOP. The completion is performed by services/elitea-llm-gateway
+// through the same llmproxy.Gateway the /llm surface uses: GatewayService
+// over gRPC with mutual TLS, the caller's identity carried as signed
+// metadata (#1359). The gateway
 // is the only LLM data plane: it resolves the project's provider credentials
 // and model definitions itself and owns the SSRF-safe egress allowlist. There
 // is no second client here, no direct provider dial, and no LiteLLM facade to
@@ -38,8 +38,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
@@ -124,45 +126,26 @@ type Completer interface {
 	Complete(ctx context.Context, req CompletionRequest) (string, error)
 }
 
-// GatewayCompleter is the only production implementation: an HTTP client for
-// elitea-llm-gateway's OpenAI-dialect chat-completions endpoint.
+// GatewayCompleter is the only production implementation: a chat completion
+// through elitea-llm-gateway (llmproxy.Gateway, gRPC over mutual TLS).
 type GatewayCompleter struct {
-	httpClient     *http.Client
-	baseURL        string
-	identitySecret []byte
+	gateway llmproxy.Gateway
 }
 
-// NewGatewayCompleter builds a completer against gatewayBaseURL (e.g.
-// "https://elitea-llm-gateway-svc:8443") over transport. The client carries NO
-// client-level timeout: the per-request deadline comes from the handler's
-// context (resolveRequestTimeout), so a caller's await_task_timeout is the one
-// bound that applies rather than being silently capped by a second, hidden one.
-func NewGatewayCompleter(gatewayBaseURL string, transport http.RoundTripper, identitySecret string) *GatewayCompleter {
-	return &GatewayCompleter{
-		httpClient:     &http.Client{Transport: transport},
-		baseURL:        strings.TrimRight(gatewayBaseURL, "/"),
-		identitySecret: []byte(identitySecret),
-	}
-}
-
-// NewGatewayCompleterFromConfig builds the completer from the same
-// LLM_GATEWAY_URL / mTLS / GATEWAY_IDENTITY_SECRET environment configuration
-// the /llm reverse proxy and the check-connection client use, so an operator
-// configures the gateway hop once.
+// NewGatewayCompleter builds a completer over gateway. It carries NO timeout
+// of its own: the per-request deadline comes from the handler's context
+// (resolveRequestTimeout), so a caller's await_task_timeout is the one bound
+// that applies rather than being silently capped by a second, hidden one.
 //
-// It returns (nil, nil) when gatewayURL is empty. Callers MUST treat that as
-// "no LLM plane is composed" and answer 503 naming the variable — never 404,
-// and never a stub that invents content. #126 is precisely what an invisible
-// 404 costs.
-func NewGatewayCompleterFromConfig(gatewayURL, clientCertFile, clientKeyFile, caFile, identitySecret string) (*GatewayCompleter, error) {
-	if gatewayURL == "" {
-		return nil, nil
+// It returns nil when gateway is nil. Callers MUST treat that as "no LLM
+// plane is composed" and answer 503 naming LLM_GATEWAY_URL — never 404, and
+// never a stub that invents content. #126 is precisely what an invisible 404
+// costs.
+func NewGatewayCompleter(gateway llmproxy.Gateway) *GatewayCompleter {
+	if gateway == nil {
+		return nil
 	}
-	transport, err := llmproxy.NewMTLSTransport(clientCertFile, clientKeyFile, caFile, "")
-	if err != nil {
-		return nil, fmt.Errorf("predict: build mTLS transport: %w", err)
-	}
-	return NewGatewayCompleter(gatewayURL, transport, identitySecret), nil
+	return &GatewayCompleter{gateway: gateway}
 }
 
 // chatCompletionsRequest is the OpenAI-dialect body the gateway serves as a
@@ -203,11 +186,6 @@ func (c *GatewayCompleter) Complete(ctx context.Context, req CompletionRequest) 
 		return "", fmt.Errorf("predict: encode request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/llm/v1/chat/completions", bytes.NewReader(raw))
-	if err != nil {
-		return "", fmt.Errorf("predict: build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 	// A browser's turn carries no attribution id, so the identity tuple signs
 	// v1 exactly as the check-connection client does. A caller that names the
 	// work (the evaluation orchestrator) signs v2 with the id as the execution
@@ -216,10 +194,22 @@ func (c *GatewayCompleter) Complete(ctx context.Context, req CompletionRequest) 
 	if ValidAttributionID(req.AttributionID) {
 		attributionID = req.AttributionID
 	}
-	llmproxy.SignIdentityHeaders(httpReq.Header, c.identitySecret, req.ProjectID, req.UserID, "", attributionID)
-
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.gateway.ChatCompletions(ctx, &llmproxy.Request{
+		Header:   http.Header{"Content-Type": {"application/json"}},
+		Body:     bytes.NewReader(raw),
+		Identity: llmproxy.Identity{ProjectID: req.ProjectID, UserID: req.UserID, ExecutionID: attributionID},
+	})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("predict: call gateway: %w", ctxErr)
+		}
+		// gRPC enforces the context's deadline on its own timer, so the call
+		// can fail with DeadlineExceeded a moment before ctx.Err() reports it.
+		// That is still this caller's deadline, and callers test for it with
+		// errors.Is(err, context.DeadlineExceeded).
+		if _, hasDeadline := ctx.Deadline(); hasDeadline && status.Code(err) == codes.DeadlineExceeded {
+			return "", fmt.Errorf("predict: call gateway: %w: %w", context.DeadlineExceeded, err)
+		}
 		return "", fmt.Errorf("predict: call gateway: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()

@@ -7,7 +7,9 @@
 //! keeps no dependency on local-tools. The workspace runner's contract test
 //! (`libs/rust/workspace-runner/tests/contract.rs`) asserts the two tables
 //! are equal, name for name and schema for schema, so a change to either
-//! fails the build until the other follows.
+//! fails the build until the other follows. `exit_plan_mode` (#1225) is
+//! local-only: the desktop's plan mode offers it outside `TOOLS`, and the
+//! cloud executor has no plan mode, so it is in neither table.
 //!
 //! [`WorkspaceToolProvider`] is a [`ToolProvider`]: one toolset, named like
 //! the local one, whose every call is sent to a [`WorkspaceRunner`] (the
@@ -19,6 +21,10 @@ use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::edit_profile::{
+    APPLY_PATCH, APPLY_PATCH_DESCRIPTION, APPLY_PATCH_ENVELOPE_DESCRIPTION, EditProfile,
+    MULTI_EDIT_DESCRIPTION, multi_edit_params, patch_param,
+};
 use crate::host::{HostError, ToolProvider, ToolsetRequest};
 
 /// The toolset's name: the local toolset's (`elitea_local_tools::provider::TOOLSET_NAME`).
@@ -40,18 +46,22 @@ fn path_param(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+/// The tools that run commands: offered only with the shell policy.
+const RUNS_COMMANDS: &[&str] = &["run_command", "run_tests"];
+
 /// The tools, in the order the model sees them.
 pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "read_file",
         read_only: true,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
         parameters: || {
             json!({
                 "type": "object",
                 "properties": {
                     "path": path_param("Path relative to the workspace root."),
                     "offset": { "type": "integer", "minimum": 1, "description": "First line to return (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Number of lines (default 2000)." }
                 },
                 "required": ["path"]
@@ -76,7 +86,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "search_files",
         read_only: true,
-        description: "Search text files in the workspace for a regular expression (or a literal string). Honours .gitignore.",
+        description: "Search the text inside workspace files for a regular expression (or a literal string), like rg: matching lines with optional context lines (output_mode content), only the matching paths (files), or matches per file (count). Honours .gitignore. To find files by name use find_files.",
         parameters: || {
             json!({
                 "type": "object",
@@ -86,6 +96,29 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                     "glob": { "type": "string", "description": "Only files matching this glob, e.g. *.rs" },
                     "fixed_strings": { "type": "boolean" },
                     "case_insensitive": { "type": "boolean" },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "output_mode": { "type": "string", "enum": ["content", "files", "count"], "description": "content (default): matching lines; files: paths only; count: matches per file." },
+                    "context_before": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context_after": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Lines before and after (like -C)." },
+                    "multiline": { "type": "boolean", "description": "Let the pattern span lines (like rg -U)." },
+                    "max_per_file": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["pattern"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "find_files",
+        read_only: true,
+        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml, !*.md for every file but those; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). A glob with / matches the path under `path` (or from the workspace root); one without matches the file name. Lists paths only and opens nothing; .gitignore always honoured. For text inside files use search_files.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs, !*.md) or, with fuzzy=true, a name fragment (usrctrl)." },
+                    "path": path_param("Directory relative to the workspace root (default: the root)."),
+                    "fuzzy": { "type": "boolean", "description": "Rank by fuzzy match instead of glob filtering." },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
                 },
                 "required": ["pattern"]
@@ -101,6 +134,23 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                 "type": "object",
                 "properties": { "path": path_param("Path relative to the workspace root.") },
                 "required": ["path"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "read_output",
+        read_only: true,
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, run_tests, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "output_id": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 1, "description": "First line (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
+                    "limit": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["output_id"]
             })
         },
     },
@@ -122,7 +172,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "edit_file",
         read_only: false,
-        description: "Replace an exact string in a file you have read. old_string must occur exactly once unless replace_all is true.",
+        description: "Replace a string in a file you have read. old_string must occur exactly once unless replace_all is true; when it is not there exactly, a match ignoring line endings, trailing whitespace and a uniform indentation shift is used and reported. The result shows the changed lines.",
         parameters: || {
             json!({
                 "type": "object",
@@ -137,16 +187,16 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
         },
     },
     WorkspaceToolSpec {
-        name: "apply_patch",
+        name: "multi_edit",
         read_only: false,
-        description: "Apply a unified diff (git diff format) to files in the workspace. Every hunk must match exactly; nothing is written if one does not.",
-        parameters: || {
-            json!({
-                "type": "object",
-                "properties": { "patch": { "type": "string" } },
-                "required": ["patch"]
-            })
-        },
+        description: MULTI_EDIT_DESCRIPTION,
+        parameters: multi_edit_params,
+    },
+    WorkspaceToolSpec {
+        name: APPLY_PATCH,
+        read_only: false,
+        description: APPLY_PATCH_DESCRIPTION,
+        parameters: patch_param,
     },
     WorkspaceToolSpec {
         name: "run_command",
@@ -163,6 +213,24 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                     "network": { "type": "boolean" }
                 },
                 "required": ["command"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "run_tests",
+        read_only: false,
+        description: "Run the project's tests (or its build check) under the OS sandbox and get back the counts and the failing tests with file, line and a short message, not the whole log (output_id pages it with read_output). Without command it runs the detected test command for cwd (the environment's Project line); a given command must be one test runner invocation (cargo, go, vitest, jest, pytest, mvn, gradle, or the package manager's test script), and its structured output is switched on. A build that fails answers errors (the compiler's messages) instead of failures. The network is off unless network is true, which the person confirms.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Optional. Defaults to the detected test command; a given command must be a test runner invocation." },
+                    "filter": { "type": "string", "description": "Optional test name filter, appended the runner's way (cargo: positional; go: -run; pytest: -k; vitest/jest: -t)." },
+                    "cwd": path_param("Working directory relative to the workspace root (default: the detected project's folder)."),
+                    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 1800 },
+                    "network": { "type": "boolean", "description": "Allow the runner to fetch dependencies. Asked." }
+                },
+                "required": []
             })
         },
     },
@@ -210,6 +278,22 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
         parameters: || json!({ "type": "object", "properties": {} }),
     },
 ];
+
+/// `apply_patch` as [`EditProfile::Patch`] offers it: the same name and
+/// schema, described as the Codex envelope.
+pub static APPLY_PATCH_ENVELOPE: WorkspaceToolSpec = WorkspaceToolSpec {
+    name: APPLY_PATCH,
+    read_only: false,
+    description: APPLY_PATCH_ENVELOPE_DESCRIPTION,
+    parameters: patch_param,
+};
+
+/// The tools a turn with `profile` is offered, in model order: the same
+/// selection as `elitea-local-tools`' `session::tools_for`.
+#[must_use]
+pub fn workspace_tools_for(profile: EditProfile) -> Vec<&'static WorkspaceToolSpec> {
+    profile.select_specs(WORKSPACE_TOOLS, |spec| spec.name, &APPLY_PATCH_ENVELOPE)
+}
 
 /// Runs one tool call in the sandbox's workspace runner.
 #[async_trait]
@@ -401,19 +485,29 @@ impl Toolset for WorkspaceToolset {
 pub struct WorkspaceToolProvider {
     runner: Arc<dyn WorkspaceRunner>,
     shell: bool,
+    edit_profile: EditProfile,
     approved_calls: Option<Arc<dyn ApprovedCallLedger>>,
 }
 
 impl WorkspaceToolProvider {
     /// `shell`: the project's effective policy (decision 11); without it
-    /// `run_command` is not offered.
+    /// `run_command` and `run_tests` are not offered.
     #[must_use]
     pub fn new(runner: Arc<dyn WorkspaceRunner>, shell: bool) -> Self {
         Self {
             runner,
             shell,
+            edit_profile: EditProfile::default(),
             approved_calls: None,
         }
+    }
+
+    /// Offer the edit tools that suit the turn's model
+    /// ([`EditProfile`]); the default is [`EditProfile::StrReplace`].
+    #[must_use]
+    pub fn with_edit_profile(mut self, profile: EditProfile) -> Self {
+        self.edit_profile = profile;
+        self
     }
 
     /// Make every approved call one-shot through `ledger`
@@ -427,9 +521,9 @@ impl WorkspaceToolProvider {
     /// The tools offered, in model order.
     #[must_use]
     pub fn specs(&self) -> Vec<&'static WorkspaceToolSpec> {
-        WORKSPACE_TOOLS
-            .iter()
-            .filter(|spec| self.shell || spec.name != "run_command")
+        workspace_tools_for(self.edit_profile)
+            .into_iter()
+            .filter(|spec| self.shell || !RUNS_COMMANDS.contains(&spec.name))
             .collect()
     }
 
@@ -501,7 +595,30 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 12);
+        assert!(names(true).contains(&"run_tests"));
+        assert!(!names(false).contains(&"run_tests"));
+        assert_eq!(names(true).len(), 16);
+        let patch = WorkspaceToolProvider::new(runner.clone(), true)
+            .with_edit_profile(EditProfile::Patch)
+            .specs();
+        let patch_names: Vec<_> = patch.iter().map(|spec| spec.name).collect();
+        assert!(!patch_names.contains(&"edit_file") && !patch_names.contains(&"multi_edit"));
+        assert!(patch_names.contains(&"run_command") && patch_names.contains(&"run_tests"));
+        let patch_no_shell: Vec<_> = WorkspaceToolProvider::new(runner.clone(), false)
+            .with_edit_profile(EditProfile::Patch)
+            .specs()
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert!(
+            !patch_no_shell.contains(&"run_command") && !patch_no_shell.contains(&"run_tests"),
+            "{patch_no_shell:?}"
+        );
+        let apply = patch
+            .iter()
+            .find(|spec| spec.name == "apply_patch")
+            .expect("apply_patch");
+        assert!(apply.description.contains("*** Begin Patch"));
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

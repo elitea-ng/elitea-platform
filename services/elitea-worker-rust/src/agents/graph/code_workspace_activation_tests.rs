@@ -8,18 +8,16 @@ use crate::{
         node_recovery::NodeFailureClass,
     },
     protocol::control::{AgentControlClient, ClaimBoundSandboxAuthority},
+    protocol::elitea::runtime::v1::{
+        ResolveCodeWorkspaceRequestV1, ResolveCodeWorkspaceResponseV1,
+    },
     sandbox::{request::Language, workspace::WorkspacePolicy},
     transport::{
         InputContentClient,
-        input_content::{InputContentRpc, InputContentTransportError},
+        input_content::content_fake::{ContentFake, claim_of},
     },
 };
-use async_trait::async_trait;
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
-use http_body_util::BodyExt as _;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -33,32 +31,26 @@ const ROOT: &str = "ccbf5e3ba22d5a09f07b063e4b8e65b7a7b1c6e6b4d0c6c4a5bb285e519c
 #[derive(Clone, Copy)]
 enum MainReply {
     Manifest,
-    Status(http::StatusCode),
-    ChangedDigest,
+    Status(tonic::Code),
+    EmptyManifest,
     ChangedRoot,
 }
 struct MainRpc {
     reply: MainReply,
     requests: Arc<Mutex<Vec<serde_json::Value>>>,
 }
-#[async_trait]
-impl InputContentRpc for MainRpc {
-    async fn get(
+#[tonic::async_trait]
+impl ContentFake for MainRpc {
+    async fn resolve_code_workspace(
         &self,
-        request: http::Request<tonic::body::Body>,
-    ) -> Result<http::Response<tonic::body::Body>, InputContentTransportError> {
-        assert_eq!(request.method(), http::Method::POST);
-        assert!(
-            request
-                .uri()
-                .path()
-                .ends_with("/runtime-context/code-workspace")
-        );
-        assert!(request.uri().query().is_none());
-        assert!(request.headers().contains_key("x-elitea-claim-id"));
-        assert!(request.headers().contains_key("x-elitea-fence"));
-        let body = request.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        request: tonic::Request<ResolveCodeWorkspaceRequestV1>,
+    ) -> Result<tonic::Response<ResolveCodeWorkspaceResponseV1>, tonic::Status> {
+        let (claim, fence) = claim_of(&request);
+        assert_ne!(claim, "");
+        assert_eq!(fence.len(), 32);
+        let request = request.into_inner();
+        assert!(request.scope.is_some());
+        let value: serde_json::Value = serde_json::from_slice(&request.request_json).unwrap();
         assert_eq!(value.as_object().unwrap().len(), 2);
         assert_eq!(value["original_visit"]["visit_id"], "1".repeat(64));
         let base = URL_SAFE_NO_PAD
@@ -70,35 +62,21 @@ impl InputContentRpc for MainRpc {
             .unwrap();
         assert_eq!(base, job().to_transport().unwrap());
         self.requests.lock().unwrap().push(value);
-        let status = match self.reply {
-            MainReply::Status(status) => status,
-            _ => http::StatusCode::OK,
+        if let MainReply::Status(code) = self.reply {
+            return Err(tonic::Status::new(code, "refused"));
+        }
+        let manifest_json = match self.reply {
+            MainReply::EmptyManifest => Vec::new(),
+            _ => MANIFEST.to_vec(),
         };
-        let digest = match self.reply {
-            MainReply::ChangedDigest => [9; 32],
-            _ => ring::digest::digest(&ring::digest::SHA256, MANIFEST)
-                .as_ref()
-                .try_into()
-                .unwrap(),
-        };
-        let root = match self.reply {
+        let workspace_root = match self.reply {
             MainReply::ChangedRoot => "f".repeat(64),
             _ => ROOT.to_owned(),
         };
-        Ok(http::Response::builder()
-            .status(status)
-            .version(http::Version::HTTP_2)
-            .header(http::header::CONTENT_TYPE, "application/json")
-            .header(http::header::CONTENT_LENGTH, MANIFEST.len())
-            .header(
-                "content-digest",
-                format!("sha-256=:{}:", STANDARD.encode(digest)),
-            )
-            .header("x-elitea-workspace-root", root)
-            .body(tonic::body::Body::new(http_body_util::Full::new(
-                bytes::Bytes::from_static(MANIFEST),
-            )))
-            .unwrap())
+        Ok(tonic::Response::new(ResolveCodeWorkspaceResponseV1 {
+            manifest_json,
+            workspace_root,
+        }))
     }
 }
 fn job() -> PreparedJob {
@@ -205,7 +183,7 @@ async fn workspace_activation_uses_the_exact_main_manifest_and_original_visit() 
 }
 #[tokio::test]
 async fn workspace_activation_denied_or_absent_main_owner_never_returns_a_job() {
-    for status in [http::StatusCode::FORBIDDEN, http::StatusCode::NOT_FOUND] {
+    for status in [tonic::Code::PermissionDenied, tonic::Code::NotFound] {
         let (runtime, requests) = fixture(MainReply::Status(status));
         let failure = runtime
             .acquire_execution_workspace(&invocation(), &visit(), job())
@@ -214,7 +192,7 @@ async fn workspace_activation_denied_or_absent_main_owner_never_returns_a_job() 
             .unwrap();
         assert_eq!(
             failure.class(),
-            if status == http::StatusCode::FORBIDDEN {
+            if status == tonic::Code::PermissionDenied {
                 NodeFailureClass::AuthorizationDenied
             } else {
                 NodeFailureClass::DependencyUnavailable
@@ -267,7 +245,7 @@ async fn workspace_activation_readwrite_and_invalid_visit_refuse_before_owner_co
 }
 #[tokio::test]
 async fn workspace_activation_changed_digest_root_or_selection_cannot_bind_execution() {
-    for reply in [MainReply::ChangedDigest, MainReply::ChangedRoot] {
+    for reply in [MainReply::EmptyManifest, MainReply::ChangedRoot] {
         let (runtime, requests) = fixture(reply);
         let failure = runtime
             .acquire_execution_workspace(&invocation(), &visit(), job())

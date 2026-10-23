@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -18,8 +19,9 @@ import (
 
 // conversationSelectSQL is the projection of one conversation-list row,
 // shared by the legacy page and the delta so a delta row is byte-identical to
-// the legacy row. withSync appends c.sync_at (the cursor position, never a
-// wire field). The caller appends WHERE / ORDER BY / LIMIT.
+// the legacy row. withSync appends c.sync_at (the cursor position) and
+// c.uuid (the id of a tombstone, see loadConversationChanges), never wire
+// fields of the row. The caller appends WHERE / ORDER BY / LIMIT.
 //
 // `is_pinned` (client contract 1.4) is whether the project holds a
 // conversation pin for the row (centry.social_pins, one shared pin per
@@ -29,6 +31,24 @@ import (
 // the delta re-delivers the row with the new flag. projectID is the path's
 // project id, already validated as a tenant id by the caller; it is written
 // as an integer literal so the projection binds no argument of its own.
+//
+// `is_archived`, `archived_by` and `archived_at` (client contract 1.10) read
+// the project's archive of the row (tenant chat_conversation_archives, one
+// row per archived conversation). The archive is shared by the project, as
+// the pin is, so every reader gets the same values. An archive or unarchive
+// stamps sync_at as a pin does (repos.ConversationsRepo's
+// ArchiveConversation), so the delta re-delivers the row to every member who
+// can see it. The archiver's display name is added after the scan
+// (annotateArchivers).
+//
+// `uuid`, `source` and `forked_from` (client contract 1.11) follow. The
+// fork's source is read from `meta.forked_from` (forkedFrom); its name is
+// on getConversation only, where the caller's sight of the source is
+// checked.
+//
+// `activity`, `last_activity_at` and `unread` (client contract 1.12) are
+// added after the scan, for the whole page in one statement
+// (annotateActivity).
 func conversationSelectSQL(s, projectID string, withSync bool) string {
 	sync := ""
 	if withSync {
@@ -42,25 +62,68 @@ func conversationSelectSQL(s, projectID string, withSync bool) string {
 		SELECT c.id, c.name, c.created_at, COALESCE(c.updated_at, c.created_at), c.meta,
 			(SELECT COUNT(*) FROM %[1]s.chat_message_group mg WHERE mg.conversation_id = c.id),
 			EXISTS (SELECT 1 FROM centry.social_pins sp
-			        WHERE sp.entity = 'conversation' AND sp.project_id = %[3]d AND sp.entity_id = c.id)%[2]s
-		FROM %[1]s.chat_conversations c`, s, sync, project)
+			        WHERE sp.entity = 'conversation' AND sp.project_id = %[3]d AND sp.entity_id = c.id),
+			arch.archived_by, arch.archived_at, COALESCE(c.uuid::text, ''), COALESCE(c.source, '')%[2]s
+		FROM %[1]s.chat_conversations c
+		LEFT JOIN %[1]s.chat_conversation_archives arch ON arch.conversation_id = c.id`, s, sync, project)
+}
+
+// archivedPredicate is true when the project archived the conversation
+// aliased `c`. s is a quoted tenant schema, so the fragment is never caller
+// text.
+func archivedPredicate(s string) string {
+	return fmt.Sprintf(`EXISTS (SELECT 1 FROM %s.chat_conversation_archives ca WHERE ca.conversation_id = c.id)`, s)
+}
+
+// The values of the list's `archived` parameter (client contract 1.10).
+const (
+	archivedExclude = "exclude"
+	archivedOnly    = "only"
+	archivedInclude = "include"
+)
+
+// archivedMode reads `archived`. Absent and every unknown value are
+// `exclude`, the default, as `hidden` treats its unknown values.
+func archivedMode(values url.Values) string {
+	switch v := values.Get("archived"); v {
+	case archivedOnly, archivedInclude:
+		return v
+	default:
+		return archivedExclude
+	}
+}
+
+// archivedFilter is the SQL clause (alias c) of one `archived` mode.
+func archivedFilter(s, mode string) string {
+	switch mode {
+	case archivedOnly:
+		return archivedPredicate(s)
+	case archivedInclude:
+		return "TRUE"
+	default:
+		return "NOT " + archivedPredicate(s)
+	}
 }
 
 // scanConversationRow reads one conversationSelectSQL row into the wire map.
-func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesync.Position, error) {
+// With withSync it also returns the row's sync position and uuid.
+func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesync.Position, *string, error) {
 	var id int
 	var name string
 	var createdAt, updatedAt time.Time
 	var metaBytes []byte
 	var msgCount int
 	var pinned bool
+	var archivedBy *int64
+	var archivedAt *time.Time
+	var conversationUUID, source string
 	var syncAt time.Time
-	dest := []any{&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount, &pinned}
+	dest := []any{&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount, &pinned, &archivedBy, &archivedAt, &conversationUUID, &source}
 	if withSync {
 		dest = append(dest, &syncAt)
 	}
 	if err := rows.Scan(dest...); err != nil {
-		return nil, changesync.Position{}, err
+		return nil, changesync.Position{}, nil, err
 	}
 
 	var meta map[string]any
@@ -80,21 +143,99 @@ func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesy
 		"duration":             -1,
 		"message_groups_count": msgCount,
 		"is_pinned":            pinned,
+		"is_archived":          archivedBy != nil,
+		"uuid":                 conversationUUID,
+		"source":               source,
 	}
-	return row, changesync.Position{At: syncAt, ID: int64(id)}, nil
+	// Client contract 1.11: the fork's source, from the server-owned meta key.
+	if ff := forkedFrom(meta); ff != nil {
+		row["forked_from"] = ff
+	}
+	if archivedBy != nil && archivedAt != nil {
+		// archived_at is a UTC wall clock without a zone; the wire is RFC 3339.
+		row["archived_by"] = map[string]any{"id": *archivedBy, "name": ""}
+		row["archived_at"] = archivedAt.UTC().Format(time.RFC3339Nano)
+	}
+	var tombstoneUUID *string // a tombstone's uuid; absent when the row has none
+	if conversationUUID != "" {
+		tombstoneUUID = &conversationUUID
+	}
+	return row, changesync.Position{At: syncAt, ID: int64(id)}, tombstoneUUID, nil
+}
+
+// annotateArchivers fills `archived_by.name` with the archiver's display
+// name. A name is an enrichment: auth_core__user is bootstrap-owned and is
+// absent from a corpus-only database, so it is probed, and any failure
+// leaves the empty name the schema allows (the participants read in
+// repos.ConversationsRepo does the same).
+func annotateArchivers(ctx context.Context, pool *pgxpool.Pool, rows []map[string]any) {
+	ids := []int64{}
+	for _, row := range rows {
+		if by, ok := row["archived_by"].(map[string]any); ok {
+			ids = append(ids, by["id"].(int64))
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	var table *string
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('auth_core__user')::text`).Scan(&table); err != nil || table == nil {
+		return
+	}
+	result, err := pool.Query(ctx, `SELECT id::bigint, COALESCE(name, '') FROM auth_core__user WHERE id::bigint = ANY($1)`, ids)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	names := map[int64]string{}
+	for result.Next() {
+		var id int64
+		var name string
+		if result.Scan(&id, &name) == nil {
+			names[id] = name
+		}
+	}
+	if result.Err() != nil {
+		return
+	}
+	for _, row := range rows {
+		if by, ok := row["archived_by"].(map[string]any); ok {
+			by["name"] = names[by["id"].(int64)]
+		}
+	}
 }
 
 // conversationChangesQuery is what List resolved before it branched into
 // delta mode: the tenant schema, the caller's visibility predicate (alias c,
 // actor id bound at $1) and the list filters (alias c, bound after it).
+//
+// archived is the `archived` clause, kept apart from filters on purpose. It
+// narrows `total` and the rows of a full sync: every page of it, for the rows
+// stamped at or before the instant its first page read the list at (the
+// cursor's Snapshot). It never narrows the rows of a later delta: an archive
+// or unarchive re-delivers the row with its new `is_archived` and the client
+// keeps or drops it.
+//
+// archivedStated is whether the caller stated `archived` at all. A client
+// older than contract 1.10 never does, and it does not read `is_archived`:
+// re-delivering an archived row would keep the row in its list. So when the
+// parameter is absent, an archived row of a delta is delivered as an
+// `access_lost` tombstone instead, and an unarchived row is a row again (see
+// loadConversationChanges). The server has no other sign of the caller's
+// contract: `X-Client-Version` is the app's own version, not a contract.
 type conversationChangesQuery struct {
-	schema     string
-	projectID  string
-	visibility string
-	filters    string
-	args       []any
-	admin      bool
-	raw        string
+	schema         string
+	projectID      string
+	visibility     string
+	filters        string
+	archived       string
+	archivedMode   string
+	archivedStated bool
+	args           []any
+	admin          bool
+	// actorID is the caller, the reader of the rows' `unread`.
+	actorID int64
+	raw     string
 }
 
 // ConversationChanges is the delta shape of the conversation list
@@ -113,7 +254,23 @@ type ConversationChanges struct {
 
 // conversationFilterParams are the query parameters that select a list; a
 // cursor is bound to their values (changesync.FilterDigest).
+//
+// `archived` (client contract 1.10) is not in this list: see
+// conversationListScope.
 var conversationFilterParams = []string{"source", "entity_name", "entity_meta_id", "mine", "hidden"}
+
+// conversationListScope is the cursor's list identity: the project, the
+// filter digest, and the `archived` mode. The mode is appended only when it
+// is not the default, so `archived` absent and `archived=exclude` are the
+// same list, and a cursor issued before contract 1.10 (which had no
+// `archived`) is still valid for the default list.
+func conversationListScope(projectID string, values url.Values, mode string) string {
+	base := projectID + "/" + changesync.FilterDigest(values, conversationFilterParams...)
+	if mode != archivedExclude {
+		base += "/archived=" + mode
+	}
+	return base
+}
 
 // conversationScope binds a conversation cursor to the caller's role as well
 // as the project and filter: see listChanges.
@@ -130,7 +287,7 @@ func (h *Handler) listChanges(w http.ResponseWriter, r *http.Request, pool *pgxp
 		writeJSON(w, http.StatusBadRequest, changesync.ErrorBody{Error: "invalid_limit", Message: "limit must be a positive integer"})
 		return
 	}
-	base := q.projectID + "/" + changesync.FilterDigest(r.URL.Query(), conversationFilterParams...)
+	base := conversationListScope(q.projectID, r.URL.Query(), q.archivedMode)
 	cursor, err := changesync.Decode(q.raw, changesync.StreamConversations, conversationScope(base, q.admin))
 	if errors.Is(err, changesync.ErrInvalidCursor) {
 		// A cursor issued under the caller's OTHER project role. Admin
@@ -180,32 +337,51 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 
 	page := ConversationChanges{Rows: []map[string]any{}, Tombstones: []changesync.Tombstone{}}
 	if err := pool.QueryRow(ctx,
-		fmt.Sprintf(`SELECT COUNT(*) FROM %s.chat_conversations c WHERE %s`, s, where), q.args...,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s.chat_conversations c WHERE %s AND %s`, s, where, q.archived), q.args...,
 	).Scan(&page.Total); err != nil {
 		return ConversationChanges{}, fmt.Errorf("conversations: count: %w", err)
 	}
 
 	// Rows: everything visible under the list filter that changed after the
-	// cursor, oldest change first.
+	// cursor, oldest change first. The `archived` clause narrows the rows of
+	// a full sync, on every page of it: the client holds nothing yet, so a
+	// row of the other archive state is only noise. It narrows only the rows
+	// stamped at or before the snapshot (the settle bound of the first
+	// page): a row stamped after it changed during the sync, possibly after
+	// the client got it, and is a change like any later delta's. Every later
+	// delta carries the rows of both states, because an archive or unarchive
+	// is a change the client must see (the row with its new `is_archived`) to
+	// drop the row from, or add it to, its list. See conversationChangesQuery.
+	snapshot := cursor.Snapshot
+	if cursor.Full {
+		snapshot = bound
+	}
 	rowsStart := cursor.RowsStart()
 	n := len(q.args)
+	rowWhere := where
 	rowArgs := append(append([]any{}, q.args...), rowsStart.At, rowsStart.ID, limit+1)
+	if !snapshot.IsZero() {
+		rowWhere += fmt.Sprintf(" AND (c.sync_at > $%d::timestamptz OR %s)", n+4, q.archived)
+		rowArgs = append(rowArgs, snapshot)
+	}
 	rows, err := pool.Query(ctx, conversationSelectSQL(s, q.projectID, true)+fmt.Sprintf(`
 		WHERE %s AND (c.sync_at, c.id) > ($%d::timestamptz, $%d::bigint)
 		ORDER BY c.sync_at, c.id
-		LIMIT $%d`, where, n+1, n+2, n+3), rowArgs...)
+		LIMIT $%d`, rowWhere, n+1, n+2, n+3), rowArgs...)
 	if err != nil {
 		return ConversationChanges{}, fmt.Errorf("conversations: list changes: %w", err)
 	}
 	positions := []changesync.Position{}
+	uuids := []*string{}
 	for rows.Next() {
-		row, position, err := scanConversationRow(rows, true)
+		row, position, conversationUUID, err := scanConversationRow(rows, true)
 		if err != nil {
 			rows.Close()
 			return ConversationChanges{}, fmt.Errorf("conversations: scan change: %w", err)
 		}
 		page.Rows = append(page.Rows, row)
 		positions = append(positions, position)
+		uuids = append(uuids, conversationUUID)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -213,9 +389,36 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	}
 	rowsTruncated := len(page.Rows) > limit
 	if rowsTruncated {
-		page.Rows, positions = page.Rows[:limit], positions[:limit]
+		page.Rows, positions, uuids = page.Rows[:limit], positions[:limit], uuids[:limit]
+	}
+	// The pre-1.10 shape (conversationChangesQuery.archivedStated): an
+	// archived row leaves the client's list as an `access_lost` tombstone,
+	// stamped with the archive time. It keeps its place in the rows stream,
+	// so the cursor moves past it as past any row. These tombstones count
+	// against the rows' `limit`, not the tombstones'.
+	var archivedTombs []changesync.Tombstone
+	if !q.archivedStated {
+		kept := page.Rows[:0]
+		for i, row := range page.Rows {
+			if row["is_archived"] != true {
+				kept = append(kept, row)
+				continue
+			}
+			at := positions[i].At
+			if archivedAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(row["archived_at"])); err == nil {
+				at = archivedAt
+			}
+			archivedTombs = append(archivedTombs, changesync.Tombstone{
+				ID: positions[i].ID, UUID: uuids[i], Reason: changesync.ReasonAccessLost, DeletedAt: changesync.FormatTime(at),
+			})
+		}
+		page.Rows = kept
 	}
 	annotateWorkspaceExecutors(ctx, pool, s, q.projectID, page.Rows)
+	annotateArchivers(ctx, pool, page.Rows)
+	if err := annotateActivity(ctx, pool, s, q.actorID, page.Rows); err != nil {
+		return ConversationChanges{}, fmt.Errorf("conversations: list changes: %w", err)
+	}
 
 	// Tombstones. Which ones this caller is told about:
 	//   conversation        a deletion — of a public conversation to everyone;
@@ -297,12 +500,18 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	if tombsTruncated {
 		page.Tombstones, tombPositions = page.Tombstones[:limit], tombPositions[:limit]
 	}
+	page.Tombstones = append(page.Tombstones, archivedTombs...)
 
 	nextRows, moreRows := changesync.Advance(rowsStart, lastPosition(positions), rowsTruncated, bound)
 	nextTombs, moreTombs := changesync.Advance(tombsStart, lastPosition(tombPositions), tombsTruncated, bound)
-	page.NextCursor = changesync.Encode(changesync.Cursor{
-		Stream: cursor.Stream, Scope: cursor.Scope, Rows: nextRows, Tombs: nextTombs,
-	})
+	// A full sync keeps its snapshot while its rows stream has rows left at
+	// or before it; past it the narrowing selects nothing, and the cursor is
+	// an ordinary delta cursor again.
+	next := changesync.Cursor{Stream: cursor.Stream, Scope: cursor.Scope, Rows: nextRows, Tombs: nextTombs}
+	if !snapshot.IsZero() && moreRows && !nextRows.At.After(snapshot) {
+		next.Snapshot = snapshot
+	}
+	page.NextCursor = changesync.Encode(next)
 	page.HasMore = moreRows || moreTombs
 	return page, nil
 }

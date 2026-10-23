@@ -47,7 +47,7 @@ func wikisToolkit(id int32, toolkitType string, settings map[string]any) repos.C
 func queryRewriter(t *testing.T, toolkits deepwiki.ToolkitReader, minter deepwiki.CallbackMinter) *deepwiki.InvokeRewriter {
 	t.Helper()
 	built, err := deepwiki.NewInvokeRewriter(
-		testCredentialResolver(t), toolkits, minter, "https://elitea.test", time.Hour)
+		testCredentialResolver(t), toolkits, minter, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestARefusedHostIsNeverDecryptedThroughAQueryToolkit(t *testing.T) {
 		rows: map[int32]repos.CurrentToolkit{
 			9001: wikisToolkit(9001, "wikis_Wikis", map[string]any{"code_toolkit": json.Number("42")}),
 		},
-	}, &recordingMinter{}, "https://elitea.test", time.Hour)
+	}, &recordingMinter{}, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

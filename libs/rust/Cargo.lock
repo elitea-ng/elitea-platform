@@ -1826,6 +1826,7 @@ dependencies = [
  "chrono",
  "elitea-connectors",
  "elitea-office-core",
+ "elitea-platform-rpc",
  "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
@@ -1968,18 +1969,21 @@ dependencies = [
 name = "elitea-engine-sidecar"
 version = "0.1.0"
 dependencies = [
- "axum",
  "elitea-engine-core",
- "http-body-util",
- "hyper",
  "hyper-util",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "prost",
+ "protoc-bin-vendored",
  "reqwest 0.13.5",
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -2081,6 +2085,8 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "landlock",
+ "nucleo-matcher",
+ "quick-xml 0.42.0",
  "regex",
  "rustix",
  "serde",
@@ -2099,8 +2105,13 @@ name = "elitea-model-client"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "elitea-engine-core",
  "elitea-llm-wire",
+ "elitea-model-rpc",
+ "futures-util",
+ "hyper",
+ "hyper-util",
  "rcgen",
  "reqwest 0.13.5",
  "serde_json",
@@ -2108,8 +2119,27 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tonic",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "elitea-model-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "elitea-model-rpc",
+ "futures-util",
+ "http",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
 ]
 
 [[package]]
@@ -2138,6 +2168,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-platform-rpc"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "elitea-platform-rpc",
+ "futures-util",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "zeroize",
+]
+
+[[package]]
 name = "elitea-repo-ingest"
 version = "0.1.0"
 dependencies = [
@@ -2145,14 +2192,14 @@ dependencies = [
  "base64 0.22.1",
  "elitea-connectors",
  "elitea-engine-core",
- "elitea-model-client",
+ "elitea-platform-rpc",
  "gix",
  "regex",
- "reqwest 0.13.5",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tokio-stream",
+ "tonic",
  "tracing",
  "zeroize",
 ]
@@ -5457,6 +5504,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7487,6 +7544,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha1dc"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9188,6 +9251,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

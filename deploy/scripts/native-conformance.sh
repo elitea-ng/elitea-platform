@@ -26,7 +26,7 @@
 #
 # Variables (all optional):
 #   STANDALONE_PROJECT     compose project      (elitea-native-conformance)
-#   STANDALONE_PORT        traefik port         (8084); the origin is http://localhost:<port>
+#   STANDALONE_PORT        elitea-main port     (8084); the origin is http://localhost:<port>
 #   E2E_OIDC_PORT          oidc-mock port       (9400)
 #   STANDALONE_SKIP_BUILD  1 = the caller built and asserted the images (CI's bake)
 #   STANDALONE_OVERLAY     extra overlays, appended after this script's own

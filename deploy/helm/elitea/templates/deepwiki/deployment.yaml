@@ -22,7 +22,11 @@ metadata:
   labels:
     {{- include "elitea-deepwiki.labels" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.deepwiki "field" "deepwiki") }}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.deepwiki) }}
   replicas: {{ .Values.deepwiki.replicaCount }}
+  {{- end }}
+  {{- /* No `replicas:` while an HPA or ScaledObject owns the Deployment (autoscaling.yaml). */}}
   selector:
     matchLabels:
       {{- include "elitea-deepwiki.selectorLabels" . | nindent 6 }}
@@ -35,18 +39,31 @@ spec:
     metadata:
       labels:
         {{- include "elitea-deepwiki.selectorLabels" . | nindent 8 }}
+      {{- with (include "elitea.scaling.scrapeAnnotations" (dict "v" .Values.deepwiki "port" .Values.deepwiki.admin.port "path" "/metrics") | trim) }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.deepwiki.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-deepwiki.serviceAccountName" . }}
-      # Long enough for an in-flight invocation to be recorded as terminal
-      # before the process goes. It does not have to outlast a GENERATION:
-      # invocations are durable (PostgreSQL), and a restarted service
-      # reconciles rows left running by a previous owner into a terminal error
-      # the caller can act on. Draining forever would be the wrong trade.
-      terminationGracePeriodSeconds: {{ .Values.deepwiki.terminationGracePeriodSeconds }}
+      # Long enough for a running generation to FINISH on this replica
+      # (scaling). On SIGTERM the host leaves the Services, stops admitting
+      # (its slots leave the fleet's total), and waits up to
+      # ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS (default 3600) for its invocations;
+      # the engine sidecar keeps serving until it is idle too. A poll or a
+      # cancel for them reaches a sibling, which reads the shared store. What
+      # is left at the deadline is cancelled and recorded terminal.
+      #
+      # One clock: the preStop sleep, the gRPC listener's stop (up to 10s), the
+      # drain, then 10s for the store and NATS to close.
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.deepwiki) }}
+      {{- $drain := include "elitea.integer" (dict "field" "deepwiki.env.ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" "value" (get $env "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" | default "30" | toString) "min" 0) | int }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "deepwiki" "grace" .Values.deepwiki.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "gRPC stop" 10) (list "ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.deepwiki.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.deepwiki "selector" (include "elitea-deepwiki.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.deepwiki.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-deepwiki
@@ -57,14 +74,16 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-            {{- if include "elitea-deepwiki.platformGrpc" . }}
+            # The one listener (#1359): the provider SPI
+            # (elitea.subapp.v1.ProviderService, elitea-main's facade) and the
+            # platform operations, both gRPC behind the mTLS terminus below.
             - name: platform-grpc
               containerPort: {{ .Values.deepwiki.platformGrpc.port }}
               protocol: TCP
-            {{- end }}
+            # The admin port: /healthz and /readyz, plain HTTP, for the probes.
+            - name: admin
+              containerPort: {{ .Values.deepwiki.admin.port }}
+              protocol: TCP
           env:
             {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
@@ -86,59 +105,69 @@ spec:
             - name: ELITEA_DEEPWIKI_TLS_CA_FILE
               value: {{ .Values.deepwiki.mtls.mountPath }}/ca.crt
             {{- end }}
-            {{- if include "elitea-deepwiki.platformGrpc" . }}
-            # The platform gRPC service: a second listener behind the TLS
-            # configuration above. Only the identities listed may call it, by
-            # their verified client certificate. Absent when the allowlist is
-            # empty, which keeps the service off.
+            # The listener's allowlist: only the identities listed may call
+            # it, by their verified client certificate (elitea-main's facade
+            # client certificate, by default).
             - name: ELITEA_DEEPWIKI_PLATFORM_CLIENTS
               value: {{ join "," .Values.deepwiki.platformGrpc.clients | quote }}
             - name: ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR
               value: {{ printf ":%d" (.Values.deepwiki.platformGrpc.port | int) | quote }}
+            - name: ELITEA_DEEPWIKI_ADMIN_ADDR
+              value: {{ printf ":%d" (.Values.deepwiki.admin.port | int) | quote }}
+            {{- if not (hasKey $env "ELITEA_DEEPWIKI_NATS_URL") }}
+            # The cancellation fan-out (#1359): a cancel that lands on one
+            # replica stops the run on the replica that holds it. Core NATS,
+            # the SUBAPP account, this application's subjects only.
+            - name: ELITEA_DEEPWIKI_NATS_URL
+              value: {{ include "elitea.natsUrl" . | quote }}
             {{- end }}
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
-            # The callback hop (artifact uploads) is TLS through platform-edge:
-            # trust the runtime CA there, apart from the listener's client CA.
+            {{- if .Values.natsClient.tls.enabled }}
+            # Its NATS identity, elitea-deepwiki (templates/natsClient.yaml).
+            - name: ELITEA_DEEPWIKI_NATS_TLS_CA_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+            - name: ELITEA_DEEPWIKI_NATS_TLS_CERT_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+            - name: ELITEA_DEEPWIKI_NATS_TLS_KEY_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
+            {{- end }}
+            # The artifact hop (#1359 U5): wiki uploads and reads go over
+            # elitea.runtime.v1.ArtifactObjectService on elitea-main's platform
+            # listener: trust the runtime CA there, apart from the provider's
+            # own client CA, and present the callback client identity
+            # (dns:elitea-subapp-callback).
+            - name: ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
-            {{- end }}
+            - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_KEY_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.key
             # Sensitive vars from Kubernetes Secrets, never plaintext in the
             # env map above.
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
-          # tcpSocket, not httpGet, and for the reason the gateway's deployment
-          # spells out at length: with mTLS on, this listener requires and
-          # verifies a client certificate, and the kubelet presents none. An
-          # httpGet probe fails every time, readiness never passes, and the
-          # liveness probe restarts a process that is working correctly.
-          #
-          # /health and /ready still exist and still answer. Reaching them from
-          # a probe needs a second cleartext listener or a probe that can
-          # present a certificate; both are larger changes than this file.
-          {{- if .Values.deepwiki.mtls.enabled }}
-          livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.deepwiki.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.deepwiki.probes.liveness.failureThreshold }}
-          readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.deepwiki.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.deepwiki.probes.readiness.failureThreshold }}
-          {{- else }}
+          # The native sleep (Kubernetes 1.30+): DNS and the endpoints drop this
+          # replica before the host stops its listener, so elitea-main's
+          # round_robin sends no new call to a process that stopped taking them.
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
+          # httpGet on the admin port: the gRPC listener requires and verifies a
+          # client certificate, and the kubelet presents none. Liveness is
+          # /healthz (the process is up); readiness is /readyz, which fails
+          # while this replica does not hold its invocation-store owner claim
+          # (#1359), so a replica that refuses new invocations leaves the
+          # Service instead of receiving them.
           livenessProbe:
             httpGet:
-              path: {{ .Values.deepwiki.probes.liveness.path }}
-              port: http
+              path: /healthz
+              port: admin
             periodSeconds: {{ .Values.deepwiki.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.deepwiki.probes.liveness.failureThreshold }}
           readinessProbe:
             httpGet:
-              path: {{ .Values.deepwiki.probes.readiness.path }}
-              port: http
+              path: /readyz
+              port: admin
             periodSeconds: {{ .Values.deepwiki.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.deepwiki.probes.readiness.failureThreshold }}
-          {{- end }}
           resources:
             {{- toYaml .Values.deepwiki.resources | nindent 12 }}
           volumeMounts:
@@ -147,12 +176,25 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            {{- if .Values.natsClient.tls.enabled }}
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
               readOnly: true
-            {{- end }}
+            - name: callback-client
+              mountPath: {{ include "elitea-deepwiki.callbackClientPath" . }}
+              readOnly: true
         {{- if eq $sidecar "native" }}
+      # A NATIVE sidecar (an init container with restartPolicy Always,
+      # Kubernetes 1.29+; this chart needs 1.30). The kubelet starts it before
+      # the host, and on termination it stops it only AFTER the host container
+      # has exited. The host drains its invocations (up to
+      # ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS), and an invocation calls the
+      # engine many times; the engine serves every one of those calls, because
+      # it gets no SIGTERM while the host runs. Then the engine drains its own
+      # open streams (none by then) and exits.
+      initContainers:
         # The engine sidecar (ADR-0023 H2, ADR-0026): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
         # identity — the socket directory is the only way in. One distroless
@@ -163,6 +205,7 @@ spec:
         - name: engine
           image: "{{ .Values.deepwiki.engine.native.image.repository }}:{{ include "elitea-deepwiki.nativeTag" . }}"
           imagePullPolicy: {{ .Values.deepwiki.engine.native.image.pullPolicy }}
+          restartPolicy: Always
           {{- with .Values.deepwiki.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -189,17 +232,38 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
-            # Model calls and artifact-folder reads go to the callback origin,
-            # platform-edge: the runtime CA signs its certificate.
+            {{- if include "elitea-deepwiki.callbackMaterial" . }}
+            # The engine reaches elitea-main only over gRPC on the platform
+            # listener: model calls (ModelService, #1359 U2) and artifact-folder
+            # reads (ArtifactObjectService, #1359 U5), both at this URL, which
+            # the native engine requires. llm_settings.api_base is a fixed route
+            # name and is never dialed. The runtime CA signs the listener's
+            # certificate, and the listener admits the callback client identity
+            # (dns:elitea-subapp-callback).
+            - name: ELITEA_DEEPWIKI_MODEL_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_KEY_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.key
+            {{- end }}
+            {{- if and (include "elitea-deepwiki.modelCalls" .) .Values.vector.enabled (not (hasKey $nativeEnv "ELITEA_DEEPWIKI_VECTOR_URL")) }}
+            # The native runner's dense vectors (ADR-0031): this chart's
+            # elitea-vector, with the invocation's callback token over the
+            # callback material above. The runtime CA signs elitea-vector's
+            # certificate, and elitea-vector trusts it for the callback client
+            # identity. The native runner refuses to start without it
+            # (elitea-deepwiki.validateGuards refuses the render first).
+            - name: ELITEA_DEEPWIKI_VECTOR_URL
+              value: {{ include "elitea-vector.origin" . | quote }}
             {{- end }}
             # ELITEA_DEEPWIKI_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
           # Distroless: no shell, no python. The binary connects to its own
-          # socket and asks GET /engine/health.
+          # socket and calls the engine's gRPC Health (elitea.engine.v1).
           livenessProbe:
             exec:
               command: ["/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
@@ -222,9 +286,12 @@ spec:
               mountPath: {{ .Values.deepwiki.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            {{- if include "elitea-deepwiki.callbackMaterial" . }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
+              readOnly: true
+            - name: callback-client
+              mountPath: {{ include "elitea-deepwiki.callbackClientPath" . }}
               readOnly: true
             {{- end }}
         {{- end }}
@@ -238,7 +305,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+        {{- if include "elitea-deepwiki.callbackMaterial" . }}
         # ONLY the runtime CA from the worker's material Secret: the Secret
         # also holds the worker's client key and signing keys, none of which
         # this pod may read.
@@ -248,8 +315,22 @@ spec:
             items:
               - key: runtime-ca.crt
                 path: runtime-ca.crt
+        # The callback hop's own client identity, which the platform listener
+        # requires: a runtime-CA certificate that is NOT the worker's.
+        - name: callback-client
+          secret:
+            secretName: {{ .Values.deepwiki.callbackClient.secretName }}
+            defaultMode: {{ .Values.deepwiki.callbackClient.defaultMode }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 8 }}{{- end }}
+        {{- if .Values.natsClient.tls.enabled }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-deepwiki.fullname" .))) | nindent 8 }}
+        {{- end }}
       {{- with .Values.deepwiki.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

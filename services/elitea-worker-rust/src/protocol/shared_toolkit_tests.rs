@@ -25,7 +25,9 @@ fn vector(name: &str) -> Vec<u8> {
         .find(|(key, _)| *key == name)
         .expect("fixture");
     hex.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).expect("hex"), 16).expect("byte"))
         .collect()
 }
@@ -1265,7 +1267,8 @@ fn every_covered_configuration_type_round_trips_through_the_wire() {
         assert_eq!(outcomes.len(), 2, "{name} proves both verdicts");
         covered += 1;
     }
-    assert_eq!(covered, 32);
+    // 31: the retired pgvector type left the catalog (#1359).
+    assert_eq!(covered, 31);
 }
 
 fn claim_again(command: &WorkerCommandV1) -> AcceptedAgentClaim {

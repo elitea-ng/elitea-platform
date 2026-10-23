@@ -122,7 +122,7 @@ mod tests {
                 Err(PartError::FileName),
                 "{name:?}"
             );
-            assert!(form.body.is_empty());
+            assert_eq!(form.body, [] as [u8; 0]);
         }
         let mut form = Multipart::new();
         for media in ["", "image/png\r\nX: y", "a\"b"] {
@@ -132,7 +132,7 @@ mod tests {
                 "{media:?}"
             );
         }
-        assert!(form.body.is_empty());
+        assert_eq!(form.body, [] as [u8; 0]);
         assert!(valid_upload_file_name("dir name/ok-1.png"));
     }
 }

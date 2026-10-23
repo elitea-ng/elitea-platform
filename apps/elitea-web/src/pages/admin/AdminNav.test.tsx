@@ -208,7 +208,7 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   'configuration.secrets.secret.view',
   // migrations/shared/0114_toolkit_type_policy.sql, administration mode,
   // super_admin, admin and system. It stands alone in its nav item: the legacy
-  // platform has no toolkit-catalogue surface, so there is no pylon section
+  // platform has no toolkit-catalogue surface, so there is no legacy section
   // name to list beside it.
   'toolkit_catalogue.type.manage',
 ]);
@@ -217,29 +217,31 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  * The names the nav also asks for that NO administration-mode seed in this
  * repository grants.
  *
- * Four are the reference sidebar's pylon SECTION names. One,
- * `admin.moderation.view`, this platform does seed — in the DEFAULT mode
+ * Each one is a permission a Go gate checks, so an operator can grant it:
+ * `configuration.secrets.secret.list` gates the secret listing and is seeded in
+ * the DEFAULT mode; `admin.moderation.view` is seeded in the DEFAULT mode too
  * (`migrations/shared/0077_moderation_permissions.sql`), which the admin
- * console never resolves.
+ * console never resolves; `configuration.service_descriptors` is the
+ * Configuration section's own permission and no seed grants it.
  *
- * They stay in the nav because a pylon-backed deployment registers them, and
- * the Go handler resolves whatever `auth_core__role_permission` holds there.
+ * The legacy section names `configuration.roles` and `projects.projects` are
+ * NOT here: no code checks them, so shared migration 0172 retires them and the
+ * nav no longer names them.
+ *
  * They are listed here so each one is a DECISION rather than a typo, and so an
  * item that names ONLY these fails the test above.
  */
 const NOT_SEEDED_IN_ADMINISTRATION = new Set([
   'admin.moderation.view',
-  'configuration.roles',
   'configuration.secrets.secret.list',
   'configuration.service_descriptors',
-  'projects.projects',
 ]);
 
 describe('permission gates name permissions the platform issues', () => {
   it('gives every item a permission a seeded administration role holds', () => {
     // The assertion the old HANDLER_ISSUED_PERMISSIONS list could not make.
-    // An item gated ONLY on pylon section names renders on a pylon deployment
-    // and on no Go-native one, and nothing else in the repo would notice.
+    // An item gated ONLY on names no administration-mode seed grants is
+    // invisible on a fresh install, and nothing else in the repo would notice.
     for (const group of adminNavGroups()) {
       for (const item of group.items) {
         const issued = item.anyPermission.filter((permission) =>
@@ -259,7 +261,7 @@ describe('permission gates name permissions the platform issues', () => {
         for (const permission of item.anyPermission) {
           expect(
             PLATFORM_ISSUED_PERMISSIONS.has(permission) || NOT_SEEDED_IN_ADMINISTRATION.has(permission),
-            `nav item "${item.id}" gates on "${permission}", which neither this platform nor pylon issues`,
+            `nav item "${item.id}" gates on "${permission}", which no seed issues and no gate checks`,
           ).toBe(true);
         }
       }
@@ -268,7 +270,7 @@ describe('permission gates name permissions the platform issues', () => {
 
   it('leaves every item visible to the operator this platform seeds', () => {
     // The end-to-end consequence of the two tests above: a Go-native
-    // administrator sees all ten. A NARROWER deployment can still hide an item
+    // administrator sees every item. A NARROWER deployment can still hide an item
     // — that is the feature — but a name no seed grants cannot.
     const groups = visibleAdminNavGroups((permission) => PLATFORM_ISSUED_PERMISSIONS.has(permission));
     const visible = groups.flatMap((group) => group.items.map((item) => item.id));
@@ -276,13 +278,6 @@ describe('permission gates name permissions the platform issues', () => {
     expect(visible).toEqual(all);
   });
 
-  it('leaves every item visible to a pylon-backed deployment too', () => {
-    const both = new Set([...PLATFORM_ISSUED_PERMISSIONS, ...NOT_SEEDED_IN_ADMINISTRATION]);
-    const groups = visibleAdminNavGroups((permission) => both.has(permission));
-    const visible = groups.flatMap((group) => group.items.map((item) => item.id));
-    const all = adminNavGroups().flatMap((group) => group.items.map((item) => item.id));
-    expect(visible).toEqual(all);
-  });
 });
 
 describe('permission filtering', () => {
@@ -294,10 +289,10 @@ describe('permission filtering', () => {
   });
 
   it('shows an item when ANY of its permissions is held, not all of them', () => {
-    // `roles` asks for `configuration.roles` OR the permissions view. An
-    // all-of rule would hide it from an operator who legitimately has one.
-    const groups = visibleAdminNavGroups((permission) => permission === 'configuration.roles.permissions.view');
-    expect(groups.flatMap((group) => group.items.map((item) => item.id))).toContain('roles');
+    // `secrets` asks for the listing OR the create permission. An all-of rule
+    // would hide it from an operator who legitimately has one.
+    const groups = visibleAdminNavGroups((permission) => permission === 'configuration.secrets.secret.create');
+    expect(groups.flatMap((group) => group.items.map((item) => item.id))).toContain('secrets');
   });
 
   it('separates the two groups with exactly one divider, and adds none for a group that is gone', async () => {
@@ -324,7 +319,7 @@ describe('permission filtering', () => {
 
   it('drops a group that loses every item, rather than rendering an empty one', () => {
     const groups = visibleAdminNavGroups((permission) =>
-      ['admin.auth.users', 'configuration.roles', 'projects.projects', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
+      ['admin.auth.users', 'configuration.roles.permissions.view', 'projects.projects.projects.view', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
         permission,
       ),
     );

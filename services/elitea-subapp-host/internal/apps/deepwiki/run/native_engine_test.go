@@ -1,10 +1,10 @@
 package run_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
@@ -266,7 +272,7 @@ func TestAStopEndsTheNativeEnginesRun(t *testing.T) {
 // A whole native generation is not run here: it needs a model gateway, a
 // git host and PostgreSQL, which this job does not stand up for the Go
 // tests. The crate's own tests/native_generate.rs runs it end to end (a
-// git http-backend, a mock gateway, the CI pgvector service). The database
+// git http-backend, a mock gateway, the CI PostgreSQL service). The database
 // URL below is never connected to: the run fails before it opens a build.
 func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
 	scratch, err := os.MkdirTemp("/tmp", "dwns")
@@ -280,6 +286,12 @@ func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
 		"ELITEA_DEEPWIKI_BUILD_OWNER=native-go-test",
 		"ELITEA_DEEPWIKI_GIT_ALLOWLIST=git.example.com",
 		"ELITEA_DEEPWIKI_SCRATCH_PATH="+scratch,
+		// The platform listener the native runner requires; never reached:
+		// the run ends at the engine's clone-host check.
+		"ELITEA_DEEPWIKI_MODEL_SERVICE_URL=http://127.0.0.1:1",
+		// elitea-vector, which the native runner also requires; never
+		// reached either (#1359).
+		"ELITEA_DEEPWIKI_VECTOR_URL=http://127.0.0.1:1",
 	)
 	client := &fakeArtifactClient{}
 	runner := nativeRunner(socket, client)
@@ -321,44 +333,19 @@ func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
 
 // An ARTIFACT-FOLDER source through the native runner: the host skips the
 // git allowlist (CheckEgress), and the engine's worker CHILD lists and
-// downloads the folder from the platform's object API at the invocation's
-// own api_base, with its callback bearer, although the engine's git
+// downloads the folder from the platform's ArtifactObjectService (on the
+// platform listener, ELITEA_DEEPWIKI_MODEL_SERVICE_URL) with the
+// invocation's callback bearer, although the engine's git
 // allowlist names another host. The host stops the run once the folder is
 // read (the next step needs PostgreSQL, which this job does not stand up):
 // nothing is uploaded and the job directory is removed. The crate's
 // tests/native_generate.rs runs a whole folder generation.
 func TestTheNativeRunnerReadsAnArtifactFolderInItsWorker(t *testing.T) {
-	var mu sync.Mutex
-	var seen []string
 	objects := map[string]string{
 		"docs/README.md":    "# Handbook\n\nHow the team works.\n",
 		"docs/guide/run.py": "def run():\n    return 1\n",
 	}
-	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, r.Header.Get("Authorization")+" "+r.URL.RequestURI())
-		mu.Unlock()
-		const route = "/api/v2/artifacts/objects/90200/handbook"
-		switch {
-		case r.URL.Path == route:
-			listed := []map[string]any{{"key": "docs/", "size_bytes": 0}}
-			for key, body := range objects {
-				listed = append(listed, map[string]any{"key": key, "size_bytes": len(body), "modified_at": "2026-10-01T10:00:00Z"})
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"objects": listed})
-		case strings.HasPrefix(r.URL.Path, route+"/"):
-			body, ok := objects[strings.TrimPrefix(r.URL.Path, route+"/")]
-			if !ok {
-				http.NotFound(w, r)
-				return
-			}
-			_, _ = w.Write([]byte(body))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(platform.Close)
+	platform := serveArtifactObjects(t, objects)
 
 	scratch, err := os.MkdirTemp("/tmp", "dwna")
 	if err != nil {
@@ -371,11 +358,15 @@ func TestTheNativeRunnerReadsAnArtifactFolderInItsWorker(t *testing.T) {
 		"ELITEA_DEEPWIKI_BUILD_OWNER=native-go-test",
 		"ELITEA_DEEPWIKI_GIT_ALLOWLIST=git.example.com",
 		"ELITEA_DEEPWIKI_SCRATCH_PATH="+scratch,
+		"ELITEA_DEEPWIKI_MODEL_SERVICE_URL=http://"+platform.address,
+		// Required by the native runner; never reached: the run stops once
+		// the folder is read (#1359).
+		"ELITEA_DEEPWIKI_VECTOR_URL=http://127.0.0.1:1",
 	)
 	client := &fakeArtifactClient{}
 	runner := nativeRunner(socket, client)
 	llm := map[string]any{
-		"api_base":     platform.URL + "/llm/v1",
+		"api_base":     "https://elitea-main:9446/llm/v1",
 		"api_key":      "minted",
 		"organization": "90200",
 		"model_name":   "gpt-4o",
@@ -402,17 +393,15 @@ func TestTheNativeRunnerReadsAnArtifactFolderInItsWorker(t *testing.T) {
 	if !strings.Contains(text, "Materialised artifact://handbook/docs: 2 objects") {
 		t.Fatalf("the folder was not read: %v\n%s", err, text)
 	}
-	mu.Lock()
-	got := append([]string(nil), seen...)
-	mu.Unlock()
+	got := platform.calls()
 	sort.Strings(got)
 	want := []string{
-		"Bearer minted /api/v2/artifacts/objects/90200/handbook/docs/README.md",
-		"Bearer minted /api/v2/artifacts/objects/90200/handbook/docs/guide/run.py",
-		"Bearer minted /api/v2/artifacts/objects/90200/handbook?prefix=docs%2F",
+		"Bearer minted GetObject 90200/handbook/docs/README.md",
+		"Bearer minted GetObject 90200/handbook/docs/guide/run.py",
+		"Bearer minted ListObjects 90200/handbook?prefix=docs/",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("object API requests %q, want %q", got, want)
+		t.Fatalf("ArtifactObjectService calls %q, want %q", got, want)
 	}
 	if len(client.uploads) != 0 {
 		t.Fatalf("a stopped run uploaded %v", uploadedNames(client))
@@ -430,4 +419,74 @@ func TestTheNativeRunnerReadsAnArtifactFolderInItsWorker(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// fakeArtifactObjects is elitea-main's ArtifactObjectService as the native
+// engine's worker reaches it: plaintext gRPC on loopback (the engine admits
+// http:// only there), one bucket's objects in project 90200, and a record
+// of every call with the bearer it carried.
+type fakeArtifactObjects struct {
+	runtimev1.UnimplementedArtifactObjectServiceServer
+	objects map[string]string
+	address string
+	mu      sync.Mutex
+	seen    []string
+}
+
+func serveArtifactObjects(t *testing.T, objects map[string]string) *fakeArtifactObjects {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeArtifactObjects{objects: objects, address: listener.Addr().String()}
+	server := grpc.NewServer()
+	runtimev1.RegisterArtifactObjectServiceServer(server, fake)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	return fake
+}
+
+func (f *fakeArtifactObjects) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.seen...)
+}
+
+func (f *fakeArtifactObjects) record(ctx context.Context, call string) {
+	bearer := ""
+	if values := metadata.ValueFromIncomingContext(ctx, "authorization"); len(values) > 0 {
+		bearer = values[0]
+	}
+	f.mu.Lock()
+	f.seen = append(f.seen, bearer+" "+call)
+	f.mu.Unlock()
+}
+
+func (f *fakeArtifactObjects) ListObjects(request *runtimev1.ArtifactListObjectsRequestV1, stream grpc.ServerStreamingServer[runtimev1.ArtifactListObjectsResponseV1]) error {
+	f.record(stream.Context(), fmt.Sprintf("ListObjects %d/%s?prefix=%s", request.GetProjectId(), request.GetBucket(), request.GetPrefix()))
+	if request.GetProjectId() != 90200 || request.GetBucket() != "handbook" {
+		return status.Error(codes.NotFound, "no such bucket")
+	}
+	listed := []*runtimev1.ArtifactObjectInfoV1{{Key: "docs/"}}
+	for key, body := range f.objects {
+		if strings.HasPrefix(key, request.GetPrefix()) {
+			listed = append(listed, &runtimev1.ArtifactObjectInfoV1{Key: key, SizeBytes: int64(len(body)), ModifiedAt: "2026-10-01T10:00:00Z"})
+		}
+	}
+	return stream.Send(&runtimev1.ArtifactListObjectsResponseV1{Objects: listed})
+}
+
+func (f *fakeArtifactObjects) GetObject(request *runtimev1.ArtifactGetObjectRequestV1, stream grpc.ServerStreamingServer[runtimev1.ArtifactGetObjectResponseV1]) error {
+	object := request.GetObject()
+	f.record(stream.Context(), fmt.Sprintf("GetObject %d/%s/%s", object.GetProjectId(), object.GetBucket(), object.GetKey()))
+	body, ok := f.objects[object.GetKey()]
+	if object.GetProjectId() != 90200 || object.GetBucket() != "handbook" || !ok {
+		return status.Error(codes.NotFound, "no such object")
+	}
+	info := &runtimev1.ArtifactObjectInfoV1{Key: object.GetKey(), SizeBytes: int64(len(body)), ModifiedAt: "2026-10-01T10:00:00Z"}
+	if err := stream.Send(&runtimev1.ArtifactGetObjectResponseV1{Frame: &runtimev1.ArtifactGetObjectResponseV1_Info{Info: info}}); err != nil {
+		return err
+	}
+	return stream.Send(&runtimev1.ArtifactGetObjectResponseV1{Frame: &runtimev1.ArtifactGetObjectResponseV1_Data{Data: []byte(body)}})
 }

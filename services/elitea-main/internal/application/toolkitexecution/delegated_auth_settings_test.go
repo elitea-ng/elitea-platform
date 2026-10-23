@@ -91,3 +91,38 @@ func TestDelegatedAuthToolkitSettingsRejectsInvalidIdentityAndCancellation(t *te
 		t.Fatalf("cancellation error = %v", err)
 	}
 }
+
+// #1286: the provenance twin resolves the SAME row with the SAME claim-mode
+// request, and its failure fails the request instead of reading as "owned".
+func TestDelegatedAuthToolkitSettingsResolvesTheProjectOwnedTwin(t *testing.T) {
+	settings := &settingsResolverStub{resolved: map[string]any{"client_secret": "admin-value"}}
+	owned := &settingsResolverStub{resolved: map[string]any{"client_secret": "{{secret.global}}"}}
+	base, err := NewCurrentDelegatedAuthToolkitSettings(&toolkitReaderStub{toolkit: exposedToolkit()}, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := base.WithProjectOwnedToolkitSettings(owned)
+	resolved, found, err := resolver.ResolveDelegatedAuthToolkitSettings(context.Background(), 7, 11, 19)
+	if err != nil || !found {
+		t.Fatalf("found = %v, error = %v", found, err)
+	}
+	if resolved.Settings["client_secret"] != "admin-value" ||
+		resolved.ProjectOwnedSettings["client_secret"] != "{{secret.global}}" {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if owned.calls != 1 || owned.request.Mode != configurationapp.CurrentToolkitSettingsClaimMode ||
+		owned.request.ProjectID != settings.request.ProjectID || owned.request.UserID != settings.request.UserID ||
+		owned.request.ToolkitType != settings.request.ToolkitType {
+		t.Fatalf("twin request %+v differs from %+v", owned.request, settings.request)
+	}
+
+	failing, err := NewCurrentDelegatedAuthToolkitSettings(&toolkitReaderStub{toolkit: exposedToolkit()}, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twinErr := errors.New("twin vault unavailable")
+	failing.WithProjectOwnedToolkitSettings(&settingsResolverStub{err: twinErr})
+	if _, found, err := failing.ResolveDelegatedAuthToolkitSettings(context.Background(), 7, 11, 19); found || !errors.Is(err, twinErr) {
+		t.Fatalf("found = %v, error = %v", found, err)
+	}
+}

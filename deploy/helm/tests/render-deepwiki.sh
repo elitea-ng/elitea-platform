@@ -13,6 +13,18 @@
 # Usage: deploy/helm/tests/render-deepwiki.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 CHART="deploy/helm/elitea"
 
@@ -21,16 +33,27 @@ CHART="deploy/helm/elitea"
 # (.invalid is reserved by RFC 2606).
 GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
 
+# The runtime plane (the standalone profile): the host's artifact calls and
+# the engine sidecar's model calls go over gRPC on elitea-main's platform
+# listener (#1359 U2/U5), so DeepWiki renders only beside it.
+RUNTIME="-f $CHART/values-standalone.yaml"
+# The native engine keeps its dense vectors in elitea-vector (ADR-0031), so the
+# chart refuses a native runner without one. A complete install names an
+# external elitea-vector here: this chart's own (vector.enabled) needs the
+# runtime plane, which the refusal cases below turn off one at a time, and it
+# is asserted on its own at the end ("the engine reaches elitea-vector").
+VECTOR="--set deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL=https://vector.elsewhere.invalid:9470"
+
 # A complete, correct DeepWiki install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
 COMPLETE="\
+$RUNTIME \
+$VECTOR \
 --set deepwiki.enabled=true \
 --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
 --set main.fileConfig.deepwikiClientMaterial.enabled=true \
 --set main.fileConfig.deepwikiClientMaterial.secretName=elitea-main-deepwiki-client-tls \
 --set main.env.ELITEA_DEEPWIKI_ENABLED=true \
---set main.env.ELITEA_DEEPWIKI_BASE_URL=https://elitea-deepwiki-svc:8443 \
---set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080 \
 --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
 --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=/run/elitea-deepwiki/tls.crt \
 --set main.env.ELITEA_DEEPWIKI_CLIENT_KEY_FILE=/run/elitea-deepwiki/tls.key \
@@ -69,7 +92,7 @@ done
 echo "== the migration Job runs the migration command, not the server =="
 args_json="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate")
-      | .spec.template.spec.containers[0].args | join(" ")' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].args | join(" ")' -)"
 if [ "$args_json" != "migrate" ]; then
   fail "the migrate Job runs args '$args_json'; the image's default CMD starts the SIDECAR, so a Job that does not override it never migrates anything"
 else
@@ -88,7 +111,7 @@ esac
 echo "== mTLS material reaches the provider container =="
 env_names="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[0].env[].name' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[].name' -)"
 for required in ELITEA_DEEPWIKI_TLS_CERTFILE ELITEA_DEEPWIKI_TLS_KEYFILE ELITEA_DEEPWIKI_TLS_CA_FILE; do
   if ! printf '%s' "$env_names" | grep -qx "$required"; then
     fail "$required is not in the provider's environment; without it the service serves plain HTTP and its own refusal of non-mTLS traffic has nothing to enforce"
@@ -100,7 +123,7 @@ done
 echo "== the facade's client material is mounted where its paths point =="
 mount_path="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-main")
-      | .spec.template.spec.containers[]
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[]
       | select(.volumeMounts[]?.name == "deepwiki-client-material")
       | .volumeMounts[] | select(.name == "deepwiki-client-material") | .mountPath' -)"
 if [ "$mount_path" != "/run/elitea-deepwiki" ]; then
@@ -112,7 +135,7 @@ fi
 echo "== the two halves name the SAME git allowlist =="
 provider_allowlist="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_GIT_ALLOWLIST") | .value' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_GIT_ALLOWLIST") | .value' -)"
 if [ "$provider_allowlist" != "github.com" ]; then
   fail "the provider's allowlist rendered as '$provider_allowlist'"
 else
@@ -125,6 +148,10 @@ fi
 # base already set, which is how a refusal is provoked without rebuilding the
 # whole argument list and accidentally omitting something else too.
 
+expect() {
+  local what="$1" got="$2" want="$3"
+  if [ "$got" != "$want" ]; then fail "$what is '$got', expected '$want'"; else note "$what: $got"; fi
+}
 echo "== the guards refuse a half-configured install =="
 refuses() {
   local description="$1"; shift
@@ -140,12 +167,29 @@ refuses() {
 }
 
 refuses "provider with no git allowlist"        --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=
-refuses "facade with no git allowlist"          --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=
-refuses "facade with no callback origin"        --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=
-refuses "facade with a plain-http base URL"     --set main.env.ELITEA_DEEPWIKI_BASE_URL=http://elitea-deepwiki-svc:8443
-refuses "facade with no client certificate"     --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=
+refuses "the retired base URL (#1359)"         --set main.env.ELITEA_DEEPWIKI_BASE_URL=https://elitea-deepwiki-svc:8443
+refuses "facade with no provider to dial"       --set deepwiki.enabled=false
 refuses "facade with a path outside the mount"  --set main.env.ELITEA_DEEPWIKI_CA_FILE=/elsewhere/ca.crt
-refuses "facade with no material mounted"       --set main.fileConfig.deepwikiClientMaterial.enabled=false
+refuses "facade with its material switched off" --set main.fileConfig.deepwikiClientMaterial.enabled=false
+refuses "a facade allowlist unlike the provider's" --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=gitlab.com
+refuses "the facade switched off beside the provider" --set main.env.ELITEA_DEEPWIKI_ENABLED=false
+
+# S10: deepwiki.enabled is ONE switch. What the facade used to need by hand
+# (the enable flag, the three certificate paths, the client material, the git
+# allowlist) is derived from the provider's settings, so leaving each of them
+# out renders the same facade instead of being refused.
+echo "== deepwiki.enabled alone composes elitea-main's facade =="
+derived="$(render $RUNTIME $VECTOR --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com 2>&1)" \
+  || fail "deepwiki.enabled with the provider's settings alone does not render: $derived"
+derived_env() { printf '%s' "$derived" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$1" -; }
+expect "derived ELITEA_DEEPWIKI_ENABLED" "$(derived_env ELITEA_DEEPWIKI_ENABLED)" "true"
+expect "derived ELITEA_DEEPWIKI_GIT_ALLOWLIST (copied from deepwiki.env)" "$(derived_env ELITEA_DEEPWIKI_GIT_ALLOWLIST)" "github.com"
+expect "derived ELITEA_DEEPWIKI_CLIENT_CERT_FILE" "$(derived_env ELITEA_DEEPWIKI_CLIENT_CERT_FILE)" "/run/elitea-deepwiki/tls.crt"
+expect "derived ELITEA_DEEPWIKI_CLIENT_KEY_FILE" "$(derived_env ELITEA_DEEPWIKI_CLIENT_KEY_FILE)" "/run/elitea-deepwiki/tls.key"
+expect "derived ELITEA_DEEPWIKI_CA_FILE" "$(derived_env ELITEA_DEEPWIKI_CA_FILE)" "/run/elitea-deepwiki/ca.crt"
+expect "derived client material Secret (the facade-client Certificate's)" \
+  "$(printf '%s' "$derived" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-main") | .spec.template.spec.volumes[] | select(.name == "deepwiki-client-material") | .secret.secretName' -)" \
+  "elitea-main-deepwiki-client-tls"
 refuses "an unrecognised ENABLED spelling"      --set main.env.ELITEA_DEEPWIKI_ENABLED=ture
 
 # The retired Python engine's settings. Each must be refused by ITS guard,
@@ -197,7 +241,7 @@ fi
 echo "== the provider pod is the Go host plus the engine sidecar over one socket (ADR-0023 H2) =="
 containers="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[].name' - | tr '\n' ' ')"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].name' - | tr '\n' ' ')"
 if [ "$containers" != "elitea-deepwiki engine " ]; then
   fail "the provider pod's containers are '$containers'; expected the host and the engine sidecar"
 else
@@ -205,14 +249,14 @@ else
 fi
 host_image="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[0].image' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].image' -)"
 case "$host_image" in
   ghcr.io/elitea-ng/elitea-subapp-host:*) note "host image: $host_image" ;;
   *) fail "the host container runs '$host_image', not the sub-application host" ;;
 esac
 engine_image="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[1].image' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].image' -)"
 case "$engine_image" in
   ghcr.io/elitea-ng/elitea-deepwiki-engine-native:*) note "engine image: $engine_image" ;;
   *) fail "the engine sidecar runs '$engine_image', not the native engine" ;;
@@ -220,7 +264,7 @@ esac
 for container in 0 1; do
   socket_mount="$(printf '%s' "$manifest" \
     | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\")
-        | .spec.template.spec.containers[$container].volumeMounts[] | select(.name == \"engine-socket\") | .mountPath" -)"
+        | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[$container].volumeMounts[] | select(.name == \"engine-socket\") | .mountPath" -)"
   if [ "$socket_mount" != "/run/deepwiki" ]; then
     fail "container $container does not mount the engine socket at /run/deepwiki (got '$socket_mount')"
   else
@@ -229,7 +273,7 @@ for container in 0 1; do
 done
 host_socket="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_ENGINE_SOCKET") | .value' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_ENGINE_SOCKET") | .value' -)"
 if [ "$host_socket" != "/run/deepwiki/engine.sock" ]; then
   fail "the host's ELITEA_DEEPWIKI_ENGINE_SOCKET is '$host_socket', which is not inside the shared mount"
 else
@@ -237,7 +281,7 @@ else
 fi
 migrate_image="$(printf '%s' "$manifest" \
   | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate")
-      | .spec.template.spec.containers[0].image' -)"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].image' -)"
 case "$migrate_image" in
   ghcr.io/elitea-ng/elitea-deepwiki-engine-native:*) note "migrate image: $migrate_image" ;;
   *) fail "the migrate Job runs '$migrate_image'; the migrations are embedded in the native engine, and the host image has none" ;;
@@ -246,7 +290,7 @@ echo "== an unavailable runner renders no sidecar =="
 solo="$(render $COMPLETE --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable)" || fail "runner=unavailable does not render"
 solo_containers="$(printf '%s' "$solo" \
   | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki")
-      | .spec.template.spec.containers[].name' - | tr '\n' ' ')"
+      | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].name' - | tr '\n' ' ')"
 if [ "$solo_containers" != "elitea-deepwiki " ]; then
   fail "runner=unavailable still renders '$solo_containers'"
 else
@@ -264,32 +308,28 @@ native="$(render $COMPLETE --set image.tag=9.9.9)" \
   || fail "the default runner does not render: $native"
 dw() { printf '%s' "$native" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
 job() { printf '%s' "$native" | yq eval-all "select(.kind == \"Job\" and .metadata.name == \"elitea-deepwiki-migrate\") | $1" -; }
-expect() {
-  local what="$1" got="$2" want="$3"
-  if [ "$got" != "$want" ]; then fail "$what is '$got', expected '$want'"; else note "$what: $got"; fi
-}
-expect "native containers" "$(dw '.spec.template.spec.containers[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
-expect "native engine image" "$(dw '.spec.template.spec.containers[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
-expect "native engine command (the image's own ENTRYPOINT/CMD)" "$(dw '.spec.template.spec.containers[1].command')" "null"
-expect "host runner" "$(dw '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
-expect "engine runner" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
+expect "native containers" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
+expect "native engine image" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+expect "native engine command (the image's own ENTRYPOINT/CMD)" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].command')" "null"
+expect "host runner" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
+expect "engine runner" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
 for probe in livenessProbe readinessProbe; do
-  expect "native $probe" "$(dw ".spec.template.spec.containers[1].$probe.exec.command | join(\" \")")" "/usr/local/bin/elitea-deepwiki-engine healthcheck"
+  expect "native $probe" "$(dw "((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].$probe.exec.command | join(\" \")")" "/usr/local/bin/elitea-deepwiki-engine healthcheck"
 done
-expect "build owner" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_BUILD_OWNER") | .valueFrom.fieldRef.fieldPath')" "metadata.name"
-expect "engine database URL secret" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_DATABASE_URL") | .valueFrom.secretKeyRef.name')" "elitea-main-db"
-expect "engine git allowlist" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_GIT_ALLOWLIST") | .value')" "github.com"
-expect "worker memory cap = 85% of limits.memory 16Gi" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value')" "14602888735"
-expect "container memory limit" "$(dw '.spec.template.spec.containers[1].resources.limits.memory')" "16Gi"
-expect "worker CPU seconds" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_CPU_SECONDS") | .value')" "14400"
-expect "engine scratch mount" "$(dw '.spec.template.spec.containers[1].volumeMounts[] | select(.name == "scratch") | .mountPath')" "/var/scratch/deepwiki"
-expect "engine socket mount" "$(dw '.spec.template.spec.containers[1].volumeMounts[] | select(.name == "engine-socket") | .mountPath')" "/run/deepwiki"
-expect "native migrate image" "$(job '.spec.template.spec.containers[0].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
-expect "native migrate args" "$(job '.spec.template.spec.containers[0].args | join(" ")')" "migrate"
-expect "native migrate command" "$(job '.spec.template.spec.containers[0].command')" "null"
+expect "build owner" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_BUILD_OWNER") | .valueFrom.fieldRef.fieldPath')" "metadata.name"
+expect "engine database URL secret" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_DATABASE_URL") | .valueFrom.secretKeyRef.name')" "elitea-main-db"
+expect "engine git allowlist" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_GIT_ALLOWLIST") | .value')" "github.com"
+expect "worker memory cap = 85% of limits.memory 16Gi" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value')" "14602888735"
+expect "container memory limit" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].resources.limits.memory')" "16Gi"
+expect "worker CPU seconds" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_CPU_SECONDS") | .value')" "14400"
+expect "engine scratch mount" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].volumeMounts[] | select(.name == "scratch") | .mountPath')" "/var/scratch/deepwiki"
+expect "engine socket mount" "$(dw '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].volumeMounts[] | select(.name == "engine-socket") | .mountPath')" "/run/deepwiki"
+expect "native migrate image" "$(job '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+expect "native migrate args" "$(job '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].args | join(" ")')" "migrate"
+expect "native migrate command" "$(job '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].command')" "null"
 expect "a smaller limit moves the cap with it" \
   "$(render $COMPLETE --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=6144Mi \
-      | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value' -)" \
+      | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value' -)" \
   "5476083265"
 
 echo "== the native runner's refusals =="
@@ -305,46 +345,118 @@ refuses "native memory limit not in Gi or Mi"    --set deepwiki.engine.runner=na
 echo "== the fixture runner runs the native image =="
 fixture="$(render $COMPLETE --set deepwiki.engine.runner=fixture --set image.tag=9.9.9)" || fail "runner=fixture does not render: $fixture"
 fx() { printf '%s' "$fixture" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
-expect "fixture containers" "$(fx '.spec.template.spec.containers[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
-expect "fixture engine image" "$(fx '.spec.template.spec.containers[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
-expect "fixture engine runner" "$(fx '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "fixture"
-expect "fixture host runner" "$(fx '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
-expect "fixture migrate image" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate") | .spec.template.spec.containers[0].image' -)" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
-if render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= >/dev/null 2>&1; then
-  note "runner=fixture renders with no database URL secret"
+expect "fixture containers" "$(fx '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
+expect "fixture engine image" "$(fx '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+expect "fixture engine runner" "$(fx '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "fixture"
+expect "fixture host runner" "$(fx '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
+expect "fixture migrate image" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Job" and .metadata.name == "elitea-deepwiki-migrate") | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].image' -)" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+# One replica: with no database the host has no invocation store, which
+# more than one replica needs (refused below).
+if render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= --set deepwiki.autoscaling.enabled=false >/dev/null 2>&1; then
+  note "runner=fixture renders with no database URL secret (one replica)"
 else
   fail "runner=fixture is refused for a missing database URL, which the fixture never reads"
 fi
 
-# ── The callback hop through platform-edge (ADR-0027) ────────────────────────
-#
-# On: elitea-main's callback origin becomes the edge, and BOTH containers trust
-# the runtime CA — that one key of the worker's material Secret and nothing
-# else. Refused: the flag without the edge, and the flag beside an explicit
-# origin that is not the edge. Off (every render above): neither appears.
+# More than one replica shares its invocations and its generation slots
+# through the database (the invocations table). Without the database each
+# replica keeps them in memory, and a poll that reaches another replica
+# answers not-found. The fixture runner isolates this guard from the native
+# runner's database guard.
+echo "== more than one replica needs the invocation store =="
+refuses "more than one replica (autoscaling) with no invocation store" --set deepwiki.engine.runner=fixture --set postgresql.existingSecret=
+refuses "more than one replica (replicaCount) with no invocation store" --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= --set deepwiki.autoscaling.enabled=false --set deepwiki.replicaCount=2
+if output="$(render $COMPLETE --set deepwiki.engine.runner=fixture --set postgresql.existingSecret= 2>&1)"; then
+  :
+elif grep -q 'has no invocation store' <<<"$output" && grep -q 'deepwiki.autoscaling.enabled=false' <<<"$output"; then
+  note "the refusal names the missing store and the one-replica way out"
+else
+  fail "the multi-replica refusal does not name the store and deepwiki.autoscaling.enabled=false: $output"
+fi
+multi="$(render $COMPLETE --set deepwiki.autoscaling.enabled=false --set deepwiki.replicaCount=2)" \
+  || fail "two replicas with the database do not render: $multi"
+expect "two replicas with the database" "$(printf '%s' "$multi" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.replicas' -)" "2"
 
-echo "== deepwiki.callbackViaPlatformEdge routes the callback hop through the edge =="
-EDGE="-f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
-edge="$(render $COMPLETE $EDGE)" || fail "the callback hop through the edge does not render: $edge"
-expect "callback origin in elitea-main" \
-  "$(printf '%s' "$edge" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
-  "https://elitea-platform-edge"
-ed() { printf '%s' "$edge" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
-expect "host callback CA" "$(ed '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
-expect "engine callback CA" "$(ed '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
-expect "runtime CA mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "runtime-ca") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-runtime-ca "
+# ── The platform listener: the only way back to elitea-main (#1359 U2/U5) ──
+#
+# Always on: BOTH containers trust the runtime CA (that one key of the worker's
+# material Secret and nothing else) and present the callback client
+# certificate; the HOST dials ArtifactObjectService at ARTIFACT_SERVICE_URL,
+# the ENGINE ModelService (and its artifact reads) at MODEL_SERVICE_URL, both
+# the platform origin; elitea-main admits dns:elitea-subapp-callback to both
+# services and the DeepWiki pods on 9446 and NOT on 8080. Refused: DeepWiki
+# without the runtime plane or the callback Secret (sidecar or not), the
+# retired HTTP callback origin, and both retired switches whatever their value.
+echo "== the host and the engine reach elitea-main over gRPC on the platform listener =="
+expect "the platform listener port" \
+  "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_RUNTIME_PLATFORM_ADDRESS' -)" \
+  ":9446"
+ed() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+en() { ed "((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[$1].env[] | select(.name == \"$2\") | .value"; }
+for c in 0 1; do
+  label="$([ "$c" = 0 ] && echo host || echo engine)"
+  expect "$label callback CA" "$(en $c ELITEA_DEEPWIKI_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
+  expect "$label callback client certificate" "$(en $c ELITEA_DEEPWIKI_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
+  expect "$label callback client key" "$(en $c ELITEA_DEEPWIKI_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
+done
+expect "host ARTIFACT_SERVICE_URL" "$(en 0 ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL)" "https://elitea-main:9446"
+expect "engine MODEL_SERVICE_URL" "$(en 1 ELITEA_DEEPWIKI_MODEL_SERVICE_URL)" "https://elitea-main:9446"
+expect "runtime CA mounted in both containers" "$(ed '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].volumeMounts[] | select(.name == "runtime-ca") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-runtime-ca "
+expect "callback client mounted in both containers" "$(ed '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].volumeMounts[] | select(.name == "callback-client") | .mountPath' | tr '\n' ' ')" "/run/elitea-callback-client /run/elitea-callback-client "
 expect "only runtime-ca.crt leaves the worker Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
-expect "the flag off mounts nothing" "$(printf '%s' "$manifest" | grep -c 'runtime-ca\|CALLBACK_CA_FILE')" "0"
-if render $COMPLETE --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
-  fail "callbackViaPlatformEdge renders with no platform-edge to dial"
-else
-  note "refused without worker.platformEdge"
-fi
-if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
-  fail "callbackViaPlatformEdge renders beside an explicit non-edge callback origin"
-else
-  note "refused beside http://elitea-main:8080"
-fi
+expect "the callback client comes from its own Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "callback-client") | .secret.secretName')" "elitea-deepwiki-callback-client"
+mc() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$1" -; }
+for var in ELITEA_MODEL_SERVICE_CLIENTS ELITEA_ARTIFACT_SERVICE_CLIENTS; do
+  expect "elitea-main's $var admits the callback identity" "$(mc $var | tr ',' '\n' | grep -cx 'dns:elitea-subapp-callback')" "1"
+done
+expect "no HTTP callback origin is rendered" "$(mc ELITEA_DEEPWIKI_CALLBACK_BASE_URL)" "null"
+np() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"NetworkPolicy\" and .metadata.name == \"elitea-main-netpol\") | .spec.ingress[] | select(.ports[0].port == $1) | .from[].podSelector.matchLabels.\"app.kubernetes.io/name\"" - | grep -cx elitea-deepwiki || true; }
+expect "elitea-main admits DeepWiki on the platform port" "$(np 9446)" "1"
+expect "elitea-main does NOT admit DeepWiki on 8080" "$(np 8080)" "0"
+refuses_with() {
+  local description="$1" text="$2"; shift 2
+  local output
+  if output="$(render "$@" 2>&1)"; then
+    fail "accepted: $description"
+  elif printf '%s' "$output" | grep -q -- "$text"; then
+    note "refused: $description"
+  else
+    fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
+  fi
+}
+refuses_with "DeepWiki without the runtime plane" "deepwiki.enabled needs main.runtime.enabled" \
+  ${COMPLETE#"$RUNTIME "}
+refuses_with "DeepWiki without a callback client Secret" "deepwiki.enabled needs deepwiki.callbackClient.secretName" \
+  $COMPLETE --set deepwiki.callbackClient.secretName=
+for name in ELITEA_DEEPWIKI_MODEL_SERVICE_URL ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL ELITEA_DEEPWIKI_CALLBACK_CA_FILE ELITEA_DEEPWIKI_CALLBACK_CERT_FILE ELITEA_DEEPWIKI_CALLBACK_KEY_FILE; do
+  refuses_with "deepwiki.env.$name set by hand" "deepwiki.env sets $name" $COMPLETE --set deepwiki.env.$name=x
+done
+# No sidecar (the host's runner unavailable): no model calls, but the host
+# still uploads over ArtifactObjectService, so the runtime plane is still
+# required and the host still carries the material.
+refuses_with "a host-only DeepWiki without the runtime plane" "deepwiki.enabled needs main.runtime.enabled" \
+  --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable
+hostonly="$(render $RUNTIME --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable)" \
+  || fail "a host-only DeepWiki (no engine sidecar) beside the runtime plane does not render: $hostonly"
+ho() { printf '%s' "$hostonly" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "host-only: no engine container" "$(ho '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[].name' | tr '\n' ' ')" "elitea-deepwiki "
+expect "host-only: the host still dials ArtifactObjectService" "$(ho '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL") | .value')" "https://elitea-main:9446"
+retired_with() {
+  local description="$1" text="$2"; shift 2
+  local output
+  if output="$(render $COMPLETE "$@" 2>&1)"; then
+    fail "accepted: $description"
+  elif printf '%s' "$output" | grep -q -- "$text" && printf '%s' "$output" | grep -q 'docs/UPGRADING.md'; then
+    note "refused with the migration note: $description"
+  else
+    fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
+  fi
+}
+retired_with "the retired HTTP callback origin" "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080
+retired_with "an EMPTY retired HTTP callback origin" "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=
+retired_with "callbackViaPlatformListener=true" "callbackViaPlatformListener was removed" --set deepwiki.callbackViaPlatformListener=true
+retired_with "callbackViaPlatformListener=false" "callbackViaPlatformListener was removed" --set deepwiki.callbackViaPlatformListener=false
+retired_with "the retired callbackViaPlatformEdge key" "callbackViaPlatformEdge was removed" --set deepwiki.callbackViaPlatformEdge=true
 
 # ── The platform gRPC service (elitea.subapp.v1.PlatformOperations) ─────────
 #
@@ -353,26 +465,56 @@ fi
 # port, and a NetworkPolicy rule that admits elitea-main only. Refused: the
 # allowlist without mutual TLS, and a port that collides with the SPI's.
 
-echo "== the platform gRPC service is off unless clients are named =="
-expect "off: no gRPC container port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].ports[].name' - | tr '\n' ' ')" "http "
-expect "off: no gRPC env" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].env[].name' - | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
-expect "off: the Service exposes the SPI only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[].name' - | tr '\n' ' ')" "https "
-expect "off: the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress | length' -)" "1"
+echo "== the provider serves one port: gRPC over mutual TLS (#1359) =="
+dep() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "two container ports: the gRPC listener and the admin port" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].ports[].name' | tr '\n' ' ')" "platform-grpc admin "
+expect "the admin address" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_ADMIN_ADDR") | .value')" ":9090"
+expect "the admin container port" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].ports[] | select(.name == "admin") | .containerPort')" "9090"
+expect "the default allowlist is elitea-main" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value')" "elitea-main"
+expect "the listener address" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") | .value')" ":9443"
+# The probes ask the plain-HTTP admin port: the gRPC listener needs a client
+# certificate the kubelet does not have, and readiness must carry the owner
+# claim (#1359), which a TCP accept cannot.
+for probe in livenessProbe readinessProbe; do
+  expect "host $probe: httpGet on the admin port" "$(dep "((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].$probe.httpGet.port")" "admin"
+  expect "host $probe: no tcpSocket" "$(dep "((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].$probe.tcpSocket")" "null"
+done
+expect "host liveness path" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].livenessProbe.httpGet.path')" "/healthz"
+expect "host readiness path" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].readinessProbe.httpGet.path')" "/readyz"
+expect "the Service exposes the gRPC port only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | .name + ":" + (.port | tostring)' - | tr '\n' ' ')" "platform-grpc:9443 "
+expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9443 "
+
+echo "== the cancellation fan-out: the host dials NATS as elitea-deepwiki (#1359) =="
+expect "NATS URL" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_NATS_URL") | .value')" "tls://elitea-nats.default.svc.cluster.local:4222"
+for f in CA:ca.crt CERT:tls.crt KEY:tls.key; do
+  expect "NATS ${f%%:*} file in the mount" "$(dep "((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == \"ELITEA_DEEPWIKI_NATS_TLS_${f%%:*}_FILE\") | .value")" "$(dep '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].volumeMounts[] | select(.name == "nats-client-tls") | .mountPath')/${f#*:}"
+done
+expect "the NATS client Secret is mounted" "$(dep '.spec.template.spec.volumes[] | select(.name == "nats-client-tls") | .secret.secretName')" "elitea-deepwiki-nats-client-tls"
+expect "its Certificate names the SUBAPP user" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Certificate" and .metadata.name == "elitea-deepwiki-nats-client") | .spec.uris[0]' -)" "spiffe://elitea.internal/nats/elitea-deepwiki"
 
 echo "== the platform gRPC service is configured, exposed and admitted together =="
 grpc="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main,elitea-main.ns.svc}' --set deepwiki.platformGrpc.port=9555)" \
   || fail "the platform gRPC service does not render: $grpc"
 gp() { printf '%s' "$grpc" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
-expect "gRPC container port" "$(gp '.spec.template.spec.containers[0].ports[] | select(.name == "platform-grpc") | .containerPort')" "9555"
-expect "gRPC allowlist" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value')" "elitea-main,elitea-main.ns.svc"
-expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") | .value')" ":9555"
+expect "gRPC container port" "$(gp '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].ports[] | select(.name == "platform-grpc") | .containerPort')" "9555"
+expect "gRPC allowlist" "$(gp '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value')" "elitea-main,elitea-main.ns.svc"
+expect "gRPC address" "$(gp '((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") | .value')" ":9555"
 expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
 expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
-expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "8080 9555 "
+# The headless Service that elitea-main dials: no cluster IP, the same port and
+# the same pods. DNS gives one address for each ready replica.
+hl() { printf '%s' "$grpc" | yq eval-all "select(.kind == \"Service\" and .metadata.name == \"elitea-deepwiki-grpc\") | $1" -; }
+expect "the headless Service has no cluster IP" "$(hl '.spec.clusterIP')" "None"
+expect "the headless Service port" "$(hl '.spec.ports[] | select(.name == "platform-grpc") | .port')" "9555"
+expect "the headless Service selects the Deployment's pods" "$(hl '.spec.selector."app.kubernetes.io/name"')" "elitea-deepwiki"
+expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9555 "
 expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
-refuses "platform clients without mutual TLS" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.mtls.enabled=false
-refuses "a platform port that is the SPI's" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.platformGrpc.port=8080
+refuses "the provider without mutual TLS" --set deepwiki.mtls.enabled=false
+refuses "an empty allowlist: a listener that admits nobody" --set 'deepwiki.platformGrpc.clients={}'
+refuses "the retired HTTPS service port" --set deepwiki.service.port=8443
 refuses "the platform env set by hand beside the values" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.env.ELITEA_DEEPWIKI_PLATFORM_CLIENTS=elitea-main
+refuses "the admin address set by hand beside the values" --set deepwiki.env.ELITEA_DEEPWIKI_ADMIN_ADDR=:9091
+refuses "the admin port on the gRPC port" --set deepwiki.admin.port=9443
 refuses "an allowlist that does not name elitea-main" --set 'deepwiki.platformGrpc.clients={someone-else}'
 # The expected name follows the client material. Chart-issued (the default):
 # elitea-main, and a stated main.platformClientName that differs is refused.
@@ -382,30 +524,63 @@ refuses "a custom main.platformClientName while the chart issues the certificate
 refuses "operator material whose allowlist does not name main.platformClientName" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.platformClientName=platform-main --set main.fileConfig.deepwikiClientMaterial.secretName=my-own-material
 operator="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={platform-main}' --set main.platformClientName=platform-main --set main.fileConfig.deepwikiClientMaterial.secretName=my-own-material)" \
   || fail "operator-supplied client material with its own name does not render: $operator"
-expect "operator material: the allowlist carries the operator's name" "$(printf '%s' "$operator" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value' -)" "platform-main"
+expect "operator material: the allowlist carries the operator's name" "$(printf '%s' "$operator" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value' -)" "platform-main"
 
 # ── elitea-main's side of the platform service (#1243) ───────────────────────
 #
 # The caller is configured WITH the service: when the engine serves it and the
-# facade is on, elitea-main's ConfigMap carries the target (<service>:<port>)
-# without the operator stating it. Off, nothing is derived; an explicit value
-# wins; and a target beside a facade that is off is refused, as cmd/elitea-main
+# facade is on, elitea-main's ConfigMap carries the target without the operator
+# stating it. The target is the HEADLESS Service (<grpcName>:<port>), so
+# elitea-main balances its calls over all replicas (round_robin). The server
+# name stays the ClusterIP Service, which the certificate SAN names. Off,
+# nothing is derived; an explicit value wins and then the chart sets no server
+# name; and a target beside a facade that is off is refused, as cmd/elitea-main
 # refuses it at boot.
 
 echo "== elitea-main is told where the platform service is =="
 main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
-expect "off: the shipped empty default, nothing derived" "$(main_env "$manifest" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
-expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-svc:9555"
+expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-grpc:9443"
+expect "the default: the server name is the ClusterIP Service (the SAN)" "$(main_env "$manifest" ELITEA_DEEPWIKI_SERVER_NAME)" "elitea-deepwiki-svc"
+expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-grpc:9555"
 explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=deepwiki.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"
 expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
-facade_off="$(render --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
+expect "an explicit target: the chart sets no server name" "$(main_env "$explicit" ELITEA_DEEPWIKI_SERVER_NAME)" ""
+facade_off="$(render $RUNTIME $VECTOR --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
   || fail "the engine with its service on and the facade off does not render: $facade_off"
-expect "facade off: nothing derived for a caller that is not composed" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
+# S10: the provider's switch composes the facade too, so there is no "engine
+# on, facade off" install any more: the target is derived for it.
+expect "the provider alone composes the facade, and its target is derived" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "elitea-deepwiki-grpc:9443"
 if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then
   fail "a platform target beside a facade that is off renders"
 else
   note "refused: a target with the facade off"
+fi
+
+# ── The engine reaches elitea-vector (ADR-0031) ──────────────────────────────
+#
+# The native engine keeps its dense vectors in elitea-vector and refuses to start
+# without ELITEA_DEEPWIKI_VECTOR_URL. With this chart's elitea-vector the chart
+# derives it from the Service; with neither that nor an explicit value the
+# render is refused; an explicit value wins.
+
+echo "== the engine reaches elitea-vector =="
+CHART_VECTOR="--set vector.enabled=true --set qdrant.enabled=true "
+engine_vector_url() {
+  printf '%s' "$1" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | ((.spec.template.spec.containers // []) + (.spec.template.spec.initContainers // []))[] | select(.name == "engine") | .env[] | select(.name == "ELITEA_DEEPWIKI_VECTOR_URL") | .value' -
+}
+with_chart_vector="$(render ${COMPLETE/"$VECTOR"/} $CHART_VECTOR )" \
+  || fail "the native engine beside this chart's elitea-vector does not render: $with_chart_vector"
+expect "derived from this chart's elitea-vector" "$(engine_vector_url "$with_chart_vector")" "https://elitea-vector:9470"
+explicit_vector="$(render $COMPLETE $CHART_VECTOR )" \
+  || fail "an explicit elitea-vector beside this chart's does not render: $explicit_vector"
+expect "an explicit elitea-vector wins" "$(engine_vector_url "$explicit_vector" | sort -u)" "https://vector.elsewhere.invalid:9470"
+refuses_with "a native engine with no elitea-vector" "deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL for an elitea-vector deployed elsewhere" \
+  ${COMPLETE/"$VECTOR"/} 
+if fixture_novector="$(render ${COMPLETE/"$VECTOR"/}  --set deepwiki.engine.runner=fixture 2>&1)"; then
+  expect "the fixture runner needs no elitea-vector" "$(engine_vector_url "$fixture_novector")" ""
+else
+  fail "a fixture engine with no elitea-vector does not render: $fixture_novector"
 fi
 
 if [ "$failures" -ne 0 ]; then

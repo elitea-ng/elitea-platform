@@ -11,7 +11,7 @@ package social
 // WHERE IT LIVES. `centry.social_users.personalization->'theme_mode'` — the
 // author record's existing per-user settings blob, the one Settings › AI
 // Personality already writes `persona` and `default_instructions` into. No
-// new table or column: social_users is a pylon-baseline table that no
+// new table or column: social_users is a legacy-baseline table that no
 // numbered migration owns (001_initial.sql projects it; claiming it in a new
 // migration breaks the repos seeds), and a jsonb key needs no DDL at all.
 //

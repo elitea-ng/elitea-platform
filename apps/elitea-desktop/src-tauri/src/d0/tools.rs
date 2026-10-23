@@ -1,14 +1,28 @@
 //! Every tool of the turn, wrapped once: `tool_call`/`tool_result` events,
 //! the recorded tool steps, the commands run, and the before-images of the
 //! files a local file tool is about to change.
+//!
+//! Plan mode (#1225): [`PlanGatedToolset`] offers a toolset's tools only
+//! once the session has left plan mode (the remote toolkits),
+//! [`AcceptedPlanNote`] gives the model the build-mode environment once
+//! it has, and an accepted `exit_plan_mode` copies the plan into the
+//! runtime's planner (one host-side call, `Planner::seed_from_markdown`)
+//! and tells the UI (`plan_accepted`).
 
 use std::sync::Arc;
 
-use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_agent::LlmAgentBuilder;
+use adk_core::callbacks::BeforeModelResult;
+use adk_core::{Content, ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
-use elitea_local_tools::session::LocalSession;
+use elitea_agent_runtime::planner::Planner;
+use elitea_local_tools::approvals::PermissionProfile;
+use elitea_local_tools::policy::LocalWorkPolicy;
+use elitea_local_tools::session::{EXIT_PLAN_MODE, LocalSession};
 use serde_json::{Value, json};
+use tokio::sync::OnceCell;
 
+use super::environment;
 use super::events::TurnEvents;
 use super::recorder::Recorder;
 
@@ -21,6 +35,97 @@ pub struct ToolObserver {
     pub recorder: Arc<Recorder>,
     /// The workspace session, for local tools' before-images.
     pub session: Option<Arc<LocalSession>>,
+    /// The turn's planner: an accepted `exit_plan_mode` seeds it.
+    pub planner: Option<Planner>,
+}
+
+/// A toolset offered only outside plan mode (the remote toolkits: a remote
+/// tool may write). adk resolves the toolsets again after every tool batch,
+/// so once the person accepts the plan the next model step of the same run
+/// is offered these tools too.
+pub struct PlanGatedToolset {
+    inner: Arc<dyn Toolset>,
+    session: Arc<LocalSession>,
+}
+
+impl PlanGatedToolset {
+    #[must_use]
+    pub fn new(inner: Arc<dyn Toolset>, session: Arc<LocalSession>) -> Self {
+        Self { inner, session }
+    }
+}
+
+#[async_trait]
+impl Toolset for PlanGatedToolset {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
+        if self.session.profile() == PermissionProfile::Plan {
+            return Ok(Vec::new());
+        }
+        self.inner.tools(ctx).await
+    }
+}
+
+/// The build-mode environment for a plan-mode turn's model steps after the
+/// person accepted the plan. The system prompt is fixed for the run and
+/// says "plan (read-only)"; from the first model step outside plan mode on,
+/// a system part ([`environment::accepted_plan`]) replaces that section:
+/// the facts gathered again with the tools offered now (the write and
+/// command guidance, the sandbox line), once per run.
+pub struct AcceptedPlanNote {
+    pub session: Arc<LocalSession>,
+    /// The folder's name, as [`environment::gather`] takes it.
+    pub folder: String,
+    pub policy: LocalWorkPolicy,
+    pub mentioned: Vec<String>,
+    /// Tools offered beside the session's own (the index's, the planner's).
+    pub extra_tools: Vec<String>,
+}
+
+impl AcceptedPlanNote {
+    /// `builder` with the note as a callback before every model step.
+    #[must_use]
+    pub fn bind_builder(self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
+        let note = Arc::new(self);
+        let text: Arc<OnceCell<String>> = Arc::new(OnceCell::new());
+        builder.before_model_callback(Box::new(move |_ctx, mut request| {
+            let note = note.clone();
+            let text = text.clone();
+            Box::pin(async move {
+                if note.session.profile() == PermissionProfile::Plan {
+                    return Ok(BeforeModelResult::Continue(request));
+                }
+                let section = text.get_or_init(|| note.section()).await;
+                request
+                    .contents
+                    .insert(0, Content::new("system").with_text(section.clone()));
+                Ok(BeforeModelResult::Continue(request))
+            })
+        }))
+    }
+
+    async fn section(&self) -> String {
+        let mut tools: Vec<String> = self
+            .session
+            .available_tools()
+            .iter()
+            .map(|tool| tool.name.to_owned())
+            .collect();
+        tools.extend(self.extra_tools.iter().cloned());
+        let facts = environment::gather(
+            &self.session,
+            self.folder.clone(),
+            &self.policy,
+            false,
+            tools,
+            &self.mentioned,
+        )
+        .await;
+        environment::accepted_plan(&facts)
+    }
 }
 
 /// A toolset whose tools report to the turn.
@@ -70,6 +175,23 @@ struct ObservedTool {
     remote: bool,
 }
 
+impl ObservedTool {
+    /// The person accepted the plan: the planner gets its steps when the
+    /// model wrote none (the state rides this call's result event), and the
+    /// UI turns plan mode off.
+    fn plan_accepted(&self, ctx: &dyn ToolContext, plan: &str) {
+        if let Some(planner) = &self.observer.planner
+            && let Err(error) = planner.seed_from_markdown(ctx, plan)
+        {
+            log::warn!("the accepted plan was not copied to the planner: {error}");
+        }
+        self.observer.events.send(
+            "plan_accepted",
+            json!({ "call_id": ctx.function_call_id() }),
+        );
+    }
+}
+
 fn shorten(text: &str) -> (String, bool) {
     let mut chars = text.chars();
     let cut: String = chars.by_ref().take(SUMMARY_CHARS).collect();
@@ -92,7 +214,7 @@ fn args_summary(args: &Value) -> String {
 /// The paths a local file tool is about to change.
 fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)>) {
     match tool {
-        "write_file" | "edit_file" => (
+        "write_file" | "edit_file" | "multi_edit" => (
             args.get("path")
                 .and_then(Value::as_str)
                 .map(|p| vec![p.to_owned()])
@@ -103,6 +225,9 @@ fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)
             let Some(patch) = args.get("patch").and_then(Value::as_str) else {
                 return (Vec::new(), Vec::new());
             };
+            if elitea_local_tools::apply_patch::is_envelope(patch) {
+                return elitea_local_tools::apply_patch::named_paths(patch).unwrap_or_default();
+            }
             let Ok(files) = elitea_local_tools::patch::parse(patch) else {
                 return (Vec::new(), Vec::new());
             };
@@ -220,9 +345,17 @@ impl Tool for ObservedTool {
                     .map(str::to_owned)
             })
             .flatten();
+        let plan = (tool == EXIT_PLAN_MODE.name && !self.remote)
+            .then(|| args.get("plan").and_then(Value::as_str).map(str::to_owned))
+            .flatten();
         let running = ToolTimer::begin(&observer.events);
-        let result = self.inner.execute(ctx, args).await;
+        let result = self.inner.execute(ctx.clone(), args).await;
         drop(running);
+        if let (Some(plan), Ok(value)) = (&plan, &result)
+            && value.get("accepted") == Some(&Value::Bool(true))
+        {
+            self.plan_accepted(ctx.as_ref(), plan);
+        }
         let (ok, summary, truncated, error) = match &result {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("error");
@@ -244,7 +377,14 @@ impl Tool for ObservedTool {
                 (false, shorten(&text).0, false, Some(text))
             }
         };
-        if let (Some(command), Ok(value)) = (&command, &result) {
+        // run_tests: the command it planned (and ran) is in its answer.
+        let planned = (tool == "run_tests" && !self.remote)
+            .then(|| result.as_ref().ok())
+            .flatten()
+            .and_then(|value| value.get("command"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &result) {
             observer.recorder.command(command, value);
         }
         observer.recorder.tool_finished(
@@ -277,8 +417,14 @@ mod tests {
         assert!(paths.contains(&"new.txt".to_owned()));
         assert!(paths.contains(&"x.txt".to_owned()));
         assert_eq!(renames, vec![("old.txt".to_owned(), "new.txt".to_owned())]);
+        let envelope = "*** Begin Patch\n*** Add File: n.txt\n+x\n*** Delete File: d.txt\n*** Update File: u.txt\n*** Move to: v.txt\n@@\n-a\n+b\n*** End Patch";
+        let (paths, renames) = changed_paths("apply_patch", &json!({ "patch": envelope }));
+        assert_eq!(paths, ["n.txt", "d.txt", "u.txt", "v.txt"]);
+        assert_eq!(renames, vec![("u.txt".to_owned(), "v.txt".to_owned())]);
         let (paths, _) = changed_paths("write_file", &json!({"path": "a.rs", "content": ""}));
         assert_eq!(paths, ["a.rs"]);
+        let (paths, _) = changed_paths("multi_edit", &json!({"path": "m.rs", "edits": []}));
+        assert_eq!(paths, ["m.rs"]);
         assert!(
             changed_paths("read_file", &json!({"path": "a.rs"}))
                 .0

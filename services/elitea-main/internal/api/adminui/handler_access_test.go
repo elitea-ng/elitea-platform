@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
@@ -98,35 +100,38 @@ func TestServeSPA_AccessReasonForwardedIdentity(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		cfg     Config
-		headers map[string]string
-		want    string
+		cfg    Config
+		signIn string
+		want   string
 	}{
 		"admin": {
-			cfg:     Config{ForwardedIdentityVerifier: peerVerifier{}, Resolver: adminResolver("admin.auth.users")},
-			headers: userHeaders("42"), want: "granted",
+			cfg:    Config{FormSessions: authtest.FormSessions{}, Resolver: adminResolver("admin.auth.users")},
+			signIn: "42", want: "granted",
 		},
 		"suspended": {
-			cfg:     Config{ForwardedIdentityVerifier: peerVerifier{}, Resolver: failingResolver(auth.ErrPrincipalInactive)},
-			headers: userHeaders("42"), want: "denied",
+			cfg:    Config{FormSessions: authtest.FormSessions{}, Resolver: failingResolver(auth.ErrPrincipalInactive)},
+			signIn: "42", want: "denied",
 		},
 		"resolver fault": {
-			cfg:     Config{ForwardedIdentityVerifier: peerVerifier{}, Resolver: failingResolver(errors.New("boom"))},
-			headers: userHeaders("42"), want: "unavailable",
+			cfg:    Config{FormSessions: authtest.FormSessions{}, Resolver: failingResolver(errors.New("boom"))},
+			signIn: "42", want: "unavailable",
 		},
-		"headers without peer proof": {
-			cfg:     Config{ForwardedIdentityVerifier: peerVerifier{err: errors.New("not the ingress")}, Resolver: adminResolver("admin.auth.users")},
-			headers: userHeaders("42"), want: "unauthenticated",
+		"rejected Form session": {
+			cfg: Config{
+				FormSessions: authtest.FormSessions{Err: apimw.ErrFormSessionRejected},
+				Resolver:     adminResolver("admin.auth.users"),
+			},
+			signIn: "42", want: "unauthenticated",
 		},
-		"no headers": {
-			cfg:  Config{ForwardedIdentityVerifier: peerVerifier{}, Resolver: adminResolver("admin.auth.users")},
+		"no Form cookie": {
+			cfg:  Config{FormSessions: authtest.FormSessions{}, Resolver: adminResolver("admin.auth.users")},
 			want: "unauthenticated",
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if injected := serveForwarded(t, tc.cfg, tc.headers); injected.Access != tc.want {
+			if injected := serveFormSession(t, tc.cfg, tc.signIn); injected.Access != tc.want {
 				t.Fatalf("access = %q, want %q", injected.Access, tc.want)
 			}
 		})

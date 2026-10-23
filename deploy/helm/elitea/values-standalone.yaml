@@ -16,41 +16,51 @@
 # consumed the last slot. elitea-main.validateConnectionBudget now refuses to
 # render the mismatch instead.
 #
-# 200 is what this profile expects the server to be configured for. Change it
-# to match yours; the guard checks against whatever it says.
+# 420 is what this profile expects the server to be configured for. The guard
+# counts EVERY component at its replica ceiling (S11), not elitea-main alone,
+# and every component autoscales now:
+#   elitea-main       4 x 44 (36 runtime + 6 primary + 2 for elitea-vector's
+#                     token introspection, which vector.enabled opens) = 176
+#   llm-gateway       4 x 8                                            =  32
+#   scheduler         2 x 4                                            =   8
+#   deepwiki          host 3 x (4 + 1), engine 3 x (2 + 2 + 8 + 4)     =  63
+#   inventory         host 3 x (2 + 1), engine 3 x 8                   =  33
+#   worker AgentState 10 x 8                                           =  80
+#                                                                      -----
+#                                                                        392
+# plus the 25 reserved, 417; 420 keeps a little headroom. It was 280 while
+# the gateway, DeepWiki, Inventory and the worker ran at fixed counts. Change
+# it to match yours; the guard checks against whatever it says.
 postgresql:
-  maxConnections: 200
+  maxConnections: 420
 
 main:
   # WITH THE RUNTIME PLANE ON, THIS CEILING IS A DATABASE PROPERTY.
   #
   # The chart's default is 10, chosen against CPU and memory targets. Each
-  # replica costs ~42 connections here (36 runtime + 6 primary), so ten of them
-  # is 420 against the 175 the server above leaves — the autoscaler would
+  # replica costs ~44 connections here (36 runtime + 6 primary + 2 for
+  # elitea-vector's token introspection when vector.enabled), so ten of them
+  # is 440 against the 395 the server above leaves — the autoscaler would
   # exhaust PostgreSQL long before it exhausted a node.
   #
-  # 4 x 42 = 168, inside 175. Raise this only together with
+  # 4 x 44 = 176, plus the other components' 216, inside 395. Raise this only
+  # together with
   # postgresql.maxConnections; the guard checks the pair, which is the point.
-  #
-  # vector.enabled adds elitea-vector's token-introspection pool (8
-  # connections per replica, ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS):
-  # 50 per replica, so 4 replicas no longer fit. Lower maxReplicas to 3 (150) or
-  # raise postgresql.maxConnections to 225 when you turn vector on.
   autoscaling:
     maxReplicas: 4
 
-  # Standalone (pylon-free) values for elitea-main — issue #382.
+  # Standalone (legacy-free) values for elitea-main — issue #382.
   #
   # WHAT THIS FILE IS FOR
   # The chart used to set no capability flag at all. cmd/elitea-main gates whole
   # capabilities on environment variables, so a Kubernetes install served none of
   # those route groups while the SAME IMAGE on compose served all of them. That
-  # made Kubernetes unable to run the pylon-free configuration, which is the
+  # made Kubernetes unable to run the standalone configuration, which is the
   # deployment target. This file closes the gap.
   #
   # The capability set here equals deploy/docker-compose.standalone-full.yml,
-  # which is the configuration proven to run without pylon. Read that file beside
-  # this one: every flag below has its reasoning written out there.
+  # which is the configuration proven to run without the legacy runtime. Read
+  # that file beside this one: every flag below has its reasoning written out there.
   #
   # HOW TO USE IT
   #   helm install elitea deploy/helm/elitea \
@@ -143,13 +153,19 @@ main:
       document:
         schema_version: elitea.auth.form.v2
 
-        # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
-        # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
-        # equal this origin's scheme and host. Name the edge that makes the
-        # edge-auth call.
-        public_origin: https://elitea-platform-edge
+        # The browser's origin: the address people open (DEPLOYMENT_URL).
+        # No edge authenticates for elitea-main any more (#1359), so nothing
+        # else is left for this to name; it scopes the Form session cookie
+        # (Secure, host-only) and must be https with no path or query.
+        public_origin: https://elitea.example.com
 
-        # The pod network. A non-empty list is mandatory.
+        # The proxies whose X-Forwarded-For is believed: the pod network the
+        # cluster Gateway or ingress controller forwards from. Narrow it to that
+        # range. Any peer inside it can name its own client address and so its
+        # own login attempt window, so it must never include an address a
+        # browser reaches elitea-main from directly (a NodePort or LoadBalancer
+        # Service). A peer outside it is keyed by its socket address. A
+        # non-empty list is mandatory.
         trusted_proxy_cidrs:
           - 10.0.0.0/8
           - 172.16.0.0/12
@@ -199,7 +215,7 @@ main:
     # The endpoint the chart cannot guess. Override it at install time.
     DATABASE_URL: ""
     # The live-update plane (project event stream, canvas presence) dials the
-    # top-level `nats` block unless ELITEA_EVENTS_NATS_URL is set here; see
+    # `natsClient` block unless ELITEA_EVENTS_NATS_URL is set here; see
     # values.yaml.
 
     # --- Current-compatibility plane -------------------------------------------
@@ -238,7 +254,7 @@ main:
     # ON here (#394). The index-types read now answers ONE body that both
     # shipped clients accept: the published DocumentLoadersResponse keys
     # (items, total) that the generated apps/elitea-web client holds, beside
-    # the Pylon keys (document_types, image_types, code_types) that
+    # the legacy keys (document_types, image_types, code_types) that
     # apps/elitea-ui reads. It was the missing items key that kept this flag
     # dark. Both halves project the same pinned SDK snapshot, so they cannot
     # disagree.
@@ -259,7 +275,7 @@ main:
 
     # ON here (#395). The attached-skills read now answers ONE body that both
     # shipped clients accept: the published SkillsList keys (items, total, page,
-    # page_size, total_pages) that apps/elitea-web reads, beside the Pylon keys
+    # page_size, total_pages) that apps/elitea-web reads, beside the legacy keys
     # (skills, max_skills) that apps/elitea-ui reads. It was the missing items
     # key that kept this flag dark.
     #
@@ -283,7 +299,7 @@ main:
     # elitea-main.validateLLMGateway refuses the half-configured pair at
     # `helm template` time (issue #463). Mount the material at this directory; the
     # names match what deploy/scripts/gen-gateway-certs.sh writes.
-    LLM_GATEWAY_URL: "https://elitea-llm-gateway:8083"
+    LLM_GATEWAY_URL: "https://elitea-llm-gateway:8443"
     LLM_GATEWAY_CLIENT_CERT: "/run/certs/tls.crt"
     LLM_GATEWAY_CLIENT_KEY: "/run/certs/tls.key"
     LLM_GATEWAY_CA_FILE: "/run/certs/ca.crt"
@@ -314,13 +330,8 @@ main:
     agentExecutionDispatch:
       enabled: true
       commandStream: "ELITEA_RT_V1_AGENT"
-      # DELIBERATELY empty. elitea-main calls itself for the next-input-suggestion
-      # policy, and it serves cleartext, so the origin is derived from its own
-      # listener: http://127.0.0.1:<port>. This used to be
-      # "https://elitea-main:8080", which aimed TLS at that cleartext port and
-      # made every chat turn log a failed policy call. Set it only where another
-      # server answers the path.
-      currentMainBaseUrl: ""
+      # (No currentMainBaseUrl, #1359 U5: the worker's internal MCP calls are
+      # InternalToolService on the platform listener it already dials.)
 
     # Index start, index cancel and index metadata.
     #
@@ -346,6 +357,24 @@ main:
       outputAddress: ":9444"
       contentAddress: ":9445"
 
+    # elitea.llm.v1.ModelService on the platform listener (#1359 U2) admits
+    # only the identities in ELITEA_MODEL_SERVICE_CLIENTS, and elitea-main
+    # refuses to start with none. This profile does not turn worker.enabled on,
+    # so it names the worker identity gen-runtime-certs.sh mints by default
+    # (RUNTIME_WORKER_SPIFFE_ID) for a worker run beside this release. Change
+    # it, and worker.runtimeSession.expectedIdentity below, if you mint another.
+    modelService:
+      extraClients:
+        - "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+    # The same worker identity for its artifact calls (Office toolkits,
+    # indexing artifact sources) and its internal MCP toolkits (#1359 U5).
+    artifactService:
+      extraClients:
+        - "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+    internalToolService:
+      extraClients:
+        - "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+
     material:
       mountPath: /run/elitea-runtime
       # A plain Kubernetes Secret, one key for each file name in this file's
@@ -365,6 +394,27 @@ main:
       # Use runtime.material.volume instead only when another mechanism already
       # writes these as real, owner-owned files at mountPath.
       secretName: elitea-runtime-material
+
+# The worker's SPIFFE ID. The worker is on by default (S10), and this is
+# required with it (#1359 U2): it is the identity ModelService admits for the
+# worker's model calls, and the runtime-session Job checks it against the
+# certificate. gen-runtime-certs.sh's default.
+worker:
+  runtimeSession:
+    expectedIdentity: "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+
+# DeepWiki and Inventory are on by default (S10) and each is ONE switch: the
+# chart derives elitea-main's facade env and client material from these
+# blocks. What only the operator can state is the posture of each git-host
+# allowlist; the chart copies each to elitea-main. vector (elitea-vector and a
+# one-node Qdrant over TLS) is on by default too, with its API key in the
+# fixed Secret elitea-qdrant-api.
+deepwiki:
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+inventory:
+  env:
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
 
 # This profile ships no edge in front of elitea-main, so nothing outside the
 # chart's own pods is admitted to elitea-main:8080. A deployment that fronts it

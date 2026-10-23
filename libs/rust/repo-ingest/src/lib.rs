@@ -185,9 +185,9 @@ pub async fn ingest_admitted(
 /// Download an artifact folder into `job_scratch` (step 1's road), under
 /// the ingest limits and deadline.
 ///
-/// `client` is the model transport's (rustls, no redirects); `platform` the
-/// invocation's own object API and bearer. At the deadline the transfer is
-/// dropped, which removes its partial directory.
+/// `artifacts` is `ArtifactObjectService` over the engine's platform
+/// channel; `platform` the invocation's own bearer and project. At the
+/// deadline the transfer is dropped, which removes its partial directory.
 ///
 /// # Errors
 ///
@@ -195,7 +195,7 @@ pub async fn ingest_admitted(
 pub async fn ingest_artifact(
     target: &ArtifactTarget,
     platform: &PlatformObjects,
-    client: &reqwest::Client,
+    artifacts: &elitea_platform_rpc::artifacts::ArtifactClient,
     settings: &IngestSettings,
     job_scratch: &Path,
     cancel: Arc<AtomicBool>,
@@ -203,7 +203,7 @@ pub async fn ingest_artifact(
     let run = artifact::Materialise {
         target,
         platform,
-        client,
+        artifacts,
         limits: &settings.limits,
         caps: settings.artifact,
         job_scratch,

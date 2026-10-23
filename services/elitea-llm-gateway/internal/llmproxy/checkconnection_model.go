@@ -162,6 +162,12 @@ func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, r
 		})
 		return
 	}
+	if fe := h.admitProbeAuthMode(r, &req); fe != nil {
+		writeJSON(w, http.StatusOK, checkConnectionResponse{
+			Success: false, Reason: fe.reason, Detail: fe.detail, Probe: checkModelProbeKind,
+		})
+		return
+	}
 	targets, err := probe.dialTargets(req)
 	if err != nil {
 		var fe *checkConnectionFieldError
@@ -206,6 +212,12 @@ func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, r
 	client := newCheckConnectionProbeClientWithTimeout(h.probeAllowsPrivateNetwork(req), checkModelProbeTimeout)
 	ctx, cancel := context.WithTimeout(r.Context(), checkModelProbeTimeout)
 	defer cancel()
+	if fe := h.mintProbeToken(ctx, &req); fe != nil {
+		writeJSON(w, http.StatusOK, checkConnectionResponse{
+			Success: false, Reason: fe.reason, Detail: fe.detail, Probe: checkModelProbeKind,
+		})
+		return
+	}
 
 	// The probe is a real completion that the budget gate does not see, so
 	// every probe is logged with the signed project and user. That record is
@@ -331,7 +343,8 @@ func messageNamesMissingModel(message string) bool {
 // modelProbeSecrets lists the request values that must never appear in a
 // Detail, whatever the provider echoes back.
 func modelProbeSecrets(req checkConnectionRequest) []string {
-	return []string{req.APIKey, req.AWSAccessKeyID, req.AWSSecretAccessKey, req.AWSSessionToken, string(req.VertexCredentials)}
+	return []string{req.APIKey, req.AWSAccessKeyID, req.AWSSecretAccessKey, req.AWSSessionToken,
+		string(req.VertexCredentials), req.bearer}
 }
 
 // --- provider message scrubbing ---------------------------------------------
@@ -521,7 +534,7 @@ func probeAzureChatCompletion(ctx context.Context, client *http.Client, req chec
 		first, second = second, first
 	}
 	return postCompletionWithTokenField(ctx, client, azureDeploymentCompletionURL(req.APIBase, req.Model, apiVersion),
-		apiKeyHeader(req.APIKey), body, first, second, "choices")
+		azureAuthHeaders(req), body, first, second, "choices")
 }
 
 // probeDialCompletion sends a DIAL model probe to the route the runtime sends
@@ -548,13 +561,17 @@ func probeDialCompletion(ctx context.Context, client *http.Client, req checkConn
 	base := strings.TrimRight(strings.TrimSpace(req.APIBase), "/")
 	switch account.DialRouteFor(protocol, req.Model) {
 	case account.DialRouteResponses:
-		headers := apiKeyHeader(req.APIKey)
+		headers := azureAuthHeaders(req)
 		// 16 is the smallest max_output_tokens the Responses API accepts.
 		body := map[string]any{"model": req.Model, "input": checkModelPrompt, "max_output_tokens": 16}
 		return modelProbePOST(ctx, client, base+"/openai/v1/responses", headers, body, "output")
 	case account.DialRouteMessages:
 		headers := map[string]string{"anthropic-version": anthropicAPIVersion}
-		if req.APIKey != "" {
+		// bifrost sends the context token as a bearer on this route too, ahead
+		// of x-api-key, so the keyless probe does the same.
+		if req.bearer != "" {
+			headers["Authorization"] = "Bearer " + req.bearer
+		} else if req.APIKey != "" {
 			headers["x-api-key"] = req.APIKey
 		}
 		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
@@ -563,7 +580,7 @@ func probeDialCompletion(ctx context.Context, client *http.Client, req checkConn
 		body := map[string]any{"messages": messages}
 		return postCompletionWithTokenField(ctx, client,
 			account.DialDeploymentURL(req.APIBase, req.Model, "chat/completions", req.APIVersion),
-			apiKeyHeader(req.APIKey), body, "max_tokens", "max_completion_tokens", "choices")
+			azureAuthHeaders(req), body, "max_tokens", "max_completion_tokens", "choices")
 	}
 }
 

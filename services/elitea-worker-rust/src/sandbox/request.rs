@@ -60,6 +60,7 @@ pub struct InvalidRequest;
 
 impl PreparedJob {
     /// Check the independently signed whole-Code intent against this admitted request.
+    #[cfg(feature = "sandbox-supervisor")]
     pub(crate) fn matches_code_binding(
         &self,
         binding: &super::code_recovery::WholeCodeBinding,

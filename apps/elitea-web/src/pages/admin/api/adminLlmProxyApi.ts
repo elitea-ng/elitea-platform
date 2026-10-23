@@ -112,6 +112,13 @@ export interface GatewayStatusBody {
    * credentials that resolve for nobody while every other signal stays healthy.
    */
   readonly shared_project_id?: string;
+  /**
+   * Whether the gateway can mint workload-identity tokens (the Helm value
+   * `llmGateway.workloadIdentity.enabled`). `undefined` means the gateway is
+   * too old to say: the provider dialog then shows no warning, because unknown
+   * is not "off".
+   */
+  readonly workload_identity_enabled?: boolean;
   readonly store?: {
     readonly has_database?: boolean;
     readonly last_attempt?: string;

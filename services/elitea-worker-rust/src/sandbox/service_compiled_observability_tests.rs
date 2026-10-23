@@ -105,7 +105,9 @@ fn typed_failures_keep_fatal_retryable_and_capacity_severity_separate() {
             "content_authority",
         ),
         (
-            SupervisorError::Content(DependencyContentError::Unavailable { status: 503 }),
+            SupervisorError::Content(DependencyContentError::Unavailable {
+                code: tonic::Code::Unavailable,
+            }),
             tracing::Level::WARN,
             "content_unavailable",
         ),

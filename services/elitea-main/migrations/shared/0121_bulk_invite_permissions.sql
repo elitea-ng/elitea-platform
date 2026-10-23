@@ -6,12 +6,12 @@
 --
 -- WHY THESE TWO STRINGS. The route they gate,
 -- `POST /admin/invites_bulk/administration`
--- (internal/api/v2/admin/invites_bulk.go), replaces two pylon console pages:
--- legacy/plugins/admin/api/v2/invites_bulkusers.py and invites_bulkprojects.py.
--- Each declares its own permission in its `check_api` decorator
--- (invites_bulkusers.py:35, invites_bulkprojects.py:35) rather than the
--- project-membership one, so this is parity, not a new policy. The gate accepts
--- either string, so an operator who held either console page keeps the
+-- (internal/api/v2/admin/invites_bulk.go), replaces two legacy runtime console
+-- pages: legacy/plugins/admin/api/v2/invites_bulkusers.py and
+-- invites_bulkprojects.py. Each declares its own permission in its `check_api`
+-- decorator (invites_bulkusers.py:35, invites_bulkprojects.py:35) rather than
+-- the project-membership one, so this is parity, not a new policy. The gate
+-- accepts either string, so an operator who held either console page keeps the
 -- capability through one route.
 --
 -- WHERE THE ROLE SPLIT COMES FROM. legacy/plugins/admin/module.py:511-517 and

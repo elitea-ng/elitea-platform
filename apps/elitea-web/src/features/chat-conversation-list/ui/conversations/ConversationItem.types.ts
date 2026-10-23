@@ -76,6 +76,10 @@ export interface ConversationItemProps {
   readonly onPin: (conversation: ConversationWithOwnerMeta, shouldPin: boolean) => void;
   /** Issue 940/A6 — clones this conversation into a new, independent one and selects it. */
   readonly onDuplicate: (conversation: ConversationWithOwnerMeta) => void;
+  /** Archives the conversation for the caller (client contract 1.10); absent hides the menu entry. */
+  readonly onArchive?: ((conversation: ConversationWithOwnerMeta) => void) | undefined;
+  /** Forks the whole conversation into a new one (client contract 1.11); absent hides the menu entry. */
+  readonly onFork?: ((conversation: ConversationWithOwnerMeta) => void) | undefined;
   readonly onCreateConversation: (conversation: ConversationWithOwnerMeta) => Promise<unknown>;
   readonly onCancelCreate: () => void;
   readonly onChangeActiveConversationName: (name: string) => void;

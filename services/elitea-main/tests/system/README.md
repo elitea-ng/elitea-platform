@@ -74,11 +74,11 @@ issue #5681 test. The current input-content profile is intentionally capped at
 256 KiB; large file/image streaming needs its artifact path before that
 broader scenario can be claimed closed by a system test.
 
-The configuration-validation handler has no provider/source/PgVector effect,
+The configuration-validation handler has no provider/source/vector-store effect,
 so this topology cannot honestly prove that an indexing SDK side effect is
 invoked only once. The production-scale issue #5681 gate (retired with
 deploy/centry-hybrid) separately required its source/model fixture receipt to remain byte-for-byte unchanged across a
-post-terminal worker restart. A crash after the SDK/PgVector side effect but
+post-terminal worker restart. A crash after an indexing side effect but
 before Main durably commits terminal output is still an ambiguous at-least-once
 window; it requires an SDK-owned idempotency key or a durable worker effect
 receipt before the platform may claim exactly-once indexing effects.
@@ -111,39 +111,7 @@ go test -count=1 -v ./services/elitea-main/tests/system \
   -run '^TestIndexEmbeddingBindingMainWorkerCrossProcess$'
 ```
 
-This gate does not contact PostgreSQL, LiteLLM, PgVector or a provider.
+This gate does not contact PostgreSQL, LiteLLM, a vector store or a provider.
 Those service-backed boundaries retain their dedicated integration tests; this
 test specifically proves the signed Main-to-worker authorization, version and
 reference-only language boundary.
-
-## Same-target synchronous SDK serialization gate
-
-`TestPostgresPgvectorSameTargetSerializationAcrossInstalledSDKProcess` proves
-that Stop does not release same-target availability after SDK invocation
-authority. It holds the real pinned `EliteAClient.test_toolkit_tool` call in a
-separate worker-container process, then checks Main admission exclusion in
-`CLAIMED`, `RUNNING/PREPARING`, `RUNNING/MAY_HAVE_STARTED` after Stop, and the
-durable post-output `SETTLING` recovery window. After canonical cancellation
-settlement, it admits and initializes the next logical generation against real
-PostgreSQL/PgVector, then proves old terminal and task-ID writes are fenced.
-
-Run the opt-in gate against a PostgreSQL 16-18 server with `vector` and the
-existing index-worker container. The Docker CLI must be installed, configured
-to reach a live daemon, and able to inspect and enter that running container:
-
-```bash
-ELITEA_INDEX_SDK_SERIALIZATION_GATE=1 \
-ELITEA_TEST_DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/DATABASE' \
-go test -count=1 -v ./services/elitea-main/internal/infra/db/repos \
-  -run '^TestPostgresPgvectorSameTargetSerializationAcrossInstalledSDKProcess$'
-```
-
-Override the default `centry-elitea-indexer-worker-1` with
-`ELITEA_INDEX_SDK_CONTAINER` when needed. Once
-`ELITEA_INDEX_SDK_SERIALIZATION_GATE=1`, missing database configuration,
-PostgreSQL/PgVector support, Docker CLI/daemon access, or a running configured
-container fails the gate; only a disabled gate skips. The tool/provider
-boundary is a deterministic blocker underneath the real installed SDK
-callable. Command-bus delivery, the production worker serve loop, gRPC,
-public authentication and an external source provider remain outside this
-gate; the existing compose and cross-process harnesses own those boundaries.

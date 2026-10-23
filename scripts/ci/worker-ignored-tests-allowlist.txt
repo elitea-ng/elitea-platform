@@ -1,5 +1,5 @@
 # Rust worker #[ignore] tests that NO ci-rust.yml `-- --ignored` invocation runs,
-# read by scripts/ci/check_worker_ignored_tests.py. One per line:
+# read by scripts/ci/check-worker-ignored-tests.mjs. One per line:
 #   <test name or module prefix>  # <where it runs instead, and why not in CI>
 # An entry that matches no ignored test fails the check, so this list cannot rot.
 # Prefer running a test in CI over adding it here. An entry is a test that

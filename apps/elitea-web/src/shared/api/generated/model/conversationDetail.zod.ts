@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -40,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConversationForkedFrom } from "./conversationForkedFrom.zod";
 import { ConversationParticipant } from "./conversationParticipant.zod";
 import { EditorTestContext } from "./editorTestContext.zod";
 import { EditorTestRunsPage } from "./editorTestRunsPage.zod";
@@ -70,6 +72,7 @@ export const ConversationDetail = zod
     is_private: zod
       .boolean()
       .describe("Always present; a row that cannot say reads as private."),
+    forked_from: ConversationForkedFrom.optional(),
     meta: zod.object({
       editor_test: EditorTestContext.optional(),
       is_hidden: zod.boolean().optional(),
@@ -79,7 +82,7 @@ export const ConversationDetail = zod
       .array(zod.record(zod.string(), zod.unknown()))
       .optional()
       .describe(
-        "Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`.\n",
+        "Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`. Each group carries `role` (`user` or `assistant`, from its author's participant row, as the message list's `role` is): a fork copies another member's questions without making that member a participant of the fork, so the participant list alone cannot tell such a question from an answer.\n",
       ),
     editor_test_runs: EditorTestRunsPage.optional(),
   })

@@ -1,5 +1,5 @@
 /**
- * The sanitiser for operator-authored splash markup — the port of pylon's
+ * The sanitiser for operator-authored splash markup — the port of the legacy
  * `splash_template`.
  *
  * ## Why this is not just `sanitizeMarkdownHtml`
@@ -32,11 +32,11 @@
  * and form-submission attributes, every `on*` handler and every `javascript:`
  * URL — the last two by DOMPurify's own defaults.
  *
- * `<style>` (and inline `style=`) going is a deliberate loss against pylon, whose
- * default splash was a whole document styled by one inline block. Here the body is rendered INSIDE
- * the product's own themed page, so it inherits the platform's typography and
- * colours rather than bringing its own — and an operator who could ship CSS
- * could hide the page it is rendered on.
+ * `<style>` (and inline `style=`) going is a deliberate loss against the legacy
+ * runtime, whose default splash was a whole document styled by one inline block.
+ * Here the body is rendered INSIDE the product's own themed page, so it inherits
+ * the platform's typography and colours rather than bringing its own — and an
+ * operator who could ship CSS could hide the page it is rendered on.
  */
 import { sanitizeUntrustedHtml } from './sanitizeMarkdownHtml';
 

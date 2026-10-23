@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"net/netip"
 	"strings"
 	"time"
 	"unicode"
@@ -25,7 +26,36 @@ type BrowserAttemptStage string
 const (
 	BrowserAttemptFormBegin      BrowserAttemptStage = "form_begin"
 	BrowserAttemptFormCredential BrowserAttemptStage = "form_credential"
+	// The single-sign-on planes (internal/api/v2/auth, #1078). Each counts
+	// per client only, like a Form begin: none verifies a credential the
+	// caller chose, so none counts against the global credential row.
+	BrowserAttemptOIDCBegin    BrowserAttemptStage = "oidc_begin"
+	BrowserAttemptOIDCCallback BrowserAttemptStage = "oidc_callback"
+	BrowserAttemptSAMLBegin    BrowserAttemptStage = "saml_begin"
+	BrowserAttemptSAMLACS      BrowserAttemptStage = "saml_acs"
 )
+
+// ipv6ClientPrefixBits is the IPv6 grouping of AttemptClientKey: the
+// smallest prefix one end site is normally assigned (RFC 6177).
+const ipv6ClientPrefixBits = 64
+
+// AttemptClientKey is the client key of a resolved client address: the
+// address for IPv4 and its /64 for IPv6. One IPv6 subscriber is routinely
+// given a whole /64 (SLAAC, privacy addresses) and can rotate through it at
+// will, so a per-/128 key would give one client 2^64 independent limits. An
+// IPv4-mapped IPv6 address keys as the IPv4 address it is.
+func AttemptClientKey(address netip.Addr) string {
+	address = address.Unmap()
+	if address.Is4() {
+		return address.String()
+	}
+	prefix, err := address.WithZone("").Prefix(ipv6ClientPrefixBits)
+	if err != nil {
+		// Unreachable for a valid IPv6 address; the full address still keys.
+		return address.String()
+	}
+	return prefix.String()
+}
 
 // BrowserAttempt contains only the bounded material needed for shared
 // cross-replica admission. ClientKey is canonical trusted-proxy output, not a
@@ -49,7 +79,8 @@ func (attempt BrowserAttempt) Validate() error {
 		if zeroDigest {
 			return ErrInvalidBrowserAttempt
 		}
-	case BrowserAttemptFormBegin:
+	case BrowserAttemptFormBegin, BrowserAttemptOIDCBegin, BrowserAttemptOIDCCallback,
+		BrowserAttemptSAMLBegin, BrowserAttemptSAMLACS:
 		if !zeroDigest {
 			return ErrInvalidBrowserAttempt
 		}

@@ -8,7 +8,7 @@
 // could be sealed (secret_sealing.go). Everything else was stored as sent. So
 //
 //	POST /configurations/configurations/{project}
-//	{"elitea_title":"…","type":"pgvector"}
+//	{"elitea_title":"…","type":"jira"}
 //
 // answered 201 and wrote a row with an empty label and an empty `data`. The
 // reference implementation answers 400 for that body, because it parses it
@@ -144,7 +144,7 @@ func missingObjectFields(
 	depth int,
 	maxDepth int,
 ) []string {
-	required := stringsOf(schema["required"])
+	required := append(stringsOf(schema["required"]), conditionalRequired(schema, value)...)
 	if len(required) == 0 || depth >= maxDepth {
 		return nil
 	}
@@ -191,6 +191,52 @@ func missingObjectFields(
 		return nil
 	}
 	return missing
+}
+
+// conditionalRequired returns the `required` list of the `then` or the `else`
+// branch of an object schema's `if`.
+//
+// Narrow on purpose: an `if` is read only as `properties.<name>.const` plus its
+// own `required`, which is the one shape the pinned snapshot uses (the keyless
+// `auth_mode` of vertex_ai: vertex_credentials is required only in the key
+// mode). An `if` of any other shape does not match and the `else` applies, so a
+// rule this walk cannot read keeps the stricter branch.
+func conditionalRequired(schema, value map[string]any) []string {
+	condition, ok := schema["if"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	branch := "else"
+	if conditionMatches(condition, value) {
+		branch = "then"
+	}
+	selected, _ := schema[branch].(map[string]any)
+	return stringsOf(selected["required"])
+}
+
+func conditionMatches(condition, value map[string]any) bool {
+	for key := range condition {
+		if key != "required" && key != "properties" {
+			return false
+		}
+	}
+	for _, name := range stringsOf(condition["required"]) {
+		if _, present := value[name]; !present {
+			return false
+		}
+	}
+	properties, _ := condition["properties"].(map[string]any)
+	for name, raw := range properties {
+		property, _ := raw.(map[string]any)
+		expected, hasConst := property["const"]
+		if !hasConst || len(property) != 1 {
+			return false
+		}
+		if actual, present := value[name]; present && actual != expected {
+			return false
+		}
+	}
+	return true
 }
 
 // lookupRequiredValue reads one required field, honouring the title alias at

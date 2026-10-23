@@ -30,24 +30,17 @@ on:
       - "libs/rust/engine-core/**"
       - "libs/rust/Cargo.toml"
       - ".github/workflows/ci-vector.yml"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-vector/**"
-      - "libs/proto/elitea/vector/**"
-      - "libs/rust/engine-sidecar/**"
-      - "libs/rust/engine-core/**"
-      - "libs/rust/Cargo.toml"
-      - ".github/workflows/ci-vector.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "35 0 * * *"
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -91,6 +84,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Registry and git only. Measured 2026-10-20: the target directory
+          # made this entry 0.75 GB and saved ~2 minutes on a cached run
+          # (~6 -> ~4 min), the worst minutes-per-GB of any Rust job;
+          # in a 10 GB cache it evicted entries worth far more.
+          cache-targets: false
           workspaces: services/elitea-vector
 
       - name: Check formatting

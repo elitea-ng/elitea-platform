@@ -83,12 +83,17 @@ impl Tracker {
     pub fn observe(&mut self, event: &AgentEvent) -> Observed {
         let turn = event.turn_id.as_str();
         match event.kind {
-            "approval_request" => {
+            // A plan card (#1225) waits for the person like an approval.
+            "approval_request" | "plan_proposed" => {
                 let Some(request_id) = event.payload["request_id"].as_str() else {
                     return Observed::default();
                 };
                 self.pending.insert(request_id.to_owned(), turn.to_owned());
-                let tool = event.payload["tool"].as_str().unwrap_or("a tool");
+                let tool = if event.kind == "plan_proposed" {
+                    "the plan"
+                } else {
+                    event.payload["tool"].as_str().unwrap_or("a tool")
+                };
                 Observed {
                     badge_changed: true,
                     notice: Some(Notice::Approval {
@@ -97,6 +102,13 @@ impl Tracker {
                     }),
                 }
             }
+            // Closed at its wait without an answer: it no longer waits.
+            "approval_closed" => Observed {
+                badge_changed: event.payload["request_id"]
+                    .as_str()
+                    .is_some_and(|id| self.answered(id)),
+                notice: None,
+            },
             "error" => {
                 self.remember(turn, Outcome::Failed);
                 Observed::default()
@@ -338,6 +350,23 @@ mod tests {
         event(turn, "done", json!({"committed": true}))
     }
 
+    /// #1225: a plan card waits for the person like an approval: it counts
+    /// until answered, and its notice never carries the plan text.
+    #[test]
+    fn a_plan_card_is_pending_until_answered() {
+        let mut tracker = Tracker::default();
+        let seen = tracker.observe(&event(
+            "t1",
+            "plan_proposed",
+            json!({"request_id": "p1", "call_id": "c1", "plan": "# Secret plan"}),
+        ));
+        assert!(seen.badge_changed);
+        assert_eq!(tracker.pending(), 1);
+        assert!(!format!("{:?}", seen.notice).contains("Secret"));
+        assert!(tracker.answered("p1"));
+        assert_eq!(tracker.pending(), 0);
+    }
+
     #[test]
     fn approvals_count_until_answered_or_their_turn_ends() {
         let mut tracker = Tracker::default();
@@ -365,6 +394,26 @@ mod tests {
             tracker.pending(),
             0,
             "a sign-out cancels the turn, whose done clears it"
+        );
+    }
+
+    /// A question the host closed at its wait (`approval_closed`) no longer
+    /// counts.
+    #[test]
+    fn a_closed_question_stops_counting() {
+        let mut tracker = Tracker::default();
+        tracker.observe(&approval("t1", "r1"));
+        let closed = tracker.observe(&event(
+            "t1",
+            "approval_closed",
+            json!({"request_id": "r1", "reason": "timeout"}),
+        ));
+        assert!(closed.badge_changed);
+        assert_eq!(tracker.pending(), 0);
+        assert!(
+            !tracker
+                .observe(&event("t1", "approval_closed", json!({"request_id": "r1"})))
+                .badge_changed
         );
     }
 

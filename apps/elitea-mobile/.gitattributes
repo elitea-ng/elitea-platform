@@ -1,0 +1,2 @@
+# SSE fixtures are byte streams: never normalise their line endings.
+*.sse -text

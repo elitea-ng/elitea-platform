@@ -7,12 +7,13 @@
 -- editable. The bearer string does not change, so every token that exists today
 -- keeps validating byte for byte.
 --
--- WHY A SIDE TABLE, NOT A COLUMN. `public.auth_core__token` belongs to pylon's
--- `auth_core` plugin. This corpus has never issued DDL against it, and
--- `internal/db/schema/auth_core_baseline.sql` mirrors it for sqlc type-checking
--- only. Two migration systems that own one table definition is the failure
--- 0064 and 0065 both describe from the other direction. A Go-owned side table
--- in `elitea_identity` references the pylon table without altering it.
+-- WHY A SIDE TABLE, NOT A COLUMN. `public.auth_core__token` belongs to the
+-- legacy runtime's `auth_core` plugin. This corpus has never issued DDL against
+-- it, and `internal/db/schema/auth_core_baseline.sql` mirrors it for sqlc
+-- type-checking only. Two migration systems that own one table definition is
+-- the failure 0064 and 0065 both describe from the other direction. A Go-owned
+-- side table in `elitea_identity` references the legacy runtime table without
+-- altering it.
 --
 -- ON DELETE CASCADE removes the binding when the token row goes. No application
 -- code deletes it, so no delete path can forget.
@@ -39,7 +40,7 @@ CREATE SCHEMA IF NOT EXISTS elitea_identity;
 CREATE TABLE IF NOT EXISTS elitea_identity.token_project_binding (
     -- token_id is the PRIMARY KEY, so one token binds to at most one project.
     token_id   integer PRIMARY KEY,
-    -- project_id carries no foreign key. centry.project is a pylon-owned table
+    -- project_id carries no foreign key. centry.project is a legacy-owned table
     -- as well, and membership is verified in the creating transaction instead.
     project_id integer NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()

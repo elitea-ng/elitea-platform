@@ -213,7 +213,7 @@ type IntrospectTokenResponse struct {
 	Active bool `protobuf:"varint,1,opt,name=active,proto3" json:"active,omitempty"`
 	// project_id is the project the token is bound to.
 	ProjectId int64 `protobuf:"varint,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	// principal is the token owner, as "user:<id>".
+	// principal is the token owner, as `user:<id>`.
 	Principal string    `protobuf:"bytes,3,opt,name=principal,proto3" json:"principal,omitempty"`
 	Kind      TokenKind `protobuf:"varint,4,opt,name=kind,proto3,enum=elitea.vector.v1.TokenKind" json:"kind,omitempty"`
 	// expires_at_unix is the token expiry, in seconds since the Unix epoch.

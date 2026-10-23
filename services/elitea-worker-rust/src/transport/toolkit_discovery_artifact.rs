@@ -1,11 +1,10 @@
 //! Immutable toolkit discovery results on the claim-bound content channel.
 
 use super::*;
-use http_body_util::Full;
 use prost::Message as _;
 
 use crate::protocol::elitea::runtime::v1::{
-    DigestAlgorithmV1, ToolkitAvailableToolsArtifactReferenceV1,
+    DigestAlgorithmV1, PutToolkitDiscoveryResultRequestV1, ToolkitAvailableToolsArtifactReferenceV1,
 };
 
 const RESULT_MEDIA_TYPE: &str = "application/vnd.elitea.toolkit-available-tools.v1+json";
@@ -47,102 +46,68 @@ impl InputContentClient {
             ));
         }
         let expected = digest::digest(&digest::SHA256, content);
-        let mut request = build_request(&authority)?;
-        let uri = format!("{}/toolkit-discovery-result", request.uri());
-        *request.uri_mut() = uri.parse().map_err(|_| {
-            InputContentError::InvalidInput("the result artifact request is malformed")
-        })?;
-        *request.method_mut() = Method::PUT;
-        *request.body_mut() = Body::new(Full::new(Bytes::copy_from_slice(content)));
-        request
-            .headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static(RESULT_MEDIA_TYPE));
-        request
-            .headers_mut()
-            .insert(CONTENT_LENGTH, HeaderValue::from(content.len()));
-        request.headers_mut().insert(
-            CONTENT_DIGEST_HEADER,
-            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(expected.as_ref())))
-                .map_err(|_| InputContentError::InvalidInput("the result digest is malformed"))?,
-        );
+        let request = claim_request(
+            PutToolkitDiscoveryResultRequestV1 {
+                scope: Some(content_scope(authority.execution_id, authority.generation)),
+                content_id: authority.content_id.to_owned(),
+                immutable_version: authority.immutable_version.to_owned(),
+                result_json: content.to_vec(),
+            },
+            authority.claim_id,
+            authority.fence_token,
+        )
+        .ok_or(InputContentError::InvalidInput(
+            "the result artifact request is malformed",
+        ))?;
+        let mut rpc = self.rpc();
         timeout(self.config.deadline, async {
-            let response = self
-                .rpc
-                .get(request)
+            let reference = rpc
+                .put_toolkit_discovery_result(request)
                 .await
-                .map_err(InputContentError::Transport)?;
-            validate_discovery_response(response, content.len(), expected.as_ref()).await
+                .map_err(discovery_status)?
+                .into_inner()
+                .reference
+                .ok_or(InputContentError::InvalidInput(
+                    "the result artifact reference is malformed",
+                ))?;
+            validate_discovery_reference(reference, content.len(), expected.as_ref())
         })
         .await
         .map_err(|_| InputContentError::Timeout("the result artifact request timed out"))?
     }
 }
 
-async fn validate_discovery_response(
-    response: Response<Body>,
+/// A conflicting or refused result is final for these bytes; Main's other
+/// failures may clear on a fresh attempt.
+fn discovery_status(status: Status) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied => {
+            InputContentError::AuthorizationFailed("the result artifact claim was rejected")
+        }
+        Code::ResourceExhausted => {
+            InputContentError::ResourceExhausted("the result artifact exceeds its content limit")
+        }
+        Code::Aborted | Code::InvalidArgument | Code::FailedPrecondition => {
+            InputContentError::InvalidInput("the immutable result artifact was rejected")
+        }
+        Code::DeadlineExceeded => {
+            InputContentError::Timeout("the result artifact request timed out")
+        }
+        _ if is_transport_status(&status) => InputContentError::transport(status),
+        _ => InputContentError::DependencyUnavailable("the result artifact service is unavailable"),
+    }
+}
+
+fn validate_discovery_reference(
+    reference: ToolkitAvailableToolsArtifactReferenceV1,
     content_length: usize,
     expected_digest: &[u8],
 ) -> Result<ToolkitAvailableToolsArtifactReferenceV1, InputContentError> {
-    if response.version() != Version::HTTP_2 {
-        return Err(InputContentError::DependencyUnavailable(
-            "the result service did not negotiate HTTP/2",
-        ));
-    }
-    match response.status() {
-        StatusCode::OK => {}
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(InputContentError::AuthorizationFailed(
-                "the result artifact claim was rejected",
-            ));
-        }
-        StatusCode::PAYLOAD_TOO_LARGE => {
-            return Err(InputContentError::ResourceExhausted(
-                "the result artifact exceeds its content limit",
-            ));
-        }
-        StatusCode::CONFLICT | StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-            return Err(InputContentError::InvalidInput(
-                "the immutable result artifact was rejected",
-            ));
-        }
-        _ => {
-            return Err(InputContentError::DependencyUnavailable(
-                "the result artifact service is unavailable",
-            ));
-        }
-    }
-    if single_header(response.headers(), &CONTENT_TYPE)? != "application/protobuf"
-        || single_header(response.headers(), &CACHE_CONTROL)?
-            != "no-store, no-cache, must-revalidate"
-    {
-        return Err(InputContentError::InvalidInput(
-            "the result artifact response metadata is malformed",
-        ));
-    }
-    let length = positive_decimal_header(response.headers(), &CONTENT_LENGTH)?;
-    if length > MAX_REFERENCE_BYTES as u64 {
+    if reference.encoded_len() > MAX_REFERENCE_BYTES {
         return Err(InputContentError::ResourceExhausted(
             "the result artifact reference exceeds its limit",
         ));
     }
-    let response_digest = sha256_header(response.headers(), &CONTENT_DIGEST_HEADER)?;
-    let bytes = collect_validated_body(
-        response,
-        ValidatedResponseHead {
-            declared_length: usize::try_from(length).map_err(|_| {
-                InputContentError::ResourceExhausted(
-                    "the result artifact reference exceeds its limit",
-                )
-            })?,
-            response_digest,
-        },
-        MAX_REFERENCE_BYTES,
-    )
-    .await?;
-    let reference =
-        ToolkitAvailableToolsArtifactReferenceV1::decode(bytes.as_bytes()).map_err(|_| {
-            InputContentError::InvalidInput("the result artifact reference is malformed")
-        })?;
     if !bounded_text(&reference.artifact_id)
         || reference.immutable_version != digest_hex(expected_digest)
         || reference.media_type != RESULT_MEDIA_TYPE
@@ -176,7 +141,8 @@ fn digest_hex(value: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::elitea::runtime::v1::DigestV1;
+    use crate::protocol::elitea::runtime::v1::{DigestV1, PutToolkitDiscoveryResultResponseV1};
+    use crate::transport::input_content::content_fake::{ContentFake, claim_of};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -187,30 +153,30 @@ mod tests {
         hang: bool,
     }
 
-    #[async_trait]
-    impl InputContentRpc for UploadRpc {
-        async fn get(
+    #[tonic::async_trait]
+    impl ContentFake for UploadRpc {
+        async fn put_toolkit_discovery_result(
             &self,
-            request: Request<Body>,
-        ) -> Result<Response<Body>, InputContentTransportError> {
+            request: tonic::Request<PutToolkitDiscoveryResultRequestV1>,
+        ) -> Result<tonic::Response<PutToolkitDiscoveryResultResponseV1>, Status> {
             self.requests.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(request.method(), Method::PUT);
+            assert_eq!(claim_of(&request), ("claim-1".into(), vec![b'f'; 32]));
+            let request = request.into_inner();
             assert_eq!(
-                request.uri().path(),
-                "/executions/execution-one/generations/2/inputs/settings%20id/versions/v%2F1/toolkit-discovery-result"
+                request.scope,
+                Some(content_scope("execution-one", 2)),
+                "the claimed execution"
             );
-            assert_eq!(request.headers()[CLAIM_HEADER], "claim-1");
-            assert_eq!(
-                request.headers()[FENCE_HEADER],
-                URL_SAFE_NO_PAD.encode([b'f'; 32])
-            );
-            assert_eq!(request.headers()[CONTENT_TYPE], RESULT_MEDIA_TYPE);
-            let body = request.into_body().collect().await.unwrap().to_bytes();
-            assert_eq!(body.as_ref(), b"{\"tools\":[]}");
+            // Identifiers travel raw: nothing is percent-encoded any more.
+            assert_eq!(request.content_id, "settings id");
+            assert_eq!(request.immutable_version, "v/1");
+            assert_eq!(request.result_json, b"{\"tools\":[]}");
             if self.hang {
                 return std::future::pending().await;
             }
-            Ok(response(&body))
+            Ok(tonic::Response::new(PutToolkitDiscoveryResultResponseV1 {
+                reference: Some(reference(&request.result_json)),
+            }))
         }
     }
 
@@ -233,7 +199,7 @@ mod tests {
             UploadRpc { requests, hang },
             InputContentConfig {
                 origin: "https://content.internal".into(),
-                deadline: Duration::from_millis(20),
+                deadline: Duration::from_millis(200),
                 max_materialized_bytes: 1024,
             },
         )
@@ -276,9 +242,9 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 
-    fn response(content: &[u8]) -> Response<Body> {
+    fn reference(content: &[u8]) -> ToolkitAvailableToolsArtifactReferenceV1 {
         let digest = digest::digest(&digest::SHA256, content);
-        let reference = ToolkitAvailableToolsArtifactReferenceV1 {
+        ToolkitAvailableToolsArtifactReferenceV1 {
             artifact_id: "artifact".into(),
             immutable_version: digest_hex(digest.as_ref()),
             media_type: RESULT_MEDIA_TYPE.into(),
@@ -289,67 +255,44 @@ mod tests {
                 value: digest.as_ref().to_vec(),
             }),
         }
-        .encode_to_vec();
-        Response::builder()
-            .version(Version::HTTP_2)
-            .status(StatusCode::OK)
-            .header(CONTENT_TYPE, "application/protobuf")
-            .header(CACHE_CONTROL, "no-store, no-cache, must-revalidate")
-            .header(CONTENT_LENGTH, reference.len())
-            .header(
-                CONTENT_DIGEST_HEADER,
-                format!(
-                    "sha-256=:{}:",
-                    STANDARD.encode(digest::digest(&digest::SHA256, &reference).as_ref())
-                ),
-            )
-            .body(Body::new(Full::new(Bytes::from(reference))))
-            .unwrap()
     }
 
-    #[tokio::test]
-    async fn accepts_only_reference_bound_to_exact_uploaded_bytes() {
+    #[test]
+    fn accepts_only_reference_bound_to_exact_uploaded_bytes() {
         let content = b"{\"tools\":[]}";
         let digest = digest::digest(&digest::SHA256, content);
-        let reference =
-            validate_discovery_response(response(content), content.len(), digest.as_ref())
-                .await
+        let accepted =
+            validate_discovery_reference(reference(content), content.len(), digest.as_ref())
                 .unwrap();
-        assert_eq!(reference.byte_length, content.len() as u64);
+        assert_eq!(accepted.byte_length, content.len() as u64);
         assert!(
-            validate_discovery_response(response(content), content.len() + 1, digest.as_ref())
-                .await
+            validate_discovery_reference(reference(content), content.len() + 1, digest.as_ref())
                 .is_err()
         );
-        assert!(
-            validate_discovery_response(response(content), content.len(), &[1; 32])
-                .await
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn refuses_redirect_stale_claim_conflict_and_oversized_reference() {
-        for status in [
-            StatusCode::TEMPORARY_REDIRECT,
-            StatusCode::FORBIDDEN,
-            StatusCode::CONFLICT,
-        ] {
-            let mut value = response(b"{}");
-            *value.status_mut() = status;
-            assert!(
-                validate_discovery_response(value, 2, &[0; 32])
-                    .await
-                    .is_err()
-            );
-        }
-        let mut value = response(b"{}");
-        value
-            .headers_mut()
-            .insert(CONTENT_LENGTH, HeaderValue::from(MAX_REFERENCE_BYTES + 1));
+        assert!(validate_discovery_reference(reference(content), content.len(), &[1; 32]).is_err());
+        let mut oversized = reference(content);
+        oversized.artifact_id = "a".repeat(MAX_REFERENCE_BYTES);
         assert!(matches!(
-            validate_discovery_response(value, 2, &[0; 32]).await,
+            validate_discovery_reference(oversized, content.len(), digest.as_ref()),
             Err(InputContentError::ResourceExhausted(_))
         ));
+    }
+
+    #[test]
+    fn refuses_stale_claim_and_conflict_and_retries_only_outages() {
+        assert!(matches!(
+            discovery_status(Status::permission_denied("fence")),
+            InputContentError::AuthorizationFailed(_)
+        ));
+        assert!(matches!(
+            discovery_status(Status::aborted("conflict")),
+            InputContentError::InvalidInput(_)
+        ));
+        assert!(matches!(
+            discovery_status(Status::resource_exhausted("large")),
+            InputContentError::ResourceExhausted(_)
+        ));
+        assert!(discovery_status(Status::unavailable("overload")).retryable());
+        assert!(discovery_status(Status::internal("verification")).retryable());
     }
 }

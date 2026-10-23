@@ -12,7 +12,7 @@
 -- a time.Time — so the key is always on the wire. Nothing ever scanned it,
 -- because the table has no such column: `applications` in
 -- internal/infra/db/migrations/001_initial.sql carries `created_at` alone,
--- and so does the pylon model this service inherited the shape from.
+-- and so does the legacy runtime model this service inherited the shape from.
 --
 -- So every client that sorts or displays "last modified" for an agent has
 -- been reading a constant. The spec said so out loud
@@ -49,7 +49,7 @@
 -- this migration records itself and moves on; where 001_initial's
 -- `create_tenant_schema` has already declared the column, ADD COLUMN IF NOT
 -- EXISTS and SET NOT NULL are both no-ops, so a fresh install and a
--- pylon-inherited schema converge on the same shape.
+-- legacy-inherited schema converge on the same shape.
 DO $$
 BEGIN
     IF to_regclass('applications') IS NULL THEN

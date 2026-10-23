@@ -68,7 +68,7 @@ adminTest('DWIKI-013: the facade registered the provider at boot, and the admin 
     )
     .toBe(true);
 
-  expect(wikis?.service_location_url, 'the origin is the facade\'s target, as registered').toBe('https://elitea-deepwiki:8080');
+  expect(wikis?.service_location_url, 'the origin is the facade\'s gRPC target (grpcs://host:port, #1359), as registered').toBe('grpcs://elitea-deepwiki:9443');
   expect(wikis?.status, 'admission is recorded, not in force, until a policy overlay exists').toBe('inactive');
   expect(wikis?.published_manifest_digest, 'the manifest was published').toMatch(/^[0-9a-f]{64}$/);
 
@@ -77,7 +77,7 @@ adminTest('DWIKI-013: the facade registered the provider at boot, and the admin 
   await expect(page.getByRole('grid', { name: 'Registered service descriptors' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-service-descriptors-unavailable')).toHaveCount(0);
   await expect(page.getByRole('grid', { name: 'Registered service descriptors' }).getByText('wikis', { exact: true })).toBeVisible();
-  await expect(page.getByRole('grid', { name: 'Registered service descriptors' }).getByText('https://elitea-deepwiki:8080', { exact: false })).toBeVisible();
+  await expect(page.getByRole('grid', { name: 'Registered service descriptors' }).getByText('grpcs://elitea-deepwiki:9443', { exact: false })).toBeVisible();
 });
 
 /**

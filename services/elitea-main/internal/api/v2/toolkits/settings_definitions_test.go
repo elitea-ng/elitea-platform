@@ -143,10 +143,10 @@ func TestToolkitTypeCatalogueServesResolvableCredentialDefinitions(t *testing.T)
 	}
 }
 
-// The vector-storage variant travels the same path and must not be typed as a
-// credential. artifact is the type that proves the two are distinguished: it
-// has a pgvector reference and no credential at all.
-func TestToolkitTypeCatalogueServesTheVectorStorageDefinition(t *testing.T) {
+// The retired pgvector reference is served by no type: artifact, which had
+// one and no credential at all, now carries no configuration reference and
+// no vector-storage definition.
+func TestToolkitTypeCatalogueServesNoVectorStorageDefinition(t *testing.T) {
 	t.Parallel()
 
 	body := getToolkitTypeCatalogue(t, pinnedCatalogueOptions(t)...)
@@ -154,22 +154,14 @@ func TestToolkitTypeCatalogueServesTheVectorStorageDefinition(t *testing.T) {
 	if !ok {
 		t.Fatalf("catalogue has no artifact type; have %v", keysOf(body))
 	}
-
-	section, ok := resolveConfigurationSection(t, artifact, "pgvector_configuration")
-	if !ok {
-		t.Fatal("artifact.pgvector_configuration does not resolve to a definition")
-	}
-	if section != "vectorstorage" {
-		t.Errorf("artifact.pgvector_configuration section=%q, want %q", section, "vectorstorage")
-	}
-
-	// The property was a bare {"type":"object"} before this change, which the
-	// client sorts into the ordinary-property bucket. Serving the reference
-	// beside the stale stub would leave it there.
 	properties := artifact["properties"].(map[string]any)
-	pgvector := properties["pgvector_configuration"].(map[string]any)
-	if pgvector["type"] == "object" {
-		t.Errorf("pgvector_configuration is still the bare object stub: %#v", pgvector)
+	if _, present := properties["pgvector_configuration"]; present {
+		t.Error("artifact still serves the retired pgvector_configuration")
+	}
+	for property := range properties {
+		if section, ok := resolveConfigurationSection(t, artifact, property); ok && section == "vectorstorage" {
+			t.Errorf("artifact.%s still resolves to a vectorstorage definition", property)
+		}
 	}
 }
 

@@ -17,7 +17,7 @@ import { collectCredentialTitles } from '@/entities/credential';
 
 import { getConfigurationsList } from './configurations';
 
-/** The section every toolkit credential lives in (`vectorstorage` is the other value the catalogue serves, and no toolkit references one as a credential). */
+/** The section every toolkit credential lives in. */
 const CREDENTIALS_SECTION = 'credentials';
 
 export function useProjectCredentialTitles(projectId: string | undefined, options: { enabled?: boolean } = {}): ReadonlySet<string> | undefined {

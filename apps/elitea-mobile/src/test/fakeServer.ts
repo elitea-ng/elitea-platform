@@ -1,0 +1,66 @@
+import { createApiClient, type ApiClient } from '@/api/client';
+import { ApiError } from '@/api/errors';
+import type { BaseFetch } from '@/api/middleware';
+
+/**
+ * A scripted workspace for API-level tests. Each route answers from a queue
+ * (the last answer repeats); every request URL is recorded.
+ */
+export type Answer =
+  | { status: number; body?: unknown; headers?: Record<string, string>; /** Raw bytes instead of a JSON body. */ raw?: Uint8Array }
+  | 'network_error';
+
+export interface FakeServer {
+  client: ApiClient;
+  /** The transport, e.g. to install as `globalThis.fetch` for code that uses the session client. */
+  fetch: BaseFetch;
+  requests: { method: string; url: URL; body: string | null }[];
+  /**
+   * Queues answers for requests whose path (without /api/v2) starts with `prefix`. A prefix may end
+   * in `?name=value&...`: the request must carry those query parameters. A request for the Local
+   * work list (`source=local_work`) is answered only by a route that names it, so the Chats list's
+   * scripted answers are never consumed by it (an unscripted one is a 404, which sync ignores).
+   */
+  on(method: string, prefix: string, ...answers: Answer[]): void;
+}
+
+export const FAKE_ORIGIN = 'https://ai.example.com';
+
+export function fakeServer(): FakeServer {
+  const routes: { method: string; prefix: string; answers: Answer[] }[] = [];
+  const requests: FakeServer['requests'] = [];
+  const fetch: BaseFetch = async (input) => {
+    const url = new URL(input.url);
+    const body = input.method === 'GET' ? null : await input.clone().text();
+    requests.push({ method: input.method, url, body });
+    const path = url.pathname.replace(/^\/api\/v2/, '');
+    const localWork = url.searchParams.get('source') === 'local_work';
+    const route = [...routes].reverse().find((r) => {
+      const [routePath, routeQuery] = r.prefix.split('?');
+      if (r.method !== input.method || !path.startsWith(routePath)) return false;
+      if (routeQuery === undefined) return !localWork;
+      for (const [name, value] of new URLSearchParams(routeQuery)) if (url.searchParams.get(name) !== value) return false;
+      return true;
+    });
+    if (!route) return new Response(JSON.stringify({ error: 'no route' }), { status: 404 });
+    const answer = route.answers.length > 1 ? route.answers.shift()! : route.answers[0];
+    if (answer === 'network_error') throw new TypeError('Network request failed');
+    if (answer.raw !== undefined) {
+      return new Response(answer.raw as unknown as BodyInit, { status: answer.status, headers: answer.headers });
+    }
+    return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), {
+      status: answer.status,
+      headers: { 'Content-Type': 'application/json', ...answer.headers },
+    });
+  };
+  return {
+    client: createApiClient({ origin: FAKE_ORIGIN, auth: { kind: 'session' }, fetch }),
+    fetch,
+    requests,
+    on(method, prefix, ...answers) {
+      routes.push({ method, prefix, answers });
+    },
+  };
+}
+
+export { ApiError };

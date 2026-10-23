@@ -15,6 +15,7 @@ export interface FakeAppIpc extends AppIpc {
     revealed: { workspaceId: string; path: string }[];
     opened: { workspaceId: string; path: string }[];
     themes: NativeWindowTheme[];
+    focusedWindows: string[];
     contextMenus: (readonly ContextMenuItem[])[];
     cloudRuns: { conversationUuid: string; running: boolean }[];
   };
@@ -30,7 +31,7 @@ export const MACOS_PLATFORM: AppPlatform = { os: 'macos', titlebar_overlay: true
 export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): FakeAppIpc {
   const handlers = new Set<AppCommandHandler>();
   const queued: AppCommand[] = [];
-  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [], contextMenus: [], cloudRuns: [] };
+  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [], focusedWindows: [], contextMenus: [], cloudRuns: [] };
   let nextChoice: string | null = null;
   const failures = new Map<'revealPath' | 'openPath', WorkspaceIpcError>();
   const settle = (command: 'revealPath' | 'openPath'): Promise<void> => {
@@ -65,6 +66,10 @@ export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): Fake
     },
     setWindowTheme(theme) {
       calls.themes.push(theme);
+      return Promise.resolve();
+    },
+    focusWindow(label) {
+      calls.focusedWindows.push(label);
       return Promise.resolve();
     },
     onCommand(handler) {

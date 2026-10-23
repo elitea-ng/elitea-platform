@@ -71,7 +71,7 @@ func TestResolveHonoursAStoredFalse(t *testing.T) {
 	}
 }
 
-// pylon's set_context_strategy flattens three summarization defaults into
+// The legacy set_context_strategy flattens three summarization defaults into
 // summary_llm_settings.
 func TestResolveFlattensTheSummarizationDefaults(t *testing.T) {
 	name := "gpt-4o-mini"
@@ -268,7 +268,7 @@ func TestBuildStatusReportsARatioNotAPercentage(t *testing.T) {
 		t.Fatal("a present runtime record reported itself as unavailable")
 	}
 	if status.Utilization != 0.25 {
-		t.Errorf("utilization = %v, want 0.25 (pylon's 0..1 ratio)", status.Utilization)
+		t.Errorf("utilization = %v, want 0.25 (the legacy 0..1 ratio)", status.Utilization)
 	}
 	if status.CurrentTokens != 2500 || status.MessageGroupsInContext != 4 || status.SummaryCount != 1 {
 		t.Errorf("recorded counters were not served: %+v", status)

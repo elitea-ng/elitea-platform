@@ -28,8 +28,14 @@
 // the token's project is refused with PERMISSION_DENIED. An administrator
 // caller must set it.
 //
-// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space,
-// named `emb_<model_slug>_<dimension>`. Points carry the payload keys
+// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space
+// and collection family. The shared family (toolkit indexes, DeepWiki,
+// memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
+// int8 quantized copy, plus a BM25 sparse vector. The Inventory family is
+// `inv_<model_slug>_<dimension>`: float32 dense vectors, no quantization, no
+// BM25 (HybridSearch is refused for it), searched by an exact scan, so its
+// scores are the exact cosine similarities. A source's points are only ever
+// in its own family's collections. Points carry the payload keys
 // `project_id`, `source`, `namespace_id`, `generation` (optional),
 // `document_key`, `document_version`, `parent_id`, `chunk_id`, `chunk_type`,
 // `acl`, `text` and `metadata`. A point id is UUIDv5, under namespace_id, of

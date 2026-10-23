@@ -1,18 +1,24 @@
-//! Fixed compiled content routes. Selected entries never become an ordinary miss.
+//! Fixed compiled content RPCs. Selected entries never become an ordinary miss.
 use super::*;
 use crate::{
     protocol::elitea::runtime::v1::{
+        FetchCompiledSnapshotFileRequestV1, FetchCompiledSnapshotFileResponseV1,
+        GetCompiledSnapshotRequestV1, PublishCompiledSnapshotRequestV1,
         RustCompiledSnapshotGrantClaimsV1, RustCompiledSnapshotPurposeV1,
+        UploadCompiledSnapshotFileHeaderV1, UploadCompiledSnapshotFileRequestV1,
+        upload_compiled_snapshot_file_request_v1,
     },
     sandbox::compiled_snapshot::{ContentSha256, DESCRIPTOR_LIMIT, Descriptor},
 };
 use std::os::unix::fs::MetadataExt as _;
-const HEADER: &str = "X-Elitea-Sandbox-Compiled-Grant";
+/// The one file a compiled snapshot holds.
+const EXECUTABLE_NAME: &str = "elitea-code-job";
+/// The protobuf encoding of a compiled-snapshot grant for `root`, after a purpose check.
 fn authority(
     grant: &SignedSandboxJobGrantV1,
     root: &str,
     purpose: RustCompiledSnapshotPurposeV1,
-) -> Result<HeaderValue, DependencyContentError> {
+) -> Result<Vec<u8>, DependencyContentError> {
     if grant.signature.len() != 64 || grant.claims_bytes.len() > 4096 || grant.key_id.is_empty() {
         return Err(DependencyContentError::Authority);
     }
@@ -27,15 +33,19 @@ fn authority(
     {
         return Err(DependencyContentError::Authority);
     }
-    HeaderValue::from_str(&STANDARD.encode(grant.encode_to_vec()))
-        .map_err(|_| DependencyContentError::Authority)
+    Ok(grant.encode_to_vec())
 }
 fn file(descriptor: &Descriptor) -> BundleFile {
     BundleFile {
-        name: "elitea-code-job".into(),
+        name: EXECUTABLE_NAME.into(),
         bytes: descriptor.executable_bytes,
         sha256: descriptor.executable_sha256.as_str().into(),
     }
+}
+fn compiled_parts(
+    stream: tonic::Streaming<FetchCompiledSnapshotFileResponseV1>,
+) -> impl Stream<Item = Result<Option<FilePart>, Status>> {
+    stream.map(|message| message.map(|message| message.part.map(FilePart::from)))
 }
 impl DependencyContentClient {
     pub(crate) fn stage_compiled(&self) -> Result<tempfile::TempDir, DependencyContentError> {
@@ -52,48 +62,38 @@ impl DependencyContentClient {
         grant: &SignedSandboxJobGrantV1,
     ) -> Result<(tempfile::TempDir, fs::File), DependencyContentError> {
         let root = ContentSha256::of(canonical);
-        let header = authority(grant, root.as_str(), RustCompiledSnapshotPurposeV1::Read)?;
+        let signed_grant = authority(grant, root.as_str(), RustCompiledSnapshotPurposeV1::Read)?;
         let _slot = self
             .slots
             .try_acquire()
             .map_err(|_| DependencyContentError::Busy)?;
         tokio::time::timeout(self.deadline, async {
-            let mut metadata = self
-                .client
-                .get(format!(
-                    "{}/sandbox-compiled-snapshots/{}",
-                    self.origin,
-                    root.as_str()
-                ))
-                .header(HEADER, header.clone())
-                .send()
+            let metadata = self
+                .rpc()
+                .get_compiled_snapshot(GetCompiledSnapshotRequestV1 {
+                    root: root.as_str().to_owned(),
+                    signed_grant: signed_grant.clone(),
+                })
                 .await
-                .map_err(transport)?;
-            check_response(&metadata, StatusCode::OK, "application/json", None)?;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = metadata.chunk().await.map_err(transport)? {
-                if bytes.len().saturating_add(chunk.len()) > DESCRIPTOR_LIMIT {
-                    return Err(DependencyContentError::Integrity);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            if bytes != canonical {
+                .map_err(rpc_error)?
+                .into_inner()
+                .descriptor_json;
+            if metadata.len() > DESCRIPTOR_LIMIT || metadata != canonical {
                 return Err(DependencyContentError::Integrity);
             }
             let directory = self.stage_compiled()?;
-            let response = self
-                .client
-                .get(format!(
-                    "{}/sandbox-compiled-snapshots/{}/files/elitea-code-job",
-                    self.origin,
-                    root.as_str()
-                ))
-                .header(HEADER, header)
-                .send()
+            let parts = self
+                .rpc()
+                .fetch_compiled_snapshot_file(FetchCompiledSnapshotFileRequestV1 {
+                    root: root.as_str().to_owned(),
+                    name: EXECUTABLE_NAME.to_owned(),
+                    signed_grant,
+                })
                 .await
-                .map_err(transport)?;
+                .map_err(rpc_error)?
+                .into_inner();
             let expected = file(descriptor);
-            write_verified_file(response, &expected, directory.path()).await?;
+            write_verified_file(compiled_parts(parts), &expected, directory.path()).await?;
             let mut opened = open_verified_file(directory.path(), &expected).await?;
             opened
                 .rewind()
@@ -133,41 +133,34 @@ impl DependencyContentClient {
         grant: &SignedSandboxJobGrantV1,
     ) -> Result<(), DependencyContentError> {
         let root = ContentSha256::of(canonical);
-        let header = authority(grant, root.as_str(), RustCompiledSnapshotPurposeV1::Publish)?;
+        let signed_grant = authority(grant, root.as_str(), RustCompiledSnapshotPurposeV1::Publish)?;
         let _slot = self
             .slots
             .try_acquire()
             .map_err(|_| DependencyContentError::Busy)?;
         tokio::time::timeout(self.deadline, async {
             let opened = self.verify_compiled_export(directory, descriptor).await?;
-            let body = reqwest::Body::wrap_stream(file_stream(opened, descriptor.executable_bytes));
-            let form = reqwest::multipart::Form::new()
-                .part(
-                    "descriptor",
-                    reqwest::multipart::Part::bytes(canonical.to_vec())
-                        .mime_str("application/json")
-                        .map_err(transport)?,
-                )
-                .part(
-                    "file",
-                    reqwest::multipart::Part::stream_with_length(body, descriptor.executable_bytes)
-                        .file_name("elitea-code-job")
-                        .mime_str("application/octet-stream")
-                        .map_err(transport)?,
-                );
-            let response = self
-                .client
-                .put(format!(
-                    "{}/sandbox-compiled-snapshots/{}/files/elitea-code-job",
-                    self.origin,
-                    root.as_str()
-                ))
-                .header(HEADER, header)
-                .multipart(form)
-                .send()
-                .await
-                .map_err(transport)?;
-            check_status(&response, StatusCode::NO_CONTENT)
+            let failure = Arc::new(Mutex::new(None));
+            let chunks = file_chunks(opened, descriptor.executable_bytes, Arc::clone(&failure))
+                .map(|chunk| UploadCompiledSnapshotFileRequestV1 {
+                    part: Some(upload_compiled_snapshot_file_request_v1::Part::Chunk(chunk)),
+                });
+            let first = UploadCompiledSnapshotFileRequestV1 {
+                part: Some(upload_compiled_snapshot_file_request_v1::Part::Header(
+                    UploadCompiledSnapshotFileHeaderV1 {
+                        root: root.as_str().to_owned(),
+                        name: EXECUTABLE_NAME.to_owned(),
+                        signed_grant,
+                        descriptor_json: canonical.to_vec(),
+                    },
+                )),
+            };
+            let result = self
+                .rpc()
+                .upload_compiled_snapshot_file(tokio_stream::once(first).chain(chunks))
+                .await;
+            take_read_failure(&failure)?;
+            result.map(|_| ()).map_err(rpc_error)
         })
         .await
         .map_err(|_| DependencyContentError::Timeout)?
@@ -178,26 +171,21 @@ impl DependencyContentClient {
         grant: &SignedSandboxJobGrantV1,
     ) -> Result<(), DependencyContentError> {
         let root = ContentSha256::of(canonical);
-        let header = authority(grant, root.as_str(), RustCompiledSnapshotPurposeV1::Publish)?;
+        let signed_grant = authority(grant, root.as_str(), RustCompiledSnapshotPurposeV1::Publish)?;
         let _slot = self
             .slots
             .try_acquire()
             .map_err(|_| DependencyContentError::Busy)?;
         tokio::time::timeout(self.deadline, async {
-            let response = self
-                .client
-                .post(format!(
-                    "{}/sandbox-compiled-snapshots/{}",
-                    self.origin,
-                    root.as_str()
-                ))
-                .header(HEADER, header)
-                .header(CONTENT_TYPE, "application/json")
-                .body(canonical.to_vec())
-                .send()
+            self.rpc()
+                .publish_compiled_snapshot(PublishCompiledSnapshotRequestV1 {
+                    root: root.as_str().to_owned(),
+                    signed_grant,
+                    descriptor_json: canonical.to_vec(),
+                })
                 .await
-                .map_err(transport)?;
-            check_status(&response, StatusCode::NO_CONTENT)
+                .map(|_| ())
+                .map_err(rpc_error)
         })
         .await
         .map_err(|_| DependencyContentError::Timeout)?

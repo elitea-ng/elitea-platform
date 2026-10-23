@@ -20,7 +20,7 @@ import (
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // hop stands in for providerhost/proxy: it fills the Outcome the way that
-// package's ModifyResponse does and writes the same bytes to the caller.
+// package's Forward does and writes the same bytes to the caller.
 func hop(status int, body string) Forwarder {
 	return func(w http.ResponseWriter, r *http.Request, _, _, _ string) {
 		if outcome := proxy.OutcomeFrom(r.Context()); outcome != nil {

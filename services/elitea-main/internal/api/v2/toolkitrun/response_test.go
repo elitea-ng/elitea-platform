@@ -152,8 +152,8 @@ func TestWriteOutcomeRelaysTheResultAsJSON(t *testing.T) {
 	}
 }
 
-// 504, not pylon's 400. The run is durable and STILL GOING; 400 would say the
-// caller's request was wrong, and it was not.
+// 504, not the legacy 400. The run is durable and STILL GOING; 400 would say
+// the caller's request was wrong, and it was not.
 func TestWriteErrorReportsAPendingRunAsAGatewayTimeout(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	WriteError(recorder, &toolkitcalltoolapp.PendingRun{ExecutionID: "exec-9"})

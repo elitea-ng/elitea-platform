@@ -12,8 +12,8 @@ import (
 var ErrInvalidProductionRuntimeRoutes = errors.New("invalid production runtime routes")
 
 // ProductionRuntimeRoutes is an opaque route pair. Construction binds both
-// runtime handlers to the existing trusted-peer and active-principal checks so
-// production routing cannot mount either handler without that verification.
+// runtime handlers to the active-principal check so production routing cannot
+// mount either handler without it.
 type ProductionRuntimeRoutes struct {
 	validation      http.Handler
 	executionEvents http.Handler
@@ -52,14 +52,18 @@ type ProductionRuntimeRoutes struct {
 //
 // The browser is admitted here at all because the chat surface reads the
 // execution-events stream with an EventSource, which can send a cookie and
-// nothing else — no bearer, no forwarded identity (#93). Composing these routes
-// for forwarded identity alone made that stream unreadable by the product's own
-// UI while every server-side hop worked, which is the shape #248's audit kept
-// finding.
+// nothing else — no bearer (#93). Composing these routes for an edge-projected
+// identity alone made that stream unreadable by the product's own UI while
+// every server-side hop worked, which is the shape #248's audit kept finding.
+//
+// There is no edge-projected identity any more (#1359): the worker's own
+// bearer token authenticates it here, and a browser authenticates with either
+// session cookie — `elitea_session`, or the Form plane's cookie, which
+// group.FormSessions reads.
 //
 // Accepting a session here does not widen what a caller may SEE. The routes
 // still require a runtime principal, and auth.RuntimePrincipalFromContext
-// already admits AuthenticationSourceSession alongside forwarded/token/API-key
+// already admits AuthenticationSourceSession alongside token/API-key
 // — a session-authenticated user was always a valid runtime principal, it just
 // had no way to prove it here. The events handler then authorizes per request
 // against the execution's project and capability
@@ -69,16 +73,16 @@ func NewProductionRuntimeRoutes(
 	validation http.Handler,
 	executionEvents http.Handler,
 	principalValidator apimw.PrincipalValidator,
-	forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier,
 	group apimw.AuthConfig,
 ) (*ProductionRuntimeRoutes, error) {
-	if validation == nil || executionEvents == nil || principalValidator == nil || forwardedIdentityVerifier == nil {
+	if validation == nil || executionEvents == nil || principalValidator == nil {
 		return nil, ErrInvalidProductionRuntimeRoutes
 	}
 
 	authenticate := apimw.Auth(apimw.AuthConfig{
-		PrincipalValidator:        principalValidator,
-		ForwardedIdentityVerifier: forwardedIdentityVerifier,
+		PrincipalValidator: principalValidator,
+		// The Form session cookie, from the group like the others below.
+		FormSessions: group.FormSessions,
 		// The bearer and API-key validator (#289). A nil one admits no token,
 		// which is how a PAT came to start a run it could not follow.
 		Validator: group.Validator,

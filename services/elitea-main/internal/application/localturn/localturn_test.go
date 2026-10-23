@@ -51,6 +51,9 @@ func TestValidCommitRules(t *testing.T) {
 		"NUL in answer":      func(r *CommitRequest) { r.AssistantMessage = "a\x00" },
 		"error without flag": func(r *CommitRequest) { r.AssistantError = "boom" },
 		"unknown sandbox":    func(r *CommitRequest) { r.Report.SandboxMode = "root" },
+		"model name too long": func(r *CommitRequest) {
+			r.ModelName = strings.Repeat("m", MaxModelNameBytes+1)
+		},
 		"unknown enforcement": func(r *CommitRequest) {
 			r.Report.Enforcement = "maybe"
 		},
@@ -135,14 +138,18 @@ func TestCleanReportedReplacesControlAndFormatRunes(t *testing.T) {
 	}
 }
 
-type commitFakeStore struct{ commits int }
+type commitFakeStore struct {
+	commits int
+	last    CommitRecord
+}
 
 func (s *commitFakeStore) StartLocalTurn(context.Context, StartRecord) (StartedTurn, error) {
 	return StartedTurn{}, nil
 }
 
-func (s *commitFakeStore) CommitLocalTurn(context.Context, CommitRecord) (CommittedTurn, error) {
+func (s *commitFakeStore) CommitLocalTurn(_ context.Context, record CommitRecord) (CommittedTurn, error) {
 	s.commits++
+	s.last = record
 	return CommittedTurn{}, nil
 }
 
@@ -199,5 +206,48 @@ func TestCommitHonoursTheLocalWorkPolicy(t *testing.T) {
 				t.Fatalf("store commits = %d, want %d", store.commits, test.writes)
 			}
 		})
+	}
+}
+
+// The answer carries the model the turn ran on (#1228), as a cloud turn's
+// does; a client that does not say leaves the meta and the digest as before.
+func TestCommitStampsTheTurnsModel(t *testing.T) {
+	commit := CommitRequest{
+		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32), Credential: Credential{TokenID: "70"},
+		UserMessage: "hi", AssistantMessage: "hello",
+	}
+	for name, test := range map[string]struct {
+		model string
+		want  any
+	}{
+		"named":   {"gpt-other", "gpt-other"},
+		"unnamed": {"", nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &commitFakeStore{}
+			service, err := NewService(store, commitFakePolicy{allowed: true}, commitFakeMemories{}, commitFakeAudit{},
+				func() (string, error) { return strings.Repeat("b", 32), nil }, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := commit
+			request.ModelName = test.model
+			if _, err := service.Commit(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			var meta map[string]any
+			if err := json.Unmarshal(store.last.ResponseMeta, &meta); err != nil {
+				t.Fatal(err)
+			}
+			if got := meta["model_name"]; got != test.want {
+				t.Fatalf("model_name = %v, want %v", got, test.want)
+			}
+		})
+	}
+	unnamed, _ := commitDigest(commit)
+	named := commit
+	named.ModelName = "gpt-other"
+	if digest, _ := commitDigest(named); digest == unnamed {
+		t.Fatal("the digest must see the model")
 	}
 }

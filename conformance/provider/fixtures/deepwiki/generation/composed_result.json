@@ -153,7 +153,7 @@
     "Partial failures append extra response messages: a '⚠️ Partial issues detected' summary, then a 'Failed pages:' list, then an 'Errors:' list.",
     "JSON artifacts are classified wiki_manifest when the name contains 'wiki_manifest_', else wiki_structure; a nameless JSON body with wiki_version_id + pages is sniffed as a manifest.",
     "Markdown artifacts become wiki_page objects with the md extension.",
-    "repository_context is appended as a repository_context artifact at {wiki_id}/repository_context.txt (or uploaded directly in jobs mode, where Pylon would strip the directory prefix).",
+    "repository_context is appended as a repository_context artifact at {wiki_id}/repository_context.txt (or uploaded directly in jobs mode, where the legacy runtime would strip the directory prefix).",
     "Artifacts flagged _uploaded_directly are skipped so the worker's own upload is not duplicated.",
     "Every artifact object carries result_bucket 'wiki-artifacts' — the descriptor advertises bucket 'wiki'. The two disagree and the invoke-time value wins."
   ]

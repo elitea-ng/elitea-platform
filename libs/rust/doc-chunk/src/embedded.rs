@@ -261,7 +261,7 @@ mod tests {
     fn pictures_are_written_in_offset_order_and_equal_offsets_keep_the_given_order() {
         // "aé" is 3 bytes: offset 2 is inside the é and moves to 3.
         assert_eq!(written_order("aé!", &[3, 0, 2, 99, 1]), vec![1, 4, 0, 2, 3]);
-        assert!(written_order("", &[]).is_empty());
+        assert_eq!(written_order("", &[]), [] as [usize; 0]);
     }
 
     #[test]

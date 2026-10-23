@@ -10,7 +10,6 @@ package indexing_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
@@ -199,12 +199,7 @@ func newRegistryFixture(t *testing.T, toolkits registryToolkits) *registryFixtur
 	f.service = service
 	cfg := apimw.AuthConfig{
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil }),
-		ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(r *http.Request) error {
-			if r.RemoteAddr != "10.0.0.8:43120" {
-				return errors.New("untrusted peer")
-			}
-			return nil
-		}),
+		FormSessions:       authtest.FormSessions{},
 	}
 	all := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return authAll(), nil
@@ -248,8 +243,7 @@ func authAll() auth.PermissionResolution {
 
 func (f *registryFixture) do(method, path, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "10.0.0.8:43120"
 	response := httptest.NewRecorder()
@@ -461,8 +455,8 @@ func TestRegistryIndexListOfAMissingToolkitAnswersLikeThePythonPath(t *testing.T
 }
 
 func TestRegistryIndexListNeverFailsForWantOfAPgvectorConfiguration(t *testing.T) {
-	// The python path answers 400 "PGVector configuration is missing" for a
-	// toolkit without one. A rust deployment's toolkits need none.
+	// The retired python path answered 400 "PGVector configuration is missing"
+	// for a toolkit without one. The registry's toolkits need none.
 	f := newRegistryFixture(t, registryToolkits{})
 	f.store.add(t, 7, 9, "docs", 1, true)
 	if response := f.do(http.MethodGet, listPath, ""); response.Code != http.StatusOK {

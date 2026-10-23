@@ -70,7 +70,7 @@ const (
 
 /* ── harness ───────────────────────────────────────────────────────────── */
 
-// allProjectSecretPermissions is the full set pylon's ProjectAPI declares —
+// allProjectSecretPermissions is the full set the legacy ProjectAPI declares —
 // what a `default`-mode admin/editor holds on the reference deployment.
 func allProjectSecretPermissions() []string {
 	return []string{
@@ -106,8 +106,8 @@ func withoutPermission(excluded string) permissionResolverFunc {
 
 /* ── the route table ───────────────────────────────────────────────────── */
 
-// projectRoute is one route of the seven, paired with the permission pylon
-// declares for it and a request that exercises it against `projectID`.
+// projectRoute is one route of the seven, paired with the permission the legacy
+// runtime declares for it and a request that exercises it against `projectID`.
 type projectRoute struct {
 	name       string
 	permission string
@@ -142,9 +142,9 @@ func projectRoutes() []projectRoute {
 			path:       func(id string) string { return "/secrets/secret/default/" + id + "/" + residentName },
 		},
 		{
-			// The mode-LESS variant elitea-sdk calls. In pylon this IS the
-			// mode-ful GET (with_modes + proxy_method's mode='default'
-			// default), so it carries the same permission.
+			// The mode-LESS variant elitea-sdk calls. In the legacy runtime
+			// this IS the mode-ful GET (with_modes + proxy_method's
+			// mode='default' default), so it carries the same permission.
 			name:       "get (plaintext, mode-less — the elitea-sdk route)",
 			permission: permSecretUnsecret,
 			method:     http.MethodGet,

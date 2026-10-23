@@ -6,10 +6,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 func TestCompleteReturnsTheFirstNonEmptyChoiceContent(t *testing.T) {
@@ -21,7 +22,7 @@ func TestCompleteReturnsTheFirstNonEmptyChoiceContent(t *testing.T) {
 		user    string
 		body    map[string]any
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured.path = r.URL.Path
 		captured.project = r.Header.Get("X-Elitea-Project-Id")
 		captured.user = r.Header.Get("X-Elitea-User-Id")
@@ -33,9 +34,8 @@ func TestCompleteReturnsTheFirstNonEmptyChoiceContent(t *testing.T) {
 		// successful empty answer.
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""}},{"message":{"content":"generated"}}]}`))
 	}))
-	defer server.Close()
 
-	completer := NewGatewayCompleter(server.URL, nil, "shared-secret")
+	completer := NewGatewayCompleter(gatewaytest.Client(t, server, "shared-secret"))
 	temperature := 0.25
 	maxTokens := 512
 	content, err := completer.Complete(context.Background(), CompletionRequest{
@@ -76,15 +76,14 @@ func TestCompleteSendsAnExplicitZeroTemperature(t *testing.T) {
 	t.Parallel()
 
 	var body map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &body)
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 	}))
-	defer server.Close()
 
 	zero := 0.0
-	if _, err := NewGatewayCompleter(server.URL, nil, "s").Complete(context.Background(), CompletionRequest{
+	if _, err := NewGatewayCompleter(gatewaytest.Client(t, server, "s")).Complete(context.Background(), CompletionRequest{
 		ProjectID:   "1",
 		Temperature: &zero,
 		Messages:    []Message{{Role: "user", Content: "hi"}},
@@ -103,13 +102,12 @@ func TestCompleteSendsAnExplicitZeroTemperature(t *testing.T) {
 func TestCompleteReportsANonOKGatewayStatusAsAnError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"error":{"message":"provider quota exceeded for key sk-live-abcdef"}}`))
 	}))
-	defer server.Close()
 
-	content, err := NewGatewayCompleter(server.URL, nil, "s").Complete(context.Background(), CompletionRequest{
+	content, err := NewGatewayCompleter(gatewaytest.Client(t, server, "s")).Complete(context.Background(), CompletionRequest{
 		ProjectID: "1", Messages: []Message{{Role: "user", Content: "hi"}},
 	})
 	if err == nil {
@@ -128,12 +126,11 @@ func TestCompleteReportsANonOKGatewayStatusAsAnError(t *testing.T) {
 func TestCompleteReportsAMalformedGatewayBodyAsAnError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"choices": [ this is not json`))
 	}))
-	defer server.Close()
 
-	if _, err := NewGatewayCompleter(server.URL, nil, "s").Complete(context.Background(), CompletionRequest{
+	if _, err := NewGatewayCompleter(gatewaytest.Client(t, server, "s")).Complete(context.Background(), CompletionRequest{
 		ProjectID: "1", Messages: []Message{{Role: "user", Content: "hi"}},
 	}); err == nil {
 		t.Fatal("Complete accepted a malformed gateway body")
@@ -145,12 +142,11 @@ func TestCompleteReportsAMalformedGatewayBodyAsAnError(t *testing.T) {
 func TestCompleteRefusesAnEmptyCompletion(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[]}`))
 	}))
-	defer server.Close()
 
-	_, err := NewGatewayCompleter(server.URL, nil, "s").Complete(context.Background(), CompletionRequest{
+	_, err := NewGatewayCompleter(gatewaytest.Client(t, server, "s")).Complete(context.Background(), CompletionRequest{
 		ProjectID: "1", Messages: []Message{{Role: "user", Content: "hi"}},
 	})
 	if !errors.Is(err, ErrNoContent) {
@@ -162,19 +158,18 @@ func TestCompleteAbandonsTheCallWhenTheContextDeadlinePasses(t *testing.T) {
 	t.Parallel()
 
 	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		<-release
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"too late"}}]}`))
 	}))
 	defer func() {
 		close(release)
-		server.Close()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	content, err := NewGatewayCompleter(server.URL, nil, "s").Complete(ctx, CompletionRequest{
+	content, err := NewGatewayCompleter(gatewaytest.Client(t, server, "s")).Complete(ctx, CompletionRequest{
 		ProjectID: "1", Messages: []Message{{Role: "user", Content: "hi"}},
 	})
 	if err == nil {
@@ -185,13 +180,10 @@ func TestCompleteAbandonsTheCallWhenTheContextDeadlinePasses(t *testing.T) {
 	}
 }
 
-func TestNewGatewayCompleterFromConfigYieldsNothingWithoutAGatewayURL(t *testing.T) {
+func TestNewGatewayCompleterYieldsNothingWithoutAGateway(t *testing.T) {
 	t.Parallel()
 
-	completer, err := NewGatewayCompleterFromConfig("", "", "", "", "secret")
-	if err != nil {
-		t.Fatalf("NewGatewayCompleterFromConfig: %v", err)
-	}
+	completer := NewGatewayCompleter(nil)
 	if completer != nil {
 		t.Error("an empty LLM_GATEWAY_URL produced a completer; callers must see nothing to compose")
 	}

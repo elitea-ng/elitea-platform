@@ -9,6 +9,17 @@
 //! tool answers 409 `confirmation_required`: the person is asked through
 //! the approval channel, and an approved call is sent again, as a new call
 //! with its own key, echoing the `interrupt_id`.
+//!
+//! An MCP server that needs the person's sign-in answers 409
+//! `mcp_authorization_required` (issue 1231): the person is asked through
+//! the same channel (an `mcp_authorization` question: sign in in the
+//! browser, on the web app's page for that toolkit, then Continue or
+//! Cancel; [`MCP_AUTHORIZATION_WAIT`] at most). Continue sends the call
+//! again as a new call; Cancel, the timeout or a second
+//! `mcp_authorization_required` end only that tool call. The desktop never
+//! talks to the MCP server and never holds what the browser signs in with:
+//! of the 409 it keeps the toolkit's name and the server's address (scheme,
+//! host and path), nothing else.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +33,9 @@ use elitea_agent_runtime::host::{
 use serde_json::{Value, json};
 
 use super::api::PlatformApi;
-use super::approvals::REMOTE_PAYLOAD_KEY;
+use super::approvals::{
+    MCP_AUTHORIZATION_PAYLOAD_KEY, REMOTE_PAYLOAD_KEY, TIMEOUT_ACTION, WAIT_PAYLOAD_KEY,
+};
 use super::definition::RemoteToolSpec;
 
 /// The toolset's name.
@@ -44,6 +57,9 @@ impl Default for RetryPolicy {
     }
 }
 
+/// How long an MCP sign-in question waits for Continue or Cancel.
+pub const MCP_AUTHORIZATION_WAIT: Duration = Duration::from_secs(10 * 60);
+
 /// What every remote call of one turn shares.
 pub struct RemoteContext {
     pub api: Arc<PlatformApi>,
@@ -53,6 +69,8 @@ pub struct RemoteContext {
     pub version_id: i64,
     pub prompt: Arc<dyn ApprovalChannel>,
     pub retry: RetryPolicy,
+    /// How long an MCP sign-in waits ([`MCP_AUTHORIZATION_WAIT`]).
+    pub authorization_wait: Duration,
 }
 
 pub struct RemoteToolkitTool {
@@ -61,6 +79,10 @@ pub struct RemoteToolkitTool {
     context: Arc<RemoteContext>,
 }
 
+/// The generic tool's description lists at most this many bytes of its
+/// tools' descriptions; past it, only their names.
+const MAX_LISTED_DESCRIPTIONS: usize = 6 * 1024;
+
 impl RemoteToolkitTool {
     #[must_use]
     pub fn new(spec: RemoteToolSpec, context: Arc<RemoteContext>) -> Self {
@@ -68,17 +90,38 @@ impl RemoteToolkitTool {
             || format!("Call any tool of the {} toolkit", spec.toolkit_name),
             |tool| format!("{}: {tool}", spec.toolkit_name),
         );
-        let description = if spec.description.is_empty() {
+        let mut description = if spec.description.is_empty() {
             format!("{what} (runs on the Elitea platform).")
         } else {
             format!("{what} (runs on the Elitea platform). {}", spec.description)
         };
+        if spec.tool_name.is_none() && !spec.tools.is_empty() {
+            description.push_str(&tools_listing(&spec));
+        }
         Self {
             spec,
             description,
             context,
         }
     }
+}
+
+/// "Its tools: `a` — what a does; `b`; …", the names the platform server
+/// listed, so the model can pick one for `tool_name`.
+fn tools_listing(spec: &RemoteToolSpec) -> String {
+    let mut listing = String::from(" Its tools (pass one as `tool_name`):");
+    let mut described = 0;
+    for tool in &spec.tools {
+        listing.push_str("\n- ");
+        listing.push_str(&tool.name);
+        let text = tool.description.trim();
+        if !text.is_empty() && described + text.len() <= MAX_LISTED_DESCRIPTIONS {
+            described += text.len();
+            listing.push_str(": ");
+            listing.push_str(text);
+        }
+    }
+    listing
 }
 
 fn error_result(code: &str, message: &str) -> Value {
@@ -99,10 +142,15 @@ impl Tool for RemoteToolkitTool {
         Some(if self.spec.tool_name.is_some() {
             json!({ "type": "object", "properties": {}, "additionalProperties": true })
         } else {
+            let mut tool_name =
+                json!({ "type": "string", "description": "The toolkit's tool to run." });
+            if !self.spec.tools.is_empty() {
+                tool_name["enum"] = self.spec.tools.iter().map(|t| t.name.clone()).collect();
+            }
             json!({
                 "type": "object",
                 "properties": {
-                    "tool_name": { "type": "string", "description": "The toolkit's tool to run." },
+                    "tool_name": tool_name,
                     "arguments": { "type": "object", "description": "That tool's arguments." }
                 },
                 "required": ["tool_name"]
@@ -148,6 +196,8 @@ pub async fn call(
 ) -> Value {
     let mut key = uuid::Uuid::new_v4().to_string();
     let mut confirmation: Option<Value> = None;
+    let mut authorization_reference: Option<String> = None;
+    let mut authorized = false;
     let mut attempts = 0;
     loop {
         let mut body = json!({
@@ -160,6 +210,9 @@ pub async fn call(
         });
         if let Some(confirmation) = &confirmation {
             body["confirmation"] = confirmation.clone();
+        }
+        if let Some(reference) = &authorization_reference {
+            body["mcp_authorization_reference"] = json!(reference);
         }
         attempts += 1;
         let answer = context
@@ -210,6 +263,13 @@ pub async fn call(
                     result["truncated"] = json!(true);
                 }
                 if !ok {
+                    // A tool that raised says why in `error` (the answer has
+                    // no `message`).
+                    let message = if message.is_empty() {
+                        code.clone()
+                    } else {
+                        message
+                    };
                     result["code"] = json!("tool_error");
                     result["message"] = json!(message);
                 }
@@ -228,8 +288,18 @@ pub async fn call(
                 else {
                     return error_result("invalid_response", "the confirmation request had no id");
                 };
-                if !confirmed(context, spec, call_id, tool_name, &interrupt, &message).await {
-                    return error_result("rejected", "the person rejected this call");
+                if let Err(feedback) =
+                    confirmed(context, spec, call_id, tool_name, &interrupt, &message).await
+                {
+                    // #1225: the person's denial is a typed failure, with
+                    // their feedback when they wrote one.
+                    let mut result = error_result("rejected", "the person rejected this call");
+                    if let Value::Object(fields) = &mut result {
+                        fields.extend(elitea_local_tools::session::declined_details(
+                            feedback.as_deref(),
+                        ));
+                    }
+                    return result;
                 }
                 confirmation = Some(json!({
                     "approved": true,
@@ -240,10 +310,39 @@ pub async fn call(
                 key = uuid::Uuid::new_v4().to_string();
                 attempts = 0;
             }
+            (409, "mcp_authorization_required") if !authorized => {
+                match authorize(context, spec, call_id, tool_name, &answer.body).await {
+                    Authorization::Continue => {}
+                    Authorization::Cancelled => {
+                        return error_result(
+                            "authorization_cancelled",
+                            "the person did not sign in to this tool's MCP server, so the tool did not run",
+                        );
+                    }
+                    Authorization::TimedOut => {
+                        return error_result(
+                            "authorization_timeout",
+                            "nobody signed in to this tool's MCP server within 10 minutes, so the tool did not run",
+                        );
+                    }
+                }
+                authorized = true;
+                authorization_reference = answer
+                    .body
+                    .pointer("/authorization_retry/mcp_authorization_reference")
+                    .and_then(Value::as_str)
+                    .filter(|reference| valid_authorization_reference(reference))
+                    .map(str::to_owned);
+                // The signed-in call is a new request: its own key, its own
+                // retries, and a sensitive tool is confirmed again.
+                confirmation = None;
+                key = uuid::Uuid::new_v4().to_string();
+                attempts = 0;
+            }
             (409, "mcp_authorization_required") => {
                 return error_result(
                     "authorization_required",
-                    "this tool needs your authorisation; authorise it in the web app, then try again",
+                    "this tool's MCP server still needs your sign-in; sign in in the Elitea web app, then try again",
                 );
             }
             _ => {
@@ -263,6 +362,8 @@ pub async fn call(
     }
 }
 
+/// Ask the person to confirm a sensitive remote call. `Err` is a denial,
+/// with the person's feedback when they wrote one (#1225).
 async fn confirmed(
     context: &RemoteContext,
     spec: &RemoteToolSpec,
@@ -270,7 +371,7 @@ async fn confirmed(
     tool_name: &str,
     interrupt: &Value,
     message: &str,
-) -> bool {
+) -> Result<(), Option<String>> {
     let text = |key: &str| {
         interrupt
             .get(key)
@@ -299,10 +400,151 @@ async fn confirmed(
             "reason": reason,
         }}),
     };
-    matches!(
-        context.prompt.request(request).await,
-        Ok(ApprovalOutcome::Decided { action, .. }) if action == "approve"
-    )
+    match context.prompt.request(request).await {
+        Ok(ApprovalOutcome::Decided { action, .. }) if action == "approve" => Ok(()),
+        Ok(ApprovalOutcome::Decided { value, .. }) => {
+            Err(elitea_local_tools::session::feedback_of(&value))
+        }
+        _ => Err(None),
+    }
+}
+
+enum Authorization {
+    Continue,
+    Cancelled,
+    TimedOut,
+}
+
+/// Ask the person to sign in to the MCP server behind `spec`, and wait.
+async fn authorize(
+    context: &RemoteContext,
+    spec: &RemoteToolSpec,
+    call_id: &str,
+    tool_name: &str,
+    answer: &Value,
+) -> Authorization {
+    // Allowlisted: the 409 may carry the server's OAuth metadata and its
+    // WWW-Authenticate challenge; neither goes further than this function.
+    let required = answer.get("authorization_required");
+    let text = |key: &str| {
+        required
+            .and_then(|r| r.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    };
+    let toolkit = if spec.toolkit_name.is_empty() {
+        cut(text("toolkit_name"), 256)
+    } else {
+        spec.toolkit_name.clone()
+    };
+    let server_url = display_url(text("server_url")).unwrap_or_default();
+    let title = format!("{toolkit} needs your sign-in");
+    let mut question = json!({
+        "tool": tool_name,
+        "toolkit": toolkit,
+        "title": title,
+        "detail": if server_url.is_empty() { toolkit.clone() } else { server_url.clone() },
+        "server_url": server_url,
+    });
+    if let Some(path) = authorize_path(context.project_id, spec, required) {
+        question["authorize_path"] = json!(path);
+    }
+    let wait = context.authorization_wait;
+    let request = ApprovalRequest {
+        subject: call_id.to_owned(),
+        message: title,
+        available_actions: vec!["continue".to_owned(), "cancel".to_owned()],
+        // The channel closes the question at the wait (the card goes and
+        // the exchange records the timeout); the timeout below only bounds
+        // a channel that does not.
+        payload: json!({
+            MCP_AUTHORIZATION_PAYLOAD_KEY: question,
+            WAIT_PAYLOAD_KEY: u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+        }),
+    };
+    let backstop = wait.saturating_add(wait.min(Duration::from_secs(1)));
+    match tokio::time::timeout(backstop, context.prompt.request(request)).await {
+        Err(_) => Authorization::TimedOut,
+        Ok(Ok(ApprovalOutcome::Decided { action, .. })) if action == "approve" => {
+            Authorization::Continue
+        }
+        Ok(Ok(ApprovalOutcome::Decided { action, .. })) if action == TIMEOUT_ACTION => {
+            Authorization::TimedOut
+        }
+        Ok(_) => Authorization::Cancelled,
+    }
+}
+
+/// The web app's page that signs in to the toolkit: the MCP toolkit's page
+/// for an MCP toolkit, else the toolkit's. The numbers come from the
+/// definition, never from the 409. Whether it is an MCP toolkit is the
+/// platform's word: the 409's `authorization_required.toolkit_type` (the
+/// saved toolkit's type, which the platform checks against the run it
+/// admitted) when it names this toolkit, else the definition's `type`; an
+/// MCP type is `mcp` or `mcp_*`, the web app's own rule. A platform server
+/// (toolkit id 0) has no page.
+fn authorize_path(
+    project_id: i64,
+    spec: &RemoteToolSpec,
+    required: Option<&Value>,
+) -> Option<String> {
+    if spec.toolkit_id <= 0 || project_id <= 0 {
+        return None;
+    }
+    let same_toolkit = |r: &&Value| match r.get("toolkit_id") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(id)) => id.parse::<i64>().ok() == Some(spec.toolkit_id),
+        Some(id) => id.as_i64() == Some(spec.toolkit_id),
+    };
+    let toolkit_type = required
+        .filter(same_toolkit)
+        .and_then(|r| r.get("toolkit_type"))
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(&spec.toolkit_type);
+    let section = if toolkit_type == "mcp" || toolkit_type.starts_with("mcp_") {
+        "mcps"
+    } else {
+        "toolkits"
+    };
+    Some(format!(
+        "/app/{project_id}/{section}/all/{}",
+        spec.toolkit_id
+    ))
+}
+
+/// The server's address to show: http(s) only, without credentials, query
+/// or fragment.
+fn display_url(raw: &str) -> Option<String> {
+    let mut url = url::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.set_username("").ok()?;
+    url.set_password(None).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(cut(url.as_str(), 2048))
+}
+
+/// An MCP authorisation reference (`toolkitcalltool.validMCPReference`):
+/// 43 characters of `[A-Za-z0-9_-]`.
+fn valid_authorization_reference(value: &str) -> bool {
+    value.len() == 43
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn cut(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
 }
 
 /// The host's remote tools for one turn.

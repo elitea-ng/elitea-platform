@@ -1,7 +1,6 @@
 package runtimegrpc
 
 import (
-	"net/http"
 	"testing"
 	"time"
 
@@ -22,15 +21,13 @@ func TestWorkspaceStoreIsRegisteredOnTheControlListenerOnly(t *testing.T) {
 		ControlMaxRequestBytes: 64 * 1024, ControlMaxResponseBytes: 80 * 1024,
 		OutputMaxRequestBytes: 64 * 1024, OutputMaxResponseBytes: 80 * 1024,
 		ControlGRPC: testGRPCServerPolicy(), OutputGRPC: testGRPCServerPolicy(),
-		ContentMaxConnections: 16, ContentMaxStreams: 8,
-		ContentReadTimeout: 5 * time.Second, ContentWriteTimeout: 30 * time.Second,
-		ContentIdleTimeout: 30 * time.Second, ContentMaxHeaderBytes: 8 * 1024,
+		ContentGRPC:     testGRPCServerPolicy(),
 		ShutdownTimeout: 10 * time.Second,
 	}
 	services := PrivateServices{
 		Control:   runtimev1.UnimplementedRuntimeControlServiceServer{},
 		Output:    runtimev1.UnimplementedExecutionOutputServiceServer{},
-		Content:   http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		Content:   testContentServices(),
 		Workspace: runtimev1.UnimplementedWorkspaceStoreServiceServer{},
 	}
 	const name = "elitea.runtime.v1.WorkspaceStoreService"
@@ -61,15 +58,13 @@ func TestEgressAuditIsRegisteredOnTheControlListenerOnlyWhenComposed(t *testing.
 		ControlMaxRequestBytes: 64 * 1024, ControlMaxResponseBytes: 80 * 1024,
 		OutputMaxRequestBytes: 64 * 1024, OutputMaxResponseBytes: 80 * 1024,
 		ControlGRPC: testGRPCServerPolicy(), OutputGRPC: testGRPCServerPolicy(),
-		ContentMaxConnections: 16, ContentMaxStreams: 8,
-		ContentReadTimeout: 5 * time.Second, ContentWriteTimeout: 30 * time.Second,
-		ContentIdleTimeout: 30 * time.Second, ContentMaxHeaderBytes: 8 * 1024,
+		ContentGRPC:     testGRPCServerPolicy(),
 		ShutdownTimeout: 10 * time.Second,
 	}
 	services := PrivateServices{
 		Control: runtimev1.UnimplementedRuntimeControlServiceServer{},
 		Output:  runtimev1.UnimplementedExecutionOutputServiceServer{},
-		Content: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		Content: testContentServices(),
 	}
 	const name = "elitea.runtime.v1.EgressAuditService"
 	without, err := NewPrivateServerSet(config, services)

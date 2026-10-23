@@ -36,12 +36,14 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -242,7 +244,6 @@ func config() inventory.SourcesConfig {
 		GitEgress: material.ParseGitEgress(
 			"github.com, *.github.com", inventory.GitAllowlistEnv),
 		SourceTypes:      inventory.DefaultSourceTypes,
-		CallbackBaseURL:  "https://elitea.example",
 		CallbackTokenTTL: time.Hour,
 	}
 }
@@ -538,7 +539,7 @@ func TestTheGrantIsMintedOnlyAfterTheSourceResolves(t *testing.T) {
 		t.Fatalf("no llm_settings block: %v", parametersOf(t, decoded))
 	}
 	if block["api_key"] != "bearer-for-token-a" ||
-		block["api_base"] != "https://elitea.example/llm/v1" ||
+		block["api_base"] != "https://elitea-platform.invalid/llm/v1" ||
 		block["organization"] != "42" {
 		t.Errorf("the callback block is not the minted grant's: %v", block)
 	}
@@ -624,8 +625,7 @@ func TestInvestigateGetsTheCallbackBlockAndNothingElse(t *testing.T) {
 		strings.NewReader(`{"parameters":{"question":"who refunds?","llm_model":"gpt-x",`+
 			`"llm_settings":{"api_key":"sk-attacker"}}}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	built.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -672,8 +672,7 @@ func grantRoute(
 func post(handler http.Handler, path, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
@@ -880,7 +879,7 @@ func provider(t *testing.T, status int) (*[]string, facade.Config) {
 	pool.AddCert(ca)
 
 	var bodies []string
-	server := httptest.NewUnstartedServer(http.HandlerFunc(
+	target := providertest.Start(t, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			var buffer bytes.Buffer
 			_, _ = buffer.ReadFrom(r.Body)
@@ -888,15 +887,12 @@ func provider(t *testing.T, status int) (*[]string, facade.Config) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"invocation_id":"inv-1","status":"Started"}`))
-		}))
-	server.TLS = &tls.Config{
+		}), &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		ClientCAs:    pool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS12,
-	}
-	server.StartTLS()
-	t.Cleanup(server.Close)
+	})
 
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -908,7 +904,7 @@ func provider(t *testing.T, status int) (*[]string, facade.Config) {
 
 	return &bodies, facade.Config{
 		Enabled:        true,
-		BaseURL:        server.URL,
+		Target:         target,
 		ClientCertFile: certFile,
 		ClientKeyFile:  keyFile,
 		CAFile:         caFile,
@@ -939,8 +935,7 @@ func invoke(
 	request := httptest.NewRequest(http.MethodPost,
 		"/api/v2/inventory/tools/42/inventory/"+tool+"/invoke", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	built.ServeHTTP(response, request)
 	return response, bodies
@@ -952,12 +947,6 @@ func (f principalValidatorFunc) ValidatePrincipal(
 	ctx context.Context, user auth.User,
 ) (auth.User, error) {
 	return f(ctx, user)
-}
-
-type forwardedPeerVerifierFunc func(*http.Request) error
-
-func (f forwardedPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return f(request)
 }
 
 type permissionResolverFunc func(context.Context, auth.User, string, string) (auth.PermissionResolution, error)
@@ -972,8 +961,8 @@ func authConfig() apimw.AuthConfig {
 	return apimw.AuthConfig{
 		PrincipalValidator: principalValidatorFunc(
 			func(_ context.Context, user auth.User) (auth.User, error) { return user, nil }),
-		ForwardedIdentityVerifier: forwardedPeerVerifierFunc(
-			func(*http.Request) error { return nil }),
+		FormSessions: authtest.FormSessions{},
+		Validator:    authtest.Tokens{},
 	}
 }
 

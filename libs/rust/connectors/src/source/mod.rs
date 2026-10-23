@@ -510,13 +510,51 @@ impl SourceHttp {
         Ok((response.headers().clone(), bytes))
     }
 
+    /// [`SourceLimits::check_count`] of this source's limits.
+    ///
+    /// # Errors
+    ///
+    /// More than `max_documents` documents.
+    pub fn check_count(&self, count: usize) -> Result<(), Failure> {
+        self.limits.check_count(count)
+    }
+
+    /// [`SourceLimits::check_pages`] of this source's limits.
+    ///
+    /// # Errors
+    ///
+    /// More than `max_pages` pages.
+    pub fn check_pages(&self, pages: usize) -> Result<(), Failure> {
+        self.limits.check_pages(pages)
+    }
+
+    /// [`SourceLimits::check_directories`] of this source's limits.
+    ///
+    /// # Errors
+    ///
+    /// More than `max_directories` directories.
+    pub fn check_directories(&self, directories: usize) -> Result<(), Failure> {
+        self.limits.check_directories(directories)
+    }
+
+    /// [`SourceLimits::check_size`] of this source's limits.
+    ///
+    /// # Errors
+    ///
+    /// `size` is over the document cap.
+    pub fn check_size(&self, size: u64) -> Result<(), Failure> {
+        self.limits.check_size(size)
+    }
+}
+
+impl SourceLimits {
     /// Refuse a listing that passed its document cap.
     ///
     /// # Errors
     ///
     /// More than `max_documents` documents.
     pub fn check_count(&self, count: usize) -> Result<(), Failure> {
-        if count > self.limits.max_documents {
+        if count > self.max_documents {
             return Err(Failure::InvalidResponse(
                 "the source holds more documents than the listing cap",
             ));
@@ -526,13 +564,13 @@ impl SourceHttp {
 
     /// Refuse a listing that passed its page cap (continuation pages of a
     /// listing; directories are counted by
-    /// [`SourceHttp::check_directories`]).
+    /// [`SourceLimits::check_directories`]).
     ///
     /// # Errors
     ///
     /// More than `max_pages` pages.
     pub fn check_pages(&self, pages: usize) -> Result<(), Failure> {
-        if pages > self.limits.max_pages {
+        if pages > self.max_pages {
             return Err(Failure::InvalidResponse(
                 "the listing did not end within the page cap",
             ));
@@ -546,7 +584,7 @@ impl SourceHttp {
     ///
     /// More than `max_directories` directories.
     pub fn check_directories(&self, directories: usize) -> Result<(), Failure> {
-        if directories > self.limits.max_directories {
+        if directories > self.max_directories {
             return Err(Failure::InvalidResponse(
                 "the source holds more directories than the listing cap",
             ));
@@ -560,8 +598,8 @@ impl SourceHttp {
     ///
     /// `size` is over the document cap.
     pub fn check_size(&self, size: u64) -> Result<(), Failure> {
-        if size > self.limits.max_document_bytes {
-            return Err(Failure::TooLarge(self.limits.max_document_bytes));
+        if size > self.max_document_bytes {
+            return Err(Failure::TooLarge(self.max_document_bytes));
         }
         Ok(())
     }
@@ -964,7 +1002,7 @@ mod tests {
             http.send(get("https://evil.example/next")).await.err(),
             Some(Failure::Refused)
         );
-        assert!(transport.seen().is_empty());
+        assert_eq!(transport.seen(), [] as [String; 0]);
         // A network failure is not a refusal, whatever the allowlist says.
         assert_eq!(
             transport_failure(TransportError::connect()),

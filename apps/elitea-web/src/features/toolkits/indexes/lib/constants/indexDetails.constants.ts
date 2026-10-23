@@ -23,6 +23,7 @@
  * this file re-exports nothing for them and callers import directly from
  * there instead (see `indexChat.helpers.ts`).
  */
+import { FRAME_TYPE } from '@elitea/client-core/stream';
 
 export const NEW_INDEX_ID = 'new_index';
 
@@ -68,22 +69,22 @@ export const IndexHistoryItemsLabels: Readonly<Record<string, string>> = {
 export const IndexCronDefault = '0 0 * * 6';
 
 /**
- * `common/constants.js:157-192`'s `SocketMessageType`, trimmed to the
- * members `indexChat.helpers.ts`'s `generateChatMessageBasedOnResponse`
- * switch statement actually reads.
+ * `common/constants.js:157-192`'s `SocketMessageType` (`@elitea/client-core`'s
+ * `FRAME_TYPE`), trimmed to the members `indexChat.helpers.ts`'s
+ * `generateChatMessageBasedOnResponse` switch statement actually reads.
  */
 export const SocketMessageType = {
-  AgentToolStart: 'agent_tool_start',
-  AgentToolEnd: 'agent_tool_end',
-  AgentToolError: 'agent_tool_error',
-  AgentException: 'agent_exception',
-  Chunk: 'chunk',
-  AIMessageChunk: 'AIMessageChunk',
-  StartTask: 'start_task',
-  Error: 'error',
-  AgentThinkingStep: 'agent_thinking_step',
-  AgentThinkingStepUpdate: 'agent_thinking_step_update',
-  AgentResponse: 'agent_response',
+  AgentToolStart: FRAME_TYPE.AgentToolStart,
+  AgentToolEnd: FRAME_TYPE.AgentToolEnd,
+  AgentToolError: FRAME_TYPE.AgentToolError,
+  AgentException: FRAME_TYPE.AgentException,
+  Chunk: FRAME_TYPE.Chunk,
+  AIMessageChunk: FRAME_TYPE.AIMessageChunk,
+  StartTask: FRAME_TYPE.StartTask,
+  Error: FRAME_TYPE.Error,
+  AgentThinkingStep: FRAME_TYPE.AgentThinkingStep,
+  AgentThinkingStepUpdate: FRAME_TYPE.AgentThinkingStepUpdate,
+  AgentResponse: FRAME_TYPE.AgentResponse,
 } as const;
 
 /** `common/constants.js:604-606`'s `PERMISSIONS.index`, the only branch this sub-unit reads. */

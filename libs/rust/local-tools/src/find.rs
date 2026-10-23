@@ -164,7 +164,7 @@ mod tests {
         let all = paths(&all);
         assert!(!all.iter().any(|p| p.contains("key.pem")), "{all:?}");
         assert!(!all.contains(&".env"), "{all:?}");
-        assert!(find_paths(&workspace, "pem", 10).unwrap().is_empty());
+        assert_eq!(find_paths(&workspace, "pem", 10).unwrap(), []);
     }
 
     #[test]

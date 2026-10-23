@@ -1,36 +1,23 @@
 package llmproxy
 
 import (
-	"crypto/tls"
-	"crypto/x509"
-	"fmt"
+	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
-// Config configures the edge → gateway streaming reverse proxy.
+// Config configures the browser-facing /llm proxy.
 type Config struct {
-	// TargetURL is the base URL of elitea-llm-gateway-svc (mTLS-only ClusterIP),
-	// e.g. "https://elitea-llm-gateway-svc:8443". Required.
-	TargetURL string
-	// Transport is the round-tripper used to reach the gateway. When nil,
-	// NewMTLSTransport builds one from the TLS* fields.
-	Transport http.RoundTripper
-	// IdentitySecret is the HMAC key used to sign forwarded identity headers.
-	// Optional: an empty secret disables signing (the mTLS transport still
-	// authenticates the hop).
-	IdentitySecret string
-
-	// mTLS material, used only when Transport is nil.
-	ClientCertFile string // PEM client certificate presented to the gateway
-	ClientKeyFile  string // PEM client private key
-	CAFile         string // PEM CA bundle used to verify the gateway certificate
-	ServerName     string // expected gateway certificate SAN (defaults to TargetURL host)
+	// Gateway is the elitea-llm-gateway client (NewGatewayClient). Required.
+	Gateway Gateway
 
 	// Logger receives proxy error events. Defaults to slog.Default().
 	Logger *slog.Logger
@@ -42,140 +29,168 @@ type Config struct {
 	ExecutionVerifier ExecutionVerifier
 }
 
-// Proxy is elitea-main's whole gateway role: a streaming reverse proxy to
-// elitea-llm-gateway-svc. It byte-streams /llm requests and responses without
-// reframing the dialect or buffering the SSE stream (design §2, §6.3).
+// Proxy is elitea-main's /llm surface: it resolves who the request is for and
+// hands it to the Gateway. The browser sees the gateway's answer unchanged —
+// status, headers and body bytes, SSE framing included — and the realtime
+// WebSocket ends here and continues as a Realtime session (proxy_realtime.go).
 type Proxy struct {
-	rp     *httputil.ReverseProxy
-	logger *slog.Logger
+	gateway  Gateway
+	logger   *slog.Logger
+	verifier ExecutionVerifier
 	// audio caps the /llm/v1/audio requests one principal has in flight
 	// (audio_limits.go).
 	audio *audioInFlight
+	// streamKeepalive overrides ssewriter.KeepaliveInterval in tests. Zero
+	// means the default.
+	streamKeepalive time.Duration
 }
 
-// New builds a streaming reverse proxy from cfg. It returns an error if the
-// target URL is invalid or the mTLS transport cannot be constructed.
+// New builds the proxy.
 func New(cfg Config) (*Proxy, error) {
-	// NOT RequireTLS: the gateway is reachable over plain HTTP in a development
-	// stack, and refusing that would break a supported configuration. The
-	// DeepWiki hop does require it, because its peer refuses non-mTLS traffic.
-	// The difference is a property of the two peers, not an inconsistency.
-	target, err := hop.ParseTarget(cfg.TargetURL, hop.TargetOptions{
-		EnvName: "LLM_GATEWAY_URL",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llmproxy: %w", err)
+	if cfg.Gateway == nil {
+		return nil, errors.New("llmproxy: a Gateway is required")
 	}
-
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-
-	transport := cfg.Transport
-	if transport == nil {
-		serverName := cfg.ServerName
-		if serverName == "" {
-			serverName = target.Hostname()
-		}
-		transport, err = NewMTLSTransport(cfg.ClientCertFile, cfg.ClientKeyFile, cfg.CAFile, serverName)
-		if err != nil {
-			return nil, fmt.Errorf("llmproxy: build mTLS transport: %w", err)
-		}
-	}
-
-	secret := []byte(cfg.IdentitySecret)
-	verifier := cfg.ExecutionVerifier
-
-	rp := &httputil.ReverseProxy{
-		// FlushInterval < 0 flushes to the client immediately after every proxy
-		// write, so the SSE stream the gateway already flushed is not re-buffered
-		// on this second hop (design §6.3, §9.5).
-		FlushInterval: -1,
-		Transport:     transport,
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
-			// SetURL preserves the inbound path; keep the caller's Host off the
-			// outbound request so the gateway sees its own service host.
-			pr.Out.Host = target.Host
-			// Strip client-spoofed identity headers and inject the edge-resolved,
-			// signed identity (X-Elitea-Project-Id / X-Elitea-User-Id /
-			// X-Elitea-Tenant-Id + X-Elitea-Identity-Signature). The gateway
-			// trusts these only on the mTLS-internal network (design §2, §6.1).
-			injectIdentity(pr.In.Context(), pr.Out.Header, secret, verifier)
-		},
-		ModifyResponse: func(resp *http.Response) error {
-			// Ensure no downstream proxy (Traefik/nginx) buffers the stream; the
-			// gateway sets this too, but re-assert it end-to-end (design §6.3).
-			resp.Header.Set("X-Accel-Buffering", "no")
-			return nil
-		},
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			// An audio request the edge stopped (body ceiling, deadline) gets
-			// its own named refusal, not "gateway unavailable".
-			if writeAudioRefusal(w, r, err) {
-				logger.Warn("llmproxy: audio request stopped at the edge", "err", err, "path", r.URL.Path)
-				return
-			}
-			logger.Error("llmproxy: upstream error", "err", err, "path", r.URL.Path)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(`{"error":{"message":"llm gateway unavailable","type":"service_unavailable","code":"upstream_unavailable"}}`))
-		},
-	}
-
-	return &Proxy{rp: rp, logger: logger, audio: newAudioInFlight(maxAudioInFlightPerPrincipal)}, nil
+	return &Proxy{
+		gateway:  cfg.Gateway,
+		logger:   logger,
+		verifier: cfg.ExecutionVerifier,
+		audio:    newAudioInFlight(maxAudioInFlightPerPrincipal),
+	}, nil
 }
 
-// ServeHTTP proxies the request to the gateway. It clears the per-connection
-// write deadline before streaming so the http.Server's global WriteTimeout does
-// not hard-kill a long-lived SSE response on the /llm path (design §9.5). This
-// is the edge-side equivalent of the gateway's WriteTimeout: 0.
+// ServeHTTP serves one /llm request. It clears the per-connection write
+// deadline before streaming so the http.Server's global WriteTimeout does not
+// hard-kill a long-lived SSE response on the /llm path (design §9.5).
 //
 // The /llm/v1/audio routes are not streams. They get a body ceiling and a
 // deadline here (audio_limits.go) before the request leaves the edge.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rpc := routeOf(r.Method, r.URL.Path)
+	if rpc == rpcNone {
+		w.Header().Set("X-Accel-Buffering", "no")
+		writeGatewayRouteMiss(w, r)
+		return
+	}
 	r, release, ok := limitAudioRequest(w, r, p.audio)
 	if !ok {
 		return
 	}
 	defer release()
 	hop.ClearWriteDeadline(w, p.logger)
-	p.rp.ServeHTTP(w, r)
+
+	req := &Request{
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		RawQuery: r.URL.RawQuery,
+		Header:   r.Header,
+		Body:     r.Body,
+		Identity: p.identity(r),
+	}
+	if rpc == rpcRealtime {
+		p.serveRealtime(w, r, req)
+		return
+	}
+	resp, err := rpc.call(p.gateway)(r.Context(), req)
+	if err != nil {
+		p.writeHopError(w, r, err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	p.writeResponse(w, r, resp)
 }
 
-// NewMTLSTransport builds an HTTP/1.1 transport that presents the given client
-// certificate and verifies the gateway against caFile. HTTP/2 is disabled
-// (ForceAttemptHTTP2=false, empty NextProtos) so the streaming reverse proxy
-// runs over HTTP/1.1 as the design mandates (design §9.1).
-func NewMTLSTransport(certFile, keyFile, caFile, serverName string) (*http.Transport, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load client cert: %w", err)
-	}
+// identity resolves who r is for: the edge-resolved project, user and tenant,
+// and the inbound execution id when the verifier admits it
+// (executionIDFromHeader, verifiedExecutionID).
+func (p *Proxy) identity(r *http.Request) Identity {
+	id := resolveIdentity(r.Context(), r.Header, p.verifier)
+	return Identity{ProjectID: id.projectID, UserID: id.userID, TenantID: id.tenantID, ExecutionID: id.executionID}
+}
 
-	caPEM, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("read ca bundle: %w", err)
+// writeResponse copies the gateway's answer to the browser. Every body write
+// is flushed at once, so an SSE stream is not re-buffered on this hop
+// (design §6.3).
+func (p *Proxy) writeResponse(w http.ResponseWriter, r *http.Request, resp *Response) {
+	copyResponseHeader(w.Header(), resp.Header)
+	if resp.ContentLength >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("no certificates parsed from ca bundle %q", caFile)
+	// No downstream proxy (nginx) may buffer the stream; the gateway sets
+	// this too, and the edge re-asserts it (design §6.3).
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(resp.StatusCode)
+	// An event stream can go quiet for minutes while a model reasons before
+	// its first token, and a proxy in front of elitea-main (a Cloudflare-style
+	// proxy idles out at 100 seconds) then drops a call that is still alive.
+	// ssewriter.Keepalive writes an SSE comment into an idle stream, only
+	// between events, which every OpenAI-compatible client ignores. Any other
+	// body is copied as it was, and so is an event stream whose length the
+	// gateway declared: a comment would overrun that Content-Length.
+	var out io.Writer = w
+	flush := http.NewResponseController(w).Flush
+	if isEventStream(resp.Header.Get("Content-Type")) && resp.ContentLength < 0 {
+		keepalive := ssewriter.StartKeepalive(w, p.streamKeepalive)
+		defer keepalive.Stop()
+		out = keepalive
+		flush = func() error { return nil } // Keepalive.Write flushes
 	}
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				return
+			}
+			_ = flush()
+		}
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			p.logger.Error("llmproxy: the gateway stream broke", "err", err, "path", r.URL.Path)
+			// As httputil.ReverseProxy does: the head is sent, so the only
+			// honest signal left is to abort the response, not end it cleanly.
+			panic(http.ErrAbortHandler)
+		}
+	}
+}
 
-	return &http.Transport{
-		TLSClientConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			RootCAs:      pool,
-			ServerName:   serverName,
-			MinVersion:   tls.VersionTLS12,
-			NextProtos:   []string{"http/1.1"},
-		},
-		ForceAttemptHTTP2:   false,
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:     90 * time.Second,
-		// No ResponseHeaderTimeout / WriteTimeout: SSE responses are long-lived.
-		TLSHandshakeTimeout: 10 * time.Second,
-	}, nil
+// isEventStream reports whether a Content-Type names an SSE body.
+func isEventStream(contentType string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/event-stream")
+}
+
+// writeHopError answers a request whose gateway call failed.
+func (p *Proxy) writeHopError(w http.ResponseWriter, r *http.Request, err error) {
+	// An audio request the edge stopped (body ceiling, deadline) gets its own
+	// named refusal, not "gateway unavailable".
+	if writeAudioRefusal(w, r, err) {
+		p.logger.Warn("llmproxy: audio request stopped at the edge", "err", err, "path", r.URL.Path)
+		return
+	}
+	if errors.Is(r.Context().Err(), context.Canceled) {
+		return
+	}
+	p.logger.Error("llmproxy: upstream error", "err", err, "path", r.URL.Path)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	_, _ = w.Write([]byte(`{"error":{"message":"llm gateway unavailable","type":"service_unavailable","code":"upstream_unavailable"}}`))
+}
+
+// copyResponseHeader copies the end-to-end headers of src to dst.
+func copyResponseHeader(dst, src http.Header) {
+	for name, values := range src {
+		dst[name] = append([]string(nil), values...)
+	}
+	for _, name := range hopByHopHeaders {
+		dst.Del(name)
+	}
+	dst.Del("Content-Length")
 }

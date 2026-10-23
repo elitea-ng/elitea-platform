@@ -12,6 +12,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // The caller's personal project and the team project are deliberately
@@ -58,7 +59,7 @@ func edgeStack(t *testing.T, allow map[int32]bool, gotHeaders *http.Header) http
 func edgeStackWith(t *testing.T, queries middleware.ProjectMemberQuerier, gotHeaders *http.Header) http.Handler {
 	t.Helper()
 
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*gotHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"ok":true}`)
@@ -70,7 +71,7 @@ func edgeStackWith(t *testing.T, queries middleware.ProjectMemberQuerier, gotHea
 		PublicProjectID: 1,
 		Membership:      middleware.NewProjectMembershipWith(queries),
 	})
-	return mw(proxyTo(t, backend.URL, "sekret"))
+	return mw(proxyTo(t, backend, "sekret"))
 }
 
 // edgeRequest builds an authenticated /llm request carrying a selector.

@@ -1,14 +1,16 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
 )
 
 type recoveryResultStub struct {
@@ -38,32 +40,36 @@ func TestNodeRecoveryResultTransportRequiresMTLSAndExactBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.WithNodeRecoveryResults(store)
+	scope := contentScope("0123456789abcdef0123456789abcdef", 1)
+	claimed := contentClaimContext(context.Background(), nil, "claim-1", bytes.Repeat([]byte{1}, 32))
+	contentID := strings.Repeat("3", 64)
 	for _, tc := range []struct {
-		name, body, version, query string
-		noTLS                      bool
-		status                     int
-	}{{name: "exact result", status: 200}, {name: "body", body: "{}", status: 400}, {name: "query", query: "credential=x", status: 400}, {name: "no TLS", noTLS: true, status: 403}, {name: "version digest mismatch", version: strings.Repeat("9", 64), status: 409}} {
+		name    string
+		ctx     context.Context
+		content string
+		version string
+		code    codes.Code
+	}{
+		{name: "exact result", ctx: claimed, code: codes.OK},
+		{name: "invalid content id", ctx: claimed, content: "x/y", code: codes.InvalidArgument},
+		{name: "no TLS", ctx: context.Background(), code: codes.PermissionDenied},
+		{name: "version digest mismatch", ctx: claimed, version: strings.Repeat("9", 64), code: codes.Aborted},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := tc.version
+			v, c := tc.version, tc.content
 			if v == "" {
 				v = version
 			}
-			r := validContentRequest(t)
-			r.Method = http.MethodPost
-			r.URL.Path = "/executions/0123456789abcdef0123456789abcdef/generations/1/node-recovery/results/" + strings.Repeat("3", 64) + "/versions/" + v
-			r.URL.RawQuery = tc.query
-			r.Body = io.NopCloser(strings.NewReader(tc.body))
-			r.ContentLength = int64(len(tc.body))
-			if tc.noTLS {
-				r.TLS = nil
+			if c == "" {
+				c = contentID
 			}
-			w := httptest.NewRecorder()
-			s.Routes().ServeHTTP(w, r)
-			if w.Code != tc.status {
-				t.Fatal(w.Code, w.Body.String())
+			response, err := s.ReadNodeRecoveryResult(tc.ctx, &runtimev1.ReadNodeRecoveryResultRequestV1{Scope: scope, ContentId: c, Version: v})
+			if tc.code != codes.OK {
+				requireContentCode(t, err, tc.code)
+				return
 			}
-			if w.Code == 200 && (w.Body.String() != string(data) || w.Header().Get("X-Elitea-Content-SHA256") != version || w.Header().Get("Cache-Control") != "no-store") {
-				t.Fatal(w.Header(), w.Body.String())
+			if err != nil || string(response.GetResultJson()) != string(data) {
+				t.Fatal(err, response)
 			}
 		})
 	}

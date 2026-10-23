@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -96,6 +97,7 @@ export * from "./applicationVersionDetail.zod";
 export * from "./applicationVersionDetailExpanded.zod";
 export * from "./applicationVersionExport.zod";
 export * from "./applicationVersionSummary.zod";
+export * from "./archiveConversationHeaders.zod";
 export * from "./attachPublicSkill200.zod";
 export * from "./attachPublicSkillBody.zod";
 export * from "./attachedSkill.zod";
@@ -180,17 +182,21 @@ export * from "./configurationSharedPage.zod";
 export * from "./continueChatExecutionBody.zod";
 export * from "./continueChatExecutionHeaders.zod";
 export * from "./continueChatExecutionParams.zod";
+export * from "./conversationActivity.zod";
+export * from "./conversationArchivedBy.zod";
 export * from "./conversationAttachmentChunkReceived.zod";
 export * from "./conversationAttachmentUploaded.zod";
 export * from "./conversationCreateRequest.zod";
 export * from "./conversationDetail.zod";
 export * from "./conversationExport.zod";
 export * from "./conversationExportMessage.zod";
+export * from "./conversationForkedFrom.zod";
 export * from "./conversationListing.zod";
 export * from "./conversationMessage.zod";
 export * from "./conversationMessageListing.zod";
 export * from "./conversationParticipant.zod";
 export * from "./conversationParticipantCreate.zod";
+export * from "./conversationReadState.zod";
 export * from "./conversationStarters.zod";
 export * from "./conversationSummary.zod";
 export * from "./createBucketRequest.zod";
@@ -209,6 +215,7 @@ export * from "./deepWikiSlots.zod";
 export * from "./defaultIcon.zod";
 export * from "./deleteApplicationVersionParams.zod";
 export * from "./deleteBucketPermissionRequest.zod";
+export * from "./deleteConversationAttachmentHeaders.zod";
 export * from "./deleteConversationHeaders.zod";
 export * from "./deleteConversationParticipantHeaders.zod";
 export * from "./deleteMemoryHeaders.zod";
@@ -265,6 +272,8 @@ export * from "./feedbackItem.zod";
 export * from "./feedbackListResponse.zod";
 export * from "./forkAgentResult.zod";
 export * from "./forkApplicationInput.zod";
+export * from "./forkConversationHeaders.zod";
+export * from "./forkConversationRequest.zod";
 export * from "./forkRequest.zod";
 export * from "./forkResponse.zod";
 export * from "./forkVersionInput.zod";
@@ -400,6 +409,8 @@ export * from "./localTurnStartRequest.zod";
 export * from "./localTurnStarted.zod";
 export * from "./localTurnWorkReport.zod";
 export * from "./localWorkPolicy.zod";
+export * from "./markConversationReadHeaders.zod";
+export * from "./markConversationReadRequest.zod";
 export * from "./markNotificationSeenHeaders.zod";
 export * from "./markNotificationsSeen200.zod";
 export * from "./markNotificationsSeenHeaders.zod";
@@ -554,6 +565,7 @@ export * from "./resolveApplicationVersionHeaders.zod";
 export * from "./resolvedApplicationTool.zod";
 export * from "./resolvedApplicationVersion.zod";
 export * from "./resolvedApplicationVersionDetails.zod";
+export * from "./resolvedPlatformTool.zod";
 export * from "./resolvedToolkitRef.zod";
 export * from "./revalidateConfiguration200.zod";
 export * from "./revokeNativeDeviceHeaders.zod";
@@ -663,6 +675,7 @@ export * from "./tracingStatusResponse.zod";
 export * from "./tracingTraceBatch.zod";
 export * from "./transferGrantResponse.zod";
 export * from "./trendingAuthor.zod";
+export * from "./unarchiveConversationHeaders.zod";
 export * from "./unpinEntityHeaders.zod";
 export * from "./unpublishRequest.zod";
 export * from "./unpublishResponse.zod";
@@ -670,6 +683,8 @@ export * from "./unpublishSkill200.zod";
 export * from "./unpublishSkillBody.zod";
 export * from "./updateBucketRequest.zod";
 export * from "./updateConversationHeaders.zod";
+export * from "./updateConversationInternalToolsHeaders.zod";
+export * from "./updateConversationInternalToolsRequest.zod";
 export * from "./updateConversationRequest.zod";
 export * from "./updateCurrentAuthorThemeHeaders.zod";
 export * from "./updateSecretBody.zod";

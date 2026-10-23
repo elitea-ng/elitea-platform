@@ -1,6 +1,6 @@
 //! The production `RemoteCodeRuntime::execute_recovery_attempt`, driven end to end
 //! through the real Code node and recovery journal with trusted doubles for the
-//! three peers it talks to: Main's claim-bound content routes (an HTTP fixture),
+//! three peers it talks to: Main's claim-bound content service (a gRPC fixture),
 //! Main's control service and the sandbox supervisor (real tonic servers on
 //! loopback), plus a disposable `PostgreSQL` for the dispatch journal. No mTLS, no
 //! container runtime. These tests exist so that reverting the dispatch proof, the
@@ -22,9 +22,8 @@ use crate::sandbox::{
     platform_client_binding::PlatformClientPolicy,
 };
 use crate::state::postgres_session_tests::IsolatedPostgres;
-use crate::transport::input_content::{InputContentRpc, InputContentTransportError};
+use crate::transport::input_content::content_fake::{ContentFake, claim_of};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use http_body_util::BodyExt as _;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tonic::{Request, Response, Status};
@@ -66,43 +65,90 @@ struct FakeMain {
     calls: Arc<StdMutex<MainCalls>>,
     pool: sqlx::PgPool,
 }
-fn json_response(
-    status: http::StatusCode,
-    value: &serde_json::Value,
-) -> http::Response<tonic::body::Body> {
-    let raw = serde_json::to_vec(value).unwrap();
-    http::Response::builder()
-        .status(status)
-        .version(http::Version::HTTP_2)
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .header(http::header::CONTENT_LENGTH, raw.len())
-        .body(tonic::body::Body::new(http_body_util::Full::new(
-            bytes::Bytes::from(raw),
-        )))
-        .unwrap()
+/// One served answer: the document, or Main's refusal of the claim.
+fn json_response(refused: bool, value: &serde_json::Value) -> Result<Vec<u8>, Status> {
+    if refused {
+        return Err(Status::permission_denied("refused"));
+    }
+    Ok(serde_json::to_vec(value).unwrap())
 }
-#[async_trait]
-impl InputContentRpc for FakeMain {
-    async fn get(
+/// The call's claim, scope and JSON document.
+fn unpack<T>(
+    request: Request<T>,
+    parts: impl FnOnce(T) -> (Option<pb::RuntimeContentScopeV1>, Vec<u8>),
+) -> (String, u64, serde_json::Value) {
+    let (claim, fence) = claim_of(&request);
+    assert_ne!(claim, "");
+    assert_eq!(fence.len(), 32);
+    let (scope, body) = parts(request.into_inner());
+    let scope = scope.unwrap();
+    (
+        scope.execution_id,
+        scope.generation,
+        serde_json::from_slice(&body).unwrap(),
+    )
+}
+#[tonic::async_trait]
+impl ContentFake for FakeMain {
+    async fn register_code_visit(
         &self,
-        request: http::Request<tonic::body::Body>,
-    ) -> Result<http::Response<tonic::body::Body>, InputContentTransportError> {
-        let path = request.uri().path().to_owned();
-        let segments: Vec<_> = path.split('/').collect();
-        let execution = segments[2].to_owned();
-        let generation: u64 = segments[4].parse().unwrap();
-        let body = request.into_body().collect().await.unwrap().to_bytes();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let ok = http::StatusCode::OK;
-        if path.ends_with("/code-sandbox/visits") {
+        request: Request<pb::RegisterCodeVisitRequestV1>,
+    ) -> Result<Response<pb::RegisterCodeVisitResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.visit_json));
+        let visit_json = self.answer("visits", execution, generation, body).await?;
+        Ok(Response::new(pb::RegisterCodeVisitResponseV1 {
+            visit_json,
+        }))
+    }
+    async fn register_code_intent(
+        &self,
+        request: Request<pb::RegisterCodeIntentRequestV1>,
+    ) -> Result<Response<pb::RegisterCodeIntentResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.intent_json));
+        let response_json = self.answer("intents", execution, generation, body).await?;
+        Ok(Response::new(pb::RegisterCodeIntentResponseV1 {
+            response_json,
+        }))
+    }
+    async fn step_code_platform(
+        &self,
+        request: Request<pb::StepCodePlatformRequestV1>,
+    ) -> Result<Response<pb::StepCodePlatformResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.request_json));
+        let response_json = self.answer("step", execution, generation, body).await?;
+        Ok(Response::new(pb::StepCodePlatformResponseV1 {
+            response_json,
+        }))
+    }
+    async fn read_code_platform_effects(
+        &self,
+        request: Request<pb::ReadCodePlatformEffectsRequestV1>,
+    ) -> Result<Response<pb::ReadCodePlatformEffectsResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.request_json));
+        let response_json = self.answer("effects", execution, generation, body).await?;
+        Ok(Response::new(pb::ReadCodePlatformEffectsResponseV1 {
+            response_json,
+        }))
+    }
+}
+impl FakeMain {
+    async fn answer(
+        &self,
+        path: &str,
+        execution: String,
+        generation: u64,
+        body: serde_json::Value,
+    ) -> Result<Vec<u8>, Status> {
+        if path == "visits" {
             if let Some(attempt) = body["attempt"].as_u64() {
                 self.calls.lock().unwrap().visit_attempts.push(attempt);
             }
             if self.script.refuse_visit {
-                return Ok(json_response(
-                    http::StatusCode::FORBIDDEN,
-                    &serde_json::json!({}),
-                ));
+                return json_response(true, &serde_json::json!({}));
             }
             let pre = URL_SAFE_NO_PAD
                 .decode(
@@ -111,8 +157,8 @@ impl InputContentRpc for FakeMain {
                         .unwrap(),
                 )
                 .unwrap();
-            return Ok(json_response(
-                ok,
+            return json_response(
+                false,
                 &serde_json::json!({
                     "schema":"elitea.sandbox.original-code-visit-response.v1",
                     "original_visit":{"visit_id":"1".repeat(64),"revision":1,"digest_sha256":"2".repeat(64)},
@@ -121,9 +167,9 @@ impl InputContentRpc for FakeMain {
                     "node_digest":body["node_digest"],
                     "pre_workspace_prepared_sha256":crate::sandbox::code_recovery::sha256(&pre),
                 }),
-            ));
+            );
         }
-        if path.ends_with("/code-sandbox/intents") {
+        if path == "intents" {
             let pending: Option<bool> = sqlx::query_scalar(
                 "SELECT submission_pending FROM elitea_runtime.sandbox_dispatches LIMIT 1",
             )
@@ -137,8 +183,8 @@ impl InputContentRpc for FakeMain {
                     calls.intent_dispatches.push(dispatch.to_owned());
                 }
             }
-            return Ok(json_response(
-                ok,
+            return json_response(
+                false,
                 &serde_json::json!({
                     "schema":"elitea.sandbox.original-code-intent-response.v1",
                     "intent":{
@@ -148,9 +194,9 @@ impl InputContentRpc for FakeMain {
                         "signature_base64url":URL_SAFE_NO_PAD.encode([0_u8; 64]),
                     },
                 }),
-            ));
+            );
         }
-        if path.ends_with("/code-platform/step") {
+        if path == "step" {
             let first = {
                 let mut calls = self.calls.lock().unwrap();
                 calls.steps += 1;
@@ -159,31 +205,29 @@ impl InputContentRpc for FakeMain {
             if first && let Some(delay) = self.script.first_step_delay {
                 tokio::time::sleep(delay).await;
             }
-            return Ok(json_response(
-                ok,
+            return json_response(
+                false,
                 &serde_json::json!({"schema":"elitea.runtime.code-platform-step-response.v1","revision":1,"disposition":"idle","effect_id":null}),
-            ));
+            );
         }
-        if path.ends_with("/code-platform/effects") {
+        if path == "effects" {
             {
                 let mut calls = self.calls.lock().unwrap();
                 calls.effects += 1;
                 calls.effects_body = Some(body);
             }
             let answer = *self.effects.lock().unwrap();
-            return Ok(match answer {
-                Effects::Refused => {
-                    json_response(http::StatusCode::FORBIDDEN, &serde_json::json!({}))
-                }
+            return match answer {
+                Effects::Refused => json_response(true, &serde_json::json!({})),
                 Effects::None => json_response(
-                    ok,
+                    false,
                     &serde_json::json!({"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none"}),
                 ),
                 Effects::Possible => json_response(
-                    ok,
+                    false,
                     &serde_json::json!({"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"possible"}),
                 ),
-            });
+            };
         }
         panic!("the fixture serves no route {path}");
     }
@@ -387,6 +431,46 @@ impl SandboxSupervisorService for FakeSupervisor {
         &self,
         _: Request<pb::HydrateSandboxWorkspaceRequestV1>,
     ) -> Result<Response<pb::HydrateSandboxWorkspaceResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_owner_recovery_read(
+        &self,
+        _: Request<pb::CodeOwnerRecoveryReadRequestV1>,
+    ) -> Result<Response<pb::CodeOwnerRecoveryReadResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_owner_recovery_seal_no_effect(
+        &self,
+        _: Request<pb::CodeOwnerRecoverySealNoEffectRequestV1>,
+    ) -> Result<Response<pb::CodeOwnerRecoverySealNoEffectResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_platform_owner_read_retained_runtime(
+        &self,
+        _: Request<pb::CodePlatformOwnerReadRetainedRuntimeRequestV1>,
+    ) -> Result<Response<pb::CodePlatformOwnerReadRetainedRuntimeResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_platform_owner_read_pending_call(
+        &self,
+        _: Request<pb::CodePlatformOwnerReadPendingCallRequestV1>,
+    ) -> Result<Response<pb::CodePlatformOwnerReadPendingCallResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_platform_owner_publish_reply(
+        &self,
+        _: Request<pb::CodePlatformOwnerPublishReplyRequestV1>,
+    ) -> Result<Response<pb::CodePlatformOwnerPublishReplyResponseV1>, Status> {
         Err(Status::unimplemented(
             "not part of the Code attempt fixture",
         ))
@@ -860,7 +944,7 @@ async fn takeover_with_an_unresolved_journal_call_reconciles() {
             effect_id: run.dispatch_activation
         }
     );
-    assert!(run.events().await.is_empty());
+    assert_eq!(run.events().await, [] as [String; 0]);
     assert_eq!(h.main.lock().unwrap().effects, 1);
 }
 

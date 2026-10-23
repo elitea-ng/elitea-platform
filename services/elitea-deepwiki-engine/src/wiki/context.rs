@@ -1,6 +1,6 @@
 //! The page's context text: `_format_simple_context` and what it calls
-//! (`_is_documentation_file`, `_extract_imports_for_file`,
-//! `_pylon_endpoints_for_file`).
+//! (`_is_documentation_file`, `_extract_imports_for_file`, and the
+//! plugin class API endpoints of a file).
 //!
 //! QUIRK (kept): the parts are joined with the two characters `\` `n`,
 //! not a newline (`"\\n".join(context_parts)` in Python), and so are the
@@ -11,7 +11,7 @@ use super::doc::ContextDoc;
 use super::index::GraphFacts;
 use super::pyregex::{Flags, PyRe};
 use super::spec::PageSpec;
-use crate::graph::api_surface::{derive_pylon_endpoints, plugin_name_from_metadata_text};
+use crate::graph::api_surface::{derive_plugin_endpoints, plugin_name_from_metadata_text};
 use crate::graph::discover::{DOCUMENTATION_EXTENSIONS, KNOWN_FILENAMES};
 use crate::graph::pystr;
 use std::path::{Path, PathBuf};
@@ -106,16 +106,16 @@ fn imports_regex(file_path: &str, content: &str) -> String {
     imports.join("\n")
 }
 
-/// Resolves the Pylon plugin name of a file (`_resolve_pylon_plugin_name`):
+/// Resolves the plugin a file is mounted under:
 /// the `plugins/<name>/` path segment, else the repository's
 /// `metadata.json` `name`, read once.
 #[derive(Debug, Default)]
-pub struct PylonPlugin {
+pub struct PluginMount {
     repo_root: Option<PathBuf>,
     cached: Mutex<Option<String>>,
 }
 
-impl PylonPlugin {
+impl PluginMount {
     #[must_use]
     pub fn new(repo_root: Option<PathBuf>) -> Self {
         Self {
@@ -152,7 +152,7 @@ impl PylonPlugin {
         name
     }
 
-    /// `_pylon_endpoints_for_file`.
+    /// The deployed endpoints of a plugin class API in this file.
     fn endpoints(&self, file_path: &str, file_docs: &[&ContextDoc], combined: &str) -> Vec<String> {
         let rel_path = file_docs
             .iter()
@@ -160,7 +160,7 @@ impl PylonPlugin {
             .find(|r| !r.is_empty())
             .unwrap_or(file_path);
         let plugin = self.name_for(rel_path);
-        derive_pylon_endpoints(rel_path, combined, &plugin)
+        derive_plugin_endpoints(rel_path, combined, &plugin)
     }
 }
 
@@ -171,7 +171,7 @@ pub fn format_simple_context(
     docs: &[ContextDoc],
     page: &PageSpec,
     facts: &GraphFacts,
-    pylon: &PylonPlugin,
+    plugin_mount: &PluginMount,
 ) -> RelevantContent {
     let mut by_file: Vec<(&str, Vec<&ContextDoc>)> = Vec::new();
     let mut documentation: Vec<&ContextDoc> = Vec::new();
@@ -232,7 +232,7 @@ pub fn format_simple_context(
                 _ => imports_regex(file, &combined),
             };
             parts.push(format!("<code_source: {file}>"));
-            let endpoints = pylon.endpoints(file, file_docs, &combined);
+            let endpoints = plugin_mount.endpoints(file, file_docs, &combined);
             if !endpoints.is_empty() {
                 parts.push("<api_endpoints>".to_owned());
                 for endpoint in endpoints {

@@ -159,10 +159,7 @@ const schedulesRoute = createRoute({
 });
 
 /**
- * `/tasks` is the PLATFORM's background jobs, not pylon's Arbiter task node.
- * `/schedules` keeps its own "Tasks" tab and keeps rendering the unavailable
- * notice there: that tab is about a runtime this platform does not have, and
- * this page is about the jobs it does run. See `./Tasks.tsx`'s header.
+ * `/tasks` is the platform's own background jobs. See `./Tasks.tsx`'s header.
  */
 const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,

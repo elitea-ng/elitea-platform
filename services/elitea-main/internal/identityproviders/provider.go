@@ -8,10 +8,11 @@
 // protocol, plus a reference to the one secret that document must not carry.
 // The configuration provenance specification requires this shape by name — "one
 // typed OIDC provider revision owns all values; insecure defaults fail
-// validation", and the same sentence for SAML — because pylon spreads response
-// type, scopes, endpoints, client authentication and verification behaviour
-// across `auth_oidc/routes/login.py` at three separate call sites, and a flat
-// settings document reproduces that scattering rather than removing it.
+// validation", and the same sentence for SAML — because the legacy runtime
+// spreads response type, scopes, endpoints, client authentication and
+// verification behaviour across `auth_oidc/routes/login.py` at three separate
+// call sites, and a flat settings document reproduces that scattering rather
+// than removing it.
 //
 // # What is deliberately NOT authorable
 //
@@ -98,7 +99,7 @@ type Provider struct {
 type OIDCDocument struct {
 	// Issuer is the identity provider's issuer identifier. Discovery is
 	// performed against `<issuer>/.well-known/openid-configuration`, so this is
-	// the issuer and NOT the discovery document's own URL. pylon's field is
+	// the issuer and NOT the discovery document's own URL. The legacy field is
 	// named `metadata_endpoint` and holds the latter; the admin surface accepts
 	// either spelling and stores the issuer, because the issuer is what an
 	// id_token's `iss` claim is compared against.
@@ -135,8 +136,8 @@ type OIDCDocument struct {
 // Two fields that a reader might expect here are absent on purpose, because
 // nothing in this service would read them:
 //
-//   - AN AUTHORIZATION TRANSPORT. pylon offers a POST binding to the
-//     authorization endpoint through a self-submitting form. This service
+//   - AN AUTHORIZATION TRANSPORT. The legacy runtime offers a POST binding to
+//     the authorization endpoint through a self-submitting form. This service
 //     performs the GET redirect binding, which OpenID Connect Core requires
 //     every provider to support; the form belongs to the browserauth plane,
 //     which is not mounted. A `get`/`post` field here would be a control with

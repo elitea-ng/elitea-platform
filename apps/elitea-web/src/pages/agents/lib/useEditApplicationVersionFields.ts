@@ -62,9 +62,9 @@ export interface EditApplicationVersionFields {
   readonly tags: readonly Tag[];
   /**
    * `meta.notes` — the editor's free-text Editor Notes (#898). Held here with
-   * the other version-level fields, and stored where pylon stores it: inside
-   * the `meta` blob, not in a column of its own (elitea_issues #5410 chose
-   * that to avoid a per-tenant migration, and
+   * the other version-level fields, and stored where the legacy runtime stores
+   * it: inside the `meta` blob, not in a column of its own (elitea_issues #5410
+   * chose that to avoid a per-tenant migration, and
    * `internal/api/v2/applications/handler.go`'s `notesMetaKey` says the same
    * on the Go side). It is documentation only — never sent to the model.
    */

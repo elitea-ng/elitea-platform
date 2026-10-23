@@ -42,6 +42,6 @@ mod tests {
 
         assert_eq!(report.schema_revision, CAPABILITY_REPORT_SCHEMA_REVISION);
         assert!(!report.production_registration_enabled);
-        assert!(report.production_capabilities.is_empty());
+        assert_eq!(report.production_capabilities, []);
     }
 }

@@ -534,9 +534,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  */
 /*
  * 231 -> 232, when the admin cross-project bulk membership invite was described
- * (`bulkInviteMembers`, issue 247). It replaces pylon's two console pages,
- * invites_bulkusers and invites_bulkprojects, which are the same cross product
- * with one side pinned, so ONE operation replaces two forms.
+ * (`bulkInviteMembers`, issue 247). It replaces two console pages of the legacy
+ * runtime, invites_bulkusers and invites_bulkprojects, which are the same cross
+ * product with one side pinned, so ONE operation replaces two forms.
  *
  * The budget half of the same package moves NEITHER number by an operation:
  * `warning_active` is a new FIELD on BudgetState, not a new operation, and
@@ -746,7 +746,29 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // Projects page for any project (getAdminProjectCloudExecutor,
 // setAdminProjectCloudExecutor). Their manifest entries land with the pages
 // that call them (see MANIFEST_ENTRY_COUNT).
-const GENERATED_OPERATION_COUNT = 335;
+// 335 -> 337 (client contract 1.10): archiveConversation and
+// unarchiveConversation, the per-user conversation archive the chat lists
+// of the web, desktop and mobile apps share. Their manifest entries land
+// with the screens that call them (see MANIFEST_ENTRY_COUNT).
+// 337 -> 338 (client contract 1.11): forkConversation, "Fork from here" in
+// the chat and Local work views of the web, desktop and mobile apps. Its
+// manifest entries land with the screens that call it.
+// 338 -> 339 (client contract 1.12): markConversationRead, the per-user
+// read marker behind the unread state of the chat and Local work lists of
+// the web, desktop and mobile apps. Its manifest entries land with the
+// screens that call it.
+// 339 -> 340 (issue 1057): resetBrandingSettings, the server-side Reset of
+// Admin › Branding (DELETE of the section's rows). Admin routes are not in
+// the manifest, so its count is unchanged.
+// 340 -> 341 (client contract 1.14, issue 1062): deleteConversationAttachment,
+// one uploaded file's delete for the native composers. No web code calls it
+// yet, so the manifest count is unchanged.
+// 341 -> 342 (client contract 1.15, issue 1060):
+// updateConversationInternalTools, the narrow write of a conversation's
+// meta.internal_tools for the native settings sheets. No web code calls it
+// yet (the web still PUTs the whole meta), so the manifest count is
+// unchanged.
+const GENERATED_OPERATION_COUNT = 342;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -947,8 +969,21 @@ const GENERATED_OPERATION_COUNT = 335;
  * 277 -> 279 (ADR-0034 decision 11): settings.getProjectCloudExecutor and
  * settings.setProjectCloudExecutor, Settings, General's Send to cloud
  * section (features/cloud-executor-switch). Generated.
+ *
+ * 279 -> 281 (project-level chat archive): conversation.archive and
+ * conversation.unarchive, the chat lists' Archive and the Archived chats
+ * page's Unarchive (pages/chat-archived). Generated.
+ *
+ * 281 -> 282 (client contract 1.11): conversation.fork, "Fork" on a chat
+ * list row and "Fork from here" on a message, in the web and desktop chat
+ * and in the desktop's Local work view. Generated.
+ *
+ * 282 -> 283 (client contract 1.12): conversation.read, the read marker
+ * the open chat moves (features/chat-conversation-list
+ * `useMarkConversationReadOnView`, called by the web and desktop chat
+ * page). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 279;
+const MANIFEST_ENTRY_COUNT = 283;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -16,9 +16,9 @@
  * It now serves what an administrator saved on Admin › Configuration ›
  * Resources, out of `centry.platform_config`
  * (`services/elitea-main/internal/api/v2/admin/config_values.go`). That is the
- * same route, the same section and the same public-read rule pylon has — pylon
- * exposes exactly one section to non-administrators, `_PUBLIC_SECTIONS =
- * {"resources"}` — so the contract is preserved rather than invented.
+ * same route, the same section and the same public-read rule the legacy runtime
+ * has — it exposes exactly one section to non-administrators, `_PUBLIC_SECTIONS
+ * = {"resources"}` — so the contract is preserved rather than invented.
  *
  * ## It reads through the generated client (issue 36, item 7)
  *
@@ -33,11 +33,11 @@
  *
  * The per-component version list in `ResourceVersionInfo`'s tooltip used to be
  * permanently empty. Its source, `GET /admin/system_info/prompt_lib`, answered
- * 501 in every deployment: in pylon that route reports the versions of six
- * named plugins, collected from the pylons that announced themselves on the
- * Arbiter bus in the last 60 seconds, and this service loads no plugins and has
- * no such bus (issue #219 made the route say so instead of inventing the
- * hardcoded `elitea_core`/`auth` map it used to answer with).
+ * 501 in every deployment: in the legacy runtime that route reports the
+ * versions of six named plugins, collected from the instances that announced
+ * themselves on the Arbiter bus in the last 60 seconds, and this service loads
+ * no plugins and has no such bus (issue #219 made the route say so instead of
+ * inventing the hardcoded `elitea_core`/`auth` map it used to answer with).
  *
  * That 501 conflated two different gaps. The FLEET question — other
  * processes' versions — genuinely has no answer here and still does not; this

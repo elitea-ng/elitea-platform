@@ -22,10 +22,10 @@ type PersonalProjectCheck func(ctx context.Context, projectID string, userID int
 //
 // The exception exists for issue #6789. A team project restricts its settings
 // to the project admin. A personal project has no admin and no editor: its
-// owner is the only member. Projects that pylon created give that owner the
-// `editor` role, not `admin`. A strict admin-only gate would lock those owners
-// out of their own project. So, in the caller's OWN personal project, the
-// route accepts `personalPermission` in place of `required`.
+// owner is the only member. Projects the legacy runtime created give that owner
+// the `editor` role, not `admin`. A strict admin-only gate would lock those
+// owners out of their own project. So, in the caller's OWN personal project,
+// the route accepts `personalPermission` in place of `required`.
 //
 // The exception never widens the route beyond `personalPermission`. The caller
 // must still hold that permission in the project, and the check reads the user

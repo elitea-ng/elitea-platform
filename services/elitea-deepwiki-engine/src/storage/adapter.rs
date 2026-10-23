@@ -208,6 +208,14 @@ impl UnifiedDb {
         self
     }
 
+    /// The dense store the dense branch searches (elitea-vector). Without
+    /// one, `vec_available` is false and the search is lexical.
+    #[must_use]
+    pub fn with_dense(mut self, dense: Option<crate::storage::dense::DenseIndex>) -> Self {
+        self.reader = self.reader.with_dense(dense);
+        self
+    }
+
     /// The branch searches.
     #[must_use]
     pub fn reader(&self) -> &IndexReader {
@@ -222,21 +230,27 @@ impl UnifiedDb {
         Ok(self.reader.pool().begin_with(READ_SNAPSHOT).await?)
     }
 
-    /// Whether any dense vector exists for this wiki: "can a dense search
-    /// return anything", which is what the caller decides with it.
+    /// Whether a dense search can return anything: the wiki's last publish
+    /// wrote vectors (it has an active generation) and a dense store is
+    /// configured. Whether elitea-vector answers is learnt by the search,
+    /// which then degrades to lexical.
     ///
     /// # Errors
     ///
     /// [`crate::storage::StorageError::Database`].
     pub async fn vec_available(&self) -> Result<bool> {
-        Ok(sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM wiki_node_embeddings \
-             WHERE wiki_id = $1 AND project_id = $2)",
+        if self.reader.dense().is_none() {
+            return Ok(false);
+        }
+        let active: Option<bool> = sqlx::query_scalar(
+            "SELECT active_generation IS NOT NULL FROM wikis \
+             WHERE wiki_id = $1 AND project_id = $2",
         )
         .bind(self.key().wiki_id())
         .bind(self.key().project_id())
-        .fetch_one(self.reader.pool())
-        .await?)
+        .fetch_optional(self.reader.pool())
+        .await?;
+        Ok(active.unwrap_or(false))
     }
 
     /// Fused search with legacy-shaped rows. `scope` is applied after the
@@ -252,17 +266,29 @@ impl UnifiedDb {
         scope: &Scope,
         params: &Hybrid,
     ) -> Result<Vec<HybridRow>> {
-        let mut tx = self.snapshot().await?;
         let key = self.key();
-        let mut hits = search::search_hybrid(
-            &mut tx,
-            key,
-            query,
-            embedding,
-            params,
-            self.expected_model.as_deref(),
-        )
-        .await?;
+        let mut attempt = 0;
+        let (mut tx, mut hits) = loop {
+            attempt += 1;
+            let mut tx = self.snapshot().await?;
+            match search::search_hybrid(
+                &mut tx,
+                self.reader.pool(),
+                key,
+                self.reader.dense(),
+                query,
+                embedding,
+                params,
+                self.expected_model.as_deref(),
+            )
+            .await?
+            {
+                Some(hits) => break (tx, hits),
+                // Republished during the search: a new snapshot.
+                None if attempt < search::READ_ATTEMPTS => tx.commit().await?,
+                None => return Err(search::republished_meanwhile(key)),
+            }
+        };
         let filtered = scope.path_prefix.as_deref().is_some_and(|p| !p.is_empty())
             || scope.cluster_id.is_some();
         if filtered {
@@ -369,24 +395,6 @@ impl UnifiedDb {
         .fetch_all(self.reader.pool())
         .await?;
         rows.iter().map(EdgeRecord::from_row).collect()
-    }
-
-    /// The stored dense vector of a node (`float4` components), or `None`.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::storage::StorageError::Database`].
-    pub async fn get_embedding(&self, node_id: &str) -> Result<Option<Vec<f32>>> {
-        let vector: Option<pgvector::Vector> = sqlx::query_scalar(
-            "SELECT embedding FROM wiki_node_embeddings \
-             WHERE wiki_id = $1 AND node_id = $2 AND project_id = $3",
-        )
-        .bind(self.key().wiki_id())
-        .bind(node_id)
-        .bind(self.key().project_id())
-        .fetch_optional(self.reader.pool())
-        .await?;
-        Ok(vector.map(Vec::from))
     }
 
     /// Node count.

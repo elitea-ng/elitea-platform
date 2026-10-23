@@ -6,9 +6,9 @@
  * /api/v2/artifacts/artifact(s)/default/{projectId}/{bucket}[/{name}], which
  * elitea-main serves NO route in — proven six ways in
  * parity/notes/deepwiki-artifact-store.md and filed as a shipped defect. Those
- * paths 404 on the standalone Go stack and work only behind pylon. Porting them
- * would port a defect, so DWIKI-004 records them as waived and this file uses
- * /api/v2/artifacts/objects/... instead.
+ * paths 404 on the standalone Go stack and work only behind the legacy runtime.
+ * Porting them would port a defect, so DWIKI-004 records them as waived and
+ * this file uses /api/v2/artifacts/objects/... instead.
  *
  * eliteaFetch RETURNS THE ENVELOPE, not the body. The generated client's
  * mutator resolves to the whole `{ data, ... }` response shape, and typing a

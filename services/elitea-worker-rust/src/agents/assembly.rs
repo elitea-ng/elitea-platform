@@ -8,6 +8,7 @@
 #![allow(dead_code)] // Production provider/session assembly remains disabled.
 
 use adk_rust::Content;
+use elitea_agent_runtime::edit_profile::EditProfile;
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
@@ -59,6 +60,10 @@ pub(crate) struct OrdinaryNoToolProfile {
     summary_model: Option<Arc<SummaryModelProfile>>,
     internal_tools: InternalToolCatalog,
     instruction_plan: super::instruction_authority::InstructionPlan,
+    /// The version's `meta.edit_format` (`auto`, `str_replace`, `patch`),
+    /// when it names one: with the model it picks the workspace's edit
+    /// tools ([`Self::edit_profile`], #1214).
+    edit_format: Option<String>,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -235,6 +240,7 @@ impl OrdinaryNoToolProfile {
             context_management: common.context_management,
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
+            edit_format: application_edit_format(request),
         })
     }
 
@@ -282,6 +288,7 @@ impl OrdinaryNoToolProfile {
             context_management: common.context_management,
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
+            edit_format: application_edit_format(request),
         })
     }
 
@@ -403,6 +410,8 @@ impl OrdinaryNoToolProfile {
                 version,
                 &fallback.instruction_plan,
             )?,
+            // A nested agent runs no workspace turn of its own.
+            edit_format: None,
         })
     }
 
@@ -432,6 +441,14 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) fn model_name(&self) -> &str {
         &self.model_name
+    }
+
+    /// The edit tools a workspace turn offers (#1214): the version's
+    /// `meta.edit_format` when it names one, else the model family's — the
+    /// desktop's choice for the same agent and model.
+    #[must_use]
+    pub(crate) fn edit_profile(&self) -> EditProfile {
+        EditProfile::select(&self.model_name, self.edit_format.as_deref())
     }
 
     #[must_use]
@@ -713,6 +730,22 @@ fn application_internal_tools(
     let conversation = InternalToolCatalog::from_names(&request.payload.internal_tools)
         .map_err(internal_tool_profile_error)?;
     Ok(configured.merge(conversation))
+}
+
+/// An application version's `meta.edit_format`, when it is a string; an
+/// ad-hoc turn has none.
+fn application_edit_format(request: &AgentExecutionRequest) -> Option<String> {
+    if request.kind != AgentExecutionKind::Application {
+        return None;
+    }
+    request
+        .payload
+        .application
+        .get("version_details")?
+        .get("meta")?
+        .get("edit_format")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn internal_tools_from_version(

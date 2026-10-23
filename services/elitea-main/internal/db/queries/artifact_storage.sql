@@ -113,6 +113,16 @@ ON CONFLICT (bucket_id, key) DO UPDATE SET
 RETURNING id, bucket_id, key, byte_length, media_type, digest_alg, digest,
     classification, scan_state, expires_at, created_at, updated_at;
 
+-- name: ReserveArtifactObjectKey :execrows
+-- Claims (bucket_id, key) for a write that has not happened yet, and never
+-- touches a row that already holds the key: objects_bucket_key_uniq decides
+-- between two concurrent claims, so exactly one of them affects a row. The
+-- placeholder is overwritten by UpsertArtifactObject once the bytes are
+-- stored (#1059).
+INSERT INTO elitea_storage.objects (bucket_id, key, byte_length, media_type, expires_at)
+VALUES ($1, $2, 0, $3, $4)
+ON CONFLICT (bucket_id, key) DO NOTHING;
+
 -- name: ListArtifactObjects :many
 SELECT id, bucket_id, key, byte_length, media_type, digest_alg, digest,
        classification, scan_state, expires_at, created_at, updated_at

@@ -12,7 +12,7 @@ package platformconfig
 //
 // # Why the ids are resolved here rather than held in process state
 //
-// The reference keeps them in Pylon module state
+// The reference keeps them in legacy module state
 // (`legacy/plugins/support_assistant/module.py`: `self._support_project_id`,
 // memoised on first read and written back through `descriptor.save_state()`),
 // which is why every field on that page carried `requires_restart`. There is no

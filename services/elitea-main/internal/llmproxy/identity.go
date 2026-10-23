@@ -1,8 +1,19 @@
-// Package llmproxy is elitea-main's lightweight /llm gateway role: a streaming
-// reverse proxy that authenticates at the edge, resolves the caller's project,
-// injects signed identity headers, and byte-streams /llm to
-// elitea-llm-gateway-svc over mTLS (design §2, ADR-0015 Option E). It does NOT
-// import bifrost/core, translate wire dialects, or run governance.
+// Package llmproxy is elitea-main's lightweight /llm gateway role: it
+// authenticates at the edge, resolves the caller's project, signs the
+// identity tuple, and hands each /llm request to elitea-llm-gateway (design
+// §2, ADR-0015 Option E). It does NOT import bifrost/core, translate wire
+// dialects, or run governance.
+//
+// THE GATEWAY INTERFACE. Every elitea-main caller of the gateway uses Gateway
+// (gateway.go): the browser /llm surface (Proxy), predict_llm, the
+// configuration checks and listings, the governance status, and the
+// worker-facing ModelService (#1359 U2). Call a named method —
+// ChatCompletions, Messages, Embeddings, ... — with a Request that carries the
+// provider-native body and an Identity; read the gateway's own status, headers
+// and body from the Response. A budget 402, a policy 403 or a provider error
+// is a Response; an error is a failed hop. GatewayClient implements it over
+// gRPC with mutual TLS (elitea.gateway.v1.GatewayService); no elitea-main code
+// reaches the gateway over HTTP.
 package llmproxy
 
 import (
@@ -307,42 +318,28 @@ func stripIdentityHeaders(h http.Header) {
 	h.Del("Cookie")
 }
 
-// injectIdentity strips any client-supplied identity headers on out, then sets
-// the edge-resolved identity. When secret is non-empty and a project is present
-// it also attaches the HMAC signature. verifier, when set, decides whether the
-// inbound execution id is kept (ExecutionVerifier).
-func injectIdentity(ctx context.Context, out http.Header, secret []byte, verifier ExecutionVerifier) {
-	// READ BEFORE STRIP. stripIdentityHeaders deletes every X-Elitea-* header,
-	// this one included, and `out` is a copy of the inbound headers — so the
-	// caller-supplied execution id has to be taken (and validated) here, before
-	// the strip removes it. Taking it afterwards would silently produce an empty
-	// dimension on every request: a column that is always NULL and a breakdown
-	// that is always empty, with nothing failing.
-	executionID := executionIDFromHeader(out)
-
-	stripIdentityHeaders(out)
-
+// resolveIdentity is the identity a request on the /llm surface is made for:
+// the project, user and tenant the edge middleware resolved, and the inbound
+// execution id when it has a valid shape and verifier, when set, admits it
+// (ExecutionVerifier). The execution id is the one part of the tuple a caller
+// sends; every other inbound X-Elitea-* value is ignored.
+func resolveIdentity(ctx context.Context, inbound http.Header, verifier ExecutionVerifier) identity {
+	executionID := executionIDFromHeader(inbound)
 	id := identityFromContext(ctx)
 	id.executionID = verifiedExecutionID(ctx, verifier, id, executionID)
-	if id.projectID != "" {
-		out.Set(HeaderProjectID, id.projectID)
-	}
-	if id.userID != "" {
-		out.Set(HeaderUserID, id.userID)
-	}
-	if id.tenantID != "" {
-		out.Set(HeaderTenantID, id.tenantID)
-	}
-	if id.executionID != "" {
-		out.Set(HeaderExecutionID, id.executionID)
-	}
+	return id
+}
 
-	// Sign only when we have both a secret and a project identity to bind; an
-	// unsigned request over the mTLS-internal network is still authenticated by
-	// the transport, but a signature lets the gateway reject stray traffic.
-	if len(secret) > 0 && id.projectID != "" {
-		out.Set(HeaderSignature, id.sign(secret))
-	}
+// injectIdentity strips any client-supplied identity headers on out, then sets
+// the edge-resolved identity (resolveIdentity). When secret is non-empty and a
+// project is present it also attaches the HMAC signature. It is the header
+// form of the tuple the Proxy sends to the gateway as gRPC metadata.
+func injectIdentity(ctx context.Context, out http.Header, secret []byte, verifier ExecutionVerifier) {
+	// READ BEFORE STRIP. stripIdentityHeaders deletes every X-Elitea-* header,
+	// the execution id included, so the identity is resolved first. Taking it
+	// afterwards would silently produce an empty dimension on every request.
+	id := resolveIdentity(ctx, out, verifier)
+	SignIdentityHeaders(out, secret, id.projectID, id.userID, id.tenantID, id.executionID)
 }
 
 // SignIdentityHeaders sets the signed X-Elitea-* identity headers on out from
@@ -373,6 +370,14 @@ func SignIdentityHeaders(out http.Header, secret []byte, projectID, userID, tena
 	if len(secret) > 0 && id.projectID != "" {
 		out.Set(HeaderSignature, id.sign(secret))
 	}
+}
+
+// VerifyIdentityHeaders reports whether the identity headers on h carry a
+// valid signature under secret, by exactly the gateway's acceptance rule. A
+// gRPC hop that carries the tuple as metadata (internal/transport/grpcauth)
+// verifies it through this instead of restating the scheme.
+func VerifyIdentityHeaders(h http.Header, secret []byte) bool {
+	return verifyIdentitySignature(h, secret)
 }
 
 // verifyIdentitySignature reports whether the identity headers on h carry a

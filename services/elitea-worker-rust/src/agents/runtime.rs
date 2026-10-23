@@ -266,9 +266,9 @@ impl<'a> AuthorizedNativeAssembly<'a> {
     /// It is deliberately INFALLIBLE. Every failure this can meet — a file
     /// elitea-main has no text for, a stale reference, a refused conversation,
     /// a transport error — leaves the attachment rendered by its header and a
-    /// note that says it was not read and why, which is pylon's own rule for a
-    /// file the platform cannot read (`rpc/chat_all.py:384-386`). A turn must
-    /// never die because of a file the question may not even be about.
+    /// note that says it was not read and why, which is the legacy runtime's own
+    /// rule for a file the platform cannot read (`rpc/chat_all.py:384-386`). A
+    /// turn must never die because of a file the question may not even be about.
     ///
     /// What is read is rendered within the turn's attachment budget
     /// (`attachment_context`): whole when it fits, an overview otherwise.

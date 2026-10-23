@@ -2,8 +2,9 @@
 //! real Unix socket, `generate_wiki` in the real worker CHILD process (this
 //! crate's binary, `worker` subcommand), a real repository cloned from
 //! `git http-backend` on loopback, a mock OpenAI-compatible gateway (the
-//! e2e stub's answers, deterministic stand-in embeddings), and PostgreSQL
-//! with pgvector.
+//! e2e stub's answers, deterministic stand-in embeddings), PostgreSQL, and
+//! elitea-vector's in-process fake (`FakeVector`) on loopback for the dense
+//! vectors.
 //!
 //! * a whole run: the result against the frozen generation contract, the
 //!   published index rows, the artifacts, the progress, the clean-up;
@@ -23,6 +24,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use elitea_deepwiki_engine::config::Settings;
+use elitea_deepwiki_engine::config::VectorSettings;
 use elitea_deepwiki_engine::graph::topology::replay::standin_embedding;
 use elitea_deepwiki_engine::runner::Runner;
 use elitea_deepwiki_engine::runner::native::{
@@ -30,11 +32,13 @@ use elitea_deepwiki_engine::runner::native::{
 };
 use elitea_deepwiki_engine::server;
 use elitea_deepwiki_engine::storage::build::WikiRecord;
+use elitea_deepwiki_engine::storage::dense::{self, DenseIndex};
 use elitea_deepwiki_engine::storage::search::IndexReader;
 use elitea_deepwiki_engine::wiki::parity::stub_answer;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper_util::rt::TokioIo;
+use elitea_engine_sidecar::client::{EngineClient, event_json};
+use elitea_platform_rpc::pb::artifact_object_service_server::ArtifactObjectServiceServer;
+use elitea_platform_rpc::testing::FakeArtifactStore;
+use elitea_vector_index::testing::FakeVector;
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -45,7 +49,6 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -234,15 +237,13 @@ struct Gateway {
     chats: Arc<AtomicUsize>,
     embedded: Arc<AtomicUsize>,
     embedding_requested: Arc<AtomicBool>,
-    /// Every request to the object API (`path?query`).
-    objects_seen: Arc<std::sync::Mutex<Vec<String>>>,
+    /// The platform's artifact store, served on the same listener.
+    store: FakeArtifactStore,
 }
 
-/// The platform's object API for the bucket `docs` of project 42: the
-/// notes service under `handbook/`, a folder placeholder, and one object
-/// outside the folder that must not be read.
-const OBJECTS_ROUTE: &str = "/api/v2/artifacts/objects/42/docs";
-
+/// The artifact store's bucket `docs` of project 42: the notes service
+/// under `handbook/`, a folder placeholder, and one object outside the
+/// folder that must not be read.
 fn artifact_objects() -> Vec<(String, &'static str)> {
     let mut objects: Vec<(String, &'static str)> = NOTES_FILES
         .iter()
@@ -252,50 +253,20 @@ fn artifact_objects() -> Vec<(String, &'static str)> {
     objects
 }
 
-fn objects_api(state: &Gateway, request: &Request) -> Response {
-    let authorized = request
-        .headers()
-        .get("authorization")
-        .is_some_and(|v| v.as_bytes() == b"Bearer mock-callback-bearer");
-    let path = request.uri().path().to_owned();
-    state.objects_seen.lock().unwrap().push(format!(
-        "{path}?{}",
-        request.uri().query().unwrap_or_default()
-    ));
-    if !authorized {
-        return (StatusCode::UNAUTHORIZED, "").into_response();
-    }
-    if path == OBJECTS_ROUTE {
-        let query = request.uri().query().unwrap_or_default();
-        let prefix = if query.contains("prefix=handbook%2F") {
-            "handbook/"
-        } else {
-            ""
-        };
-        let mut listed: Vec<Value> = artifact_objects()
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .map(|(key, text)| json!({"key": key, "size_bytes": text.len(), "modified_at": "2026-10-01T10:00:00Z"}))
-            .collect();
-        listed.push(
-            json!({"key": "handbook/", "size_bytes": 0, "modified_at": "2026-10-01T10:00:00Z"}),
-        );
-        return axum::Json(json!({"objects": listed, "common_prefixes": []})).into_response();
-    }
-    let key = path
-        .strip_prefix(&format!("{OBJECTS_ROUTE}/"))
-        .unwrap_or_default();
-    match artifact_objects().into_iter().find(|(k, _)| k == key) {
-        Some((_, text)) => text.into_response(),
-        None => (StatusCode::NOT_FOUND, "").into_response(),
-    }
+/// The fake store's `modified_at` for every object.
+const MODIFIED_AT: &str = "2026-10-21T10:00:00Z";
+
+fn artifact_store() -> FakeArtifactStore {
+    artifact_objects().iter().fold(
+        FakeArtifactStore::new()
+            .grant("mock-callback-bearer", 42)
+            .with_object(42, "docs", "handbook/", b""),
+        |store, (key, text)| store.with_object(42, "docs", key, text.as_bytes()),
+    )
 }
 
 async fn gateway(State(state): State<Gateway>, request: Request) -> Response {
     let path = request.uri().path().to_owned();
-    if path.starts_with("/api/v2/artifacts/") {
-        return objects_api(&state, &request);
-    }
     let bytes = to_bytes(request.into_body(), 64 * 1024 * 1024)
         .await
         .unwrap();
@@ -366,11 +337,21 @@ async fn serve_gateway(hang: bool) -> (u16, Gateway) {
         chats: Arc::new(AtomicUsize::new(0)),
         embedded: Arc::new(AtomicUsize::new(0)),
         embedding_requested: Arc::new(AtomicBool::new(false)),
-        objects_seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        store: artifact_store(),
     };
-    let app = axum::Router::new()
-        .fallback(gateway)
-        .with_state(state.clone());
+    // Model calls arrive as elitea.llm.v1.ModelService and reach `gateway`;
+    // the artifact calls as elitea.runtime.v1.ArtifactObjectService, on the
+    // same listener as elitea-main serves both.
+    let app = elitea_model_rpc::testing::with_model_service(
+        axum::Router::new()
+            .fallback(gateway)
+            .with_state(state.clone()),
+        "/llm/v1",
+    )
+    .route_service(
+        "/elitea.runtime.v1.ArtifactObjectService/{*method}",
+        ArtifactObjectServiceServer::new(state.store.clone()),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -391,14 +372,29 @@ struct Engine {
     socket: PathBuf,
     scratch: PathBuf,
     stop: Option<oneshot::Sender<()>>,
+    /// elitea-vector's fake, admitting the invocation's callback bearer for
+    /// the host's project.
+    vectors: FakeVector,
+    vector_url: String,
 }
 
+/// The callback bearer the host's arguments carry (`llm_settings.api_key`).
+const BEARER: &str = "mock-callback-bearer";
+
 impl Engine {
-    fn start(root: &Path, database: &str) -> Self {
-        Self::start_with(root, database, &[])
+    async fn start(root: &Path, database: &str, gateway_port: u16) -> Self {
+        Self::start_with(root, database, gateway_port, &[]).await
     }
 
-    fn start_with(root: &Path, database: &str, extra: &[(&str, &str)]) -> Self {
+    async fn start_with(
+        root: &Path,
+        database: &str,
+        gateway_port: u16,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let vectors = FakeVector::new(&[(BEARER, i64::from(storage_common::PROJECT))]);
+        let (address, _served) = vectors.clone().serve().await.unwrap();
+        let vector_url = format!("http://{address}");
         let scratch = root.join("scratch");
         let mut environment: Vec<(String, String)> = [
             ("ELITEA_DEEPWIKI_RUNNER", "native".to_owned()),
@@ -413,6 +409,13 @@ impl Engine {
                 scratch.to_string_lossy().into_owned(),
             ),
             ("ELITEA_DEEPWIKI_WORKER_THREADS", "2".to_owned()),
+            // The platform listener: the mock gateway, plaintext on loopback.
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                format!("http://127.0.0.1:{gateway_port}"),
+            ),
+            // elitea-vector, plaintext on loopback.
+            ("ELITEA_DEEPWIKI_VECTOR_URL", vector_url.clone()),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))
@@ -442,59 +445,52 @@ impl Engine {
             socket,
             scratch,
             stop: Some(stop),
+            vectors,
+            vector_url,
         }
     }
 
-    async fn post(&self, path: &str, body: &Value) -> hyper::Response<hyper::body::Incoming> {
-        self.send("POST", path, body).await
+    /// The dense store a reader of this engine's wikis searches.
+    #[allow(clippy::unnecessary_wraps)] // as `with_dense` takes it
+    fn dense(&self) -> Option<DenseIndex> {
+        let client = dense::connect(&VectorSettings {
+            url: self.vector_url.clone(),
+            server_name: None,
+            ca_file: None,
+            ca_setting: "",
+            identity: None,
+            insecure_loopback: true,
+        })
+        .unwrap();
+        Some(DenseIndex::remote(client, BEARER))
     }
 
-    async fn send(
-        &self,
-        method: &str,
-        path: &str,
-        body: &Value,
-    ) -> hyper::Response<hyper::body::Incoming> {
-        let stream = UnixStream::connect(&self.socket).await.unwrap();
-        let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+    async fn client(&self) -> EngineClient {
+        EngineClient::connect(&self.socket).await.unwrap()
+    }
+
+    async fn health(&self) -> Value {
+        self.client().await.health().await.unwrap()
+    }
+
+    async fn stop(&self, id: &str) -> bool {
+        self.client().await.stop(id).await.unwrap()
+    }
+
+    /// Invoke, streaming each event (as its JSON document) into the returned
+    /// channel.
+    async fn invoke(&self, id: &str, arguments: &Value) -> mpsc::UnboundedReceiver<Value> {
+        let mut stream = self
+            .client()
+            .await
+            .start(id, "generate_wiki", arguments)
             .await
             .unwrap();
-        tokio::spawn(connection);
-        let request = hyper::Request::builder()
-            .method(method)
-            .uri(path)
-            .header("host", "engine")
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap();
-        sender.send_request(request).await.unwrap()
-    }
-
-    /// Invoke, streaming each NDJSON line into the returned channel.
-    async fn invoke(&self, id: &str, arguments: &Value) -> mpsc::UnboundedReceiver<Value> {
-        let response = self
-            .post(
-                "/engine/invoke",
-                &json!({"invocation_id": id, "tool": "generate_wiki", "arguments": arguments}),
-            )
-            .await;
-        assert_eq!(response.status().as_u16(), 200);
         let (sender, receiver) = mpsc::unbounded_channel();
-        let mut body = response.into_body();
         tokio::spawn(async move {
-            let mut pending = Vec::new();
-            while let Some(frame) = body.frame().await {
-                let Ok(frame) = frame else { return };
-                let Ok(data) = frame.into_data() else {
-                    continue;
-                };
-                pending.extend_from_slice(&data);
-                while let Some(end) = pending.iter().position(|b| *b == b'\n') {
-                    let line: Vec<u8> = pending.drain(..=end).collect();
-                    let value: Value = serde_json::from_slice(&line).unwrap();
-                    if sender.send(value).is_err() {
-                        return;
-                    }
+            while let Ok(Some(event)) = stream.message().await {
+                if sender.send(event_json(&event)).is_err() {
+                    return;
                 }
             }
         });
@@ -520,7 +516,7 @@ fn arguments(git_port: u16, gateway_port: u16) -> Value {
         "query": "Document the notes service",
         "llm_settings": {
             "api_base": format!("http://127.0.0.1:{gateway_port}/llm/v1"),
-            "api_key": "mock-callback-bearer",
+            "api_key": BEARER,
             "organization": "42",
             "model_name": "gpt-4o",
         },
@@ -581,11 +577,9 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     let (served, commit) = served_repository(&root);
     let git_port = serve_git(served).await;
     let (gateway_port, gateway) = serve_gateway(false).await;
-    let engine = Engine::start(&root, "native_generate");
-    let health = engine.send("GET", "/engine/health", &Value::Null).await;
-    let health = health.into_body().collect().await.unwrap().to_bytes();
+    let engine = Engine::start(&root, "native_generate", gateway_port).await;
     assert_eq!(
-        serde_json::from_slice::<Value>(&health).unwrap(),
+        engine.health().await,
         json!({
             "status": "UP",
             "runner": "native",
@@ -775,11 +769,25 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     assert!(nodes > 10, "{nodes} nodes");
     let clustered = count(&pool, "SELECT count(*) FROM wiki_nodes WHERE wiki_id = 'acme--notes-service--main' AND macro_cluster IS NOT NULL").await;
     assert!(clustered > 0, "no node carries its Phase 3 section");
-    let vectors = count(
-        &pool,
-        "SELECT count(*) FROM wiki_node_embeddings WHERE wiki_id = 'acme--notes-service--main'",
+    // The vectors are in elitea-vector, one generation (the publish deleted
+    // any other), written with the invocation's callback bearer.
+    let vectors = i64::try_from(engine.vectors.point_count()).unwrap();
+    assert!(
+        engine
+            .vectors
+            .bearers()
+            .iter()
+            .all(|b| b == &format!("Bearer {BEARER}")),
+        "{:?}",
+        engine.vectors.bearers()
+    );
+    let active: Option<String> = sqlx::query_scalar(
+        "SELECT active_generation FROM wikis WHERE wiki_id = 'acme--notes-service--main'",
     )
-    .await;
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(active.is_some(), "the publish names its vector generation");
     assert!(vectors > 0 && vectors <= nodes, "{vectors} vectors");
     assert_eq!(
         usize::try_from(vectors).unwrap(),
@@ -809,7 +817,8 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
         count(&pool, "SELECT count(*) FROM deepwiki_build.wiki_nodes").await,
         0
     );
-    let reader = IndexReader::new(pool.clone(), storage_common::key(wiki_id.as_str()));
+    let reader = IndexReader::new(pool.clone(), storage_common::key(wiki_id.as_str()))
+        .with_dense(engine.dense());
     let hits = reader.search_fts("NoteStore", 5).await.unwrap();
     assert!(
         hits.iter().any(|h| h.rel_path == "notes/store.py"),
@@ -831,7 +840,8 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
 }
 
 /// An ARTIFACT-FOLDER source end to end: the worker child lists and
-/// downloads `artifact://docs/handbook` from the platform's object API with
+/// downloads `artifact://docs/handbook` from the platform's artifact store
+/// (`ArtifactObjectService` on the platform listener) with
 /// the invocation's callback bearer (the git allowlist does not apply; this
 /// engine's names only 127.0.0.1 for git), and the wiki is named and keyed
 /// as the Python engine names it.
@@ -848,8 +858,10 @@ async fn a_native_generation_reads_an_artifact_folder() {
     let engine = Engine::start_with(
         &root,
         "native_artifact",
+        gateway_port,
         &[("ELITEA_DEEPWIKI_GIT_ALLOWLIST", "git.example.com")],
-    );
+    )
+    .await;
     let mut arguments = arguments(1, gateway_port);
     arguments["repo_config"] = json!({
         "provider_type": "artifact",
@@ -883,7 +895,7 @@ async fn a_native_generation_reads_an_artifact_folder() {
     listed.sort();
     let mut digest = Sha256::new();
     for (key, size) in &listed {
-        digest.update(format!("{key}\0{size}\02026-10-01T10:00:00Z\n").as_bytes());
+        digest.update(format!("{key}\0{size}\0{MODIFIED_AT}\n").as_bytes());
     }
     let digest: String = digest
         .finalize()
@@ -928,12 +940,19 @@ async fn a_native_generation_reads_an_artifact_folder() {
     assert_eq!(manifest["wiki_id"], wiki_id);
     assert_eq!(manifest["repository"], "artifact://docs/handbook");
 
-    // The object API: one listing of the folder, one download per object,
-    // nothing outside the folder, the bearer on every request.
-    let seen = gateway.objects_seen.lock().unwrap().clone();
-    assert_eq!(seen[0], format!("{OBJECTS_ROUTE}?prefix=handbook%2F"));
+    // The artifact store: one listing of the folder, one download per
+    // object, nothing outside the folder, the bearer and project on every
+    // call.
+    let seen = gateway.store.calls();
+    assert_eq!(seen[0].op, "ListObjects", "{seen:#?}");
     assert_eq!(seen.len(), 1 + 6, "{seen:#?}");
-    assert!(seen.iter().all(|s| !s.contains("archive")), "{seen:#?}");
+    assert!(
+        seen.iter().all(|call| !call.key.contains("archive")
+            && call.bucket == "docs"
+            && call.project_id == 42
+            && call.bearer.as_deref() == Some("mock-callback-bearer")),
+        "{seen:#?}"
+    );
 
     // The published index, under the wiki id Python would file it under.
     let row: (String, Option<String>) =
@@ -978,7 +997,7 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
     // Embeddings never answer: the worker waits in the embedding phase,
     // after the graph was staged.
     let (gateway_port, gateway) = serve_gateway(true).await;
-    let engine = Engine::start(&root, "native_stop");
+    let engine = Engine::start(&root, "native_stop", gateway_port).await;
     let mut lines = engine
         .invoke("inv-native-stop", &arguments(git_port, gateway_port))
         .await;
@@ -1018,15 +1037,7 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
     );
 
     let started = Instant::now();
-    let stopped = engine
-        .post("/engine/invocations/inv-native-stop/stop", &json!({}))
-        .await;
-    assert_eq!(stopped.status().as_u16(), 202);
-    let body = stopped.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"stopped": true})
-    );
+    assert!(engine.stop("inv-native-stop").await);
     let mut last = None;
     while let Some(line) = tokio::time::timeout(Duration::from_secs(30), lines.recv())
         .await
@@ -1054,14 +1065,8 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
         count(&pool, "SELECT count(*) FROM deepwiki_build.wiki_nodes").await,
         0
     );
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT count(*) FROM deepwiki_build.wiki_node_embeddings"
-        )
-        .await,
-        0
-    );
+    // The stopped build's vectors went with it.
+    assert_eq!(engine.vectors.point_count(), 0);
     assert_eq!(count(&pool, "SELECT count(*) FROM wikis").await, 0);
     assert_eq!(
         jobs_left(&engine.scratch),
@@ -1098,7 +1103,7 @@ async fn stop_while_publishing(
     let (served, _commit) = served_repository(root);
     let git_port = serve_git(served).await;
     let (gateway_port, _gateway) = serve_gateway(false).await;
-    let engine = Engine::start_with(root, database, extra);
+    let engine = Engine::start_with(root, database, gateway_port, extra).await;
     let id = format!("inv-{database}");
     let mut lines = engine.invoke(&id, &arguments(git_port, gateway_port)).await;
     let deadline = Instant::now() + Duration::from_mins(5);
@@ -1123,10 +1128,7 @@ async fn stop_while_publishing(
     }
     // The publish is now queued behind the held lock.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let stopped = engine
-        .post(&format!("/engine/invocations/{id}/stop"), &json!({}))
-        .await;
-    assert_eq!(stopped.status().as_u16(), 202);
+    assert!(engine.stop(&id).await);
     (engine, lines, pid.expect("the worker's pid"))
 }
 

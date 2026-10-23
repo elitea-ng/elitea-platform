@@ -9,7 +9,7 @@ This page assumes the platform is already installed ([Deploy from scratch](/depl
 
 | Piece | Comes from |
 |---|---|
-| Sandbox nodes and a RuntimeClass whose handler is `runsc`, `gvisor` or `kata*` | your platform (GKE, AKS), or the `elitea-sandbox-runtime` chart (EKS, k3s) |
+| Sandbox nodes and a RuntimeClass whose handler is `runsc`, `gvisor` or `kata*` | your platform (GKE, AKS), or the `elitea` chart's sandbox-runtime installer, `sandboxRuntime` (EKS, k3s) |
 | The sandbox supervisor and its `workspace` profile | the `elitea` chart (`sandboxKubernetes.*`) |
 | The worker's side of workspace runs | the `elitea` chart (`worker.runtime.workspaceRuns`) |
 | The egress proxy for projects with a host allowlist | the `elitea` chart (`egressProxy.*`) |
@@ -27,8 +27,8 @@ flowchart LR
     Pod -->|"allowlisted hosts only"| Proxy["elitea-egress-proxy"]
 ```
 
-<Warning title="The elitea chart never touches nodes">
-The `elitea` chart creates no RuntimeClass and installs nothing on a node. The sandbox runtime is either part of your platform or comes from the separate, privileged `elitea-sandbox-runtime` chart, which you install on purpose.
+<Warning title="Nothing touches a node unless you turn it on">
+By default the `elitea` chart creates no RuntimeClass and installs nothing on a node. The sandbox runtime is either part of your platform (GKE, AKS) or comes from the chart's privileged installer, `sandboxRuntime`, which you turn on on purpose. That installer is the `elitea-sandbox-runtime` chart carried as a dependency; it is still published on its own (`oci://ghcr.io/elitea-ng/charts/elitea-sandbox-runtime`) for a cluster that installs it separately. Turn it on in **one release per cluster**: the `gvisor` RuntimeClass is cluster-scoped, and two installers would change the same nodes. Under Argo CD, the AppProject must allow the installer's namespace as a destination.
 </Warning>
 
 ## Step 1: sandbox nodes and the runtime
@@ -89,7 +89,7 @@ sandboxKubernetes:
 </Tab>
 <Tab title="EKS">
 
-EKS ships no sandbox runtime. Create a labelled and tainted node group on the **Amazon Linux 2023** AMI, then install gVisor with the `elitea-sandbox-runtime` chart in `containerd` mode. Bottlerocket is not supported: its root file system is read-only.
+EKS ships no sandbox runtime. Create a labelled and tainted node group on the **Amazon Linux 2023** AMI, then install gVisor with the chart's sandbox-runtime installer in `containerd` mode. Bottlerocket is not supported: its root file system is read-only.
 
 ```yaml
 # eksctl ClusterConfig excerpt
@@ -103,12 +103,21 @@ managedNodeGroups:
       - {key: elitea.ai/sandbox, value: "true", effect: NoSchedule}
 ```
 
+The installer's DaemonSet runs privileged, so it goes to a namespace of its own that admits privileged pods, not to the platform's namespace. Create it, then turn the installer on in the `elitea` values and upgrade the release:
+
 ```bash
 kubectl create namespace elitea-sandbox-runtime
 kubectl label namespace elitea-sandbox-runtime pod-security.kubernetes.io/enforce=privileged
-helm install sandbox-runtime oci://ghcr.io/elitea-ng/charts/elitea-sandbox-runtime \
-  --version "$CHART_VERSION" -n elitea-sandbox-runtime --set mode=containerd
-kubectl -n elitea-sandbox-runtime rollout status ds/sandbox-runtime-installer
+```
+
+```yaml
+sandboxRuntime:
+  enabled: true
+  mode: containerd
+```
+
+```bash
+kubectl -n elitea-sandbox-runtime rollout status ds/elitea-sandbox-runtime-installer
 ```
 
 The installer writes `/etc/containerd/config.d/50-elitea-runsc.toml`. If needed, it adds that directory to `imports` in `/etc/containerd/config.toml`. It checks with `containerd config dump` that nothing else changes, then restarts containerd once.
@@ -127,16 +136,22 @@ sandboxKubernetes:
 </Tab>
 <Tab title="k3s">
 
-Label and taint the sandbox node, then install gVisor with the `elitea-sandbox-runtime` chart in `k3s` mode, the chart's default.
+Label and taint the sandbox node, then install gVisor with the chart's sandbox-runtime installer in `k3s` mode, its default.
 
 ```bash
 kubectl label node sandbox-1 elitea.ai/sandbox=true
 kubectl taint node sandbox-1 elitea.ai/sandbox=true:NoSchedule
 kubectl create namespace elitea-sandbox-runtime
 kubectl label namespace elitea-sandbox-runtime pod-security.kubernetes.io/enforce=privileged
-helm install sandbox-runtime oci://ghcr.io/elitea-ng/charts/elitea-sandbox-runtime \
-  --version "$CHART_VERSION" -n elitea-sandbox-runtime
-kubectl -n elitea-sandbox-runtime rollout status ds/sandbox-runtime-installer
+```
+
+```yaml
+sandboxRuntime:
+  enabled: true        # mode: k3s is the default
+```
+
+```bash
+kubectl -n elitea-sandbox-runtime rollout status ds/elitea-sandbox-runtime-installer
 ```
 
 What the installer does on the node:
@@ -205,7 +220,7 @@ By default the desktop app uploads and downloads workspace segments with presign
 
 Three things follow:
 
-- Each segment goes up in one request, with no multipart upload. Main's ingress must accept a body as large as the largest segment. Traefik has no limit by default. On ingress-nginx, set `nginx.ingress.kubernetes.io/proxy-body-size` on Main's ingress.
+- Each segment goes up in one request, with no multipart upload. Main's ingress must accept a body as large as the largest segment. On ingress-nginx, set `nginx.ingress.kubernetes.io/proxy-body-size` on Main's ingress.
 - Main writes those segments to the store as multipart uploads of its own. On RustFS with default encryption, also set `AWS_REQUEST_CHECKSUM_CALCULATION: when_required` (see the warning above).
 - Bytes move through Main, so size Main's network and CPU for them.
 </Note>
@@ -244,7 +259,7 @@ kubectl -n "$NS" create secret generic elitea-egress-proxy-keys --from-file=2026
 shred -u signing.pem workspace-server.key
 ```
 
-The proxy's **audit certificate** (`egressProxy.audit`) is a cert-manager `Certificate` that the chart creates on the `elitea-runtime-ca` ClusterIssuer. You only need that issuer, which [Deploy from scratch](/deployment/from-scratch) already set up.
+The proxy's **audit certificate** (`egressProxy.audit`) is a cert-manager `Certificate` that the chart creates on the runtime CA. The chart's default names a `ClusterIssuer`. [Deploy from scratch](/deployment/from-scratch) creates a namespaced `Issuer` called `elitea-runtime-ca`, so the values below set `egressProxy.audit.issuerRef.kind: Issuer`. Without it the certificate never issues and the proxy never becomes Ready.
 
 The supervisor reads the material once, at start. After a rotation, run `kubectl rollout restart deploy/elitea-sandbox-supervisor`. The material Secret must not contain a key named `workspace.json`: that name is reserved for the profile the chart renders.
 
@@ -305,6 +320,8 @@ egressProxy:
     existingSecret: elitea-egress-token-signing
   publicKeys:
     existingSecret: elitea-egress-proxy-keys
+  audit:
+    issuerRef: {name: elitea-runtime-ca, kind: Issuer}
 ```
 
 Take the digests from the release you install: `crane digest ghcr.io/elitea-ng/elitea-sandbox-supervisor:<version>`, and the same for `elitea-workspace-runner`. From these values the chart renders the supervisor's `workspace` profile into a ConfigMap, projects it beside the material Secret, and creates the `elitea-sandbox-workspace` Service. It also gives the worker its scratch volume and tells Main that an executor exists (`ELITEA_CLOUD_EXECUTOR_CONFIGURED`). The render fails if workspace runs are only partly enabled: without the supervisor, without `worker.runtime.workspaceRuns`, without a RuntimeClass, or with an audience or target that does not match.

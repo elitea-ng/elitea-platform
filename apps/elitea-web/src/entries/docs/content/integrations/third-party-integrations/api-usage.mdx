@@ -12,7 +12,7 @@ Everything the web app does goes through the same REST API you can call directly
 Open [Settings › Personal tokens](/getting-started/create-personal-access-token) and create a token. Copy it immediately — it's shown once.
 </Step>
 <Step title="Send it with every request">
-Add an `Authorization: Bearer <token>` header. A pylon-compatibility alternative, `X-API-Key: <token>`, is also accepted.
+Add an `Authorization: Bearer <token>` header. A legacy-compatibility alternative, `X-API-Key: <token>`, is also accepted.
 </Step>
 <Step title="Scope your calls to a project">
 Most endpoints take a project id in the path. A token can only act on projects its owner belongs to.

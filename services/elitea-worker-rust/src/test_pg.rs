@@ -1,6 +1,6 @@
 //! Test `PostgreSQL` sessions run in a non-UTC time zone.
 //!
-//! The pylon-era tables keep `created_at`/`updated_at` as `timestamp`
+//! The legacy-era tables keep `created_at`/`updated_at` as `timestamp`
 //! WITHOUT time zone holding the UTC wall clock, beside timestamptz columns.
 //! Postgres converts between the two through the SESSION time zone, so a
 //! defect that mixes them is visible only off UTC; CI's `PostgreSQL` runs in
@@ -215,6 +215,20 @@ pub(crate) async fn assert_test_session(pool: &PgPool, fixture: &str) {
 
 fn set_time_zone_statement(zone: &str) -> String {
     format!("SET TimeZone = '{}'", zone.replace('\'', "''"))
+}
+
+/// A random 32-character lowercase hex id. `PostgreSQL` fixtures that share
+/// one database derive job scopes and owner ids from it, so tests running in
+/// parallel never select, claim or reap each other's rows.
+#[allow(
+    clippy::format_collect,
+    reason = "Keep independent hexadecimal fixture generation separate from production helpers."
+)]
+pub(crate) fn unique_hex() -> String {
+    let mut id = [0_u8; 16];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut id)
+        .expect("system randomness for a test id");
+    id.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

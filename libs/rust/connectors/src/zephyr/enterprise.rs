@@ -493,7 +493,7 @@ mod tests {
         let transport = Scripted::new(|_, _| Reply::json(&json!({"resultSize": 0, "results": []})));
         let source =
             ZephyrEnterpriseSource::new(config(), arguments("x=1"), allow(), transport).unwrap();
-        assert!(source.list().await.unwrap().is_empty());
+        assert_eq!(source.list().await.unwrap(), []);
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ name: CI — Web mutation spot-check
 #
 # ── DECISION: this job is ADVISORY, not a gate (issue #160) ──────────────────
 #
-# It has run: EliteaAI/elitea-platform actions run 31148549304, job 92773164195,
+# It has run: elitea-ng/elitea-platform actions run 31148549304, job 92773164195,
 # 11m08s wall clock (635.5s inside the script). Score 74% — 135 killed of 183
 # mutants, 48 survived, over a 19-file slice of src/shared/** + src/entities/**.
 # The "has never executed" premise in #160 was wrong.

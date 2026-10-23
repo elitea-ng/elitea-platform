@@ -10,7 +10,7 @@ use adk_rust::tool::BasicToolset;
 use adk_rust::{Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{Request, Response, StatusCode, Version};
+use http::Response;
 use http_body_util::Full;
 use tonic::body::Body;
 
@@ -29,15 +29,16 @@ use crate::toolkits::{
     McpConnector, McpMaterializationError, RemoteMcpConfig, ToolAdmissionPolicy,
     mcp_authorization_required_fixture,
 };
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::model_facade::ModelFacade;
 use crate::transport::openai_compatible_facade::{
     CapturedModelRequest, TestModelGatewayOutcome, test_model_gateway_client,
     test_model_gateway_config, test_model_gateway_response,
 };
 use crate::transport::platform_client::PlatformClient;
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 
 const TOKEN: &str = "ephemeral-ordinary-fixture-token";
 
@@ -72,28 +73,28 @@ fn platform_client(runtime_context: RuntimeContextClient) -> Arc<PlatformClient>
     Arc::new(PlatformClient::new(Arc::new(runtime_context)))
 }
 
+type RuntimeContextReply = Result<ContextAnswer, tonic::Status>;
+
+/// Answers runtime-context calls in order and records each call's route.
 struct RuntimeContextFixture {
-    responses: Mutex<VecDeque<Response<Body>>>,
+    responses: Mutex<VecDeque<RuntimeContextReply>>,
     calls: Arc<AtomicUsize>,
     paths: Arc<Mutex<Vec<String>>>,
 }
 
-#[async_trait]
-impl RuntimeContextRpc for RuntimeContextFixture {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
+#[tonic::async_trait]
+impl ContextRoutes for RuntimeContextFixture {
+    async fn answer(&self, call: ContextCall) -> RuntimeContextReply {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.paths
             .lock()
-            .map_err(|_| RuntimeContextTransportError::Unavailable)?
-            .push(request.uri().path().to_owned());
+            .map_err(|_| tonic::Status::unavailable("paths"))?
+            .push(call.route);
         self.responses
             .lock()
-            .map_err(|_| RuntimeContextTransportError::Unavailable)?
+            .map_err(|_| tonic::Status::unavailable("responses"))?
             .pop_front()
-            .ok_or(RuntimeContextTransportError::Unavailable)
+            .unwrap_or_else(|| Err(tonic::Status::unavailable("no response")))
     }
 }
 
@@ -119,30 +120,25 @@ fn runtime_context_client_for_redemptions(
     (client, calls)
 }
 
-fn runtime_context_response(value: &serde_json::Value) -> Response<Body> {
-    let raw = value.to_string();
-    Response::builder()
-        .status(StatusCode::OK)
-        .version(Version::HTTP_2)
-        .header("content-type", "application/json")
-        .header("cache-control", "private, no-cache, no-store")
-        .header("pragma", "no-cache")
-        .header("content-length", raw.len())
-        .body(Body::new(Full::new(Bytes::from(raw))))
-        .expect("runtime-context fixture response")
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a fixture reply is the Result the fake service answers with"
+)]
+fn runtime_context_response(value: &serde_json::Value) -> RuntimeContextReply {
+    Ok(ContextAnswer::from(value))
 }
 
 fn runtime_context_client_from(
-    responses: VecDeque<Response<Body>>,
+    responses: VecDeque<RuntimeContextReply>,
     calls: Arc<AtomicUsize>,
     paths: Arc<Mutex<Vec<String>>>,
 ) -> RuntimeContextClient {
     RuntimeContextClient::with_rpc(
-        RuntimeContextFixture {
+        Routes(RuntimeContextFixture {
             responses: Mutex::new(responses),
             calls,
             paths,
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -300,7 +296,7 @@ fn application_version_response(
     application_id: u64,
     version_id: u64,
     version_details: serde_json::Value,
-) -> Response<Body> {
+) -> RuntimeContextReply {
     let mut response = serde_json::json!({
         "schema_version": "elitea.runtime.application-version.v1",
         "project_id": 17,
@@ -2480,10 +2476,7 @@ async fn saved_agent_is_resolved_once_and_runs_as_an_adk_agent_tool() {
     assert_eq!(context_calls.load(Ordering::Acquire), 2);
     assert_eq!(
         *context_paths.lock().expect("runtime-context paths"),
-        [
-            "/executions/execution-one/generations/2/runtime-context/elitea-client-token",
-            "/executions/execution-one/generations/2/runtime-context/applications/31/versions/41",
-        ]
+        ["elitea-client-token", "applications/31/versions/41",]
     );
     let _ = invocation
         .project_start(chrono::Utc::now())
@@ -4023,7 +4016,11 @@ async fn nested_agent_tier_limit_fails_before_fetching_the_fourth_tier() {
     );
     assert_eq!(calls.load(Ordering::Acquire), 3);
     let paths = paths.lock().expect("runtime-context paths");
-    assert!(paths.iter().all(|path| !path.contains("/applications/33/")));
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.starts_with("applications/33/"))
+    );
     assert!(captured.lock().expect("captured model requests").is_empty());
 }
 
@@ -5243,6 +5240,46 @@ mod internal_tools_graph {
         }
     }
 
+    /// #1225 conformance (ADR-0029 Verification): one turn calling
+    /// `update_plan` in Codex's shape. The desktop's
+    /// `d0::tests::update_plan_conforms_to_the_cloud` sends the same call and
+    /// asserts the same tool result text, so both hosts give the model the
+    /// same answer from the one runtime planner.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_codex_shaped_update_plan_answers_as_on_the_desktop() {
+        let (runtime_context, _) = runtime_context_client();
+        let (assembler, captured) = assembler_with(
+            vec![
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_plan",
+                    "update_plan",
+                    &serde_json::json!({
+                        "title": "Rename X",
+                        "steps": [
+                            {"step": "Find the callers", "status": "in_progress"},
+                            "Rename it"
+                        ]
+                    }),
+                )),
+                TestModelGatewayOutcome::Response(text_response("Planned.")),
+            ],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        run(
+            &assembler,
+            &with_toggles(AgentExecutionKind::Application, &["planner"]),
+        )
+        .await;
+        let seen = requests(&captured);
+        assert_eq!(
+            tool_results(&seen[1]),
+            [
+                "Plan created:\n\n📋 Rename X\n   Progress: 0/2 completed, 1 in progress\n\n   ▶ 1. Find the callers (in progress)\n   ☐ 2. Rename it"
+            ]
+        );
+    }
+
     struct RecordedTool {
         name: String,
         calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
@@ -5618,7 +5655,7 @@ mod internal_tools_graph {
                 Arc::new(InMemorySessionService::new()),
             );
             run(&assembler, &with_toggles(kind, &[])).await;
-            assert!(tool_names(&requests(&captured)[0]).is_empty());
+            assert_eq!(tool_names(&requests(&captured)[0]), [] as [String; 0]);
         }
     }
 

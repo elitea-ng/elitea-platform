@@ -567,7 +567,7 @@ nodes:
         .await
         .expect("child checkpoint reload")
         .expect("completed child checkpoint");
-    assert!(child_checkpoint.pending_nodes.is_empty());
+    assert_eq!(child_checkpoint.pending_nodes, [] as [String; 0]);
 
     let completed_session = get_pipeline_session(&sessions, THREAD).await;
     let replay = PipelineHitlDecision::from_payload(&resume_payload(THREAD, &interrupt_id))
@@ -733,7 +733,7 @@ nodes:
             .await
             .expect("child checkpoint reload")
             .expect("completed child checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
     }
 }
 
@@ -1509,7 +1509,7 @@ async fn application_loop_starts_each_child_activation_once_and_reuses_completed
         .await
         .unwrap()
         .unwrap();
-    assert!(terminal_child.pending_nodes.is_empty());
+    assert_eq!(terminal_child.pending_nodes, [] as [String; 0]);
     assert_eq!(
         terminal_child.metadata["elitea.pipeline.application-activation.v1"]["loop-root/delegate"]
             ["parent_step"],
@@ -1725,7 +1725,7 @@ async fn owned_wrapper_completion_replays_before_parent_advance_without_repollin
         .unwrap()
         .unwrap();
     assert_eq!(final_checkpoint.state["answer"], json!("visit-2"));
-    assert!(final_checkpoint.pending_nodes.is_empty());
+    assert_eq!(final_checkpoint.pending_nodes, [] as [String; 0]);
     let recovered_completion = receipt_for_node(&final_checkpoint, "delegate")
         .unwrap()
         .unwrap();
@@ -1856,7 +1856,7 @@ async fn owned_wrapper_channel_crash_after_completion_reemits_original_terminal_
     assert_eq!(effects.load(Ordering::SeqCst), 2);
     let checkpoint = recovered.load("owned-loop").await.unwrap().unwrap();
     assert_eq!(checkpoint.state["answer"], json!("visit-2"));
-    assert!(checkpoint.pending_nodes.is_empty());
+    assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
     let recovered_receipt = receipt_for_node(&checkpoint, "delegate").unwrap().unwrap();
     assert_eq!(
         serde_json::to_value(&recovered_receipt).unwrap(),

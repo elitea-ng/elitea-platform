@@ -10,11 +10,8 @@ name: Dependency Scanning
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
   schedule:
-    # 06:41 UTC daily. Deliberately away from ci-image-scan.yml's 05:17,
+    # 06:41 UTC daily. Deliberately away from nightly-image-scan.yml's 05:17,
     # deepwiki-real-engine.yml's Sunday 04:23 and the Saturday 02:00 UTC
     # dependabot burst, so the cadence jobs do not contend for the free plan's
     # 20-job concurrency window.
@@ -25,12 +22,12 @@ on:
 # This does not narrow what the gate sees: it still runs unfiltered on every
 # push and pull_request (see above), it just stops N superseded copies of the
 # same commit range sitting in the queue. The org is on the GitHub free plan —
-# 20 concurrent jobs for the whole account — and a push to main starts ~100
+# 20 concurrent jobs for the whole account — and a nightly run on main starts ~100
 # jobs, so a queued run that can never report on current code is a slot another
 # gate needs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -45,3 +42,20 @@ jobs:
       # The script reads git ls-files, so it needs the index, not history.
       - name: Check dependabot coverage
         run: bash scripts/ci/check-dependabot-coverage.sh
+
+  # Dependabot cannot see `azure/setup-helm`'s `version:` input, so it never
+  # proposes a newer Helm. This compares the pins (scripts/ci/check-helm-version.mjs)
+  # with the newest Helm 4 and Helm 3 releases and fails when either is behind.
+  # Daily and on demand only: a new Helm release is not a pull request's fault.
+  helm-version-current:
+    name: The Helm pins are the latest releases
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the checker's one dependency
+        uses: ./.github/actions/ci-scripts-deps
+      - name: Compare the pins with the latest Helm releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/check-helm-version.mjs --latest

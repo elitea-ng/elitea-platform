@@ -7,17 +7,14 @@ use crate::protocol::control::test_runtime_context_authority;
 use crate::toolkits::ArtifactToolAuthority;
 use crate::toolkits::families::artifact::config::ArtifactToolkitConfig;
 use crate::toolkits::families::artifact::tools::build_artifact_toolset;
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 use adk_rust::tool::SimpleToolContext;
 use adk_rust::{ReadonlyContext, Toolset};
-use bytes::Bytes;
-use http::{Request, Response, StatusCode, Version};
-use http_body_util::Full;
-use tonic::body::Body;
 
 const ARTIFACT_NODE: &str = r"
 id: mk
@@ -34,43 +31,25 @@ transition: END
 /// Main's claim-bound content listener, counting every write it accepts.
 struct WriteListener(Arc<AtomicUsize>);
 
-#[async_trait]
-impl RuntimeContextRpc for WriteListener {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        assert!(
-            request
-                .uri()
-                .path()
-                .ends_with("/runtime-context/artifacts/write")
-        );
+#[tonic::async_trait]
+impl ContextRoutes for WriteListener {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+        assert_eq!(call.route, "artifacts/write");
         self.0.fetch_add(1, Ordering::SeqCst);
-        let raw = json!({
+        Ok(ContextAnswer::from(&json!({
             "schema_version": "elitea.runtime.artifact-write.v1",
             "project_id": 17,
             "bucket": "test",
             "name": "verify-1ab920d-edge.txt",
             "media_type": "text/plain",
             "byte_length": 16,
-        })
-        .to_string();
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", raw.len())
-            .body(Body::new(Full::new(Bytes::from(raw))))
-            .expect("artifact write response"))
+        })))
     }
 }
 
 async fn create_file_tool(writes: &Arc<AtomicUsize>) -> Arc<dyn Tool> {
     let client = RuntimeContextClient::with_rpc(
-        WriteListener(Arc::clone(writes)),
+        Routes(WriteListener(Arc::clone(writes))),
         RuntimeContextConfig {
             origin: "https://content.internal:443".to_owned(),
             deadline: std::time::Duration::from_secs(1),

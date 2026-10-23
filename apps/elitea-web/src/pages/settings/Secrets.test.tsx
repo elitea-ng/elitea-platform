@@ -148,7 +148,7 @@ describe('SecretsContent — happy path', () => {
  * ever issued and the row vanished from state.
  *
  * The POST URL asserted here is also the client-side half of defect 1: it is
- * `/api/v2/secrets/secrets/default/{projectId}` — the pylon shape
+ * `/api/v2/secrets/secrets/default/{projectId}` — the legacy shape
  * (plugin `secrets` + resource module `secrets.py` + mode `default`) that
  * elitea-main serves again since #151, pinned on the Go side by
  * TestRouterServesSecretsUnderThePluginPrefix. It was briefly

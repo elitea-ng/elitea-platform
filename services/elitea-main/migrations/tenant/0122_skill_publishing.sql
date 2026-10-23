@@ -2,8 +2,8 @@
 --
 -- The Go bootstrap schema modelled skills as project-local content only: a
 -- skill_versions row had no publish state, and a skills row had no link back to
--- the project a public copy was published from. Both columns exist in the pylon
--- schema this platform is drop-in compatible with
+-- the project a public copy was published from. Both columns exist in the
+-- legacy runtime schema this platform is drop-in compatible with
 -- (legacy/plugins/elitea_core/models/skill.py), so this migration brings a
 -- migrated database up to the same shape rather than inventing one.
 --

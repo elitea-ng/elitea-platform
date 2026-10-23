@@ -69,8 +69,8 @@ describe('buildAvailableConfigurationsTypeUrl (API-145 query assembly)', () => {
   });
 
   it('appends multiple section params for an array, preserving order', () => {
-    const url = buildAvailableConfigurationsTypeUrl({ section: ['llm', 'embedding', 'vectorstorage'] });
-    expect(url).toBe('/configurations/available/?section=llm&section=embedding&section=vectorstorage');
+    const url = buildAvailableConfigurationsTypeUrl({ section: ['llm', 'embedding', 'image_generation'] });
+    expect(url).toBe('/configurations/available/?section=llm&section=embedding&section=image_generation');
   });
 
   it('omits section entirely when absent', () => {

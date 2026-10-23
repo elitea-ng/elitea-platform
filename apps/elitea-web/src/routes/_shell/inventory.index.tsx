@@ -4,7 +4,7 @@
  *
  * THE LEGACY HAD NO SUCH SCREEN. Its bundle was always entered with a toolkit
  * already in the path (`/app/ui_host/inventory/ui/{project}/{toolkit}`),
- * because pylon's provider hub linked to it. This application has its own
+ * because the legacy provider hub linked to it. This application has its own
  * routes, so the route resolves its own toolkit — and a project can hold
  * several Inventory toolkits over different buckets, so it cannot guess.
  *

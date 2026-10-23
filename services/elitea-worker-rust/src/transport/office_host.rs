@@ -3,13 +3,13 @@
 //!
 //! **Objects.** The `artifact` family moves text through the claim-bound
 //! runtime-context routes; a `.pptx` is bytes. The bytes go through the
-//! platform's own object API (`/api/v2/artifacts/objects/{project}/{bucket}`),
-//! the route the indexing artifact source already reads, under the turn's own
-//! model-gateway credential, so elitea-main applies the project and the
-//! per-bucket access list of the person the turn runs as. No new route and no
-//! new internal REST: the request is an ordinary authenticated client call to
-//! the platform origin, and the only host it may reach is that origin (the
-//! egress guard is built from it, fail-closed).
+//! platform's artifact store, `elitea.runtime.v1.ArtifactObjectService` on
+//! elitea-main's platform listener (#1359 U5; it replaced the HTTP object
+//! API on that listener), over the channel the model calls ride and under
+//! the turn's own model-gateway credential and claim, so elitea-main applies
+//! the project and the per-bucket access list of the person the turn runs
+//! as. A refusal keeps the HTTP status the route decided, so each cause keeps
+//! its kind; the hop failing is `Unreachable`.
 //!
 //! **Model.** `complete` binds a second model on the agent's own profile
 //! (the binding the step-back index tools use), through the same model
@@ -25,66 +25,45 @@ use elitea_agent_runtime::toolkits::{
     ImageEditRequest, ImageGenerateRequest, OfficeBucketCreated, OfficeFailure, OfficeHostError,
     OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, TextExtractionFailure,
 };
-use elitea_connectors::artifact::client::{ArtifactPlatform, valid_object_key, valid_segment};
-use elitea_connectors::egress::HostAllowlist;
-use elitea_connectors::source::{Failure, SourceHttp, SourceLimits};
-use elitea_connectors::transport::{Body, Method, Url, header};
+use elitea_connectors::artifact::client::{valid_object_key, valid_segment};
+use elitea_connectors::transport::Url;
 use elitea_llm_wire::refusal::Refusal;
-use serde_json::Value;
+use elitea_platform_rpc::artifacts::{
+    ArtifactClient, ArtifactError, Caller, PutObject, RuntimeClaim,
+};
+use tonic::transport::Channel;
 
 use super::extractor_client::{Extraction, ExtractorClient, SkipReason};
 use super::images_facade::{ImageCall, ImagesClient, ImagesError};
 use super::model_text::ModelCallBudget;
-use super::multipart::Multipart;
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
 
-/// The host's HTTP client: the GitHub client's timeouts and limits, with
-/// protocol-level retries OFF. Object uploads and bucket creation are effects:
-/// a retried POST is a second write and hides a lost answer.
-pub(crate) const OFFICE_POLICY: elitea_connectors::ClientPolicy = elitea_connectors::ClientPolicy {
-    disable_retries: true,
-    ..elitea_connectors::github::client::CLIENT_POLICY
-};
-
-/// What every Office host of the worker shares: the platform origin and the
-/// guarded HTTP client to it.
+/// What every Office host of the worker shares: the platform's artifact
+/// store, the public base URL and the extraction sidecar.
 pub(crate) struct OfficeRuntime {
-    origin: String,
+    artifacts: ArtifactClient,
     /// The deployment's public base URL, when it has stated one.
     public_base_url: Option<String>,
-    http: SourceHttp,
     /// The document extraction sidecar, when the deployment names it: the
     /// toolkit tools that read a PDF or Office file as text (`SharePoint`
     /// `read_document`) ask it. Absent, those tools say so.
     extractor: Option<Arc<ExtractorClient>>,
 }
 
-/// The platform origin is not a usable `https://host[:port]`, or the client
-/// cannot be built.
+/// The turn's credential or project is not usable for the artifact store.
 #[derive(Debug)]
 pub(crate) struct OfficeRuntimeError;
 
 impl OfficeRuntime {
-    /// A runtime that reaches `platform_origin` and nothing else.
-    pub(crate) fn new(platform_origin: &str) -> Result<Self, OfficeRuntimeError> {
-        let host = Url::parse(platform_origin)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .ok_or(OfficeRuntimeError)?;
-        let transport = elitea_connectors::reqwest012::ReqwestTransport::hardened(&OFFICE_POLICY)
-            .map_err(|_| OfficeRuntimeError)?;
-        let limits = SourceLimits {
-            max_document_bytes: elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
-            ..SourceLimits::default()
-        };
-        Ok(Self {
-            origin: platform_origin.to_owned(),
+    /// A runtime over `platform_channel`: elitea-main's platform listener,
+    /// the channel the model calls ride.
+    pub(crate) fn new(platform_channel: Channel) -> Self {
+        Self {
+            artifacts: ArtifactClient::new(platform_channel),
             public_base_url: None,
-            http: SourceHttp::new(HostAllowlist::parse(Some(&host)), Arc::new(transport))
-                .with_limits(limits),
             extractor: None,
-        })
+        }
     }
 
     /// The document extraction sidecar the text readers ask.
@@ -100,34 +79,6 @@ impl OfficeRuntime {
     pub(crate) fn with_public_base_url(mut self, public_base_url: Option<String>) -> Self {
         self.public_base_url = public_base_url;
         self
-    }
-
-    /// Whether the guard admits `url`'s host.
-    #[cfg(test)]
-    pub(crate) fn permits(&self, url: &str) -> bool {
-        Url::parse(url).is_ok_and(|url| self.http.permits(&url))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_transport(
-        platform_origin: &str,
-        transport: Arc<dyn elitea_connectors::transport::Transport>,
-    ) -> Self {
-        let host = Url::parse(platform_origin)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_default();
-        Self {
-            origin: platform_origin.to_owned(),
-            public_base_url: None,
-            http: SourceHttp::new(HostAllowlist::parse(Some(&host)), transport).with_limits(
-                SourceLimits {
-                    max_document_bytes: elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
-                    ..SourceLimits::default()
-                },
-            ),
-            extractor: None,
-        }
     }
 }
 
@@ -167,6 +118,16 @@ impl OfficeClaim {
             conversation: conversation.filter(|value| canonical_uuid(value)),
             attachment_bucket: None,
             resolved: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
+    /// The claim as the artifact store reads it.
+    fn runtime_claim(&self) -> RuntimeClaim {
+        RuntimeClaim {
+            execution_id: self.execution_id.clone(),
+            generation: self.generation,
+            claim_id: self.claim_id.clone(),
+            fence: self.fence.clone(),
         }
     }
 
@@ -257,7 +218,8 @@ fn canonical_uuid(value: &str) -> bool {
 /// The Office host of one claimed turn.
 pub(crate) struct ClaimOfficeHost {
     runtime: Arc<OfficeRuntime>,
-    platform: ArtifactPlatform,
+    /// The turn's credential and project (and, with a claim, the claim).
+    caller: Caller,
     model: LazyStepbackModel,
     project_id: String,
     /// The claim named on every object request.
@@ -276,18 +238,17 @@ impl ClaimOfficeHost {
     ///
     /// # Errors
     ///
-    /// The origin, bearer or project are not usable for the object API.
+    /// The bearer or project are not usable for the artifact store.
     pub(crate) fn new(
         runtime: Arc<OfficeRuntime>,
         bearer: &str,
         project_id: &str,
         model: LazyStepbackModel,
     ) -> Result<Self, OfficeRuntimeError> {
-        let platform = ArtifactPlatform::new(&runtime.origin, bearer, project_id)
-            .map_err(|_| OfficeRuntimeError)?;
+        let caller = Caller::parse(bearer, project_id).ok_or(OfficeRuntimeError)?;
         Ok(Self {
             runtime,
-            platform,
+            caller,
             model,
             project_id: project_id.to_owned(),
             claim: None,
@@ -299,6 +260,7 @@ impl ClaimOfficeHost {
     /// This host naming `claim` on every object request.
     #[must_use]
     pub(crate) fn with_claim(mut self, claim: OfficeClaim) -> Self {
+        self.caller = self.caller.clone().with_claim(claim.runtime_claim());
         self.claim = Some(claim);
         self
     }
@@ -371,56 +333,28 @@ impl ClaimOfficeHost {
         }
     }
 
-    fn object_request(
-        &self,
-        method: Method,
-        bucket: &str,
-        key: Option<&str>,
-        overwrite: bool,
-    ) -> Result<elitea_connectors::transport::Request, OfficeHostError> {
-        if !valid_segment(bucket) || key.is_some_and(|k| !valid_object_key(k)) {
+    /// The worker's name check, before any call is made.
+    fn check_names(bucket: &str, key: Option<&str>) -> Result<(), OfficeHostError> {
+        // A control character is refused as the multipart encoder refused
+        // it: a model-chosen name never carries a line break into a key.
+        if !valid_segment(bucket)
+            || key.is_some_and(|k| !valid_object_key(k) || k.chars().any(char::is_control))
+        {
             return Err(OfficeHostError::new(
                 OfficeFailure::InvalidRequest,
                 "office_host.invalid_name",
             ));
         }
-        let mut url = self.platform.objects_url(bucket, key);
-        // The server refuses a taken name (409) unless the write asks to replace.
-        if overwrite {
-            url.query_pairs_mut().append_pair("overwrite", "true");
-        }
-        let mut request = self.platform.get(url).map_err(|_| {
-            OfficeHostError::new(
-                OfficeFailure::AccessRefused,
-                "office_host.credential_unusable",
-            )
-        })?;
-        *request.method_mut() = method;
-        if let Some(claim) = &self.claim {
-            for (name, value) in [
-                ("x-elitea-execution-id", claim.execution_id.clone()),
-                (
-                    "x-elitea-execution-generation",
-                    claim.generation.to_string(),
-                ),
-                ("x-elitea-claim-id", claim.claim_id.clone()),
-                ("x-elitea-fence", claim.fence.clone()),
-            ] {
-                let value = header::HeaderValue::from_str(&value).map_err(|_| {
-                    OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.claim_header")
-                })?;
-                request.headers_mut().insert(name, value);
-            }
-        }
-        Ok(request)
+        Ok(())
     }
 }
 
-/// A platform object failure as the host classifies it: each real cause its
-/// own kind, so the tool names it.
-pub(crate) fn failure(error: &Failure) -> OfficeHostError {
+/// An artifact store failure as the host classifies it: each real cause its
+/// own kind, so the tool names it. A refusal is classified by the HTTP status
+/// the route decided.
+pub(crate) fn failure(error: &ArtifactError) -> OfficeHostError {
     let (kind, reason) = match error {
-        Failure::Status(status) => match status.as_u16() {
+        ArtifactError::Refused(refusal) => match refusal.http_status {
             404 => (OfficeFailure::NotFound, "office_host.not_found"),
             401 | 403 => (OfficeFailure::AccessRefused, "office_host.access_refused"),
             409 => (OfficeFailure::AlreadyExists, "office_host.already_exists"),
@@ -435,13 +369,10 @@ pub(crate) fn failure(error: &Failure) -> OfficeHostError {
                 "office_host.dependency_unavailable",
             ),
         },
-        Failure::TooLarge(_) => (OfficeFailure::TooLarge, "office_host.too_large"),
-        // The egress guard does not admit the platform host, or the credential
-        // does not fit a header: the file store was refused, not unreachable.
-        Failure::Refused | Failure::Client(_) => {
-            (OfficeFailure::AccessRefused, "office_host.egress_refused")
-        }
-        _ => (
+        ArtifactError::TooLarge(_) => (OfficeFailure::TooLarge, "office_host.too_large"),
+        // A name the call cannot carry: nothing was sent.
+        ArtifactError::Invalid(_) => (OfficeFailure::InvalidRequest, "office_host.invalid_name"),
+        ArtifactError::Hop(_) | ArtifactError::Protocol(_) => (
             OfficeFailure::Unreachable,
             "office_host.dependency_unavailable",
         ),
@@ -787,24 +718,16 @@ impl OfficeToolHost for ClaimOfficeHost {
     }
 
     async fn object_size(&self, bucket: &str, name: &str) -> Result<Option<u64>, OfficeHostError> {
-        // A HEAD: the size is the declared Content-Length, and nothing is
-        // buffered.
+        // The object's info: nothing is read.
+        Self::check_names(bucket, Some(name))?;
         self.check_object(bucket, name).await?;
-        let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
-        let response = self
+        let info = self
             .runtime
-            .http
-            .send(head)
+            .artifacts
+            .stat(&self.caller, bucket, name)
             .await
             .map_err(|e| failure(&e))?;
-        if !response.status().is_success() {
-            return Err(failure(&Failure::Status(response.status())));
-        }
-        Ok(response
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.trim().parse::<u64>().ok()))
+        Ok(u64::try_from(info.size_bytes).ok())
     }
 
     async fn read_object(
@@ -813,30 +736,17 @@ impl OfficeToolHost for ClaimOfficeHost {
         name: &str,
         max_bytes: u64,
     ) -> Result<Vec<u8>, OfficeHostError> {
-        // The size first, from a HEAD, so a large object is refused without
-        // being buffered (and an existence check does not download a deck).
+        // The object's info arrives before its bytes, so a large object is
+        // refused from its declared size without being read.
+        Self::check_names(bucket, Some(name))?;
         self.check_object(bucket, name).await?;
-        let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
-        let response = self
+        let reader = self
             .runtime
-            .http
-            .send(head)
+            .artifacts
+            .get_object(&self.caller, bucket, name)
             .await
             .map_err(|e| failure(&e))?;
-        if !response.status().is_success() {
-            return Err(failure(&Failure::Status(response.status())));
-        }
-        if response.declares_more_than(usize::try_from(max_bytes).unwrap_or(usize::MAX)) {
-            return Err(failure(&Failure::TooLarge(max_bytes)));
-        }
-        drop(response);
-        self.check_object(bucket, name).await?;
-        let get = self.object_request(Method::GET, bucket, Some(name), false)?;
-        let bytes = self.runtime.http.raw(get).await.map_err(|e| failure(&e))?;
-        if bytes.len() as u64 > max_bytes {
-            return Err(failure(&Failure::TooLarge(max_bytes)));
-        }
-        Ok(bytes)
+        reader.read_to_end(max_bytes).await.map_err(|e| failure(&e))
     }
 
     async fn write_object(
@@ -847,59 +757,46 @@ impl OfficeToolHost for ClaimOfficeHost {
         bytes: Vec<u8>,
         overwrite: bool,
     ) -> Result<OfficeObjectWritten, OfficeHostError> {
-        if !valid_object_key(name) {
+        Self::check_names(bucket, Some(name))?;
+        if media_type.chars().any(char::is_control) {
             return Err(OfficeHostError::new(
                 OfficeFailure::InvalidRequest,
                 "office_host.invalid_name",
             ));
         }
         self.check_object(bucket, name).await?;
-        let mut request = self.object_request(Method::POST, bucket, None, overwrite)?;
         let byte_length = bytes.len() as u64;
-        // The one multipart encoder refuses a name or media type that could
-        // end the header line.
-        let mut form = Multipart::new();
-        form.file("file", name, media_type, &bytes).map_err(|_| {
-            OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.invalid_name")
-        })?;
-        let (content_type, body) = form.finish();
-        request.headers_mut().insert(
-            header::CONTENT_TYPE,
-            content_type.parse().map_err(|_| {
-                OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.upload_header")
-            })?,
-        );
-        *request.body_mut() = Some(Body::from(body));
-        let mut response = self
+        // The server refuses a taken name (409) unless the write asks to
+        // replace it.
+        let info = self
             .runtime
-            .http
-            .send(request)
+            .artifacts
+            .put_object(
+                &self.caller,
+                PutObject {
+                    bucket: bucket.to_owned(),
+                    key: name.to_owned(),
+                    media_type: media_type.to_owned(),
+                    overwrite,
+                },
+                bytes.into(),
+            )
             .await
             .map_err(|e| failure(&e))?;
-        if !response.status().is_success() {
-            return Err(failure(&Failure::Status(response.status())));
-        }
-        let reply = SourceHttp::body(&mut response, 64 * 1024)
-            .await
-            .map_err(|e| failure(&e))?;
-        let reply: Value = serde_json::from_slice(&reply).map_err(|_| {
-            OfficeHostError::new(OfficeFailure::Unreachable, "office_host.reply_not_json")
-        })?;
+        let echoed = |value: String, fallback: &str| {
+            if value.is_empty() {
+                fallback.to_owned()
+            } else {
+                value
+            }
+        };
         Ok(OfficeObjectWritten {
             bucket: bucket.to_owned(),
-            name: reply
-                .get("key")
-                .and_then(Value::as_str)
-                .unwrap_or(name)
-                .to_owned(),
-            media_type: reply
-                .get("media_type")
-                .and_then(Value::as_str)
-                .unwrap_or(media_type)
-                .to_owned(),
-            byte_length: reply
-                .get("size_bytes")
-                .and_then(Value::as_u64)
+            name: echoed(info.key, name),
+            media_type: echoed(info.media_type, media_type),
+            byte_length: u64::try_from(info.size_bytes)
+                .ok()
+                .filter(|size| *size > 0 || byte_length == 0)
                 .unwrap_or(byte_length),
         })
     }
@@ -951,51 +848,24 @@ impl OfficeToolHost for ClaimOfficeHost {
                 "office_host.invalid_name",
             ));
         }
-        let mut request = self
-            .platform
-            .get(self.platform.buckets_url())
-            .map_err(|_| {
-                OfficeHostError::new(
-                    OfficeFailure::AccessRefused,
-                    "office_host.credential_unusable",
-                )
-            })?;
-        *request.method_mut() = Method::POST;
-        request.headers_mut().insert(
-            header::CONTENT_TYPE,
-            header::HeaderValue::from_static("application/json"),
-        );
-        let mut body = serde_json::json!({"name": name});
-        if let (Some(days), Some(object)) = (retention_days, body.as_object_mut()) {
-            object.insert("retention_days".to_owned(), serde_json::json!(days));
-        }
-        *request.body_mut() = Some(Body::from(body.to_string()));
-        let mut response = self
+        let created = self
             .runtime
-            .http
-            .send(request)
+            .artifacts
+            .create_bucket(
+                &self.caller,
+                name,
+                retention_days.and_then(|days| i32::try_from(days).ok()),
+            )
             .await
             .map_err(|e| failure(&e))?;
-        if !response.status().is_success() {
-            return Err(failure(&Failure::Status(response.status())));
-        }
-        // The bucket exists once the platform says 2xx; a reply that cannot be
-        // read only costs the echo of what it stored.
-        let reply = SourceHttp::body(&mut response, 64 * 1024)
-            .await
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         Ok(OfficeBucketCreated {
-            name: reply
-                .as_ref()
-                .and_then(|reply| reply.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or(name)
-                .to_owned(),
-            retention_days: reply
-                .as_ref()
-                .and_then(|reply| reply.get("retention_days"))
-                .and_then(Value::as_u64)
+            name: if created.name.is_empty() {
+                name.to_owned()
+            } else {
+                created.name
+            },
+            retention_days: created
+                .retention_days
                 .and_then(|days| u32::try_from(days).ok())
                 .or(retention_days),
         })

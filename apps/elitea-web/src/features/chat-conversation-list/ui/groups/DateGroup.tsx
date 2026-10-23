@@ -9,6 +9,7 @@ import Typography from '@mui/material/Typography';
 import type { Theme } from '@mui/material/styles';
 
 import type { Conversation } from '@/entities/conversation';
+import { GroupActivitySummary } from '@/shared/ui/ConversationActivity';
 
 import type { DateGroupListItem } from '../../lib/hooks/conversationListState.types';
 import type { DropAreaState } from '../../lib/hooks/useDragAndDrop';
@@ -133,6 +134,7 @@ export function DateGroup({ group, renderConversationItem, isExpanded, onToggleE
         >
           {group.displayName ?? group.name}
         </Typography>
+        <GroupActivitySummary rows={group.conversations} serverNeedsYou={group.needsYou} count={group.total ?? group.conversations.length} />
       </ButtonBase>
 
       <Collapse in={isExpanded}>

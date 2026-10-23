@@ -91,9 +91,9 @@ export function modelConfigurationErrorMessage(error: unknown): string {
 /**
  * Fetch model list for a project.
  * @param projectId — project UID from the selected project.
- * @param section — one of: `llm`, `embedding`, `vectorstorage`, `image_generation`, `asr`, `tts`.
+ * @param section — one of: `llm`, `embedding`, `image_generation`, `asr`, `tts`.
  * @param includeShared — include shared (public-project) models.
- * @param signal — react-query's abort signal, so the six parallel section
+ * @param signal — react-query's abort signal, so the parallel section
  *   queries stop when the panel unmounts.
  */
 async function fetchModels(
@@ -145,7 +145,7 @@ export function useModelsQuery(
 export interface SetProjectDefaultModelParams {
   readonly name: string;
   readonly targetProjectId: string;
-  /** e.g. `llm`, `llm_low_tier`, `llm_high_tier`, `embedding`, `vectorstorage`, `image_generation`, `asr`, `tts`. */
+  /** e.g. `llm`, `llm_low_tier`, `llm_high_tier`, `embedding`, `image_generation`, `asr`, `tts`. */
   readonly section: string;
 }
 

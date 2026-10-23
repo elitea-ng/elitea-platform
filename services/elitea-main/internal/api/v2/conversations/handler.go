@@ -55,7 +55,7 @@ type Conversation struct {
 	IsPrivate *bool `json:"is_private,omitempty"`
 	// The conversation's own settings document (`chat_conversations.meta`).
 	//
-	// Pylon's PUT accepted it and its GET returned it
+	// The legacy PUT accepted it and its GET returned it
 	// (legacy/plugins/elitea_core/api/v2/conversation.py:123), and the web
 	// client is written against that contract on both sides: the chat page
 	// reads `detailsQuery.data.meta` (apps/elitea-web/src/pages/chat/
@@ -164,14 +164,15 @@ type MessagesListResponse struct {
 // `{...params, limit, offset: page * pageSize}`
 // (apps/elitea-web/src/entities/conversation/api/messageApi.ts:59-63); the SPA
 // it was ported from does the same (frontends/EliteaUI/.../chat.api.js:24-32);
-// and pylon, the contract both were written against, read `limit` (default 10),
-// `offset` (default 0), `sort_by` (default created_at) and `sort_order`
-// (default desc) — legacy/plugins/elitea_core/api/v2/messages.py:71-107. So
-// every request collapsed onto this server's own defaults: page 1, size 50,
-// created_at DESC. Scrolling back re-fetched the same newest 50 groups
-// forever (useLoadMoreMessages.ts:96 sends offset=10,20,30…), and a caller
-// that asked for `sort_order=asc` (useChatPageData.ts:66,
-// usePlaybackConversation.ts:66) was served DESC.
+// and the legacy runtime, the contract both were written against, read `limit`
+// (default 10), `offset` (default 0), `sort_by` (default created_at) and
+// `sort_order` (default desc) —
+// legacy/plugins/elitea_core/api/v2/messages.py:71-107. So every request
+// collapsed onto this server's own defaults: page 1, size 50, created_at DESC.
+// Scrolling back re-fetched the same newest 50 groups forever
+// (useLoadMoreMessages.ts:96 sends offset=10,20,30…), and a caller that asked
+// for `sort_order=asc` (useChatPageData.ts:66, usePlaybackConversation.ts:66)
+// was served DESC.
 //
 // SortBy crosses this boundary UNVALIDATED on purpose: it names a column, so it
 // is concatenated into SQL rather than bound, and the allow-list that decides
@@ -322,6 +323,8 @@ type Handler struct {
 	userDefaults    UserContextDefaults
 	events          EventEmitter
 	candidates      ParticipantCandidateStore
+	readEvents      ReadEvents
+	warmer          AttachmentExtractionWarmer
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
@@ -360,7 +363,13 @@ func eventEmitterPresent(emitter EventEmitter) bool {
 	if emitter == nil {
 		return false
 	}
-	v := reflect.ValueOf(emitter)
+	return presentValue(emitter)
+}
+
+// presentValue is false for an interface boxing a nil pointer, map, slice,
+// channel or func (the #86 trap).
+func presentValue(value any) bool {
+	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
 		return !v.IsNil()
@@ -541,17 +550,27 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		filters += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
 	}
 
-	baseWhere := "WHERE " + visibility + " AND " + filters
+	// The project's archive (client contract 1.10). Kept out of `filters`:
+	// the delta treats it differently (see conversationChangesQuery).
+	mode := archivedMode(r.URL.Query())
+	archived := archivedFilter(s, mode)
+
+	baseWhere := "WHERE " + visibility + " AND " + filters + " AND " + archived
 
 	if raw, delta := changesync.Requested(r.URL.Query()); delta {
 		h.listChanges(w, r, pool, conversationChangesQuery{
-			schema:     s,
-			projectID:  projectID,
-			visibility: visibility,
-			filters:    filters,
-			args:       args,
-			admin:      access.Admin,
-			raw:        raw,
+			schema:       s,
+			projectID:    projectID,
+			visibility:   visibility,
+			filters:      filters,
+			archived:     archived,
+			archivedMode: mode,
+			// A client at contract 1.10 or later states `archived`.
+			archivedStated: r.URL.Query().Has("archived"),
+			args:           args,
+			admin:          access.Admin,
+			actorID:        access.ActorID,
+			raw:            raw,
 		})
 		return
 	}
@@ -580,7 +599,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	result := []map[string]any{}
 	for rows.Next() {
-		row, _, err := scanConversationRow(rows, false)
+		row, _, _, err := scanConversationRow(rows, false)
 		if err != nil {
 			apierr.Write(w, err)
 			return
@@ -594,6 +613,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
+	annotateArchivers(ctx, pool, result)
+	if err := annotateActivity(ctx, pool, s, access.ActorID, result); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 
@@ -691,6 +715,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if testRuns != nil {
 		resp["editor_test_runs"] = *testRuns
 	}
+	// Client contract 1.11: the fork's source, with its name when the caller
+	// can still see it.
+	if ff := forkedFrom(conv.Meta); ff != nil {
+		h.annotateForkSource(r.Context(), projectID, ff)
+		resp["forked_from"] = ff
+	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
 	messagesLimit, _ := strconv.Atoi(r.URL.Query().Get("messages_limit"))
@@ -725,9 +755,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	// The create path carries settings too: the composer sends
 	// `meta.steps_limit` with the very first send (apps/elitea-web/src/
-	// widgets/chat-box/ui/hooks/useChatBoxSend.ts:310-313), and pylon stored
-	// it (legacy/plugins/elitea_core/api/v2/conversations.py:153-164).
+	// widgets/chat-box/ui/hooks/useChatBoxSend.ts:310-313), and the legacy
+	// runtime stored it
+	// (legacy/plugins/elitea_core/api/v2/conversations.py:153-164).
 	if meta, ok := body["meta"].(map[string]any); ok {
+		// `forked_from` is the server's: only forkConversation writes it.
+		delete(meta, ForkedFromMetaKey)
 		conv.Meta = meta
 	}
 	actorID, err := chatauthority.Actor(r.Context())
@@ -892,7 +925,7 @@ func (h *Handler) statesStoredName(r *http.Request, projectID, conversationID st
 }
 
 // MaxConversationNameLength is the longest name a rename stores, in
-// characters (runes). Pylon's ConversationUpdate capped it at 50
+// characters (runes). The legacy ConversationUpdate capped it at 50
 // (elitea_core/utils/chat_constants.py); the create route here never did, so
 // conversations named from a first message are longer, and a rename of one
 // must still be able to send its name back. 256 bounds what a client can
@@ -950,7 +983,7 @@ func conversationNameFromBody(body map[string]any) (string, error) {
 //
 // The ORDER is the one Handler.DeleteMessage explains at length: the repository
 // applies its guards, collects the refs inside its transaction and commits, and
-// only then are the bytes touched. Pylon's opposite order destroys files for
+// only then are the bytes touched. The legacy opposite order destroys files for
 // requests that go on to refuse; the cost of this one — rows gone, bytes not —
 // is bounded, because the objects are still recorded in
 // `elitea_storage.objects` and the sweeper still finds them.
@@ -993,15 +1026,15 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 // `predict.go` (its only caller's only dependency) went with it.
 //
 // It was never mounted by any router, and the reason is that the route it
-// implements is already served by something else. pylon declares the message
-// POST at `/api/v2/elitea_core/messages/prompt_lib/<project_id>/
+// implements is already served by something else. The legacy API declares the
+// message POST at `/api/v2/elitea_core/messages/prompt_lib/<project_id>/
 // <conversation_uuid>` under `models.chat.messages.create`
 // (elitea_core/api/v2/messages.py:220-228,377-385). That is character for
 // character `agentexecution.CurrentApplicationStartPath` with
 // `CurrentApplicationStartPermission` — the live agent-execution start route
 // #93 ported the dispatch onto. Mounting this shim at its own baseline URL
 // would collide with that registration; mounting it anywhere else would invent
-// a URL pylon never served.
+// a URL the legacy runtime never served.
 //
 // The two implementations were also not interchangeable. The runtime plane
 // dispatches a real turn and streams it. The shim built its own HTTP request
@@ -1012,28 +1045,28 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 // a hardcoded `gpt-4o-mini` no deployment here serves.
 
 const (
-	// Pylon's default page of a transcript is 10 groups
+	// The legacy default page of a transcript is 10 groups
 	// (messages.py:73). The 50 this handler used instead was never observable
 	// — no caller sends page_size — so restoring the legacy number changes what
 	// a parameterless request returns, and nothing else.
 	defaultMessagesLimit = 10
 
 	// The cap the page_size branch already enforced, carried over onto `limit`.
-	// Pylon has no cap at all, but the ceiling matters more here than parity
-	// does: ListMessages runs one correlated string_agg subquery per group, so
-	// an uncapped limit lets an anonymous query string decide how much work the
-	// database does. 100 is not arbitrary either — it is exactly what the
-	// largest real caller asks for (usePlaybackConversation.ts:66 requests
-	// pageSize 100), so the cap binds nothing that exists today.
+	// The legacy runtime has no cap at all, but the ceiling matters more here
+	// than parity does: ListMessages runs one correlated string_agg subquery
+	// per group, so an uncapped limit lets an anonymous query string decide how
+	// much work the database does. 100 is not arbitrary either — it is exactly
+	// what the largest real caller asks for (usePlaybackConversation.ts:66
+	// requests pageSize 100), so the cap binds nothing that exists today.
 	maxMessagesLimit = 100
 )
 
 // parseMessagesQuery resolves the transcript window from the query string.
 //
 // PRECEDENCE, and why it is this way round (#603): `limit`/`offset` are the
-// primary pair because they are the pair pylon defined and the pair every
-// client sends. `page`/`page_size` are read FIRST and then overwritten, which
-// makes limit/offset win whenever both are present, while leaving the
+// primary pair because they are the pair the legacy API defined and the pair
+// every client sends. `page`/`page_size` are read FIRST and then overwritten,
+// which makes limit/offset win whenever both are present, while leaving the
 // page/page_size pair fully functional for a caller that sends only it — this
 // server has advertised that pair for long enough that dropping it would be a
 // second silent break, and the sibling List handler on the same resource takes
@@ -1068,12 +1101,12 @@ func parseMessagesQuery(values url.Values) MessagesQuery {
 	if sortBy := values.Get("sort_by"); sortBy != "" {
 		query.SortBy = sortBy
 	}
-	// Pylon read this as `request.args.get('query')` and applied it only when
-	// truthy (messages.py:71,86), so an explicit `query=` was the same as
-	// sending nothing. Same here.
+	// The legacy runtime read this as `request.args.get('query')` and applied
+	// it only when truthy (messages.py:71,86), so an explicit `query=` was the
+	// same as sending nothing. Same here.
 	query.Query = values.Get("query")
-	// Only the exact token `asc` flips the order. Pylon wrote this as
-	// `desc if sort_order == 'desc' else asc`, so under pylon ANY unrecognised
+	// Only the exact token `asc` flips the order. The legacy runtime wrote this
+	// as `desc if sort_order == 'desc' else asc`, so there ANY unrecognised
 	// value — a typo, an empty explicit `sort_order=` — silently reversed the
 	// transcript. The documented default is desc; an unrecognised value gets
 	// the documented default rather than the opposite of it.
@@ -1133,30 +1166,32 @@ func (h *Handler) DeleteMessages(w http.ResponseWriter, r *http.Request) {
 // WHY THIS ANSWERS 200 WITH A BODY RATHER THAN 204. One request can remove TWO
 // groups — the reply named in the URL and the question it answers — and a
 // client that prunes only the id it asked for would leave the other message on
-// screen until a reload, which is worse than not pairing at all. Pylon told the
-// client through a per-group socket event (message.py:154-171); there is no
-// such channel on this route, so the response carries the fact instead. The
-// body names every group that is really gone, newest first, so a client can
-// prune exactly what the server removed rather than guessing at the pairing
-// rule — the pairing lives in one place, on the server.
+// screen until a reload, which is worse than not pairing at all. The legacy
+// runtime told the client through a per-group socket event
+// (message.py:154-171); there is no such channel on this route, so the response
+// carries the fact instead. The body names every group that is really gone,
+// newest first, so a client can prune exactly what the server removed rather
+// than guessing at the pairing rule — the pairing lives in one place, on the
+// server.
 //
-// # `delete_attachment`, and the pylon ordering bug NOT reproduced
+// # `delete_attachment`, and the legacy ordering bug NOT reproduced
 //
-// Pylon removes an attachment's stored bytes only when the request carries a
-// `delete_attachment` query flag (message.py:103-107), and this keeps that
-// opt-in: a delete that silently destroyed uploaded files would be a bigger
-// surprise than one that leaves them for the retention sweeper.
+// The legacy runtime removes an attachment's stored bytes only when the request
+// carries a `delete_attachment` query flag (message.py:103-107), and this keeps
+// that opt-in: a delete that silently destroyed uploaded files would be a
+// bigger surprise than one that leaves them for the retention sweeper.
 //
-// But pylon runs that loop BEFORE its "summarized message cannot be deleted"
-// and "only the last message" guards (message.py:103 vs :108-122), so a request
-// that goes on to answer 400 has ALREADY deleted the files. That is a defect,
-// not a contract, and it is not ported. Here the repository applies every guard
-// and commits first; the bytes are touched only once the delete is a fact.
+// But the legacy runtime runs that loop BEFORE its "summarized message cannot
+// be deleted" and "only the last message" guards (message.py:103 vs :108-122),
+// so a request that goes on to answer 400 has ALREADY deleted the files. That
+// is a defect, not a contract, and it is not ported. Here the repository
+// applies every guard and commits first; the bytes are touched only once the
+// delete is a fact.
 //
 // The cost of that ordering is the opposite failure: rows gone, bytes not. It
 // is the cheaper one, and it is bounded — the objects are still recorded in
 // `elitea_storage.objects`, so the retention sweeper still finds and expires
-// them. Deleting the bytes first and refusing afterwards, pylon's order, is
+// them. Deleting the bytes first and refusing afterwards, the legacy order, is
 // unrecoverable: the file is gone and the message still claims it.
 func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeConversation(w, r) {
@@ -1172,10 +1207,10 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Presence, not value — pylon tests `'delete_attachment' in request.args`,
-	// so `?delete_attachment` with no value counts, and so does `=false`.
-	// Matching that literally matters more than tidiness: a client that has
-	// been sending the bare flag at pylon for years must keep working.
+	// Presence, not value — the legacy runtime tests `'delete_attachment' in
+	// request.args`, so `?delete_attachment` with no value counts, and so does
+	// `=false`. Matching that literally matters more than tidiness: a legacy
+	// client that has been sending the bare flag for years must keep working.
 	if _, asked := r.URL.Query()["delete_attachment"]; asked && len(result.Attachments) > 0 {
 		if err := h.deleteAttachmentObjects(r.Context(), projectID, result.Attachments); err != nil {
 			apierr.Write(w, err)
@@ -1196,9 +1231,9 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 // A `chat_messages_attachment` row and an `elitea_storage.objects` row are
 // independent — the first is the message's claim on a file, the second is the
 // storage layer's record of it — so an attachment may legitimately have no
-// object record here (an upload from before the S20a byte path, or a row pylon
-// wrote). A missing record is not an error: the bytes are deleted by ref, and
-// the record delete simply matches nothing.
+// object record here (an upload from before the S20a byte path, or a row the
+// legacy runtime wrote). A missing record is not an error: the bytes are
+// deleted by ref, and the record delete simply matches nothing.
 func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr string, attachments []AttachmentRef) error {
 	if h.store == nil || h.attachments == nil {
 		// Nothing could have been stored in a deployment with no object store;
@@ -1271,12 +1306,12 @@ func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr stri
 	return nil
 }
 
-// GetMessage is the per-message read pylon declares as `message.py`'s `get`,
-// alongside the `delete` DeleteMessage already serves — one module, one URL,
-// two verbs (elitea_core/api/v2/message.py:176-183).
+// GetMessage is the per-message read the legacy API declares as `message.py`'s
+// `get`, alongside the `delete` DeleteMessage already serves — one module, one
+// URL, two verbs (elitea_core/api/v2/message.py:176-183).
 //
 // The path param is `{messageID}`, shared with that DELETE sibling, and it
-// carries pylon's `message_group_uid`: a message-GROUP uuid STRING, not the
+// carries the legacy `message_group_uid`: a message-GROUP uuid STRING, not the
 // numeric row id the name suggests. The name is the sibling's because chi
 // resolves one param per path segment and the two verbs share the segment.
 //
@@ -1399,14 +1434,14 @@ func (h *Handler) DeleteMessageFeedback(w http.ResponseWriter, r *http.Request) 
 // when the caller left it out. It changes nothing for a model participant,
 // which carries no project id at all.
 //
-// The early return for `llm` and `dummy` matches what legacy STORES. legacy
+// The early return for `llm` and `dummy` matches what the legacy runtime STORES. The legacy runtime
 // writes the project id into every request entry (participants.py:63-65), but
 // pydantic then validates entity_meta against a per-type model.
 // ParticipantEntityLlm keeps `model_name` only, and ParticipantEntityDummy
 // keeps nothing (models/pd/participant.py:21-30). The extra key never reaches
 // the INSERT.
 //
-// One difference remains. legacy validates a `user` entity against
+// One difference remains. The legacy runtime validates a `user` entity against
 // ParticipantEntityUser, which keeps `id` only, so the stored document holds
 // no project id. This helper adds one. The identity key for a user is `id`
 // alone, so the extra key splits no participant row.
@@ -1477,7 +1512,7 @@ func (h *Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Answer with the participants of THIS request only, in request order.
-	// Legacy returns `[serialize(p) for p in result_details]`, the rows it
+	// The legacy runtime returns `[serialize(p) for p in result_details]`, the rows it
 	// added or found. This handler used to return the whole conversation, and
 	// the web callers that treat the answer as "the added rows"
 	// (useAddNewParticipants, the create-from-chat attach, the toolkit
@@ -1812,7 +1847,7 @@ func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request
 }
 
 // AddAttachments serves two different resource types at the one legacy URL,
-// exactly like legacy itself does (legacy/plugins/elitea_core/api/v2/
+// exactly like the legacy runtime itself does (legacy/plugins/elitea_core/api/v2/
 // attachments.py's PromptLibAPI.post handles both a plain multipart upload
 // and a chunked one at the same route, distinguishing by form fields, not a
 // separate path): a JSON body updates chat_conversations.meta (pre-existing,
@@ -1848,7 +1883,7 @@ func (h *Handler) AddAttachments(w http.ResponseWriter, r *http.Request) {
 // DEFECT #599: this route used to strip the meta and nothing else. The
 // uploaded bytes and their metadata rows survived until the retention
 // sweeper eventually expired them, so "delete my attachments" forgot the
-// attachments without deleting them. Pylon's equivalent route removes the
+// attachments without deleting them. The legacy equivalent route removes the
 // bytes at the same moment (legacy/plugins/elitea_core/api/v2/
 // attachments.py:240, `mc.remove_file(bucket_name, filename)`); this is that
 // parity baseline.
@@ -1981,7 +2016,7 @@ func (h *Handler) deleteStoredAttachments(ctx context.Context, projectIDStr, con
 	return nil
 }
 
-// GetContextStatus serves pylon's ContextStatus for one conversation:
+// GetContextStatus serves the legacy ContextStatus for one conversation:
 // `GET /elitea_core/context_analytics/prompt_lib/{projectID}/{conversationID}`.
 //
 // The `max_tokens` it reports is the RESOLVED strategy's, so a conversation
@@ -2009,10 +2044,10 @@ func (h *Handler) GetContextStatus(w http.ResponseWriter, r *http.Request) {
 // GetContextStrategy serves the resolved strategy itself, so a client can show
 // what applies to a conversation before anything has been written to it.
 //
-// pylon had no such route - its UI only ever saw a strategy in the response to
-// its own PUT, which meant a conversation nobody had configured could not be
-// displayed without writing to it first. The response is the same document the
-// PUT returns under `updated_strategy`.
+// The legacy runtime had no such route - its UI only ever saw a strategy in the
+// response to its own PUT, which meant a conversation nobody had configured
+// could not be displayed without writing to it first. The response is the same
+// document the PUT returns under `updated_strategy`.
 func (h *Handler) GetContextStrategy(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeConversation(w, r) {
 		return
@@ -2028,7 +2063,7 @@ func (h *Handler) GetContextStrategy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, contextsettings.Resolve(state.Strategy, h.contextDefaults(r)))
 }
 
-// UpdateContextStrategy is pylon's context_strategy PUT
+// UpdateContextStrategy is the legacy context_strategy PUT
 // (legacy/plugins/elitea_core/api/v2/context_strategy.py), response shape
 // included: the context status, plus `message` and `updated_strategy`.
 //
@@ -2076,7 +2111,7 @@ func (h *Handler) UpdateContextStrategy(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, contextStrategyUpdateResponse(merged, state))
 }
 
-// contextStrategyUpdateResponse is pylon's PUT body: the context status with
+// contextStrategyUpdateResponse is the legacy PUT body: the context status with
 // `message` and `updated_strategy` laid on top, one flat object.
 func contextStrategyUpdateResponse(merged contextsettings.Strategy, state contextsettings.ConversationState) map[string]any {
 	response := map[string]any{}
@@ -2093,7 +2128,7 @@ func contextStrategyUpdateResponse(merged contextsettings.Strategy, state contex
 
 // contextDefaults reads the CALLER's defaults, never the conversation author's.
 //
-// That is pylon's behaviour and the only one that is safe here: the defaults
+// That is the legacy behaviour and the only one that is safe here: the defaults
 // live on the author record of whoever is asking, and a conversation can be
 // read by any member of its project. Resolving someone else's Settings >
 // Memory preferences would leak them across a shared conversation.

@@ -4,15 +4,14 @@ package migrations_test
 // permission strings no code checks (#6874).
 //
 // Every case runs the ledgered corpus on a fresh database, then runs the
-// migration's own SQL again where a case needs rows that only a pylon-managed
-// database carries. Re-running the real file is the point: a copy of the SQL
+// migration's own SQL again where a case needs rows that only a legacy dump
+// carries. Re-running the real file is the point: a copy of the SQL
 // here would measure the copy.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
 import (
 	"os"
-	"regexp"
 	"slices"
 	"testing"
 
@@ -23,31 +22,6 @@ const (
 	projectSettingsMigration = "shared/0136_project_settings_permission_and_dead_permissions.sql"
 	projectSettingsEdit      = "models.project_settings.edit"
 )
-
-var deadPermissionArray = regexp.MustCompile(`(?s)dead_permission text\[\] := ARRAY\[(.*?)\];`)
-
-// retiredBy0136 reads the dead_permission array from 0136, so a test that
-// compares against the legacy matrix can leave out the strings 0136 removes
-// on purpose. Reading the file keeps one list, not a copy.
-func retiredBy0136(t *testing.T) map[string]bool {
-	t.Helper()
-	body, err := os.ReadFile(projectSettingsMigration)
-	if err != nil {
-		t.Fatalf("read %s: %v", projectSettingsMigration, err)
-	}
-	match := deadPermissionArray.FindSubmatch(body)
-	if match == nil {
-		t.Fatalf("%s carries no dead_permission array", projectSettingsMigration)
-	}
-	retired := map[string]bool{}
-	for _, literal := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(match[1], -1) {
-		retired[string(literal[1])] = true
-	}
-	if len(retired) == 0 {
-		t.Fatalf("%s retires no permission; the array shape changed", projectSettingsMigration)
-	}
-	return retired
-}
 
 func applyProjectSettingsMigration(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
@@ -167,8 +141,8 @@ func TestDeadPermissionStringsAreRemovedWithoutWideningARole(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// What pylon re-seeds on a shared database, and what the old Roles matrix
-	// saved when an operator clicked a group toggle.
+	// Bare section nodes, and what the old Roles matrix saved when an operator
+	// clicked a group toggle.
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__role_permission (role_id, permission)
 SELECT role.id, dead.permission

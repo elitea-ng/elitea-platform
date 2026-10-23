@@ -443,10 +443,9 @@ mod tests {
         let ruby = code("def a\n  1\nend\n", ".rb", &defaults()).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(ruby[0].metadata["language"], "ruby");
         assert_eq!(ruby[0].metadata["method_name"], "text");
-        assert!(
-            code("  \n", ".rs", &defaults())
-                .unwrap_or_default()
-                .is_empty()
+        assert_eq!(
+            code("  \n", ".rs", &defaults()).unwrap_or_default(),
+            [] as [Chunk; 0]
         );
     }
 }

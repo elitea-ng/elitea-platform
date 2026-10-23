@@ -246,6 +246,15 @@ pub enum EntryKind {
     Other,
 }
 
+/// An entry's kind, size and modification time ([`Workspace::stamp`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EntryStamp {
+    pub kind: EntryKind,
+    pub len: u64,
+    /// Nanoseconds since the epoch.
+    pub mtime_ns: i128,
+}
+
 /// Identity of a file's content as of one read: what the read-before-write
 /// guard compares.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -627,22 +636,80 @@ impl Workspace {
         if path.is_root() {
             return Ok(Some(EntryKind::Dir));
         }
-        let (dir, resolved) = match self.locate(path, false, false) {
-            Ok(found) => found,
-            Err(error) if error.code() == ErrorCode::NotFound => return Ok(None),
-            Err(error) => return Err(error),
+        Ok(self.stamp(path)?.map(|stamp| stamp.kind))
+    }
+
+    /// What `path` is, its size and its modification time, without
+    /// following a final symlink and without opening it: a cheap marker
+    /// that it changed (the project profile's cache key). `None` when it
+    /// does not exist. The deny rules are the caller's to check.
+    ///
+    /// # Errors
+    ///
+    /// When the walk fails for any reason other than absence.
+    pub fn stamp(&self, path: &WsPath) -> ToolResult<Option<EntryStamp>> {
+        let stat = if path.is_root() {
+            rustix::fs::fstat(&self.root_fd)?
+        } else {
+            let (dir, resolved) = match self.locate(path, false, false) {
+                Ok(found) => found,
+                Err(error) if error.code() == ErrorCode::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let name = resolved.file_name().unwrap_or_default();
+            match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => stat,
+                Err(Errno::NOENT) => return Ok(None),
+                Err(errno) => return Err(errno.into()),
+            }
         };
-        let name = resolved.file_name().unwrap_or_default();
-        match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => Ok(Some(match FileType::from_raw_mode(stat.st_mode) {
-                FileType::RegularFile => EntryKind::File,
-                FileType::Directory => EntryKind::Dir,
-                FileType::Symlink => EntryKind::Symlink,
-                _ => EntryKind::Other,
-            })),
-            Err(Errno::NOENT) => Ok(None),
-            Err(errno) => Err(errno.into()),
+        let kind = match FileType::from_raw_mode(stat.st_mode) {
+            FileType::RegularFile => EntryKind::File,
+            FileType::Directory => EntryKind::Dir,
+            FileType::Symlink => EntryKind::Symlink,
+            _ => EntryKind::Other,
+        };
+        Ok(Some(EntryStamp {
+            kind,
+            len: u64::try_from(stat.st_size).unwrap_or(0),
+            mtime_ns: i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec),
+        }))
+    }
+
+    /// Open the directory `path` for listing, every component opened from
+    /// the root with `O_DIRECTORY | O_NOFOLLOW`: no symlink is followed on
+    /// the way or at the end, so what is listed is the folder `path` names
+    /// even if a component is swapped for a symlink meanwhile. The deny
+    /// rules are checked.
+    ///
+    /// # Errors
+    ///
+    /// Not found, a symlink or not a directory on the way, or denied.
+    pub fn open_dir(&self, path: &WsPath) -> ToolResult<OwnedFd> {
+        self.check(path, Intent::Read)?;
+        let mut dir = self.root_dir()?;
+        for name in path.components() {
+            dir = match rustix::fs::openat(
+                &dir,
+                name.as_str(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(next) => next,
+                Err(Errno::NOENT) => {
+                    return Err(ToolError::new(
+                        ErrorCode::NotFound,
+                        format!("`{path}` does not exist"),
+                    ));
+                }
+                Err(_) => {
+                    return Err(ToolError::invalid(format!(
+                        "`{path}` is not a directory reached without a symlink"
+                    )));
+                }
+            };
         }
+        Ok(dir)
     }
 
     /// Open a regular file for reading, confined.
@@ -806,7 +873,7 @@ impl Workspace {
 /// Permission and type bits as `u32` (`mode_t` is `u16` on macOS and `u32`
 /// on Linux, where this conversion is the identity).
 #[allow(clippy::useless_conversion)]
-fn mode_bits(raw: rustix::fs::RawMode) -> u32 {
+pub(crate) fn mode_bits(raw: rustix::fs::RawMode) -> u32 {
     u32::from(raw)
 }
 
@@ -1002,6 +1069,25 @@ mod tests {
             .expect("dir")
             .collect();
         assert_eq!(leftovers.len(), 1, "no temporary file is left behind");
+    }
+
+    #[test]
+    fn open_dir_follows_no_symlink_and_honours_deny() {
+        let (root, _outside, ws) = workspace(&["secret"]);
+        std::fs::create_dir_all(root.path().join("real/sub")).expect("dir");
+        std::fs::create_dir_all(root.path().join("secret")).expect("dir");
+        symlink("real", root.path().join("alias")).expect("dir link");
+        let path = |p: &str| WsPath::from_relative(std::path::Path::new(p)).expect("path");
+        assert!(ws.open_dir(&path("real/sub")).is_ok());
+        assert_eq!(code(ws.open_dir(&path("missing"))), ErrorCode::NotFound);
+        for linked in ["alias", "alias/sub"] {
+            assert_eq!(
+                code(ws.open_dir(&path(linked))),
+                ErrorCode::InvalidArgument,
+                "{linked}"
+            );
+        }
+        assert_eq!(code(ws.open_dir(&path("secret"))), ErrorCode::Denied);
     }
 
     #[test]

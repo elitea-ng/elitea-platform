@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 type stubExecutionVerifier struct {
@@ -95,12 +96,11 @@ func TestInjectIdentity_AnEvaluationIDNeverReachesTheVerifier(t *testing.T) {
 func TestProxy_UsesTheConfiguredExecutionVerifier(t *testing.T) {
 	verifier := &stubExecutionVerifier{ok: false}
 	var seen string
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get(HeaderExecutionID)
+	}))
 	proxy, err := New(Config{
-		TargetURL: "http://gateway.invalid",
-		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			seen = r.Header.Get(HeaderExecutionID)
-			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
-		}),
+		Gateway:           gatewayTo(t, backend, frozenSecret),
 		ExecutionVerifier: verifier,
 	})
 	if err != nil {
@@ -116,10 +116,6 @@ func TestProxy_UsesTheConfiguredExecutionVerifier(t *testing.T) {
 		t.Fatalf("the gateway received execution id %q the verifier refused", seen)
 	}
 }
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type discardWriter struct{ header http.Header }
 

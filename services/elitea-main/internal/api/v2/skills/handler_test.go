@@ -1009,7 +1009,7 @@ func TestSkillRelation_AttachReachesTheRepository(t *testing.T) {
 		t.Errorf("AttachSkill called with %+v, want %+v", got, want)
 	}
 
-	// The body is pylon's four-key attachment, not an echo of the request.
+	// The body is the legacy four-key attachment, not an echo of the request.
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode attach body: %v", err)

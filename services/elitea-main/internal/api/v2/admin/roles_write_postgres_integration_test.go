@@ -464,7 +464,8 @@ func TestPermissionMatrixSeparatesTheFourScopes(t *testing.T) {
 	}
 
 	// The public project has no overrides, so it INHERITS central default — the
-	// pylon fallback. It must therefore match `standard`, not `administration`.
+	// legacy fallback. It must therefore match `standard`, not
+	// `administration`.
 	if public.granted(t, "admin.auth.users", "admin") {
 		t.Fatalf("public scope reported the ADMINISTRATION matrix: admin.auth.users is granted")
 	}
@@ -774,8 +775,8 @@ func TestPermissionMatrixSaveRejectsUnknownNames(t *testing.T) {
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("PUT status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
 			}
-			// Pylon answers {"ok": true} and drops the row. The point of the 400
-			// is that nothing was written, so assert that too.
+			// The legacy runtime answers {"ok": true} and drops the row. The
+			// point of the 400 is that nothing was written, so assert that too.
 			if got := grantsSQL(t, pool, "default", "admin"); !equalStrings(got, baseline) {
 				t.Fatalf("a rejected save still changed the matrix: %v → %v", baseline, got)
 			}

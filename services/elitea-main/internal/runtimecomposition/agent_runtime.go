@@ -90,6 +90,18 @@ func newCurrentToolkitSettingsGraph(
 	pool *pgxpool.Pool,
 	configurations *CurrentConfigurationsRuntime,
 ) (*configurationapp.CurrentToolkitSettingsResolver, CurrentToolkitNameDeriver, *currentAgentPrebuiltMCP, error) {
+	return newCurrentToolkitSettingsGraphWith(pool, configurations, configurations.expander, configurations.unsecreter)
+}
+
+// newCurrentToolkitSettingsGraphWith is newCurrentToolkitSettingsGraph over a
+// caller-chosen expander and unsecreter. Only the provenance resolver
+// (NewProjectOwnedToolkitSettingsResolver) chooses differently.
+func newCurrentToolkitSettingsGraphWith(
+	pool *pgxpool.Pool,
+	configurations *CurrentConfigurationsRuntime,
+	expander *configurationapp.CurrentExpansionService,
+	unsecreter *storage.CurrentVaultUnsecreter,
+) (*configurationapp.CurrentToolkitSettingsResolver, CurrentToolkitNameDeriver, *currentAgentPrebuiltMCP, error) {
 	builtInSchemas, err := LoadPinnedCurrentToolkitSchemaSnapshot()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load current agent toolkit schema snapshot: %w", err)
@@ -124,9 +136,9 @@ func newCurrentToolkitSettingsGraph(
 	settings, err := configurationapp.NewCurrentToolkitSettingsResolver(
 		schemas,
 		nestedToolkits,
-		configurations.expander,
+		expander,
 		modelVisibility,
-		configurations.unsecreter,
+		unsecreter,
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -157,6 +169,34 @@ func (runtime *CurrentConfigurationsRuntime) NewToolkitSettingsValidator(
 		return nil, errors.New("current toolkit settings validator dependencies are required")
 	}
 	settings, _, _, err := newCurrentToolkitSettingsGraph(pool, runtime)
+	return settings, err
+}
+
+// NewProjectOwnedToolkitSettingsResolver composes the PROVENANCE twin of the
+// claim-mode resolver Main's OAuth proxy uses (#1286).
+//
+// It is the same graph with one difference: its unsecreter, and the one its
+// configuration expander redeems with, never fall back to the admin vault. A
+// value it resolves identically to the ordinary resolver was built from
+// literals and the owning project's vault only; a value that differs drew on a
+// global secret. The proxy uses that difference to refuse releasing a global
+// secret to a token endpoint the toolkit's editor wrote.
+func (runtime *CurrentConfigurationsRuntime) NewProjectOwnedToolkitSettingsResolver(
+	pool *pgxpool.Pool,
+) (*configurationapp.CurrentToolkitSettingsResolver, error) {
+	if pool == nil || runtime == nil || runtime.vaultLoader == nil || runtime.scope == nil ||
+		runtime.rows == nil || runtime.models == nil || runtime.publicProjectID <= 0 {
+		return nil, errors.New("project-owned toolkit settings resolver dependencies are required")
+	}
+	unsecreter, err := storage.NewCurrentProjectVaultUnsecreter(runtime.vaultLoader)
+	if err != nil {
+		return nil, err
+	}
+	expander, err := configurationapp.NewCurrentExpansionService(runtime.scope, runtime.rows, unsecreter)
+	if err != nil {
+		return nil, err
+	}
+	settings, _, _, err := newCurrentToolkitSettingsGraphWith(pool, runtime, expander, unsecreter)
 	return settings, err
 }
 

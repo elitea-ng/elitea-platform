@@ -11,7 +11,7 @@ import (
 func TestCurrentAgentInternalBuildersMaterializeWithoutRegistryRows(t *testing.T) {
 	store := &currentPrebuiltMCPStoreStub{err: mcpregistry.ErrPrebuiltNotFound}
 	issuer := &currentActorTokenIssuerStub{token: "ephemeral-executing-actor"}
-	resolver, err := newCurrentAgentRuntimePrebuiltMCP(store, "https://main.example.test", issuer)
+	resolver, err := newCurrentAgentRuntimePrebuiltMCP(store, issuer)
 	require.NoError(t, err)
 	for _, entry := range mcpregistry.InternalBuilders() {
 		kind := mcpregistry.InternalBuilderTypePrefix + entry.Key
@@ -20,7 +20,7 @@ func TestCurrentAgentInternalBuildersMaterializeWithoutRegistryRows(t *testing.T
 		}, identityPrebuiltMaterializer)
 		require.NoError(t, err)
 		require.True(t, found)
-		require.Equal(t, "https://main.example.test/app/7/mcp/"+entry.Category, resolved["url"])
+		require.Equal(t, InternalToolOrigin+"/app/7/mcp/"+entry.Category, resolved["url"])
 		require.Equal(t, "Bearer ephemeral-executing-actor", resolved["headers"].(map[string]any)["Authorization"])
 		require.Equal(t, int64(42), issuer.userID)
 	}

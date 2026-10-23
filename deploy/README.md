@@ -25,11 +25,9 @@ including the runtime plane, on one machine.
 The agent worker is the native Rust worker by default (the Rust overlay,
 `docker-compose.standalone-rust-agent.yml`, is applied for you, and elitea-main
 is told `ELITEA_WORKER_IMPLEMENTATION=rust` and `ELITEA_INDEXING_RUNTIME=rust`).
-`STANDALONE_WORKER=python deploy/scripts/standalone-stack.sh ...` selects the
-legacy Python worker until it is removed. Running `docker compose -f
-deploy/docker-compose.standalone-full.yml` by itself, without the script, still
-gives the Python worker, and that base file states
-`ELITEA_WORKER_IMPLEMENTATION=python` so its toolkit catalogue matches. Where the
+The Python worker was removed; the script refuses `STANDALONE_WORKER=python`.
+Running the base file by itself, without the overlay, is not a supported shape:
+the overlay carries the worker's command, config and TLS trust. Where the
 Rust worker cannot serve a configured toolkit, tool or built-in capability, the
 chat says so on the reply (a compact notice naming what was left out and why).
 
@@ -169,7 +167,9 @@ steps.
 ### DeepWiki and Inventory — canned data, or the real engines
 
 Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
-engine SIDECAR over a shared Unix socket — the socket hop this stack exists
+engine SIDECAR over a shared Unix socket (gRPC, `elitea.engine.v1`, no TLS),
+and elitea-main reaches each host over mTLS gRPC
+(`elitea.subapp.v1.ProviderService` on the host's platform port) — the socket hop this stack exists
 to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
 and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
 with its migration service); Inventory's host runs `RUNNER=sidecar` (the host's
@@ -177,6 +177,18 @@ word for "dial the sidecar socket"; `legacy` is an accepted alias) and its sidec
 `elitea-inventory-engine` (with its own `elitea-inventory-migrate` service).
 Both sidecars serve their `fixture` runner, so `up` shows a populated wiki
 and a populated Inventory graph with no repository and no model.
+
+The way BACK is gRPC on elitea-main's platform listener (`https://elitea-main:9446`,
+#1359): the hosts upload and read artifacts over
+`elitea.runtime.v1.ArtifactObjectService`; the engines make model calls over
+`elitea.llm.v1.ModelService`, read artifact folders over ArtifactObjectService,
+and (Inventory) run their `investigate` source tools over
+`elitea.runtime.v1.InternalToolService.InvokeToolkit`. All of them present the
+sub-application callback certificate (`DNS:elitea-subapp-callback`) that
+`runtime-material` installs (engines: `standalone_runtime_subapp`, uid 10001;
+hosts: `standalone_runtime_subapp_host`, uid 65532). No provider calls
+elitea-main on 8080, and the old `ELITEA_<APP>_CALLBACK_BASE_URL` is refused at
+boot.
 `DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead, and
 `INVENTORY_ENGINE_RUNNER=native` the real Inventory engine (graph in the
 stack's PostgreSQL; it clones repositories itself, admitting the hosts in
@@ -211,16 +223,18 @@ helpers. NATS runs the `scratch` image `nats:2.12.0` (no OS), with a
 `nats-health` sidecar for its compose health check. Two documented
 exceptions (owner decisions, 2026-10-06):
 
-- the short-lived `nats-bootstrap` job keeps `natsio/nats-box`, which NATS
+- the short-lived NATS bootstrap Job (`elitea-nats-bootstrap`) keeps `natsio/nats-box`, which NATS
   publishes on Alpine only;
-- the two nginx images, `elitea-web` and `elitea-ui`, stay on
-  `nginx:stable-alpine`. Their image scans are blocking, and every Debian
+- the nginx image, `elitea-web`, stays on
+  `nginx:stable-alpine`. Its image scan is blocking, and every Debian
   userland carries HIGH findings with no fixed version (measured
   2026-10-06: `debian:trixie-slim` 43, `nginx:stable-trixie` 67, none
   fixable), where Alpine scans clean.
 
 **Debian 13 PostgreSQL image (2026-10).** The `postgres` service moved from
-`pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`.
+`pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`,
+and later (#1359) to plain `postgres:18`, the same major on the same Debian 13:
+nothing needs pgvector any more, and that second move rebuilds nothing.
 The PostgreSQL major is the same, so the `standalone_pg_data` volume is reused
 in place. The C library changed (glibc 2.36 to 2.41), and with it the collation
 rules that ordered the existing text indexes. PostgreSQL logs this as
@@ -262,6 +276,14 @@ kubectl apply -f deploy/argocd/app-of-apps.yaml
 `kubectl apply -f deploy/argocd/` reaches only that file — kubectl does not
 recurse — which is the intended behaviour: the children are created by ArgoCD.
 
+`deploy/argocd/examples/gke/` is a copyable layout for an operator's own GitOps
+repository on GKE: a root, one `elitea` Application that pulls the published
+OCI chart with `values-gke.yaml` and externalSecrets on, and the bootstrap
+objects applied once by hand (the OCI repository registration, a
+ClusterSecretStore on Google Secret Manager). The root above never renders it;
+the `argocd` job in `helm-lint.yml` validates its Applications against the
+same schema. The embedded docs page "Deploy on GKE with Argo CD" walks it.
+
 The root syncs nothing usable on its own. Two values have no chart default and
 cannot get one, and the platform chart refuses to render without them. Read
 [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
@@ -276,40 +298,61 @@ address. Those copies had already drifted apart.
 
 | Chart (`deploy/helm/`) | ArgoCD Application | Wave | Namespace | Status |
 |---|---|---|---|---|
-| `nats` | `applications/nats.yaml` | -2 | `elitea` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. mTLS-only with its own CA Issuer (#1076), so it shares the platform's namespace. |
-| `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea` | **Production reference.** Idempotent Helm hook Job that owns every stream and KV bucket; HA needs `replicas=3`. |
-| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
-| `elitea-sandbox-runtime` | none (optional, installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Optional node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
+| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform, one release.** elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, the vector store (elitea-vector and Qdrant), the DeepWiki and Inventory provider services, and NATS JetStream with its bootstrap Job: the upstream NATS chart 1.3.9 is a `Chart.lock` dependency, built by `deploy/helm/elitea/build-deps.sh` from a clone and carried by the published chart (`nats.enabled`, on by default; `natsBootstrap.*`; HA with `values-nats-ha.yaml`). The upstream qdrant chart 1.19.2 is a second one the same way (`qdrant.enabled`, on by default, StatefulSet `elitea-vectordb`; HA with `values-qdrant-ha.yaml`). The sandbox-runtime installer is a third dependency, off by default (`sandboxRuntime.enabled`; k3s and EKS turn it on, GKE and AKS leave it off). |
+| `elitea-sandbox-runtime` | none (a dependency of `elitea`, or installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. Normally enabled through `elitea`'s `sandboxRuntime`; still published standalone. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
+
+The `nats` and `nats-bootstrap` charts are retired and no longer published;
+docs/UPGRADING.md ("One chart: NATS bundled") moves an install from the three
+Applications to the one.
 
 Components of the `elitea` chart are switched by `<component>.enabled`, and
 `deploy/helm/elitea/values.yaml` holds every one of them. Ordering inside the
-platform is Helm hook ordering, not a sync wave: the migration runs
-`pre-install,pre-upgrade` and Helm blocks the release until it finishes, the
-workload-session Job follows it, and the runtime command bus's JetStream
-streams and durable consumers are created by the `nats-bootstrap` hook
-(docs/runtime-command-bus.md). A failed migration aborts the release, and the previous pods
+platform is Helm hook ordering plus sync waves inside the one Application: the
+migration runs `pre-install,pre-upgrade` (PreSync) and blocks the release
+until it finishes, the workload-session Job follows it, then the NATS server,
+its certificates and the `elitea-nats-bootstrap` Job (a Sync hook) run in wave
+-10, the vector store in -5, the platform in 0 and the worker in 1. The
+bootstrap Job creates the runtime command bus's JetStream streams and durable
+consumers (docs/runtime-command-bus.md). With the Helm CLI the bootstrap is a
+`post-install,post-upgrade` hook, so a FIRST install must not use `--wait`. A failed migration aborts the release, and the previous pods
 keep serving.
 
-Three charts, and that is all of them: `helm lint`, the template matrix and
+Two charts, and that is all of them: `helm lint`, the template matrix and
 `publish.yml` each read `deploy/helm/*/Chart.yaml`, so a fourth chart fails CI
 until somebody templates and publishes it.
 
-One image has no chart. `ghcr.io/elitea-ng/elitea-ui` is the old UI: it runs
-in compose, and the Kubernetes path is the `web` component. `pylon-indexer`
-used to be the second one, deployed nowhere; issue #339 deleted the service, so
+Every published image has a chart component. `ghcr.io/elitea-ng/elitea-ui`,
+the old UI that ran only in compose, went with the `apps/elitea-ui` submodule;
+`elitea-web` (the `web` component) serves the UI everywhere. The legacy indexer
+was the other image deployed nowhere; issue #339 deleted the service, so
 it is no longer built or published either. The Go runtime plane serves index
 ingest through the agent worker, on the same command stream.
 
-One component is off by default and needs TWO settings, not one. `deepwiki`
-is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
-block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its base URL, callback
-origin, git allowlist and the three client-certificate paths — elitea-main is
-the only door to it, so a provider nobody can reach is a Deployment doing
-nothing. Both halves refuse to render while half configured
-(`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the
-container's own refusal is a CrashLoopBackOff somebody has to go read logs for.
+DeepWiki, Inventory, the runtime plane, the worker and elitea-vector with
+the bundled Qdrant are ON by default (S10), and each is ONE switch:
+`deepwiki.enabled`, `inventory.enabled`, `main.runtime.enabled`,
+`worker.enabled`, `vector.enabled` (with `qdrant.enabled`, the upstream
+qdrant subchart; `qdrant.enabled=false` beside `vector.enabled` is
+bring-your-own Qdrant at `vector.qdrant.external.url`). The chart derives
+elitea-main's side from the provider's block: `ELITEA_DEEPWIKI_ENABLED` and
+`ELITEA_INVENTORY_ENABLED`, the git allowlists (copied from
+`deepwiki.env` / `inventory.env`), the client-certificate paths and mounts,
+the `ELITEA_VECTOR_*` target and material, and the platform gRPC targets. An
+explicit `main.env` value that agrees is kept; one that disagrees fails the
+render and says which switch to set. DeepWiki (ADR-0022) calls back only over
+gRPC on elitea-main's platform listener, for its artifacts and models (#1359
+U5; there is no callback origin any more, and
+`ELITEA_DEEPWIKI_CALLBACK_BASE_URL` is refused), presenting
+`deepwiki.callbackClient`, which cert-manager issues from the
+`elitea-runtime-ca` issuer by default. elitea-main reaches the provider over
+gRPC, `elitea.subapp.v1.ProviderService`, at
+`ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` (the old `ELITEA_DEEPWIKI_BASE_URL` is
+refused, #1359); elitea-main is the only door to it. Turning one feature off
+while another needs it (the runtime plane under DeepWiki, say) fails the render
+with one message that lists every disagreement, because the container's own
+refusal is a CrashLoopBackOff somebody has to go read logs for.
 
-Two things about it are worth knowing before turning it on. The engine
+Two things about DeepWiki are worth knowing before you deploy it. The engine
 sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`), and its
 default `native` runner keeps every index in PostgreSQL, so the chart
 refuses to render without an `ELITEA_DEEPWIKI_DATABASE_URL` secret
@@ -319,49 +362,19 @@ both: the facade checks it before opening the vault, the provider before
 building a clone URL, and two values that disagree mean an invocation that
 starts and then fails.
 
-Two images share one chart component. The `worker` component runs either
-`elitea-worker-rust` (the default, matching `deploy/scripts/
-standalone-stack.sh`'s own default) or `elitea-worker-python` while it still
-exists, selected by `worker.implementation`. `worker.indexingRuntime` defaults to
-`python`: the chart never switches to Rust indexing by itself, because Rust
-indexing starts with EMPTY indexes (nothing is migrated). To use it, set
-`worker.indexingRuntime: rust` together with `vector.enabled=true`,
-`main.runtime.enabled=true` and `main.runtime.indexIngestDispatch.enabled=true`;
-anything missing fails the render and is named. The Python-removal change will
-flip this default.
-
-**Upgrade notes.** (1) An install that enables the worker and never set
-`worker.implementation` moves from the Python worker to the Rust worker. With
-the default Python indexing, agents on the Rust worker cannot search the
-indexes created before the upgrade (the Rust tools read a vector store that
-starts empty): until you set `worker.indexingRuntime: rust` and re-create your
-indexes, index search is lost. `helm install` prints this as an UPGRADE
-WARNING. To keep today's behaviour set `worker.implementation: python`. (2) The
-toolkit types memory, vectorstore, sandbox, delta_lake, aws and localgit have
-no Rust implementation yet and are unavailable on the Rust worker. (3) A
-release with `worker.enabled=false` still tells elitea-main
-`ELITEA_WORKER_IMPLEMENTATION=rust` (the toolkit catalogue follows it): a Python
-worker deployed separately needs `worker.implementation: python`. (4) A
+The `worker` component runs `elitea-worker-rust`, the only agent worker: the
+Python worker was removed (#1312), and the chart refuses `worker.implementation`
+set to anything but `rust`. `worker.indexingRuntime` is `rust`, the only indexing runtime (`python` fails
+the render). With index ingest dispatch on and the worker enabled it needs
+`vector.enabled=true` (the default; its Qdrant API key is the Secret
+`elitea-qdrant-api`, key `api-key`) or
+`worker.runtime.vectorTarget`; anything missing fails the render and is named. A
 `main.env.ELITEA_INDEXING_RUNTIME` that disagrees with `worker.indexingRuntime`
-fails the render. `deploy/scripts/standalone-stack.sh` does not
-switch an existing stack: it records the worker on `up` and keeps it until you
-set `STANDALONE_WORKER`. `worker.runtime.agentModelCheckpointRecovery` and
+fails the render too. `worker.runtime.agentModelCheckpointRecovery` and
 `agentNodeRecovery` stay `false` by default until the pod-replacement proofs in
-`services/elitea-worker-rust/docs/recovery-guarantees.md` (ruling D1) pass. The Rust worker is a smaller, faster
-process but — as of this release — has no adapter for 18 of the 52 catalogued
-toolkit types and no implementation for 6 of the platform's internal chat-agent
-tools (`values.yaml`'s `worker.implementation` comment lists both sets); a
-deployment that chooses it still serves those tiles and toggles, greyed with
-the reason, rather than hiding them. They are not drop-in for each other and
-the chart handles the difference rather than the operator: the Rust worker's
-argument parser matches an exact five-token command line and additionally
-requires `--toolkit-security-config`, so the Python argument list makes it
-exit immediately with `worker_cli.invalid_arguments`.
-`worker.runtime.sensitiveTools` is written once and carried to each as that
-implementation expects — an environment variable for Python, a second JSON
-file for Rust. `runtime.json` itself is byte-identical for both, and
-`deploy/helm/tests/render-worker.sh`
-holds all of that.
+`services/elitea-worker-rust/docs/recovery-guarantees.md` (ruling D1) pass.
+`deploy/helm/tests/render-worker.sh` and `render-indexing-runtime.sh` hold the
+worker's rendered contract.
 
 ## Values an operator supplies, and where each one goes (#475)
 
@@ -386,6 +399,14 @@ would guard a name nobody uses and read as armed. The chart REFUSES to render
 while either is empty, so a sync of the committed file reports SyncFailed and
 names the field. It does not install a gateway with a disarmed guard.
 
+`GATEWAY_SELF_LLM_ORIGINS` lists HTTP `/llm` origins only: the public one and
+`http://elitea-main:8080/llm/v1`. Leave elitea-main's platform listener
+(`https://elitea-main:9446`) out. The worker and the DeepWiki/Inventory engines
+reach the model pipeline there over gRPC (`elitea.llm.v1.ModelService`, #1359
+U2), which is not an origin a credential's `api_base` can name: an HTTP call to
+it fails the TLS handshake (gRPC-only, runtime-CA client certificate required)
+and cannot loop.
+
 Fill them in your own GitOps copy of the Application, or with:
 
 ```bash
@@ -400,6 +421,7 @@ DSN carries a password, so the chart takes a Secret NAME and every component
 that reads the database reads that one Secret. Prove it after a change:
 
 ```bash
+deploy/helm/elitea/build-deps.sh   # once per clone: the chart's dependencies
 helm template elitea deploy/helm/elitea \
   -f deploy/helm/elitea/values.yaml \
   --set-string postgresql.existingSecret=elitea-main-db \
@@ -522,8 +544,10 @@ curl -s -H "Authorization: Bearer $ADMIN_PAT" \
 
 ## Distribution — the charts are published to GHCR as OCI artifacts
 
-Every chart in the table above is packaged and pushed on each release by the
-`chart` job in `.github/workflows/publish.yml`, next to the images:
+Every chart in the table above is packaged and pushed on each release (and
+each nightly or dev pre-release, at its own version) by the `chart` job in
+`.github/workflows/publish.yml`, next to the images. A merge publishes nothing:
+a release is dispatched (`gh workflow run publish.yml --ref main -f channel=release`).
 
 ```
 oci://ghcr.io/elitea-ng/charts/<chart>
@@ -547,10 +571,10 @@ Four properties of the published artifact that the in-repo chart does not have:
   `pullPolicy: IfNotPresent`, which means a node holding an older cached
   `latest` layer keeps serving it — the release job stamps the tag at package
   time so the published chart cannot install that way.
-- **`appVersion` tracks the platform release** for that same chart. The two
-  charts that deploy a third-party image (`nats`, `nats-bootstrap`) keep their
-  deliberate upstream pin, because a platform release number means nothing to
-  those images' registries.
+- **`appVersion` tracks the platform release** for that same chart. The
+  bundled NATS dependency keeps its deliberate upstream pins (chart 1.3.9,
+  the `nats` and `natsio/nats-box` images), because a platform release number
+  means nothing to those images' registries.
 - **Charts are cosign-signed**, keyless, exactly as the images are:
 
   ```bash
@@ -570,9 +594,9 @@ images.
 variable makes the composition root build a dependency, and the router
 registers a route group only when that dependency exists.
 
-The chart used to set **none** of them. So the same image served the pylon-free
+The chart used to set **none** of them. So the same image served the standalone
 configuration on compose and served none of it on Kubernetes — the platform
-could run without pylon on compose and could not on Kubernetes, which is the
+could run without the legacy runtime on compose and could not on Kubernetes, which is the
 deployment target. `deploy/helm/elitea/values.yaml` now carries every flag
 under `main.env`, and `deploy/helm/elitea/values-standalone.yaml` is the values
 file whose capability set matches `docker-compose.standalone-full.yml`.
@@ -586,7 +610,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
-| `ELITEA_EVENTS_NATS_URL` | **derived** from `nats` (`tls://`) | derived | the shared NATS, with JetStream and the bootstrap's assets; main presents its own client certificate (`nats.tls`, #1076) |
+| `ELITEA_EVENTS_NATS_URL` | **derived** from `natsClient` (`tls://`) | derived | the bundled NATS (or yours), with JetStream and the bootstrap's assets; main presents its own client certificate (`natsClient.tls`, #1076) |
 | `ADMIN_UI_STATIC_DIR` | **set** | set | the image ships the bundle at it |
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
@@ -667,10 +691,10 @@ same rows, so the halves cannot disagree:
 
 - `ELITEA_APPLICATION_SKILLS_ENABLED` (#395). The attached-skills read answers
   the published `SkillsList` keys (`items`, `total`, `page`, `page_size`,
-  `total_pages`) that `apps/elitea-web` reads, beside the Pylon keys (`skills`,
+  `total_pages`) that `apps/elitea-web` reads, beside the legacy keys (`skills`,
   `max_skills`) that `apps/elitea-ui` reads.
 - `ELITEA_INDEX_TYPES_ENABLED` (#394). The index-types read answers the
-  published `DocumentLoadersResponse` keys (`items`, `total`) beside the Pylon
+  published `DocumentLoadersResponse` keys (`items`, `total`) beside the legacy
   keys (`document_types`, `image_types`, `code_types`). Every entry of `items`
   names one category and lists that category's extensions, so the two halves
   are the same pinned SDK snapshot read twice.
@@ -1265,51 +1289,70 @@ the Application values instead. The order is the same.
 
 Stated plainly, because the gap between compose and Helm is where deploys break:
 
-- **No PostgreSQL and no NATS.** No chart here provisions them. (No Redis is
+- **No PostgreSQL.** No chart here provisions it. (No Redis is
   needed at all: `runtimeRedis` is removed and the chart refuses values that
   still set it; see `docs/UPGRADING.md`.) The migration hook fails against a cluster where PostgreSQL does not already
   exist or `postgresql.existingSecret` has not been pointed at it, and
   elitea-main stops at startup when the NATS named by `nats` (its
   `ELITEA_EVENTS_NATS_URL`) is unreachable, has no JetStream, or lacks the
-  presence bucket the `nats-bootstrap` Job creates. The NATS chart in this
-  directory is the reference server; it requires cert-manager (its own CA
-  Issuer, #1076), and every NATS client presents a certificate from it.
+  presence bucket the `elitea-nats-bootstrap` Job creates. NATS itself is
+  bundled in the `elitea` chart (`nats.enabled`); it requires cert-manager
+  (its own CA Issuer, #1076), and every NATS client presents a certificate
+  from it.
   The table in [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
   names both.
-  The database itself may be **empty**. `elitea-migrate` embeds the pylon-era
+  The database itself may be **empty**. `elitea-migrate` embeds the legacy-era
   schema (`internal/infra/db/migrations/001_initial.sql`) and applies it first
   when the database does not carry it, then applies the shared and tenant
   histories. So the migration hook does build the schema, and nobody runs SQL
-  by hand before the install (#556). Two preparations stay outside it, because
-  both need rights the migrating role does not hold: `CREATE DATABASE` for the
-  agent-state store and `CREATE EXTENSION vector`. The `dbInit` Job does them,
-  and it needs an administrator DSN.
+  by hand before the install (#556). One preparation stays outside it, because
+  it needs a right the migrating role does not hold: `CREATE DATABASE` for the
+  agent-state store. The `dbInit` Job does it, and it needs an administrator
+  DSN. No `vector` extension: plain PostgreSQL is enough (#1359).
 - **No browser edge by default, and no securityContext hardening.** The charts
   render neither an Ingress nor an HTTPRoute until `main.ingress.enabled` is
   on, so a default install leaves `elitea-web` and `elitea-main` reachable
   in-cluster only. Turning it on renders ONE `/` rule with elitea-main as the
-  only backend. A cluster that also serves the web app from `/app` needs a rule
-  per root-mounted Go route, or the SPA backend swallows them:
-  `deploy/gateway-api/httproute.yaml` is the reviewed edge for that shape, and
-  it must stay in step with `deploy/traefik/dynamic.yml`. Both are walked by
-  `services/elitea-main/tests/deployedge/`, so a new root-mounted family fails
-  CI until every edge routes it (#568).
-- **One namespace for NATS and the platform.** The Argo CD sample installs
-  NATS, its bootstrap and the platform into `elitea`. That is not a
-  convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer
+  only backend, and that is the whole edge (#1359 P3): elitea-main redirects
+  `/` to `/app/`, relays `/app` and `/docs` to elitea-web
+  (`internal/api/webedge`, turned on by `ELITEA_WEB_UPSTREAM`, which the chart
+  sets to the elitea-web Service whenever `web.enabled` is true) and keeps the
+  MCP server (`/app/<project id>/mcp`) and its icon file servers under `/app`.
+  No rule names elitea-web, and none needs a regular-expression path match.
+  `deploy/gateway-api/httproute.yaml` is the same one-rule shape for a Gateway
+  managed outside the release. `services/elitea-main/tests/deployedge/` drives
+  the routing through the real router and holds the manifest to that shape
+  (#568). With the edge on, elitea-main's startup and readiness probes run
+  `/elitea-main -healthcheck <path>` inside the container, because the edge
+  refuses `/readyz` and `/startupz` to a non-loopback caller, the kubelet
+  included; and elitea-web's NetworkPolicy admits elitea-main only.
+- **GKE Ingress.** `main.ingress.gke.enabled` (or `className: gce`) puts
+  elitea-main behind the standard Google Cloud load balancer, optionally behind
+  a proxy of your own: the Service gets `cloud.google.com/neg` and a
+  `cloud.google.com/backend-config` binding on its `http` port, the chart
+  renders a BackendConfig (timeout 3600 s so streams survive, connection
+  draining, an HTTP `/healthz` check on 8080, optional Cloud Armor policy) and
+  a FrontendConfig (HTTPS redirect, optional SSL policy), and
+  `main.ingress.certManager` annotates the Ingress so cert-manager issues the
+  `tls[].secretName` Secret (an external origin CA issuer included). Admit the
+  load balancer's ranges `35.191.0.0/16` and `130.211.0.0/22` in
+  `networkPolicies.main.ingressFrom`. elitea-main writes an SSE comment into
+  every idle stream (chat, project events, notifications, `/llm`, MCP
+  `tools/call`) at least every 40 seconds, so a proxy idle timeout of about 100
+  seconds does not drop one.
+- **One namespace for NATS and the platform.** The bundled NATS, its
+  bootstrap and the platform are one release in one namespace. That is not a
+  convenience: the NATS CA is a NAMESPACED cert-manager Issuer
   (`elitea-nats-ca`), and the platform's NATS client Certificates are issued
-  by it, so they must live in its namespace (#1076); the platform chart
-  refuses `nats.namespace` other than its own while `nats.tls.issuerRef` is a
-  namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
-  mint a NATS identity — restrict both (`deploy/helm/nats/README.md`, "Who
-  can mint a NATS identity"). To run NATS in another namespace, back a
-  `ClusterIssuer` with a CA used for NATS only, point
-  `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and
-  `security.issuerRef` + `security.ca.create=false` (NATS) at it, set
-  `nats.namespace`, and add the platform's namespace to the NATS chart's
-  `networkPolicy.clients` and, with approver-policy installed, to
-  `security.approverPolicy.clientNamespaces` (otherwise no policy approves
-  the platform's client certificates).
+  by it, so they must live in its namespace (#1076); the chart refuses
+  `natsClient.namespace` other than its own while `natsClient.tls.issuerRef`
+  is a namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
+  mint a NATS identity — restrict both (`deploy/helm/elitea/NATS.md`, "Who
+  can mint a NATS identity"). To run NATS elsewhere, set `nats.enabled:
+  false`, back a `ClusterIssuer` with a CA used for NATS only, and point
+  `natsClient.tls.issuerRef`, `natsClient.service` and `natsClient.namespace`
+  at it; the bootstrap's identities follow (`natsBootstrap.tls.certificate.issuerRef`
+  defaults to the client issuer).
   The mount itself is no longer missing. `LLM_GATEWAY_CLIENT_CERT` and its two
   siblings are *file paths* (`llmproxy.Config.ClientCertFile`), and issue #463
   moved them out of the `secrets:` block — where a `secretKeyRef` had been
@@ -1329,13 +1372,13 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
 `elitea-main` and `elitea-llm-gateway` both read `centry.secrets_key`. Each one wraps a project key with `SECRETS_MASTER_KEY`
 when it holds that value, and stores the project key in the clear when it does
 not. Two services with two answers put two row formats in one table, and
-neither can read what the other wrote. `pylon-indexer` was the third reader
+neither can read what the other wrote. The legacy indexer was the third reader
 until issue #339 deleted it, which is one fewer place for those two answers to
 disagree.
 
 So the rule is: **one stack, one value, given to every service that reads that
 table.** Give it in the environment, never in a file. A committed default is a
-second key source, and the one `pylon-indexer` used to ship is treated as
+second key source, and the one the legacy indexer used to ship is treated as
 exposed (issue #418).
 
 Set it to a base64url-encoded 32-byte Fernet key:

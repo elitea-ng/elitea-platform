@@ -14,6 +14,8 @@
 //! * [`planner`], [`lazy_tools`] — the `planner` and `lazy_tools_mode`
 //!   (Smart Tools Selection) internal tools;
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
+//! * [`context`] — shrinking older tool results in a long turn's model
+//!   requests (host opt-in);
 //! * [`step_limit`] — the end of a run that used its model steps, and the
 //!   person's "Continue?" that runs it again on the same session;
 //! * [`toolkits`] — native toolkit families, the Streamable HTTP MCP client,
@@ -26,7 +28,9 @@
 //!   [`context_status`], [`context_management`] — the shared assembly
 //!   vocabulary: the native assembly error, skill and project-context
 //!   instruction authority, the request context budget and its status, and
-//!   the compaction plan.
+//!   the compaction plan with the step compaction a host composes around its
+//!   model (`StepCompaction`, #1217: pi's reserve and recent tail, the
+//!   iterative v1 summary, compact-and-retry once).
 //!
 //! The move from `services/elitea-worker-rust` is staged; `EXTRACTION.md`
 //! holds the dependency map and the remaining stages. The worker re-exports
@@ -48,10 +52,12 @@
 pub mod assembly_error;
 pub mod bounded_yaml;
 pub mod canonical;
+pub mod context;
 pub mod context_budget;
 pub mod context_management;
 pub mod context_status;
 pub mod context_summary;
+pub mod edit_profile;
 pub mod exact_number;
 pub mod graph;
 pub mod host;
@@ -61,6 +67,7 @@ pub mod planner;
 pub mod platform;
 pub mod request;
 pub mod step_limit;
+pub mod text;
 pub mod tool_namespacing;
 pub mod toolkits;
 pub mod workspace_archive;

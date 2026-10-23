@@ -669,6 +669,9 @@ func configurationOrderBy(sortBy, sortOrder string) string {
 // no caller string reaches the statement text.
 func configurationRowFilter(request configurationListQuery, placeholder int) (string, []any) {
 	clause, args := configurationSectionFilter(request.sections, placeholder)
+	// A row of a retired type is kept but never listed (retired.go). The
+	// value is a package constant, not request input.
+	clause += retiredConfigurationTypeFilter
 	placeholder += len(args)
 	if len(request.ids) > 0 {
 		clause += " AND id = ANY($" + strconv.Itoa(placeholder) + "::integer[])"
@@ -686,6 +689,18 @@ func configurationRowFilter(request configurationListQuery, placeholder int) (st
 	}
 	return clause, args
 }
+
+// retiredConfigurationTypeFilter keeps every row of a retired configuration
+// type (application/configurations/retired.go) out of a listing.
+//
+// It normalises the stored value the way IsRetiredConfigurationType normalises
+// a request's: case-folded and trimmed of the whitespace strings.TrimSpace
+// strips in ASCII (space, tab, newline, carriage return, vertical tab, form
+// feed; \x0B because an E-string has no \v escape). A row written as "PgVector" or
+// "pgvector " before the gate folded case is the same retired type and stays
+// hidden. A NULL type is filtered as before (NULL <> x is NULL).
+const retiredConfigurationTypeFilter = " AND lower(btrim(type, E' \\t\\n\\r\\x0B\\f')) <> '" +
+	configurationapp.RetiredPgvectorConfigurationType + "'"
 
 // The two sentinels separate a row this handler could not READ from a row it
 // read and could not DECODE. Both are 500s, and they keep the two messages the
@@ -1121,6 +1136,26 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
+	// A retired type (application/configurations/retired.go) is refused before
+	// anything else: as an unknown type it would otherwise be stored.
+	if configurationapp.IsRetiredConfigurationType(strVal(body, "type")) {
+		writeRetiredConfigurationTypeRefusal(w)
+		return
+	}
+
+	// The keyless mode (keyless_credentials.go) runs BEFORE the required-field
+	// walk: that walk reads the mode to decide whether the key is required,
+	// so a project body must be refused for the mode and not for the key.
+	if keylessData, isObject := body["data"].(map[string]any); isObject {
+		if failure := refuseKeylessCredentialWrite(ctx, strVal(body, "type"), keylessData); failure != nil {
+			failure.write(w)
+			return
+		}
+		if failure := admitKeylessCredentialData(ctx, strVal(body, "type"), keylessData); failure != nil {
+			failure.write(w)
+			return
+		}
+	}
 
 	// The type's own schema decides which fields a create must carry
 	// (required_fields.go). It runs FIRST, on the body as sent: a row with no
@@ -1371,11 +1406,25 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
+	// A change TO a retired type is refused before the database is read.
+	if configurationapp.IsRetiredConfigurationType(strVal(body, "type")) {
+		writeRetiredConfigurationTypeRefusal(w)
+		return
+	}
 	// The self-referential guard answers before the transaction opens. It
 	// refuses a client mistake, so it must not depend on the database.
 	if failure := validateUpdatedConfigurationData(body); failure != nil {
 		failure.write(w)
 		return
+	}
+	// The mode is checked before the database is read when the body names the
+	// type, like the guard above. applyConfigurationUpdate runs it again on the
+	// STORED type, which a body may omit.
+	if keylessData, isObject := body["data"].(map[string]any); isObject {
+		if failure := refuseKeylessCredentialWrite(ctx, strVal(body, "type"), keylessData); failure != nil {
+			failure.write(w)
+			return
+		}
 	}
 	pID, convErr := strconv.Atoi(projectID)
 	if convErr != nil {
@@ -1392,6 +1441,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestedType := strVal(body, "type")
+	// Nor is a stored row of a retired type rewritten. It stays deletable
+	// (retired.go).
+	if configurationapp.IsRetiredConfigurationType(storedType) {
+		writeRetiredConfigurationTypeRefusal(w)
+		return
+	}
 	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
 		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
@@ -1468,6 +1523,16 @@ func (h *Handler) applyConfigurationUpdate(
 	if failure := refuseInvalidDialProtocol(configType, body); failure != nil {
 		return c, failure, nil
 	}
+	// A switch to the keyless mode clears the stored key fields here, before
+	// sealing, because `data` is written whole.
+	if keylessData, isObject := body["data"].(map[string]any); isObject {
+		if failure := refuseKeylessCredentialWrite(ctx, configType, keylessData); failure != nil {
+			return c, failure, nil
+		}
+		if failure := admitKeylessCredentialData(ctx, configType, keylessData); failure != nil {
+			return c, failure, nil
+		}
+	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)
 	if failure != nil {
 		return c, failure, nil
@@ -1477,11 +1542,22 @@ func (h *Handler) applyConfigurationUpdate(
 	if reason != "" {
 		return c, &configurationWriteFailure{status: http.StatusBadRequest, message: reason}, nil
 	}
+	// `data` is written whole, so a new plaintext value replaces the stored
+	// reference and the hidden secret it named would stay in the vault with
+	// nothing pointing at it (#1204). The stored references are read under the
+	// row lock before the UPDATE and purged after it, once no row names them.
+	previousSecrets, err := h.storedHiddenSecretReferences(ctx, tx, body, schema, configID)
+	if err != nil {
+		return c, nil, err
+	}
 	failure, err = h.scanUpdatedConfiguration(ctx, tx, q, args, &c)
 	if failure != nil || err != nil {
 		return c, failure, err
 	}
 	if err = h.sealTransactionSecrets(ctx, tx, projectID, secretMutations); err != nil {
+		return c, nil, err
+	}
+	if err = h.purgeOrphanedHiddenSecrets(ctx, tx, schema, int64(projectID), previousSecrets); err != nil {
 		return c, nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1685,16 +1761,33 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	projectNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil {
+		apierr.WriteStatus(w, http.StatusBadRequest, "invalid project")
+		return
+	}
+
 	// RETURNING names the deleted row, so a model that some project stored as
 	// its default can be released below (#6826). The id column is unique, so
 	// the statement deletes one row or none.
+	//
+	// It also returns the row's `data`, so the hidden secrets only this row
+	// referenced leave the vault in the SAME transaction (#1204). They used to
+	// stay readable through the secrets API after the row was gone.
 	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1
-		RETURNING id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)`,
+		RETURNING id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false),
+			COALESCE(data, '{}'::jsonb)`,
 		schema, configurationIDColumn(configID))
 	var id int32
 	var section, title, dataName string
 	var shared bool
-	err := h.pool.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared)
+	err := h.inConfigurationTx(ctx, func(tx pgx.Tx) error {
+		var data []byte
+		if err := tx.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared, &data); err != nil {
+			return err
+		}
+		return h.purgeOrphanedHiddenSecrets(ctx, tx, schema, projectNumber, hiddenSecretReferencesIn(data))
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
 		return
@@ -1709,6 +1802,21 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.releaseDeletedModelDefault(ctx, projectID, deletedModelRowFrom(id, section, title, dataName, shared))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// inConfigurationTx runs one row write and its vault purge in ONE
+// transaction, so a failed purge keeps the row and a failed delete keeps the
+// secret.
+func (h *Handler) inConfigurationTx(ctx context.Context, write func(pgx.Tx) error) error {
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := write(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // CheckConnection and BatchCheckConnections are implemented in
@@ -1872,7 +1980,8 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 		"image_generation_model": "image_generation",
 	}
 
-	q := fmt.Sprintf(`SELECT DISTINCT type, section FROM %s.configuration ORDER BY type`, schema)
+	q := fmt.Sprintf(`SELECT DISTINCT type, section FROM %s.configuration WHERE TRUE%s ORDER BY type`,
+		schema, retiredConfigurationTypeFilter)
 	// Same rule as ListModels: only a missing schema is an empty list.
 	rows, err := h.pool.Query(ctx, q)
 	if err != nil {
@@ -2175,4 +2284,11 @@ func configurationQueryIDs(values url.Values) ([]int32, error) {
 		return nil, configurationapp.ErrInvalidCurrentConfigurationRequest
 	}
 	return configurationapp.ParseCurrentConfigurationIDs(values.Get("ids"))
+}
+
+// writeRetiredConfigurationTypeRefusal answers a create or update of a retired
+// configuration type with the reviewed mutation route's body shape.
+func writeRetiredConfigurationTypeRefusal(w http.ResponseWriter) {
+	writeCurrentConfigurationMutationError(
+		w, http.StatusBadRequest, configurationapp.RetiredPgvectorConfigurationMessage, "type")
 }

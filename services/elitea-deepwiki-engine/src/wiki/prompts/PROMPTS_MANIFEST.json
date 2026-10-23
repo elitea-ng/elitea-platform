@@ -6,8 +6,9 @@
       "file": "page_content_v3_tone_adjusted.txt",
       "source": "services/elitea-deepwiki/src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
       "symbol": "ENHANCED_CONTENT_GENERATION_PROMPT_V3_TONE_ADJUSTED",
-      "sha256": "6f7fe0b51094a6be0e4d43f42246cdd614302506a8ecac31f03b8aeed7646ab8",
-      "chars": 19269
+      "sha256": "e1f2e78c7a4c77a586e59ca6726f3de1ee684150c98566e511ac8fe1fb5623fa",
+      "chars": 19299,
+      "amended": "2026-10-22: one sentence reworded (the legacy runtime's name -> 'a file-path-routed plugin framework mounts a route as'); no longer the Python value byte for byte"
     },
     {
       "file": "target_audience_mixed.txt",

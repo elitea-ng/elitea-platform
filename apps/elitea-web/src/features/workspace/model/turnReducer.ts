@@ -8,27 +8,23 @@
  * that list. The common case (a higher seq than any seen) is applied
  * incrementally; a late lower seq re-folds from the sorted list.
  *
- * Kept compact: a `text_delta` whose seq directly follows a stored text run
- * is merged into it (the run then covers `seq..last`), so a long answer is
+ * Kept compact: a `text_delta` (or `thinking_delta`) whose seq directly
+ * follows a stored run of its kind is merged into it (the run then covers `seq..last`), so a long answer is
  * one stored event, not thousands, and an append copies a short list. The
  * channel is global (every workspace's turns), so the turns this hook did
  * not begin are kept only for the few most recently heard
  * ([`MAX_UNCLAIMED_TURNS`]): one of them may be the turn whose start has not
  * returned yet.
  */
-import type { AgentEvent, ApprovalRequestPayload, TurnPhase } from '@/shared/desktop/workspaceIpc';
+import { isPlanEvent, type PlanEvent } from '@/shared/desktop/planEvents';
+import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
+import type { TurnModel } from '@/shared/desktop/turnModel';
+import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
-export type TranscriptItem =
-  | { type: 'text'; key: string; text: string }
-  | {
-      type: 'tool';
-      key: string;
-      callId: string;
-      tool: string;
-      argsSummary: string;
-      remote: boolean;
-      result?: { ok: boolean; summary: string; truncated: boolean };
-    };
+import type { TranscriptItem } from './transcriptItem';
+import { applySideEvent, isSideEvent } from './turnSideEvents';
+
+export type { TranscriptItem } from './transcriptItem';
 
 interface TurnDone {
   committed: boolean;
@@ -49,6 +45,16 @@ export interface TurnView {
   projectInstructions?: string[];
   /** The turn's commit (after `done`) did not land: "Retry" sends it again. */
   commitFailed?: { executionId: string; code: string; message: string; seq: number };
+  /** The latest model call's context occupancy (the composer's meter). */
+  context?: ContextMeter;
+  /** The agent's checklist as this turn last sent it (`plan_updated`); `null` once deleted, absent when the turn sent none. */
+  plan?: PlanView | null;
+  /** The plan `exit_plan_mode` proposed, waiting for Accept / Decline. */
+  planProposal?: PlanProposalPayload;
+  /** The person accepted a plan in this turn (its `call_id`): the session left plan mode. */
+  planAccepted?: string;
+  /** The model the turn runs on (from `status` `running`). */
+  model?: TurnModel;
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -114,8 +120,20 @@ function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
   if (event.payload.message !== undefined) next.message = event.payload.message;
   else delete next.message;
   if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
-  if (isTerminalPhase(event.payload.phase)) next.approvals = [];
+  if (event.payload.model !== undefined) next.model = event.payload.model;
+  if (isTerminalPhase(event.payload.phase)) return withoutProposal({ ...next, approvals: [] });
   return next;
+}
+
+function withoutProposal(view: TurnView): TurnView {
+  if (view.planProposal === undefined) return view;
+  const { planProposal: _answered, ...rest } = view;
+  return rest;
+}
+
+function onPlanProposed(view: TurnView, event: EventOf<'plan_proposed'>, resolved: readonly string[]): TurnView {
+  if (resolved.includes(event.payload.request_id) || isTerminalPhase(view.phase)) return view;
+  return { ...view, planProposal: event.payload };
 }
 
 function onTextDelta(view: TurnView, event: EventOf<'text_delta'>): TurnView {
@@ -133,7 +151,16 @@ function onToolCall(view: TurnView, event: EventOf<'tool_call'>): TurnView {
   return { ...view, items: [...view.items, { type: 'tool', key: `c${callId}`, callId, tool, argsSummary, remote }] };
 }
 
+/** A sign-in card belongs to its tool call: once the call ends (its wait timed out, say), the card goes. */
 function onToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
+  const callId = event.payload.call_id;
+  const answered = withToolResult(view, event);
+  const next = answered.planProposal?.call_id === callId ? withoutProposal(answered) : answered;
+  if (!next.approvals.some((a) => a.call_id === callId)) return next;
+  return { ...next, approvals: next.approvals.filter((a) => a.call_id !== callId) };
+}
+
+function withToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
   const { call_id: callId, ok, summary, truncated } = event.payload;
   const result = { ok, summary, truncated };
   const index = view.items.findIndex((item) => item.type === 'tool' && item.callId === callId);
@@ -153,10 +180,23 @@ function onApprovalRequest(view: TurnView, event: EventOf<'approval_request'>, r
 
 function onDone(view: TurnView, event: EventOf<'done'>): TurnView {
   const { committed, conversation_id: conversationId, message_ids: messageIds, changed_files: changedFiles } = event.payload;
-  return { ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] };
+  return withoutProposal({ ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] });
+}
+
+function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly string[]): TurnView {
+  switch (event.kind) {
+    case 'plan_updated':
+      return { ...view, plan: event.payload.plan };
+    case 'plan_proposed':
+      return onPlanProposed(view, event, resolved);
+    case 'plan_accepted':
+      return { ...withoutProposal(view), planAccepted: event.payload.call_id };
+  }
 }
 
 function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+  if (isPlanEvent(event)) return applyPlanEvent(view, event, resolved);
+  if (isSideEvent(event)) return applySideEvent(view, event);
   switch (event.kind) {
     case 'status':
       return onStatus(view, event);
@@ -168,11 +208,10 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
       return onToolResult(view, event);
     case 'approval_request':
       return onApprovalRequest(view, event, resolved);
-    case 'usage':
-      // Not part of the transcript: the activity island shows a turn's tokens.
-      return view;
+    case 'approval_closed':
+      return { ...view, approvals: view.approvals.filter((a) => a.request_id !== event.payload.request_id) };
     case 'error':
-      return { ...view, error: event.payload, approvals: [] };
+      return withoutProposal({ ...view, error: event.payload, approvals: [] });
     case 'done':
       return onDone(view, event);
     case 'commit_failed': {
@@ -190,9 +229,13 @@ function lastSeq(event: AgentEvent | StoredEvent): number {
   return 'last' in event ? event.last : event.seq;
 }
 
-/** `event` merged onto `run` when it is a text delta (or run) directly following the text run; otherwise null. */
+type DeltaEvent = EventOf<'text_delta'> | EventOf<'thinking_delta'>;
+
+const isDelta = (event: AgentEvent | undefined): event is DeltaEvent => event?.kind === 'text_delta' || event?.kind === 'thinking_delta';
+
+/** `event` merged onto `run` when it is a delta (or run) of the run's kind directly following it; otherwise null. */
 function extendRun(run: StoredEvent | undefined, event: AgentEvent | StoredEvent): StoredEvent | null {
-  if (run?.kind !== 'text_delta' || event.kind !== 'text_delta' || event.seq !== run.last + 1) return null;
+  if (run === undefined || !isDelta(run) || !isDelta(event) || run.kind !== event.kind || event.seq !== run.last + 1) return null;
   return { ...run, payload: { text: run.payload.text + event.payload.text }, last: lastSeq(event) };
 }
 
@@ -215,7 +258,8 @@ function withoutSaved(view: TurnView, savedThrough: number | undefined): TurnVie
 }
 
 function withoutResolved(view: TurnView, requestId: string): TurnView {
-  return { ...view, approvals: view.approvals.filter((a) => a.request_id !== requestId) };
+  const next = { ...view, approvals: view.approvals.filter((a) => a.request_id !== requestId) };
+  return next.planProposal?.request_id === requestId ? withoutProposal(next) : next;
 }
 
 function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
@@ -230,7 +274,16 @@ function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
  * no approvals.
  */
 export function replayView(events: readonly AgentEvent[]): TurnView {
-  return { ...fold(sortedUnique(events), []), approvals: [] };
+  return withoutProposal({ ...fold(sortedUnique(events), []), approvals: [] });
+}
+
+/** The thread's checklist: the newest `plan` any of `views` (oldest first) sent; `null` when none did or it was deleted. */
+export function latestPlan(views: readonly TurnView[]): PlanView | null {
+  for (let i = views.length - 1; i >= 0; i -= 1) {
+    const plan = views[i]?.plan;
+    if (plan !== undefined) return plan;
+  }
+  return null;
 }
 
 function appended(events: readonly StoredEvent[], event: AgentEvent): StoredEvent[] {

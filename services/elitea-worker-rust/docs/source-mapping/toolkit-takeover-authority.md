@@ -2,7 +2,7 @@
 
 ## Ownership and source mapping
 
-Current Core `projects/centry/pylon_main/plugins/elitea_core/api/v2/test_toolkit_tool.py`
+Current Core `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/test_toolkit_tool.py`
 provides the named-operation Test behavior. Its task implementation is a business
 reference, not the durable recovery contract for the replacement worker.
 

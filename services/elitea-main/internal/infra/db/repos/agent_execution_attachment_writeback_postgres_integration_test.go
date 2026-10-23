@@ -3,13 +3,14 @@ package repos
 // #607: the worker's extracted document text is PERSISTED, so a LATER turn sees
 // the file's contents instead of just its filename.
 //
-// Pylon extracts once, at message-persist time, and stores the text as a second
-// `{"type":"text"}` chunk of the item's `content` (rpc/chat_all.py:344-377);
-// every later turn is then pure DB (utils/chat_history.py:67-73). The Go port
-// extracts in the WORKER, at invoke time, and until now threw the result away:
-// the turn carrying the file worked, and a follow-up question about it saw the
-// filename. #606 part 3 taught the chat-history projection to read an
-// attachment's stored chunks; nothing ever wrote the text into them.
+// The legacy runtime extracts once, at message-persist time, and stores the
+// text as a second `{"type":"text"}` chunk of the item's `content`
+// (rpc/chat_all.py:344-377); every later turn is then pure DB
+// (utils/chat_history.py:67-73). The Go port extracts in the WORKER, at invoke
+// time, and until now threw the result away: the turn carrying the file worked,
+// and a follow-up question about it saw the filename. #606 part 3 taught the
+// chat-history projection to read an attachment's stored chunks; nothing ever
+// wrote the text into them.
 //
 // These run against real Postgres because every property under test is a
 // property of the SQL: whether the write lands on the right row, whether the

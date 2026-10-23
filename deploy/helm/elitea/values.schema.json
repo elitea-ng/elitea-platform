@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Deliberately minimal: values.yaml and templates/guards.yaml are the contract. This file exists for the one check a template cannot make. `nats` is the bundled upstream nats chart's values, whose templates run before this chart's guards, so a values file that still sets the old client key `nats.service` (a string; it moved to natsClient.service) would fail inside the upstream chart with an error that names neither key. Schema validation runs before any template.",
+  "type": "object",
+  "properties": {
+    "nats": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "description": "The bundled NATS server's Service settings (upstream nats chart). The NATS client's service NAME moved to natsClient.service; see docs/UPGRADING.md, 'One chart: NATS bundled'.",
+          "type": "object"
+        }
+      }
+    }
+  }
+}

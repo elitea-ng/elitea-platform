@@ -27,7 +27,7 @@ import { server } from '@/test/setup';
 import { AdminConfiguration } from './Configuration';
 import { renderAdminRoute } from './__tests__/testRouter';
 
-const PYLON_REASON = 'these settings configure Pylon plugin runtimes';
+const WITHHELD_REASON = 'these settings have no equivalent on this platform';
 
 const MCP_REASON =
   'MCP server definitions are not stored as plugin configuration on this platform';
@@ -40,7 +40,7 @@ function sections(managedSurface: string | undefined) {
     {
       id: 'guardrails',
       title: 'Guardrails',
-      unavailable_reason: PYLON_REASON,
+      unavailable_reason: WITHHELD_REASON,
       fields: [],
     },
     {

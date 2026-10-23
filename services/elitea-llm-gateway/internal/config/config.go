@@ -8,13 +8,21 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
+	// DefaultGRPCAddr is where GatewayService listens (#1359).
+	DefaultGRPCAddr = ":8443"
+	// DefaultGRPCClients admits elitea-main's client certificate, whose one
+	// DNS SAN is "elitea-main".
+	DefaultGRPCClients = "dns:elitea-main"
+
 	// DefaultShutdownTimeout is the ceiling on srv.Shutdown()'s context.
 	// It MUST be ≥150s and rise together with the Deployment's
 	// terminationGracePeriodSeconds so provider streams (up to ~120s) drain
@@ -32,7 +40,7 @@ const (
 	DefaultProviderConcurrency = 50
 
 	// DefaultNATSReplicas is the default gateway replica count
-	// (LLM_BUDGET_EXPECTED_REPLICAS) the degraded per-replica cap divides by.
+	// (LLM_BUDGET_EXPECTED_REPLICAS) the fleet-wide degraded allowance divides by.
 	// It no longer sizes any NATS asset: the gateway binds to streams the
 	// nats-bootstrap Job creates, at the replica count that Job is given
 	// (#1076). HA operators MUST set the real gateway replica count.
@@ -104,12 +112,17 @@ const (
 	// snapshot freshness (§8.5, LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN).
 	DefaultNATSDegradedMaxDuration = 10 * time.Minute
 
-	// DefaultNATSDegradedCapPct is the per-replica degraded-window overspend cap
+	// DefaultNATSDegradedCapPct is the FLEET-wide degraded-window overspend cap
 	// expressed as a percentage of hard_limit_usd when
 	// LLM_BUDGET_NATS_DEGRADED_CAP_USD is unset (§8.5, "default 10 % of
 	// hard_limit_usd"). A positive LLM_BUDGET_NATS_DEGRADED_CAP_USD overrides it
-	// with an absolute USD cap.
+	// with an absolute USD cap. Each replica's share is
+	// floor(cap / LLM_BUDGET_EXPECTED_REPLICAS) (failmode.PerReplicaShare).
 	DefaultNATSDegradedCapPct = 10
+
+	// DefaultNATSDegradedReservationUSD is the reservation per admitted
+	// NATS-down request (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD).
+	DefaultNATSDegradedReservationUSD = 0.10
 
 	// DefaultRealtimeBudgetRecheck is how often a LIVE realtime session re-asks
 	// the budget gate (LLM_REALTIME_BUDGET_RECHECK_SEC). It MUST equal
@@ -153,8 +166,17 @@ const (
 
 // Config holds the resolved gateway configuration.
 type Config struct {
-	// HTTPAddr is the listen address for the /llm HTTP server.
+	// HTTPAddr is the listen address of the HTTP server. It serves health
+	// and metrics only: /llm is served over gRPC (GRPCAddr, #1359).
 	HTTPAddr string
+	// GRPCAddr is the listen address of the GatewayService gRPC listener
+	// (GATEWAY_GRPC_ADDR). It always requires mutual TLS (TLSCertFile,
+	// TLSKeyFile, TLSCAFile).
+	GRPCAddr string
+	// GRPCClients lists the workload identities admitted to GatewayService
+	// (GATEWAY_GRPC_CLIENTS, comma-separated "dns:<name>" or spiffe:// IDs of
+	// the client certificate).
+	GRPCClients string
 	// DatabaseURL is the Postgres DSN (Fernet vault + governance rows live here).
 	DatabaseURL string
 	// ShutdownTimeout bounds graceful shutdown; ≥150s (§9.5).
@@ -240,18 +262,30 @@ type Config struct {
 	// NATSDegradedMaxDuration is the continuous-outage ceiling before the FSM
 	// forces closed (503) regardless of snapshot freshness (§8.5).
 	NATSDegradedMaxDuration time.Duration
-	// NATSDegradedCapUSD is an absolute per-replica degraded-window overspend cap
-	// in USD (§8.5). 0 means "use DefaultNATSDegradedCapPct % of hard_limit_usd".
+	// NATSDegradedCapUSD is an absolute FLEET-wide degraded-window overspend cap
+	// in USD (§8.5). 0 means "use 10% of hard_limit_usd". Each replica admits
+	// floor(cap / ExpectedReplicas) of it (failmode.PerReplicaShare).
 	NATSDegradedCapUSD float64
-	// ExpectedReplicas is the operator-configured replica count used for the
-	// NATS_DOWN_PG_FRESH_NEAR per-replica cap (§8.5, LLM_BUDGET_EXPECTED_REPLICAS,
-	// default 1).
+	// ExpectedReplicas is the operator-configured replica count that the
+	// NATS-down degraded allowance is divided by: the FRESH_NEAR remaining
+	// budget and the FRESH_SAFE degraded cap (§8.5, LLM_BUDGET_EXPECTED_REPLICAS,
+	// default 1). FromEnv returns an error for a set value that is not an
+	// integer of 1 or more (ExpectedReplicasFromEnv), and main refuses to start.
 	ExpectedReplicas int
+	// NATSDegradedReservationUSD is what one admitted NATS-down request
+	// reserves against this replica's share until its real cost is billed
+	// (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD, default 0.10). It bounds how
+	// many requests can be admitted at once against one share. Set it at or
+	// above the largest cost one request can have, and the degraded cap holds
+	// exactly; a request that costs more adds the difference. A share smaller
+	// than the reservation admits nothing while NATS is down.
+	NATSDegradedReservationUSD float64
 
-	// TLS / mTLS (FIX #10). When TLSCertFile and TLSKeyFile are both set the
-	// server switches to ListenAndServeTLS. When TLSCAFile is also set, client
-	// certificates are required and verified against the CA bundle (mTLS).
-	// All three are empty by default (plain HTTP, for local/dev use).
+	// The mTLS material of the GatewayService gRPC listener (#1359): the
+	// server certificate and key, and the CA bundle client certificates must
+	// chain to. All three are required; the gateway refuses to start without
+	// them, because that listener is the only way to /llm. The HTTP listener
+	// (health and metrics) does not use them.
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
@@ -363,17 +397,91 @@ type Config struct {
 	// handshake is not subject to CORS, so a browser page can open one
 	// cross-site with the ambient credentials of the user. With this empty the
 	// gateway admits only a handshake whose Origin matches its OWN host, or one
-	// that carries no Origin at all — which is every non-browser client,
-	// including the pylon-indexer relay this route exists for. A browser origin
-	// must be named here on purpose.
+	// that carries no Origin at all — which is every non-browser client. The
+	// route's original caller, the legacy indexer's realtime ASR relay, was
+	// deleted with that service (#339); today a handshake reaches the gateway
+	// through elitea-main's /llm edge proxy, which forwards the caller's own
+	// headers, Origin included. A browser origin must be named here on purpose.
 	RealtimeAllowedOrigins []string
+
+	// WorkloadIdentityEnabled arms keyless PLATFORM credentials
+	// (GATEWAY_WORKLOAD_IDENTITY_ENABLED): a vertex_ai or ai_dial row with
+	// `auth_mode = workload_identity` then authenticates with the pod's own
+	// Google identity (GKE Workload Identity, read through ADC). Only a shared
+	// row of the public project is admitted; see internal/account
+	// workload_identity.go.
+	//
+	// FALSE IS THE DEFAULT, and the parse is strict: only the exact words
+	// "true" and "false" are read. Anything else is false, because the value
+	// that weakens tenant isolation is the one a typo must never select.
+	WorkloadIdentityEnabled bool
 }
 
 // FromEnv builds a Config from environment variables, applying the §9.5
 // defaults for any value that is unset or invalid.
-func FromEnv() Config {
+//
+// It returns an error for the values that must never fall back to a default.
+// Today that is LLM_BUDGET_EXPECTED_REPLICAS: the NATS-down degraded cap is
+// divided by it, and a silent fallback to 1 gives every replica the whole
+// fleet's allowance (human decision, DECISIONS.md 2026-10-22). main refuses to
+// start on the error.
+func FromEnv() (Config, error) {
+	replicas, err := ExpectedReplicasFromEnv(os.LookupEnv)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := fromEnvDefaults()
+	cfg.ExpectedReplicas = replicas
+	return cfg, nil
+}
+
+// expectedReplicasPattern is the accepted form of LLM_BUDGET_EXPECTED_REPLICAS:
+// a base-10 integer of 1 or more, with no sign and no leading zero. It is the
+// chart's rule too (elitea.integer in deploy/helm/elitea/templates/_helpers.tpl,
+// min 1), so a value the chart renders is a value the gateway accepts, and
+// "+3", "007" and "0x2" are refused by both.
+var expectedReplicasPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
+
+// negativeOrZeroPattern recognises a whole number below 1, for a message that
+// names the minimum rather than the format.
+var negativeOrZeroPattern = regexp.MustCompile(`^(0|-[1-9][0-9]*)$`)
+
+// ExpectedReplicasFromEnv reads LLM_BUDGET_EXPECTED_REPLICAS strictly. UNSET
+// gives DefaultNATSReplicas (1). A SET value must match expectedReplicasPattern
+// exactly and fit an int: an empty value, spaces and any other text are
+// refused, because a fallback to 1 gives each replica the whole cap.
+func ExpectedReplicasFromEnv(lookup func(string) (string, bool)) (int, error) {
+	const key = "LLM_BUDGET_EXPECTED_REPLICAS"
+	raw, ok := lookup(key)
+	if !ok {
+		return DefaultNATSReplicas, nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return 0, fmt.Errorf("%s is set but empty. Set it to the most gateway replicas that can run, "+
+			"or unset it for 1", key)
+	}
+	if negativeOrZeroPattern.MatchString(raw) {
+		return 0, fmt.Errorf("%s must be at least 1, and it is %s. The NATS-down degraded budget cap is "+
+			"divided by it; set it to the most gateway replicas that can run", key, raw)
+	}
+	if !expectedReplicasPattern.MatchString(raw) {
+		return 0, fmt.Errorf("%s must be a whole number (digits only, no sign, no leading zero), and it is %q. "+
+			"Set it to the most gateway replicas that can run", key, raw)
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s is out of range: %q", key, raw)
+	}
+	return n, nil
+}
+
+// fromEnvDefaults is the lenient part of FromEnv: every value that falls back
+// to its default when unset or invalid.
+func fromEnvDefaults() Config {
 	return Config{
 		HTTPAddr:            envOr("GATEWAY_HTTP_ADDR", ":8083"),
+		GRPCAddr:            envOr("GATEWAY_GRPC_ADDR", DefaultGRPCAddr),
+		GRPCClients:         envOr("GATEWAY_GRPC_CLIENTS", DefaultGRPCClients),
 		DatabaseURL:         envOr("DATABASE_URL", "postgres://localhost:5432/elitea?sslmode=disable"),
 		ShutdownTimeout:     durationOr("GATEWAY_SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 		InitialPoolSize:     intOr("GATEWAY_INITIAL_POOL_SIZE", DefaultInitialPoolSize),
@@ -396,23 +504,41 @@ func FromEnv() Config {
 		PGFreshnessMin:           minutesOr("LLM_BUDGET_PG_FRESHNESS_MIN", DefaultPGFreshnessMin),
 		NATSDegradedMaxDuration:  minutesOr("LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN", DefaultNATSDegradedMaxDuration),
 		NATSDegradedCapUSD:       floatOr("LLM_BUDGET_NATS_DEGRADED_CAP_USD", 0),
-		ExpectedReplicas:         intOr("LLM_BUDGET_EXPECTED_REPLICAS", DefaultNATSReplicas),
-		TLSCertFile:              os.Getenv("GATEWAY_TLS_CERT_FILE"),
-		TLSKeyFile:               os.Getenv("GATEWAY_TLS_KEY_FILE"),
-		TLSCAFile:                os.Getenv("GATEWAY_TLS_CA_FILE"),
-		StreamGrace:              millisOr("LLM_STREAM_GRACE_MS", DefaultStreamGrace, MaxStreamGrace),
-		StreamDrainLimit:         intOr("LLM_STREAM_DRAIN_MAX_INFLIGHT", DefaultStreamDrainLimit),
-		SelfLLMOrigins:           csvOr("GATEWAY_SELF_LLM_ORIGINS"),
-		EgressAllowlist:          csvOr("GATEWAY_EGRESS_ALLOWLIST"),
-		LoopBreakerThreshold:     signedIntOr("LLM_LOOP_BREAKER_THRESHOLD", 0),
-		LoopBreakerWindow:        plainMillisOr("LLM_LOOP_BREAKER_WINDOW_MS", 0),
-		LoopBreakerOpenFor:       secondsOr("LLM_LOOP_BREAKER_OPEN_SEC", 0),
-		PublicProjectID:          intOr("ELITEA_AI_PROJECT_ID", 0),
+		NATSDegradedReservationUSD: floatOr("LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD",
+			DefaultNATSDegradedReservationUSD),
+		TLSCertFile:          os.Getenv("GATEWAY_TLS_CERT_FILE"),
+		TLSKeyFile:           os.Getenv("GATEWAY_TLS_KEY_FILE"),
+		TLSCAFile:            os.Getenv("GATEWAY_TLS_CA_FILE"),
+		StreamGrace:          millisOr("LLM_STREAM_GRACE_MS", DefaultStreamGrace, MaxStreamGrace),
+		StreamDrainLimit:     intOr("LLM_STREAM_DRAIN_MAX_INFLIGHT", DefaultStreamDrainLimit),
+		SelfLLMOrigins:       csvOr("GATEWAY_SELF_LLM_ORIGINS"),
+		EgressAllowlist:      csvOr("GATEWAY_EGRESS_ALLOWLIST"),
+		LoopBreakerThreshold: signedIntOr("LLM_LOOP_BREAKER_THRESHOLD", 0),
+		LoopBreakerWindow:    plainMillisOr("LLM_LOOP_BREAKER_WINDOW_MS", 0),
+		LoopBreakerOpenFor:   secondsOr("LLM_LOOP_BREAKER_OPEN_SEC", 0),
+		PublicProjectID:      intOr("ELITEA_AI_PROJECT_ID", 0),
 
 		RealtimeBudgetRecheck:  secondsOr("LLM_REALTIME_BUDGET_RECHECK_SEC", DefaultRealtimeBudgetRecheck),
 		GovernanceRefresh:      secondsOr("LLM_GOVERNANCE_REFRESH_SEC", DefaultGovernanceRefresh),
 		RealtimeMaxSessions:    intOr("LLM_REALTIME_MAX_SESSIONS", DefaultRealtimeMaxSessions),
 		RealtimeAllowedOrigins: csvOr("LLM_REALTIME_ALLOWED_ORIGINS"),
+
+		WorkloadIdentityEnabled: strictBoolOr("GATEWAY_WORKLOAD_IDENTITY_ENABLED", false),
+	}
+}
+
+// strictBoolOr reads a boolean that accepts exactly "true" or "false". Any
+// other value, "1", "TRUE" and "yes" included, returns def. strconv.ParseBool
+// is not used: it reads "1" and "T" as true, and for a switch that lends the
+// pod's cloud identity a loose reading is a widening nobody chose.
+func strictBoolOr(key string, def bool) bool {
+	switch os.Getenv(key) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return def
 	}
 }
 

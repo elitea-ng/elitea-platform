@@ -54,9 +54,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * "A GitHub credential with no label and no data is refused" is not a
  * credentials-section rule: the configuration create route validates neither
- * field for ANY type, so the same body is accepted for a model, a vector store
- * and an embedding model too. It belongs with the configuration create
- * contract, which owns the refusal for all four sections, and asserting
+ * field for ANY type, so the same body is accepted for a model and an
+ * embedding model too. It belongs with the configuration create contract,
+ * which owns the refusal for every section, and asserting
  * today's acceptance here would have to be reverted by the change that fixes
  * it.
  *
@@ -318,9 +318,9 @@ test('a GitHub credential with no authentication is stored; one with half a pair
   /*
    * No authentication at all is DELIBERATE: `auth` is `required: false` in
    * the type's schema, because a GitHub Enterprise endpoint may be reachable
-   * anonymously. Half a pair is not: pylon refused a username without its
-   * password (and an app id without its private key), and so does the create
-   * route (configurations/required_fields.go), naming the pair, so a
+   * anonymously. Half a pair is not: the legacy runtime refused a username
+   * without its password (and an app id without its private key), and so does
+   * the create route (configurations/required_fields.go), naming the pair, so a
    * credential that can never authenticate is not saved as if it could.
    */
   const created: string[] = [];
@@ -428,18 +428,16 @@ test('a GitHub credential is listed under the credentials section, by its own na
 
 /* ── the GitHub toolkit creation contract ─────────────────────────────────── */
 
-test('a GitHub toolkit carries its credential, its vector store and its embedding model by reference', async ({
+test('a GitHub toolkit carries its credential and its embedding model by reference, and drops a legacy vector-store reference', async ({
   request,
 }) => {
   const credentialTitle = autotestName('tkcred');
-  const vectorTitle = autotestName('tkvector');
   const embeddingTitle = autotestName('tkembed');
 
   const credential = await createConfiguration(request, 'credentials', {
     title: credentialTitle,
     data: { base_url: PLACEHOLDER_BASE_URL, access_token: `${AUTOTEST_PREFIX}gh_ref_token` },
   });
-  const vector = await createConfiguration(request, 'vectorstorage', { title: vectorTitle });
   // Not `createConfiguration('embedding', …)`: an embedding model is only
   // referenceable once the project can SEE it, which takes a credential of its
   // own and an admitted row. The fixture makes both.
@@ -466,7 +464,11 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
          * referenced with `private: false`.
          */
         github_configuration: { elitea_title: credential.title, private: false },
-        pgvector_configuration: { elitea_title: vector.title, private: false },
+        // The removed vector-store reference. Indexes live in the platform
+        // vector store and need no configuration, so a write that still
+        // carries the key has it dropped rather than refused — an old client
+        // or an imported toolkit keeps saving. The title names no row.
+        pgvector_configuration: { elitea_title: autotestName('tkvector_legacy'), private: false },
         // An embedding model is named by a plain string — the schema declares
         // it `configuration_model: "embedding"`, not a configuration-reference
         // object, and the two shapes are not interchangeable. The string is the
@@ -486,9 +488,9 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
       'the credential reference must survive as an object',
     ).toBe(credential.title);
     expect(
-      (settings['pgvector_configuration'] as Record<string, unknown> | undefined)?.['elitea_title'],
-      'the vector-store reference must survive as an object',
-    ).toBe(vector.title);
+      Object.keys(settings),
+      'the removed vector-store reference must not be stored',
+    ).not.toContain('pgvector_configuration');
     expect(settings['embedding_model'], 'the embedding model is stored by name').toBe(
       embedding.modelName,
     );
@@ -496,7 +498,6 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
     await removeToolkit(request, toolkitId);
     await deleteConfiguration(request, embedding.id);
     await deleteConfiguration(request, embedding.credentialId);
-    await deleteConfiguration(request, vector.id);
     await deleteConfiguration(request, credential.id);
   }
 });
@@ -682,7 +683,7 @@ test('an artifact toolkit is created against a bucket with every tool its type o
       name,
       type: 'artifact',
       // `bucket` is the only required setting the artifact type declares; the
-      // pgvector and embedding references are for indexing and are left off.
+      // embedding reference is for indexing and is left off.
       settings: { bucket, selected_tools: [...everyTool] },
     });
     toolkitId = id;

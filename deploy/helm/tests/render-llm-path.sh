@@ -17,6 +17,18 @@
 # Usage: deploy/helm/tests/render-llm-path.sh
 # Needs: helm, yq. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 # The single chart contains the LLM gateway, which REFUSES to render until an
 # operator states its two postures. Every render below therefore supplies them:
@@ -195,11 +207,11 @@ fi
 # readable client certificate is a fatal boot error.
 refuses "a gateway URL with no client certificate" \
   "LLM_GATEWAY_CLIENT_CERT" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083"
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8443"
 
 refuses "a gateway URL with no CA bundle" \
   "LLM_GATEWAY_CA_FILE" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083" \
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8443" \
   --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
   --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key
 
@@ -211,14 +223,32 @@ refuses "certificate material with no gateway URL" \
 # as file paths, so that shape could never work.
 refuses "certificate text where a file path belongs" \
   "absolute file path" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083" \
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8443" \
   --set-string main.env.LLM_GATEWAY_CLIENT_CERT="-----BEGIN CERTIFICATE-----" \
   --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
   --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
 
 refuses "a gateway URL with no scheme" \
   "missing scheme or host" "$MAIN" \
-  --set-string main.env.LLM_GATEWAY_URL="gw:8083" \
+  --set-string main.env.LLM_GATEWAY_URL="gw:8443" \
+  --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
+  --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
+  --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
+
+# The gRPC hop is mutual TLS only (#1359). gateway_client.go refuses http://,
+# so the chart must refuse it first.
+refuses "a cleartext gateway URL" \
+  "not https" "$MAIN" \
+  --set-string main.env.LLM_GATEWAY_URL="http://gw:8443" \
+  --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
+  --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
+  --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
+
+# The gateway HTTP port (8083) now serves health and metrics only. A URL that
+# still names it would boot and then fail every /llm call with 502.
+refuses "a gateway URL on the infra HTTP port" \
+  "health and metrics only" "$MAIN" \
+  --set-string main.env.LLM_GATEWAY_URL="https://gw:8083" \
   --set-string main.env.LLM_GATEWAY_CLIENT_CERT=/run/certs/client.crt \
   --set-string main.env.LLM_GATEWAY_CLIENT_KEY=/run/certs/client.key \
   --set-string main.env.LLM_GATEWAY_CA_FILE=/run/certs/ca.crt
@@ -317,7 +347,7 @@ refuses "a gateway with no NATS to count budgets in" \
   "empty GATEWAY_NATS_URL" "$GATEWAY" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS="https://elitea.example.com/llm/v1" \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
-  --set-string nats.service=
+  --set nats.enabled=false --set natsBootstrap.enabled=false --set-string natsClient.service=
 
 refuses "a require-enforcement value the binary does not read" \
   "must be one of auto, on or off" "$GATEWAY" \
@@ -450,7 +480,9 @@ fi
 refuses "elitea-main and the gateway naming different public projects" \
   "name different public projects" "$MAIN" \
   --set-string main.env.ELITEA_AI_PROJECT_ID=1 \
-  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID=2
+  --set-string llmGateway.env.ELITEA_AI_PROJECT_ID=2 \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted
 
 refuses "the SPA naming a different public project from elitea-main" \
   "name different public projects" "$MAIN" \
@@ -506,7 +538,7 @@ if [ -z "$nats_url" ]; then
   fail "a default scheduler install renders GATEWAY_NATS_URL empty, so the write-back consumer never starts whatever BUDGET_WRITEBACK_ENABLED says"
 else
   pass "a default scheduler install renders GATEWAY_NATS_URL=\"$nats_url\""
-  # The chart renders the FQDN (nats.namespace may name another namespace
+  # The chart renders the FQDN (natsClient.namespace may name another namespace
   # when the NATS issuer is a ClusterIssuer, and a short name does not
   # resolve across namespaces), over tls:// with the scheduler's client
   # certificate (#1076).

@@ -6,19 +6,15 @@ package main
 //
 // ONE VARIABLE PER APPLICATION, ELITEA_<APP>_PLATFORM_GRPC_TARGET, a host:port
 // (compose: elitea-deepwiki:9443; the chart derives <service>:<platformGrpc
-// port>). Everything else the hop needs — the client certificate, its key, the
-// CA, the server name — is the facade's: the engine serves both listeners
-// behind one TLS configuration, and this process presents the same identity on
-// both. So the target is read only where the facade is ENABLED, and a target
-// set beside a disabled facade is a boot error rather than a silently ignored
-// setting: an operator who set it meant it, and a process that reads it as
-// nothing would delete projects for ever while the engine kept their data.
-//
-// A facade that is enabled WITHOUT a target is allowed, logged at Warn at boot:
-// the engine's service is off until its allowlist is set (ELITEA_<APP>_
-// PLATFORM_CLIENTS), and a deployment is entitled to run the facade alone.
-// What that deployment then has is the leak the two issues describe, and the
-// log line says so.
+// port>). Since #1359 it is the FACADE's target too — the host serves the
+// provider SPI and the platform operations on one listener, behind one TLS
+// configuration and one allowlist — so an enabled facade always has it, and
+// the data deletion is always wired where the facade is. Everything else the
+// hop needs — the client certificate, its key, the CA, the server name — is
+// the facade's. A target set beside a disabled facade is a boot error rather
+// than a silently ignored setting: an operator who set it meant it, and a
+// process that reads it as nothing would delete projects for ever while the
+// engine kept their data.
 
 import (
 	"fmt"
@@ -28,18 +24,18 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
-const (
-	deepwikiPlatformTargetEnv  = "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET"
-	inventoryPlatformTargetEnv = "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET"
+var (
+	deepwikiPlatformTargetEnv  = v2deepwiki.TargetEnv
+	inventoryPlatformTargetEnv = v2inventory.EnvNames.Target
 )
 
-// platformOperationsConfigs reads the two targets against the two facades. It
-// returns one client Config per target set, and an error for a target set
-// beside a disabled facade.
+// platformOperationsConfigs builds one client Config per enabled facade, from
+// the facade's own target, and refuses a target set beside a disabled one.
 func platformOperationsConfigs(
 	deepwiki v2deepwiki.Config,
 	inventory facade.Config,
@@ -50,30 +46,28 @@ func platformOperationsConfigs(
 		return strings.TrimSpace(value)
 	}
 	var configs []platformops.Config
-	if target := get(deepwikiPlatformTargetEnv); target != "" {
-		if !deepwiki.Enabled {
-			return nil, fmt.Errorf("%s is set but %s is off: the platform gRPC client presents the facade's client certificate (%s, %s, %s), so it cannot exist without the facade. Turn the facade on, or clear the target",
-				deepwikiPlatformTargetEnv, v2deepwiki.EnabledEnv, v2deepwiki.ClientCertEnv, v2deepwiki.ClientKeyEnv, v2deepwiki.CAFileEnv)
-		}
+	if target := deepwiki.Target; deepwiki.Enabled {
 		configs = append(configs, platformops.Config{
 			App: platformops.AppDeepWiki, Target: target,
 			ClientCertFile: deepwiki.ClientCertFile, ClientKeyFile: deepwiki.ClientKeyFile,
 			CAFile: deepwiki.CAFile, ServerName: deepwiki.ServerName,
 			CallTimeout: platformCallTimeout(deepwiki.Timeout),
 		})
+	} else if get(deepwikiPlatformTargetEnv) != "" {
+		return nil, fmt.Errorf("%s is set but %s is off: the platform gRPC client presents the facade's client certificate (%s, %s, %s), so it cannot exist without the facade. Turn the facade on, or clear the target",
+			deepwikiPlatformTargetEnv, v2deepwiki.EnabledEnv, v2deepwiki.ClientCertEnv, v2deepwiki.ClientKeyEnv, v2deepwiki.CAFileEnv)
 	}
-	if target := get(inventoryPlatformTargetEnv); target != "" {
-		if !inventory.Enabled {
-			return nil, fmt.Errorf("%s is set but %s is off: the platform gRPC client presents the facade's client certificate (%s, %s, %s), so it cannot exist without the facade. Turn the facade on, or clear the target",
-				inventoryPlatformTargetEnv, "ELITEA_INVENTORY_ENABLED",
-				"ELITEA_INVENTORY_CLIENT_CERT_FILE", "ELITEA_INVENTORY_CLIENT_KEY_FILE", "ELITEA_INVENTORY_CA_FILE")
-		}
+	if target := inventory.Target; inventory.Enabled {
 		configs = append(configs, platformops.Config{
 			App: platformops.AppInventory, Target: target,
 			ClientCertFile: inventory.ClientCertFile, ClientKeyFile: inventory.ClientKeyFile,
 			CAFile: inventory.CAFile, ServerName: inventory.ServerName,
 			CallTimeout: platformCallTimeout(inventory.Timeout),
 		})
+	} else if get(inventoryPlatformTargetEnv) != "" {
+		return nil, fmt.Errorf("%s is set but %s is off: the platform gRPC client presents the facade's client certificate (%s, %s, %s), so it cannot exist without the facade. Turn the facade on, or clear the target",
+			inventoryPlatformTargetEnv, v2inventory.EnvNames.Enabled,
+			v2inventory.EnvNames.ClientCertFile, v2inventory.EnvNames.ClientKeyFile, v2inventory.EnvNames.CAFile)
 	}
 	for _, cfg := range configs {
 		if err := cfg.Validate(); err != nil {
@@ -92,9 +86,8 @@ func platformCallTimeout(facadeTimeout time.Duration) time.Duration {
 }
 
 // composePlatformOperations builds the clients the two cleanup journals (the
-// project provisioner's and the toolkit one) share, and logs, per facade,
-// whether the engine's data is deleted with its project and toolkits. The
-// returned close releases the connections.
+// project provisioner's and the toolkit one) share, one per enabled facade.
+// The returned close releases the connections.
 func composePlatformOperations(
 	logger *slog.Logger,
 	deepwiki v2deepwiki.Config,
@@ -107,7 +100,6 @@ func composePlatformOperations(
 	}
 	clients := make([]api.ApplicationDataClient, 0, len(configs))
 	closers := make([]func() error, 0, len(configs))
-	wired := map[string]bool{}
 	for _, cfg := range configs {
 		client, err := platformops.New(cfg, logger)
 		if err != nil {
@@ -118,22 +110,8 @@ func composePlatformOperations(
 		}
 		clients = append(clients, client)
 		closers = append(closers, client.Close)
-		wired[cfg.App] = true
 		logger.Info("application data deletion is wired: the engine's data goes with its project and toolkits",
 			"app", cfg.App, "target", cfg.Target)
-	}
-	for _, app := range []struct {
-		name    string
-		enabled bool
-		env     string
-	}{
-		{platformops.AppDeepWiki, deepwiki.Enabled, deepwikiPlatformTargetEnv},
-		{platformops.AppInventory, inventory.Enabled, inventoryPlatformTargetEnv},
-	} {
-		if app.enabled && !wired[app.name] {
-			logger.Warn("application data deletion is NOT wired: deleting a project (or a toolkit) leaves its data in this engine for ever",
-				"app", app.name, "set", app.env)
-		}
 	}
 	closeAll := func() {
 		for _, closeClient := range closers {

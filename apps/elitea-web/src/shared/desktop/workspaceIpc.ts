@@ -7,7 +7,14 @@
  * side serialises them) and are NOT renamed here: a rename layer is one more
  * place for the two halves to drift apart.
  */
+import type { ContextMeter } from './contextMeter';
+import type { CustomCommand, TurnStartRequest } from './turnStart';
 import type { HostInvoke } from './hostBridge';
+import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
+
+export type { ContextMeter } from './contextMeter';
+export type { CustomCommand, TurnCommand, TurnStartRequest } from './turnStart';
 
 export interface Workspace {
   id: string;
@@ -15,20 +22,6 @@ export interface Workspace {
   name: string;
   project_id: number | null;
   is_git: boolean;
-}
-
-export interface TurnStartRequest {
-  workspace_id: string;
-  project_id: number;
-  conversation_id: string;
-  application_id: number;
-  version_id: number;
-  prompt: string;
-  plan_mode: boolean;
-  /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */
-  mentions: string[];
-  /** The agent's skills the person picked with "/" (by name); the host resolves them against the agent version and applies them to this turn. */
-  skills: string[];
 }
 
 /** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
@@ -58,7 +51,11 @@ export interface TurnStarted {
   execution_id: string;
 }
 
-export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny';
+/**
+ * `continue` / `cancel` answer an `mcp_authorization` request; `accept` / `decline` a `plan_proposed` card; the rest a tool's
+ * approval (`continue` takes `allow_once` too). `deny_with_feedback` denies any card with the person's text (IPC.md "Decline with feedback").
+ */
+export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'deny_with_feedback' | 'continue' | 'cancel' | 'accept' | 'decline';
 type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface ChangedFile {
@@ -95,16 +92,34 @@ export type TurnPhase = 'resolving' | 'starting' | 'running' | 'committing' | 'd
 
 export interface ApprovalRequestPayload {
   request_id: string;
-  /** `continue`: the run used its steps; asked every time, shown as a card in the transcript. Absent for a tool's approval. */
-  kind?: 'continue';
+  /**
+   * `continue`: the run used its steps; asked every time, shown as a card in the transcript.
+   * `mcp_authorization`: a remote tool's MCP server needs the person's sign-in in the browser, then `continue` (or `cancel`).
+   * Absent for a tool's approval.
+   */
+  kind?: 'continue' | 'mcp_authorization';
   /** For `continue`: the steps each run takes (and the next one would). */
   steps?: number;
+  /** For `mcp_authorization`: the tool call it holds up; the card goes when that call's `tool_result` arrives. */
+  call_id?: string;
+  /** For `mcp_authorization`: the toolkit's name. */
+  toolkit?: string;
+  /** For `mcp_authorization`: the MCP server's address, to show. */
+  server_url?: string;
+  /** For `mcp_authorization`: the web app page to sign in on (`/app/<project>/mcps/all/<toolkit>`), relative to the deployment; absent when there is none. */
+  authorize_path?: string;
   tool: string;
   title: string;
   detail: string;
   command?: string[];
   paths?: string[];
   reason: string;
+  /** The layer that asks: `workspace` / `user` (a rule), `default`, … (#1216). */
+  source?: string;
+  /** The rule that asks (`workspace#3`, `user#1`), when a rule does. */
+  rule?: string;
+  /** The rule's justification, shown in place of the classifier's reason. */
+  justification?: string;
   can_remember: boolean;
 }
 
@@ -138,6 +153,8 @@ export type AgentEvent =
         phase: TurnPhase;
         message?: string;
         project_instructions?: string[];
+        /** On the first `running`: the model the turn runs on. */
+        model?: TurnModel;
         /** On `running` again: the run went on past its step limit, for the n-th time, from the host's own `host_prompt` (never the person's message). */
         continued?: number;
         host_prompt?: string;
@@ -148,11 +165,22 @@ export type AgentEvent =
       };
     })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
+  | (EventBase & { kind: 'thinking_delta'; payload: ThinkingDeltaPayload })
+  | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
-  /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced. Absent when the gateway reports no usage. */
-  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number } })
+  /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
+  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number; context?: ContextMeter } })
+  /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
+  | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
+  /** The host closed an open request nobody answered within its wait (an MCP sign-in): it no longer waits. */
+  | (EventBase & { kind: 'approval_closed'; payload: { request_id: string; reason: string } })
+  /** The agent's checklist changed: the whole plan, `null` once deleted. */
+  | (EventBase & { kind: 'plan_updated'; payload: { plan: PlanView | null } })
+  | (EventBase & { kind: 'plan_proposed'; payload: PlanProposalPayload })
+  /** The person accepted the plan: the session left plan mode and the turn goes on with every tool. */
+  | (EventBase & { kind: 'plan_accepted'; payload: { call_id: string } })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
@@ -180,6 +208,21 @@ export interface StoredTurn {
   state: 'done' | 'running' | 'interrupted';
   /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
   live: boolean;
+}
+
+/** What `thread_history_fork` copies (IPC.md "Thread history"). */
+export interface ThreadForkRequest {
+  workspaceId: string;
+  sourceConversationId: string;
+  targetConversationId: string;
+  targetConversationUuid: string;
+  /** The fork point's turn: the turns up to and including it are copied. Absent: every turn. */
+  upToTurnId?: string;
+  /**
+   * The fork answer's `forked_messages` (source message UUID → the copy's): the copied turns' `done`
+   * events name the new conversation's messages, so they can be fork points in turn.
+   */
+  messageIds?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -215,6 +258,8 @@ export interface WorkspaceIpc {
   bindProject(id: string, projectId: number): Promise<void>;
   /** The "@" picker: the workspace's files and folders matching `query`, best first. */
   files(workspaceId: string, query: string, limit?: number): Promise<WorkspaceFile[]>;
+  /** The "/" menu's custom commands of the workspace and of the person's own folder, by name. */
+  commands(workspaceId: string): Promise<CustomCommand[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
   /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
   retryCommit(executionId: string): Promise<void>;
@@ -223,7 +268,8 @@ export interface WorkspaceIpc {
   cancelTurn(turnId: string): Promise<void>;
   /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
   turnStatus(turnId: string): Promise<TurnStatus>;
-  respondApproval(requestId: string, decision: ApprovalDecision): Promise<void>;
+  /** `feedback` (the person's text for the agent) goes only with `decline` / `deny_with_feedback`. */
+  respondApproval(requestId: string, decision: ApprovalDecision, feedback?: string): Promise<void>;
   turnChanges(turnId: string): Promise<TurnChanges>;
   /** Undo the newest turn (or one file of a turn), or with `confirmOlder` restore the folder to before an older turn. */
   restore(turnId: string, path?: string, options?: RestoreOptions): Promise<{ restored: string[] }>;
@@ -233,6 +279,12 @@ export interface WorkspaceIpc {
   threadHistory(workspaceId: string, conversationId: string): Promise<StoredTurn[]>;
   /** Forget a thread's recorded turns (the conversation itself stays); resolves with how many. */
   deleteThreadHistory(workspaceId: string, conversationId: string): Promise<number>;
+  /**
+   * The local half of a fork (`thread_history_fork`): copy a thread's recorded turns, up to and including
+   * `upToTurnId` (all when absent), into the conversation the server fork made, in the same folder.
+   * Resolves with how many turns were copied (0 when this machine recorded none).
+   */
+  forkThreadHistory(request: ThreadForkRequest): Promise<number>;
   /** Subscribe to `agent://event`; resolves once the subscription is live, with its unsubscribe. */
   onEvent(handler: AgentEventHandler): Promise<() => void>;
 }
@@ -261,12 +313,14 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     bindProject: (id, projectId) => invoke<void>('workspace_bind_project', { id, project_id: projectId }),
     files: (workspaceId, query, limit) =>
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
+    commands: (workspaceId) => invoke<CustomCommand[]>('commands_list', { workspace_id: workspaceId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
     prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
-    respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
+    respondApproval: (requestId, decision, feedback) =>
+      invoke<void>('approval_respond', feedback === undefined ? { request_id: requestId, decision } : { request_id: requestId, decision, feedback }),
     turnChanges: (turnId) => invoke<TurnChanges>('turn_changes', { turn_id: turnId }),
     restore: (turnId, path, options) =>
       invoke<{ restored: string[] }>('checkpoint_restore', {
@@ -279,6 +333,17 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       (await invoke<{ turns: StoredTurn[] }>('thread_history', { workspace_id: workspaceId, conversation_id: conversationId })).turns,
     deleteThreadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
+    forkThreadHistory: async (request) =>
+      (
+        await invoke<{ copied: number }>('thread_history_fork', {
+          workspace_id: request.workspaceId,
+          source_conversation_id: request.sourceConversationId,
+          target_conversation_id: request.targetConversationId,
+          target_conversation_uuid: request.targetConversationUuid,
+          ...(request.upToTurnId === undefined ? {} : { up_to_turn_id: request.upToTurnId }),
+          ...(request.messageIds === undefined ? {} : { message_ids: request.messageIds }),
+        })
+      ).copied,
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

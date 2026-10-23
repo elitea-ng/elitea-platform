@@ -104,7 +104,7 @@ func run(
 
 	// The preflight dials as elitea-main's runtime identity, whose grants
 	// include the stream and consumer INFO it reads and nothing it could
-	// change (deploy/helm/nats/values.yaml).
+	// change (deploy/helm/elitea/values.yaml).
 	natsConn, err := runtimecomposition.NewRuntimeNATSConn(runtimeConfig.nats, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		writeMessage(stderr, "runtime index cutover control store is unavailable\n")

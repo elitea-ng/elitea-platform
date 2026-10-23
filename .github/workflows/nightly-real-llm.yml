@@ -34,10 +34,14 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
+  # The build reads the registry layer cache main writes. Those packages are
+  # public, so this is not what makes the read work; it lets the build's
+  # login read one that went private instead of building cold.
+  packages: read
 
 defaults:
   run:
@@ -96,8 +100,8 @@ jobs:
             ${{ matrix.worker == 'rust' && 'ci/bake-cache-rust.hcl' || '' }}
           targets: ${{ matrix.worker == 'rust' && 'standalone-rust' || 'standalone' }}
           mount-cache-suffix: ${{ matrix.worker }}
-          # A scheduled run carries the main ref but is not a push to main:
-          # it reads main's caches and writes nothing into the 10 GB cap.
+          # A scheduled run on main is a cache writer by default, and this lane
+          # is not the one that should be: it reads main's caches and writes nothing into the 10 GB cap.
           cache-write: "false"
       - name: Run the superset against a fresh real-model stack
         working-directory: ${{ github.workspace }}

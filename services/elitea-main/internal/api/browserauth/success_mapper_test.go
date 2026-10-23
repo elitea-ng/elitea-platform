@@ -151,3 +151,12 @@ func mapperSource() forwardapp.Source {
 		Target: "header", TargetPresent: true, Scope: "grafana", ScopePresent: true,
 	}
 }
+
+func newTrackedSuccessMapper(t *testing.T) *SuccessMapper {
+	t.Helper()
+	mapper, err := NewSuccessMapper(MapperContractTrackedV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mapper
+}

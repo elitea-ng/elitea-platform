@@ -1,7 +1,8 @@
 # Source-level dependency scanning.
 #
 # WHAT THIS CLOSES. Before this file, a dependency vulnerability was caught in
-# exactly one place: trivy in ci-image-scan.yml, which runs against a BUILT
+# exactly one place: trivy in ci-image-scan.yml (now nightly-image-scan.yml,
+# against the published `latest`), which runs against a BUILT
 # IMAGE. That means nothing was scanned until it was packaged, nothing that is
 # not packaged was scanned at all (every library module, the tools, the test
 # harnesses), and the report arrived with no route to a fix — trivy names a
@@ -75,8 +76,26 @@ multi-ecosystem-groups:
     open-pull-requests-limit: 1
 
 updates:
+  # Bumps `uses:` refs only. The Helm a step installs is azure/setup-helm's
+  # `version:` input, which this never reads: scripts/ci/check-helm-version.mjs
+  # holds those pins together, and dependency-scanning.yml fails daily when a
+  # newer Helm 4 or Helm 3 is out.
   - package-ecosystem: github-actions
-    directory: /
+    # `/` covers .github/workflows only; each composite action under
+    # .github/actions/ is its own directory to dependabot (they held
+    # actions/cache@v4 and bake-action@v6 on Node 20 long after the workflows
+    # had moved on). Listed, not globbed, like every other entry; the coverage
+    # gate counts an action.yml as a manifest.
+    directories:
+      - /
+      - /.github/actions/build-stack-images
+      - /.github/actions/build-stack-images/cap-saved-mounts
+      - /.github/actions/ci-scripts-deps
+      - /.github/actions/go-cache
+      - /.github/actions/main-write-cache
+      - /.github/actions/npm-cache
+      - /.github/actions/pull-stack-images
+      - /.github/actions/stack-images
     multi-ecosystem-group: weekly
     patterns: ["*"]
 
@@ -93,9 +112,7 @@ updates:
       - /libs/go/natsconn
       - /libs/go/observability
       - /libs/go/rpclib
-      - /gen/go
       - /libs/proto/gen/go
-      - /tools/uictl
       - /conformance/nativeclient
     multi-ecosystem-group: weekly
     patterns: ["*"]
@@ -172,11 +189,13 @@ updates:
       # gen/. It moves with protobuf 7 and a regeneration, not on its own.
       - dependency-name: grpcio-tools
 
+  # /scripts/ci is the CI checks' one dependency (`yaml`, exact pin), installed
+  # with `npm ci --prefix scripts/ci` for the runner's node.
   - package-ecosystem: npm
     directories:
       - /apps/elitea-web
       - /apps/elitea-desktop
-      - /tools/parity-extract
+      - /scripts/ci
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:

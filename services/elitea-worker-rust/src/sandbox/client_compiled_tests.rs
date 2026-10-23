@@ -170,6 +170,65 @@ impl SandboxSupervisorService for SupervisorFixture {
             "Workspace hydration is outside this fixture.",
         ))
     }
+    async fn code_owner_recovery_read(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodeOwnerRecoveryReadRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodeOwnerRecoveryReadResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_owner_recovery_seal_no_effect(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodeOwnerRecoverySealNoEffectRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodeOwnerRecoverySealNoEffectResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_platform_owner_read_retained_runtime(
+        &self,
+        _: Request<
+            crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadRetainedRuntimeRequestV1,
+        >,
+    ) -> Result<
+        Response<
+            crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadRetainedRuntimeResponseV1,
+        >,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_platform_owner_read_pending_call(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadPendingCallRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodePlatformOwnerReadPendingCallResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
+    async fn code_platform_owner_publish_reply(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::CodePlatformOwnerPublishReplyRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::CodePlatformOwnerPublishReplyResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Owner observation is outside this fixture.",
+        ))
+    }
     async fn submit_sandbox_job(
         &self,
         _request: Request<SubmitSandboxJobRequestV1>,
@@ -219,11 +278,11 @@ impl SandboxSupervisorService for SupervisorFixture {
             );
             if input.reconcile_only {
                 assert!(input.read_grant.is_none() && input.dependency_content_grant.is_none());
-                assert!(input.dependency_bundle_json.is_empty());
+                assert_eq!(input.dependency_bundle_json, [] as [u8; 0]);
             } else {
                 assert_eq!(input.read_grant.is_some(), cold.purpose == Purpose::Execute);
                 assert!(input.dependency_content_grant.is_some());
-                assert!(!input.dependency_bundle_json.is_empty());
+                assert_ne!(input.dependency_bundle_json, [] as [u8; 0]);
             }
             if input.reconcile_only && !cold.recorded {
                 return Ok(Response::new(SubmitRustCompiledSnapshotResponseV1 {
@@ -647,7 +706,7 @@ async fn cold_native_indices_renew_both_roles_and_preserve_original_compiler_int
     assert_eq!(calls.len(), bundle.file_count() + 3);
     assert!(calls[0].reconcile_only);
     assert!(calls[0].dependency_content_grant.is_none());
-    assert!(calls[0].dependency_bundle_json.is_empty());
+    assert_eq!(calls[0].dependency_bundle_json, [] as [u8; 0]);
     let indices = &calls[1..=bundle.file_count() + 1];
     assert_eq!(
         indices

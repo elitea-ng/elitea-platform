@@ -31,14 +31,14 @@ interface RecordedRequest {
 
 let recorded: RecordedRequest[] = [];
 
-const PYLON_REASON =
-  'these settings configure Pylon plugin runtimes: the reference page collects them from plugin heartbeats';
+const WITHHELD_REASON =
+  'these settings have no equivalent on this platform: the reference page collected them from plugin heartbeats';
 
 const SECTIONS = [
   {
     id: 'guardrails',
     title: 'Guardrails',
-    unavailable_reason: PYLON_REASON,
+    unavailable_reason: WITHHELD_REASON,
     fields: [{ key: 'blocked_toolkits', type: 'array', title: 'Blocked Toolkits' }],
   },
   {
@@ -68,7 +68,7 @@ const SECTIONS = [
   },
   {
     // A section that is STILL unavailable. It used to be `advanced`, which is
-    // no longer declared at all: its subject is Pylon plugin loading, which the
+    // no longer declared at all: its subject is plugin loading, which the
     // target architecture removes on purpose, so the row was removed rather
     // than left saying "not available here" forever. `runtime` followed
     // `advanced` out the door for the same reason — see config_schemas.go's
@@ -77,7 +77,7 @@ const SECTIONS = [
     // withheld (its data is three unrelated shapes a flat form cannot express).
     id: 'llm_proxy',
     title: 'LLM Proxy',
-    unavailable_reason: 'these settings configure Pylon plugin runtimes',
+    unavailable_reason: 'these settings have no equivalent on this platform',
     fields: [],
   },
 ];
@@ -171,7 +171,7 @@ describe('AdminConfiguration — the unavailable sections', () => {
     await userEvent.click(screen.getByRole('button', { name: /Guardrails/ }));
 
     const notice = await screen.findByTestId('admin-configuration-unavailable');
-    expect(notice).toHaveTextContent('Pylon plugin runtimes');
+    expect(notice).toHaveTextContent('no equivalent on this platform');
     // No control from that section is drawn — a disabled field would still read
     // as "this is configurable, just not right now".
     expect(screen.queryByRole('textbox', { name: 'Blocked Toolkits' })).not.toBeInTheDocument();

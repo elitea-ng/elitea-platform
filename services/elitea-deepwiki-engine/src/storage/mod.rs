@@ -23,6 +23,9 @@
 //!   background, in bounded statements (migration 0007 is a no-op).
 //! * [`text`] holds the tokenizer and the BM25 arithmetic both sides share.
 //! * [`topology`] is Phase 2's index over a build's staged rows.
+//! * [`dense`] is where the dense vectors are: Qdrant behind elitea-vector
+//!   (ADR-0031 D1-D3). PostgreSQL holds no vector and needs no `vector`
+//!   extension (migration 0008).
 //! * [`scope`] is the tenancy key: every index row belongs to one
 //!   platform project, and every reader and build is made with one
 //!   ([`ProjectScope`], [`WikiKey`]; migration 0005).
@@ -40,6 +43,7 @@ pub mod build;
 pub mod cleanup;
 mod copy;
 pub mod delete;
+pub mod dense;
 pub mod migrate;
 pub mod rows;
 pub mod scope;
@@ -85,8 +89,13 @@ pub enum StorageError {
         stored: String,
         expected: String,
     },
+    /// The dense store refused a request that cannot succeed as asked (a
+    /// vector of the wrong dimension), or a write to it failed.
+    #[error("{0}")]
+    Vector(String),
     /// A deletion gave up waiting for a publish of the same wiki (the
-    /// bounded advisory-lock wait). Nothing was deleted; the caller retries.
+    /// bounded advisory-lock wait), or a search found the wiki republished
+    /// during each of its attempts. Nothing was changed; the caller retries.
     #[error("{0}")]
     Busy(String),
     /// A DSN that does not parse. The text is never part of the message:

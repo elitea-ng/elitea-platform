@@ -36,7 +36,9 @@ func TestProductionRouterConfigSetsRouteGatingRepositories(t *testing.T) {
 		}
 	}
 
-	for _, field := range []string{"Pool", "AppsRepo"} {
+	// PlatformMCPTools: without it the remote toolkit route answers 501 for
+	// every platform MCP tool of a local turn (issue 1231).
+	for _, field := range []string{"Pool", "AppsRepo", "PlatformMCPTools"} {
 		if !present[field] {
 			t.Errorf("api.RouterConfig in main.go does not set %s; "+
 				"internal/api/router.go silently drops the route group it gates", field)

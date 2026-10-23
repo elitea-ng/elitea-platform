@@ -1,4 +1,0 @@
-[submodule "apps/elitea-ui"]
-	path = apps/elitea-ui
-	url = https://github.com/EliteaAI/EliteaUI.git
-	branch = main

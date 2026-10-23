@@ -351,56 +351,41 @@ pub(super) fn composition_definitions_for(
 mod tests {
     use super::*;
     use crate::protocol::control::test_runtime_context_authority;
-    use crate::transport::runtime_context::{
-        RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
+    use crate::transport::input_content::content_fake::{
+        ContextAnswer, ContextCall, ContextRoutes, Routes,
     };
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use http::{Request, Response, StatusCode, Version};
-    use http_body_util::Full;
+    use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
     use serde_json::json;
     use std::fmt::Write as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use tonic::body::Body;
 
     struct FrozenVersions {
         versions: BTreeMap<(u64, u64), Map<String, Value>>,
         reads: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
-    impl RuntimeContextRpc for FrozenVersions {
-        async fn post(
-            &self,
-            request: Request<Body>,
-        ) -> Result<Response<Body>, RuntimeContextTransportError> {
-            let parts = request.uri().path().split('/').collect::<Vec<_>>();
+    #[tonic::async_trait]
+    impl ContextRoutes for FrozenVersions {
+        async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+            let parts = call.route.split('/').collect::<Vec<_>>();
             let version = parts.last().and_then(|value| value.parse::<u64>().ok());
             let application = parts
                 .get(parts.len() - 3)
                 .and_then(|value| value.parse::<u64>().ok());
             let identity = application
                 .zip(version)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture"))?;
             self.reads.fetch_add(1, Ordering::SeqCst);
             let details = self
                 .versions
                 .get(&identity)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture"))?;
             let raw =
                 json!({"schema_version":"elitea.runtime.application-version.v1", "project_id":17,
                 "application_id":identity.0, "version_id":identity.1, "version_details":details})
                 .to_string();
-            Response::builder()
-                .status(StatusCode::OK)
-                .version(Version::HTTP_2)
-                .header("content-type", "application/json")
-                .header("cache-control", "private, no-cache, no-store")
-                .header("pragma", "no-cache")
-                .header("content-length", raw.len())
-                .body(Body::new(Full::new(Bytes::from(raw))))
-                .map_err(|_| RuntimeContextTransportError::Unavailable)
+            Ok(ContextAnswer::Json(raw.into_bytes()))
         }
     }
 
@@ -409,10 +394,10 @@ mod tests {
     ) -> (PlatformClient, Arc<AtomicUsize>) {
         let reads = Arc::new(AtomicUsize::new(0));
         let runtime = RuntimeContextClient::with_rpc(
-            FrozenVersions {
+            Routes(FrozenVersions {
                 versions,
                 reads: reads.clone(),
-            },
+            }),
             RuntimeContextConfig {
                 origin: "https://content.internal".to_owned(),
                 deadline: Duration::from_secs(1),

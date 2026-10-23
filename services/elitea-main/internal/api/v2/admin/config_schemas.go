@@ -2,18 +2,18 @@ package admin
 
 // Why most of these sections carry an `unavailable_reason` — unit A14, #200.
 //
-// This file describes what the admin Configuration page can offer. In pylon
-// those descriptions are assembled at request time from every plugin's
-// `admin_schema.json` as announced over the Arbiter bus, and each field's `path`
-// addresses a key inside that plugin's YAML config; saving one re-serialises the
-// YAML and ships it back to the pylon that owns it
+// This file describes what the admin Configuration page can offer. In the
+// legacy runtime those descriptions are assembled at request time from every
+// plugin's `admin_schema.json` as announced over the Arbiter bus, and each
+// field's `path` addresses a key inside that plugin's YAML config; saving one
+// re-serialises the YAML and ships it back to the runtime that owns it
 // (legacy/plugins/admin/api/v2/plugin_config_values.py — see the header of
 // config_values.go for the whole chain).
 //
-// None of that exists here, and AGENTS.md says it is not meant to: "Do not
-// preserve Pylon plugin loading … as target architecture." A field whose only
-// consumer is a Pylon plugin descriptor therefore has nowhere to go, and the
-// honest answer is to say so ON THE SECTION rather than to render a form.
+// None of that exists here, and AGENTS.md says it is not meant to: the legacy
+// plugin loading is not to be preserved as target architecture. A field whose
+// only consumer is a legacy plugin descriptor therefore has nowhere to go, and
+// the honest answer is to say so ON THE SECTION rather than to render a form.
 //
 // `unavailable_reason` is declared HERE, on the server, for the same reason the
 // permission is: it is a fact about the deployment, and a page that decided it
@@ -124,13 +124,14 @@ const (
 	// pointer to a real surface, in the same way `mcp_servers` is.
 	//
 	// The reason it is not a form HERE has not changed and cannot: every field
-	// it declares addresses a key inside a pylon plugin's YAML, and two of them
-	// (`client_secret`, and a SAML service provider key) are credentials that
-	// `rejectCredentialField` refuses into a plaintext `centry.platform_config`
-	// row — correctly, because every holder of `runtime.plugins` can read those
-	// rows. A flat list of field values also cannot express "this document is
-	// an OIDC provider and these are its invariants", which is the shape the
-	// configuration provenance specification requires by name.
+	// it declares addresses a key inside a legacy plugin's YAML, and two of
+	// them (`client_secret`, and a SAML service provider key) are credentials
+	// that `rejectCredentialField` refuses into a plaintext
+	// `centry.platform_config` row — correctly, because every holder of
+	// `runtime.plugins` can read those rows. A flat list of field values also
+	// cannot express "this document is an OIDC provider and these are its
+	// invariants", which is the shape the configuration provenance
+	// specification requires by name.
 	//
 	// What HAS changed is that the values now have somewhere to go and
 	// something that reads them. `elitea_auth.identity_providers` (shared
@@ -217,14 +218,14 @@ const (
 // ## The Advanced section is GONE, not withheld
 //
 // It used to be declared here with an `unavailable_reason` saying that it edits
-// raw plugin YAML, tails pylon logs and reloads plugins on live Pylon runtimes,
-// and that those runtimes are not part of this platform. Every word of that was
-// true, and it is why the section is now absent instead.
+// raw plugin YAML, tails runtime logs and reloads plugins on live legacy
+// runtimes, and that those runtimes are not part of this platform. Every word
+// of that was true, and it is why the section is now absent instead.
 //
 // A withheld section is a promise: it tells an operator that the capability
 // belongs on this page and is coming. Advanced is the one section on this page
 // whose subject the target architecture removes ON PURPOSE — AGENTS.md names
-// Pylon plugin loading and the Arbiter bus as things this platform does not
+// legacy plugin loading and the Arbiter bus as things this platform does not
 // preserve — so there is nothing to arrive. Leaving the row in the sidebar
 // spends a permanent line of the operator's attention on a control that will
 // never exist, which is the same failure mode as a form that saves into a void,
@@ -238,7 +239,7 @@ const (
 //
 // ## Observability, Runtime and Admin Panel are GONE too, for the same reason
 //
-// All three carried the generic "these settings configure Pylon plugin
+// All three carried the generic "these settings configure legacy plugin
 // runtimes" reason, and in every one of the three that reason was permanent
 // rather than a gap this platform intended to close:
 //
@@ -261,13 +262,13 @@ const (
 //     `*_scheduling_{enabled,cron}` fields are centry.schedule rows the admin
 //     "Schedules & Tasks" page already edits
 //     (internal/api/v2/scheduling/schedules.go). The rest belong to
-//     pylon-indexer's mounted YAML. A save on this page could reach none of
-//     them.
+//     the legacy indexer's mounted YAML. A save on this page could reach none
+//     of them.
 //   - `admin_panel` declared zero fields — the same subject as Advanced above,
 //     with nothing even to describe.
 //
 // The one field worth keeping, `analytics_enabled`, was never actually
-// Pylon-plugin-shaped: it is a `centry.platform_config` flag of exactly the
+// legacy-plugin-shaped: it is a `centry.platform_config` flag of exactly the
 // same kind as `mcp_in_menu` or the voice-feature switches, and this platform
 // already has the whole chain to serve it. It now lives on the Features page —
 // see analyticsSection() below and platformconfig.KeyAnalyticsEnabled.
@@ -418,10 +419,11 @@ func guardrailsSection() map[string]any {
 
 // mcpConfigurationSection — the Features page's MCP switches. LIVE.
 //
-// This is the master switch pylon exposes as `mcp_exposure.enabled`, read into
-// module state at plugin load and consulted by every MCP surface it has
-// (legacy/plugins/elitea_core/utils/mcp_config.py, and its callers in
-// mcp_dcr_proxy, mcp_oauth_proxy, mcp_sync_tools and routes/mcp_sse).
+// This is the master switch the legacy runtime exposes as
+// `mcp_exposure.enabled`, read into module state at plugin load and consulted
+// by every MCP surface it has (legacy/plugins/elitea_core/utils/mcp_config.py,
+// and its callers in mcp_dcr_proxy, mcp_oauth_proxy, mcp_sync_tools and
+// routes/mcp_sse).
 //
 // It is available here because this platform now reads it in both of the places
 // that matter:
@@ -453,11 +455,11 @@ func mcpConfigurationSection() map[string]any {
 				"section":     "mcp_configuration",
 				"default":     true,
 				// No `requires_restart`. The reference marks both fields as
-				// needing one because a pylon reads them into module state at
-				// plugin load; here every consumer reads the row per request, so
-				// the change is live on the next call. Carrying the flag over
-				// would have asked the operator to press a reload button that
-				// answers 501.
+				// needing one because the legacy runtime reads them into module
+				// state at plugin load; here every consumer reads the row per
+				// request, so the change is live on the next call. Carrying the
+				// flag over would have asked the operator to press a reload
+				// button that answers 501.
 			},
 			{
 				"key":         "mcp_in_menu",
@@ -624,13 +626,13 @@ func skillPublishingSection() map[string]any {
 // mcpServersUnavailable sends this section's caller to the surface that really
 // holds the catalogue.
 //
-// This section used to carry the generic "these settings configure Pylon
+// This section used to carry the generic "these settings configure legacy
 // plugin runtimes" reason, and that WAS true of it: the values addressed the
 // indexer_worker plugin descriptor, collected over
 // the Arbiter bus, and nothing here read them. It is no longer the whole truth,
 // because the catalogue itself now exists — shared migration 0094,
 // `internal/mcpregistry` and the three routes in mcp_prebuilt.go — so a reader
-// told only "Pylon plugin runtimes" would conclude the feature is missing when
+// told only "legacy plugin runtimes" would conclude the feature is missing when
 // it is merely somewhere else.
 //
 // The section stays unavailable rather than becoming writable for one reason,
@@ -684,7 +686,7 @@ func mcpServersSection() map[string]any {
 //
 // This used to be a field on the withheld `observability` section
 // (`analytics.enabled`), which meant it inherited that section's blanket
-// "Pylon plugin runtime" refusal even though it was never plugin-shaped: it is
+// "legacy plugin runtime" refusal even though it was never plugin-shaped: it is
 // a `centry.platform_config` row of exactly the same kind as `mcp_in_menu` or
 // the voice-feature switches. It moves here because this platform has the
 // whole chain for that kind of flag already —
@@ -722,9 +724,9 @@ func analyticsSection() map[string]any {
 // llmProxyUnavailable explains why the ordinary plugin-config form cannot
 // serve this section.
 //
-// It is a different sentence from the generic "these settings configure Pylon
+// It is a different sentence from the generic "these settings configure legacy
 // plugin runtimes" reason on purpose. That reason says "these values address a
-// Pylon plugin descriptor and nothing here reads them", which was true of the
+// legacy plugin descriptor and nothing here reads them", which was true of the
 // LiteLLM section this replaces and is not
 // true of anything on this one: every value the LLM Proxy section shows is read,
 // and most of it is read on the billed request path. The reason it is not a form
@@ -1058,7 +1060,7 @@ func authSection() map[string]any {
 		//
 		// The five this section used to declare — `auth_provider`,
 		// `form_users`, and the three OIDC values — each addressed a key inside
-		// a pylon plugin's YAML, and two of them were `format: password`.
+		// a legacy plugin's YAML, and two of them were `format: password`.
 		// Declaring them here would describe controls this page cannot serve,
 		// which is the "renders as a working control and is not one" failure
 		// rejectUnavailableField exists to stop. The typed editor at
@@ -1250,10 +1252,11 @@ func resourcesSection() map[string]any {
 // something that is happening now.
 //
 // The `path` values are kept as they were. They are legacy provenance — where
-// pylon would have written the key inside `extra_ui_config` — and nothing here
-// reads them; the storage key is `key`, in `centry.platform_config` under this
-// section id. They stay because a deployment migrating from pylon needs the two
-// namings to be traceable to each other.
+// the legacy runtime would have written the key inside `extra_ui_config` — and
+// nothing here reads them; the storage key is `key`, in
+// `centry.platform_config` under this section id. They stay because a
+// deployment migrating from the legacy runtime needs the two namings to be
+// traceable to each other.
 func dedicatedBannerSection() map[string]any {
 	return map[string]any{
 		"id":             "dedicated_banner",
@@ -1565,11 +1568,11 @@ func voiceFeaturesSection() map[string]any {
 // setting nothing enforces". That was true and it is the sentence this section
 // had to earn its way out of: something enforces it now.
 //
-// WHAT REPLACED THE PYLON HOOK. In pylon this was a gevent router hook installed
-// on the bootstrap plugin's persisted state, which intercepted every request,
-// called `auth_authorize` over RPC, read the caller's administration-mode roles
-// and served a 503 splash to anyone who was not an admin
-// (legacy/plugins/bootstrap/tools/splash.py). Here it is
+// WHAT REPLACED THE LEGACY HOOK. In the legacy runtime this was a gevent router
+// hook installed on the bootstrap plugin's persisted state, which intercepted
+// every request, called `auth_authorize` over RPC, read the caller's
+// administration-mode roles and served a 503 splash to anyone who was not an
+// admin (legacy/plugins/bootstrap/tools/splash.py). Here it is
 // `internal/api/middleware`'s Maintenance middleware on the `/api/v2` group,
 // which asks the same question of the same permission model and answers 503 with
 // the copy authored below.
@@ -1577,14 +1580,14 @@ func voiceFeaturesSection() map[string]any {
 // The port is deliberately NOT a byte-for-byte one, in two places:
 //
 //   - The splash is JSON and a client-side page, not a served
-//     `splash_template` document. The pylon hook returned a WSGI app serving a
+//     `splash_template` document. The legacy hook returned a WSGI app serving a
 //     stored HTML document VERBATIM, with 503 and no sanitisation, because it
 //     sat in front of everything including the SPA's own assets. This
 //     middleware sits on the JSON API only — the SPA still loads — so the
 //     product renders its own splash in its own theme.
 //
 //     `maintenance_html` below is the port of that tunable, and it is NOT the
-//     pylon mechanism: the field carries a BODY that the product's splash
+//     legacy mechanism: the field carries a BODY that the product's splash
 //     renders inside its own page, the server refuses executable markup on the
 //     way in (validateSplashHTML), and every renderer sanitises on the way out.
 //     The earlier decision here was to have no such field at all, on the
@@ -1599,7 +1602,7 @@ func voiceFeaturesSection() map[string]any {
 //     anyone who had ever seen it. The admin permission is the bypass.
 //
 // WHO GETS THROUGH. Holders of `runtime.plugins` in administration mode — the
-// permission pylon's own maintenance.py declares on this surface — plus the
+// permission the legacy maintenance.py declares on this surface — plus the
 // routes an admin needs in order to sign in and turn the switch back off. The
 // middleware owns that list; see its doc comment for why each entry is on it.
 func maintenanceSection() map[string]any {

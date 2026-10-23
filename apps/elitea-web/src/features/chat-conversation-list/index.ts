@@ -35,7 +35,9 @@
  * into `Conversations`' props (`onCreateFolder`, `onDeleteFolder`,
  * `onEditFolder`/`onPinFolder`, `sensors`/`handleDragStart`/…,
  * `onMoveToFolderConversation`/…, `onPinConversation`,
- * `isLoadFolders`/…, `onReorderFolders`). The 4 NOT exported:
+ * `isLoadFolders`/…, `onReorderFolders`). `useDateGroupExpansion` left this
+ * list when the activity status work needed the slot: its one caller,
+ * `GroupedConversations`, is inside the slice. The 4 NOT exported:
  * `conversationListState.types.ts` isn't a hook (its 3 types ARE exported,
  * see below); `useDragAndDrop.positioning.ts` is pure arithmetic consumed
  * only by `useDragAndDrop.ts` itself (already re-exports its 2 genuinely
@@ -93,11 +95,15 @@ export type { ConversationsDateGroup, ConversationsFolder, ConversationsProps } 
 
 export type { DateGroupListItem, FolderListItem, NewFolderDraft } from './lib/hooks/conversationListState.types';
 
+export { useArchiveConversation } from './lib/hooks/useArchiveConversation.hooks';
+export { useConversationActivity } from './lib/hooks/useConversationActivity.hooks';
+export { useMarkConversationReadOnView } from './lib/hooks/useConversationActivityLive.hooks';
+export { useConversationRail } from './lib/hooks/useConversationRail.hooks';
 export { useCreateFolder } from './lib/hooks/useCreateFolder.hooks';
-export { useDateGroupExpansion } from './lib/hooks/useDateGroupExpansion.hooks';
 export { useDeleteFolder } from './lib/hooks/useDeleteFolder.hooks';
 export { useDragAndDrop } from './lib/hooks/useDragAndDrop';
 export { useEditFolder } from './lib/hooks/useEditFolder';
+export { useForkConversation } from './lib/hooks/useForkConversation.hooks';
 export { useMoveToFolderConversation } from './lib/hooks/useMoveToFolderConversation.hooks';
 export { usePinConversation } from './lib/hooks/usePinConversation.hooks';
 export { useQueryFoldersList } from './lib/hooks/useQueryFoldersList.hooks';

@@ -1,0 +1,317 @@
+syntax = "proto3";
+
+// GatewayService is served by elitea-llm-gateway on its mutual-TLS gRPC
+// listener and called by elitea-main only (#1359, decision D4). It replaces
+// the HTTP/1.1-over-mTLS reverse-proxy hop main used to run for /llm.
+//
+// WHAT TRAVELS. Each RPC carries one /llm request and its response in the
+// provider-native wire format: the request body is the OpenAI or Anthropic
+// JSON (or the multipart form) the caller sent, and the response is the
+// status, headers and body bytes the gateway would have answered over HTTP,
+// SSE framing included. The gateway's dialect handling, budget gate, policy
+// gate and usage accounting therefore run unchanged, and elitea-main writes
+// the browser the same status, headers and bytes it wrote before.
+//
+// WHY THE HTTP HEAD IS A MESSAGE AND NOT METADATA. Response headers such as
+// Content-Type, rate-limit and usage headers name things gRPC metadata
+// reserves or rewrites (content-type, te, grpc-*), so the response head is
+// the first frame of every response and is copied verbatim.
+//
+// WHO MAY CALL. The listener requires a client certificate from the gateway
+// CA, and only the workload identities in GATEWAY_GRPC_CLIENTS (elitea-main)
+// are admitted. Who the request is FOR travels as the signed X-Elitea-*
+// identity tuple in metadata (x-elitea-project-id, x-elitea-user-id,
+// x-elitea-tenant-id, x-elitea-execution-id, x-elitea-identity-signature),
+// signed with the same HMAC the HTTP hop used; the gateway verifies it
+// exactly as before. Identity headers inside HttpRequestHead are dropped.
+//
+// ERRORS. A refusal the gateway decides (budget 402, rate limit 429, policy
+// 403, an upstream provider error) is a normal response: a head with that
+// status and the error body. A gRPC status other than OK means the hop
+// itself failed (unauthenticated peer, malformed call, the gateway
+// unavailable), and elitea-main answers the browser its own 502.
+//
+// CANCELLATION. Cancelling a call cancels the request context the gateway's
+// handler runs under, exactly as a closed HTTP connection did.
+
+package elitea.gateway.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/gateway/v1;gatewayv1";
+
+service GatewayService {
+  // ChatCompletions serves POST /llm/v1/chat/completions (OpenAI dialect).
+  // The response streams: an SSE body arrives as it is produced.
+  rpc ChatCompletions(ChatCompletionsRequest) returns (stream ChatCompletionsResponse);
+  // Completions serves POST /llm/v1/completions (OpenAI legacy completions).
+  rpc Completions(CompletionsRequest) returns (stream CompletionsResponse);
+  // Messages serves POST /llm/v1/messages (Anthropic dialect).
+  rpc Messages(MessagesRequest) returns (stream MessagesResponse);
+  // CountTokens serves POST /llm/v1/messages/count_tokens.
+  rpc CountTokens(CountTokensRequest) returns (CountTokensResponse);
+  // Responses serves POST /llm/v1/responses (OpenAI Responses API).
+  rpc Responses(ResponsesRequest) returns (stream ResponsesResponse);
+  // Embeddings serves POST /llm/v1/embeddings.
+  rpc Embeddings(EmbeddingsRequest) returns (EmbeddingsResponse);
+  // ImageGenerate serves POST /llm/v1/images/generations.
+  rpc ImageGenerate(ImageGenerateRequest) returns (ImageGenerateResponse);
+  // ImageEdit serves POST /llm/v1/images/edits and /llm/v1/images/variations.
+  // The multipart body streams: a head frame, then body chunks.
+  rpc ImageEdit(stream ImageEditRequest) returns (ImageEditResponse);
+  // Speech serves POST /llm/v1/audio/speech; the audio body streams back.
+  rpc Speech(SpeechRequest) returns (stream SpeechResponse);
+  // Transcribe serves POST /llm/v1/audio/transcriptions and
+  // /llm/v1/audio/translations. The multipart body streams like ImageEdit.
+  rpc Transcribe(stream TranscribeRequest) returns (TranscribeResponse);
+  // Realtime serves the /llm/v1/realtime WebSocket session. The browser's
+  // WebSocket ends at elitea-main; this stream carries its messages.
+  rpc Realtime(stream RealtimeRequest) returns (stream RealtimeResponse);
+  // ListModels serves GET /llm/v1/models.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // GetModel serves GET /llm/v1/models/{model}.
+  rpc GetModel(GetModelRequest) returns (GetModelResponse);
+  // CheckConnection serves POST /llm/v1/check_connection.
+  rpc CheckConnection(CheckConnectionRequest) returns (CheckConnectionResponse);
+  // ListProviderModels serves POST /llm/v1/list_provider_models.
+  rpc ListProviderModels(ListProviderModelsRequest) returns (ListProviderModelsResponse);
+  // ListProviderVoices serves POST /llm/v1/list_provider_voices.
+  rpc ListProviderVoices(ListProviderVoicesRequest) returns (ListProviderVoicesResponse);
+  // GovernanceStatus reports the gateway's enforcement state (the admin LLM
+  // Proxy section). It carries no identity.
+  rpc GovernanceStatus(GovernanceStatusRequest) returns (GovernanceStatusResponse);
+}
+
+// HttpHeader is one header name with every value it carried, in order.
+message HttpHeader {
+  string name = 1;
+  repeated string values = 2;
+}
+
+// HttpRequestHead is the HTTP request line and headers of one /llm request.
+message HttpRequestHead {
+  // method is the HTTP method ("POST", or "GET" for the models and realtime
+  // routes).
+  string method = 1;
+  // path is the request path ("/llm/v1/chat/completions"). Each RPC accepts
+  // only the paths it names; anything else is INVALID_ARGUMENT.
+  string path = 2;
+  // raw_query is the query string without the "?".
+  string raw_query = 3;
+  // headers are the end-to-end request headers. Hop-by-hop headers, Host,
+  // Content-Length and the X-Elitea identity tuple are not carried.
+  repeated HttpHeader headers = 4;
+}
+
+// HttpResponseHead is the status and headers of one /llm response.
+message HttpResponseHead {
+  int32 status_code = 1;
+  repeated HttpHeader headers = 2;
+}
+
+// HttpRequest is a request whose body fits one message (the gateway caps a
+// JSON body at 32 MiB).
+message HttpRequest {
+  HttpRequestHead head = 1;
+  bytes body = 2;
+}
+
+// HttpResponse is a whole response in one message.
+message HttpResponse {
+  HttpResponseHead head = 1;
+  bytes body = 2;
+}
+
+// RequestFrame is one frame of a streamed request: the head first, then
+// body chunks.
+message RequestFrame {
+  oneof frame {
+    HttpRequestHead head = 1;
+    bytes data = 2;
+  }
+}
+
+// ResponseFrame is one frame of a streamed response: the head first, then
+// body chunks in order.
+message ResponseFrame {
+  oneof frame {
+    HttpResponseHead head = 1;
+    bytes data = 2;
+  }
+}
+
+message ChatCompletionsRequest {
+  HttpRequest request = 1;
+}
+
+message ChatCompletionsResponse {
+  ResponseFrame frame = 1;
+}
+
+message CompletionsRequest {
+  HttpRequest request = 1;
+}
+
+message CompletionsResponse {
+  ResponseFrame frame = 1;
+}
+
+message MessagesRequest {
+  HttpRequest request = 1;
+}
+
+message MessagesResponse {
+  ResponseFrame frame = 1;
+}
+
+message CountTokensRequest {
+  HttpRequest request = 1;
+}
+
+message CountTokensResponse {
+  HttpResponse response = 1;
+}
+
+message ResponsesRequest {
+  HttpRequest request = 1;
+}
+
+message ResponsesResponse {
+  ResponseFrame frame = 1;
+}
+
+message EmbeddingsRequest {
+  HttpRequest request = 1;
+}
+
+message EmbeddingsResponse {
+  HttpResponse response = 1;
+}
+
+message ImageGenerateRequest {
+  HttpRequest request = 1;
+}
+
+message ImageGenerateResponse {
+  HttpResponse response = 1;
+}
+
+message ImageEditRequest {
+  RequestFrame frame = 1;
+}
+
+message ImageEditResponse {
+  HttpResponse response = 1;
+}
+
+message SpeechRequest {
+  HttpRequest request = 1;
+}
+
+message SpeechResponse {
+  ResponseFrame frame = 1;
+}
+
+message TranscribeRequest {
+  RequestFrame frame = 1;
+}
+
+message TranscribeResponse {
+  HttpResponse response = 1;
+}
+
+// RealtimeMessage is one WebSocket message of the session.
+message RealtimeMessage {
+  bytes data = 1;
+  // binary is true for a binary WebSocket message, false for text.
+  bool binary = 2;
+}
+
+// RealtimePing asks the other end to ping the browser and answer with a
+// RealtimePong carrying the same id once the browser's pong arrives. Only
+// the gateway sends it: it is the session keepalive's view of the browser.
+message RealtimePing {
+  uint64 id = 1;
+}
+
+message RealtimePong {
+  uint64 id = 1;
+}
+
+// RealtimeClose ends the session with a WebSocket close status and reason.
+message RealtimeClose {
+  int32 code = 1;
+  string reason = 2;
+}
+
+// RealtimeRequest is a frame from elitea-main. The first frame is `open`,
+// carrying the browser's handshake request; the rest are the browser's
+// messages, pongs for the gateway's pings, and a close when the browser
+// closed.
+message RealtimeRequest {
+  oneof frame {
+    HttpRequestHead open = 1;
+    RealtimeMessage message = 2;
+    RealtimePong pong = 3;
+    RealtimeClose close = 4;
+  }
+}
+
+// RealtimeResponse is a frame from the gateway. The first frame is `head`.
+// A 101 head accepts the session (its headers carry the negotiated
+// Sec-WebSocket-Protocol), and messages, pings and a close follow. Any other
+// status refuses it: `data` frames carry the refusal body, then the stream
+// ends.
+message RealtimeResponse {
+  oneof frame {
+    HttpResponseHead head = 1;
+    bytes data = 2;
+    RealtimeMessage message = 3;
+    RealtimePing ping = 4;
+    RealtimeClose close = 5;
+  }
+}
+
+message ListModelsRequest {
+  HttpRequest request = 1;
+}
+
+message ListModelsResponse {
+  HttpResponse response = 1;
+}
+
+message GetModelRequest {
+  HttpRequest request = 1;
+}
+
+message GetModelResponse {
+  HttpResponse response = 1;
+}
+
+message CheckConnectionRequest {
+  HttpRequest request = 1;
+}
+
+message CheckConnectionResponse {
+  HttpResponse response = 1;
+}
+
+message ListProviderModelsRequest {
+  HttpRequest request = 1;
+}
+
+message ListProviderModelsResponse {
+  HttpResponse response = 1;
+}
+
+message ListProviderVoicesRequest {
+  HttpRequest request = 1;
+}
+
+message ListProviderVoicesResponse {
+  HttpResponse response = 1;
+}
+
+message GovernanceStatusRequest {}
+
+message GovernanceStatusResponse {
+  HttpResponse response = 1;
+}

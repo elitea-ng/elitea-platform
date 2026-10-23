@@ -46,7 +46,7 @@ Hardened beyond the current platform:
 | Sanitisers drop `style`, `class`, `id`, `name`, `data-*`, form attributes and controls; `on*` stays stripped | `apps/elitea-web/src/shared/ui/lib/sanitizeMarkdownHtml.ts:49`, `:104`; `sanitizeSplashHtml.ts:46` |
 | CSP with hash-pinned inline scripts, no `unsafe-inline`/`unsafe-eval` in script-src | `apps/elitea-web/nginx/security-headers.conf:69` |
 | No CSP violations from the app itself | same-origin AudioWorklet `src/features/chat-input/lib/helpers/speechCapture.ts:74`; Zod jitless `src/shared/config/zodJitless.ts:13`, imported first by `src/app/main.tsx` and `src/entries/admin/main.tsx` |
-| No bearer token in shipped files | `deploy/scripts/run-migration-tests.sh:42`, `:110`; gate `services/elitea-main/tests/secretscan/committed_token_test.go` |
+| No bearer token in shipped files | gate `services/elitea-main/tests/secretscan/committed_token_test.go` |
 
 Local stacks that seed unwrapped vault keys set the opt-out:
 

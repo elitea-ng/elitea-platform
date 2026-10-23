@@ -186,42 +186,46 @@ func TestCurrentExpansionPreservesProjectPrecedence(t *testing.T) {
 	}
 }
 
-func TestCurrentExpansionEnforcesPrivatePgVectorRule(t *testing.T) {
+// The pgvector configuration type is retired: a stored row is kept but never
+// read, so a reference to one expands to nothing, exactly like a missing row,
+// and its secrets are never redeemed. Own project and public shared alike.
+func TestCurrentExpansionNeverExpandsTheRetiredPgvectorType(t *testing.T) {
 	userID := int32(44)
-
-	t.Run("personal pgvector cannot cross into a shared project", func(t *testing.T) {
-		finder := &currentExpansionFinderStub{rows: map[currentExpansionLookup]CurrentExpansionConfiguration{
-			{projectID: 99, title: "private-vector"}: expansionConfiguration(99, "pgvector", "private"),
-		}}
-		service := newCurrentExpansionTestService(t, finder, &currentExpansionUnsecreterStub{})
-		result, err := service.Expand(context.Background(), CurrentExpansionRequest{
-			Payload:          map[string]any{"elitea_title": "private-vector", "private": true},
-			CurrentProjectID: 7,
-			UserID:           &userID,
+	for name, test := range map[string]struct {
+		rows    map[currentExpansionLookup]CurrentExpansionConfiguration
+		payload map[string]any
+	}{
+		"own project": {
+			rows: map[currentExpansionLookup]CurrentExpansionConfiguration{
+				{projectID: 7, title: "project-vector"}: expansionConfiguration(7, "pgvector", "project"),
+			},
+			payload: map[string]any{"elitea_title": "project-vector", "private": false},
+		},
+		"public shared": {
+			rows: map[currentExpansionLookup]CurrentExpansionConfiguration{
+				{projectID: 1, title: "public-vector", sharedOnly: true}: expansionConfiguration(1, "pgvector", "public"),
+			},
+			payload: map[string]any{"elitea_title": "public-vector", "private": false},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			unsecreter := &currentExpansionUnsecreterStub{}
+			service := newCurrentExpansionTestService(t, &currentExpansionFinderStub{rows: test.rows}, unsecreter)
+			result, err := service.Expand(context.Background(), CurrentExpansionRequest{
+				Payload:          test.payload,
+				CurrentProjectID: 7,
+				UserID:           &userID,
+				Unsecret:         true,
+			})
+			if result != nil || !errors.Is(err, ErrCurrentExpansionNotFound) {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			assertCurrentExpansionError(t, err, CurrentExpansionNotFoundCode)
+			if len(unsecreter.calls) != 0 {
+				t.Fatalf("a retired row's secrets were redeemed: %#v", unsecreter.calls)
+			}
 		})
-		if result != nil || !errors.Is(err, ErrCurrentExpansionForbidden) {
-			t.Fatalf("result=%#v err=%v", result, err)
-		}
-		assertCurrentExpansionError(t, err, CurrentExpansionForbiddenCode)
-		if strings.Contains(err.Error(), "private-vector") || strings.Contains(err.Error(), "99") {
-			t.Fatalf("policy error leaked protected identity: %v", err)
-		}
-	})
-
-	t.Run("public shared pgvector remains allowed", func(t *testing.T) {
-		finder := &currentExpansionFinderStub{rows: map[currentExpansionLookup]CurrentExpansionConfiguration{
-			{projectID: 1, title: "public-vector", sharedOnly: true}: expansionConfiguration(1, "pgvector", "public"),
-		}}
-		service := newCurrentExpansionTestService(t, finder, &currentExpansionUnsecreterStub{})
-		result, err := service.Expand(context.Background(), CurrentExpansionRequest{
-			Payload:          map[string]any{"elitea_title": "public-vector", "private": true},
-			CurrentProjectID: 7,
-			UserID:           &userID,
-		})
-		if err != nil || result["configuration_project_id"] != int32(1) {
-			t.Fatalf("result=%#v err=%v", result, err)
-		}
-	})
+	}
 }
 
 func TestCurrentExpansionRecursesOnlyThroughDictionaryValues(t *testing.T) {

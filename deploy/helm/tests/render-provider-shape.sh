@@ -24,13 +24,28 @@
 # now decides each of them, so this suite is what stops the define from being
 # edited into disagreeing with itself.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 CHART="deploy/helm/elitea"
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
       --set deepwiki.enabled=true
-      --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com)
+      --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com
+      # The native engine keeps its vectors in elitea-vector (ADR-0031): the
+      # chart refuses a native runner without it.
+      --set vector.enabled=true --set qdrant.enabled=true)
 
 failures=0
 fail() { printf 'FAIL: %s\n' "$1" >&2; failures=$((failures + 1)); }

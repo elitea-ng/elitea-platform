@@ -11,16 +11,19 @@
 //!   `repo_config.repository` (the Go host also sets `provider_type:
 //!   artifact`; [`crate::source::parse_artifact_source`] parses it).
 //! * **The credential** is the invocation's callback bearer, the one its
-//!   model calls use: `llm_settings.api_base` without its `/llm/v1`-style
-//!   suffix is the platform, `api_key` the bearer, `organization` (or
-//!   `openai_organization`, `project_id`) the project. Python read the same
-//!   three (`extract_artifact_settings`). The project in the URL is the
-//!   grant's own (elitea-main checks the bearer against it), so a source can
-//!   only name a bucket of the caller's project.
-//! * **The routes** are elitea-main's object API:
-//!   `GET {platform}/api/v2/artifacts/objects/{project}/{bucket}?prefix=&cursor=`
-//!   lists (`objects[].key`, `size_bytes`, `modified_at`, `next_cursor`) and
-//!   `GET …/{bucket}/{key}` downloads, each with `Authorization: Bearer`.
+//!   model calls use: `llm_settings.api_key` is the bearer, `organization`
+//!   (or `openai_organization`, `project_id`) the project. Python read the
+//!   same (`extract_artifact_settings`). The project is the grant's own
+//!   (elitea-main checks the bearer against it), so a source can only name
+//!   a bucket of the caller's project. `api_base` plays no part: it only
+//!   names the model route.
+//! * **The service** is `elitea.runtime.v1.ArtifactObjectService` on
+//!   elitea-main's platform listener (#1359 U5), over the engine's platform
+//!   channel (the model calls' mutual-TLS channel): `ListObjects` one page
+//!   at a time (`key`, `size_bytes`, `modified_at`, `next_cursor`) and
+//!   `GetObject` per object, each with the bearer in its metadata. It
+//!   replaced the HTTP object API under `/api/v2/artifacts/objects`; a
+//!   refusal carries the HTTP status the route decided.
 //! * **The identity** is the sha256 over the sorted listing, one line per
 //!   object, `{key}\0{size}\0{modified}\n`, byte for byte Python's
 //!   `listing_digest`. It stands where a clone's commit sha stands, so the
@@ -46,13 +49,11 @@
 //!   download and again over the bytes actually received, plus Python's own
 //!   caps (`ARTIFACT_MAX_FILES` 5000,
 //!   `ARTIFACT_MAX_BYTES` 512 MiB);
-//! * the only host is the invocation's `api_base`. Nothing in
-//!   `repo_config` or in a listing reaches the URL except as an encoded path
-//!   segment or query value; redirects are not followed (the model
-//!   transport's client: rustls, the engine's CA bundle). The git
-//!   allowlist does not apply, as in Go's `CheckEgress`: the platform is not
-//!   an external git host;
-//! * the bearer is sent as a sensitive header and never appears in a log
+//! * the only peer is the platform listener the engine is configured with;
+//!   nothing in `repo_config`, `llm_settings` or a listing chooses a host.
+//!   The git allowlist does not apply, as in Go's `CheckEgress`: the
+//!   platform is not an external git host;
+//! * the bearer is sent as sensitive metadata and never appears in a log
 //!   line or an error;
 //! * every request has a timeout (60 s a listing page, 300 s a download, as
 //!   Python), the whole ingest has `CLONE_TIMEOUT_SECONDS`, and a stop ends
@@ -60,8 +61,8 @@
 //!
 //! # Deliberate differences from Python
 //!
-//! * A listing that fails (an HTTP status other than 200 or 404, a body
-//!   that is not JSON, the 1000-page ceiling) is an error. Python logged a
+//! * A listing that fails (a refusal other than 404, a broken stream, the
+//!   1000-page ceiling) is an error. Python logged a
 //!   warning and indexed what it had read so far, under an identity of that
 //!   partial listing. A 404 on the first page is still an empty listing,
 //!   so an unknown bucket is still "holds no objects to index"; a 404 on a
@@ -88,15 +89,14 @@ use crate::source::{
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::pystr;
 use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};
-use regex::Regex;
-use reqwest::{Client, Response, StatusCode, Url};
-use serde_json::{Map, Value};
+use elitea_platform_rpc::Bearer;
+use elitea_platform_rpc::artifacts::{ArtifactClient, ArtifactError, Caller, ListObjects};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -119,19 +119,8 @@ const LIST_TIMEOUT: Duration = Duration::from_mins(1);
 /// One download (Python: `timeout=300`).
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(5);
 
-/// The largest listing page read. elitea-main pages at 1000 keys of at
-/// most 1 KiB each.
-const MAX_LIST_PAGE_BYTES: usize = 16 * 1024 * 1024;
-
 /// How often a transfer looks at the stop flag.
 const CANCEL_POLL: Duration = Duration::from_millis(100);
-
-/// The listing route below the platform base.
-const OBJECTS_ROUTE: [&str; 4] = ["api", "v2", "artifacts", "objects"];
-
-/// `re.sub(r'/llm(/api)?(/v\d+)?/?$', '', api_base)`.
-static LLM_SUFFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/llm(/api)?(/v\d+)?/?$").unwrap_or_else(|_| unreachable!()));
 
 /// Python's two artifact caps, on top of the ingest limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,12 +152,6 @@ fn runtime_error(message: String) -> EngineError {
 // The platform and its credential
 // ---------------------------------------------------------------------------
 
-/// Python's `base_url`: `api_base` without its `/llm[/api][/vN][/]` suffix.
-#[must_use]
-pub fn platform_base(api_base: &str) -> String {
-    LLM_SUFFIX.replace(api_base, "").into_owned()
-}
-
 /// `settings.get(a) or settings.get(b) or …` as a string.
 fn first_text(settings: &Map<String, Value>, keys: &[&str]) -> String {
     keys.iter()
@@ -176,21 +159,19 @@ fn first_text(settings: &Map<String, Value>, keys: &[&str]) -> String {
         .unwrap_or_default()
 }
 
-/// The platform object API one invocation may read: the base URL, the
-/// callback bearer and the project, from its `llm_settings`.
+/// Who one invocation reads its project's artifact store as: the callback
+/// bearer and the project, from its `llm_settings`.
 ///
 /// `Debug` is safe to print: the bearer is a [`Secret`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct PlatformObjects {
-    base: Url,
     api_key: Secret,
-    project_id: String,
+    project_id: i64,
 }
 
 impl fmt::Debug for PlatformObjects {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlatformObjects")
-            .field("base", &self.base.as_str())
             .field("api_key", &self.api_key)
             .field("project_id", &self.project_id)
             .finish()
@@ -198,100 +179,57 @@ impl fmt::Debug for PlatformObjects {
 }
 
 impl PlatformObjects {
-    /// Read `api_base` / `api_key` / `organization` as Python's
-    /// `extract_artifact_settings` did.
+    /// Read `api_key` / `organization` as Python's
+    /// `extract_artifact_settings` did (`api_base` is not read).
     ///
     /// # Errors
     ///
-    /// A `ValueError` when the block has no base URL, no bearer or no
-    /// project, or the base is not an absolute http(s) URL without
-    /// credentials, query or fragment.
+    /// A `ValueError` when the block has no usable bearer, or no project id.
     pub fn from_llm_settings(llm_settings: &Value) -> Result<Self, EngineError> {
         let empty = Map::new();
         let settings = llm_settings.as_object().unwrap_or(&empty);
-        let api_base = first_text(settings, &["api_base", "openai_api_base"]);
-        let api_key = Secret::new(first_text(settings, &["api_key", "openai_api_key"]));
-        let (Some(api_key), false) = (api_key, api_base.trim().is_empty()) else {
+        let api_key = Secret::new(first_text(settings, &["api_key", "openai_api_key"]))
+            .filter(|key| Bearer::new(key.expose()).is_some());
+        let Some(api_key) = api_key else {
             return Err(value_error(
-                "an artifact source needs the platform artifact credentials (llm_settings.api_base and api_key), and this invocation has none".to_owned(),
+                "an artifact source needs the platform artifact credential (llm_settings.api_key), and this invocation has none".to_owned(),
             ));
         };
-        let project_id = first_text(
+        let project = first_text(
             settings,
             &["organization", "openai_organization", "project_id"],
         );
-        if project_id.trim().is_empty() {
+        if project.trim().is_empty() {
             return Err(value_error(
                 "an artifact source needs the invoking project (llm_settings.organization), and this invocation names none".to_owned(),
             ));
         }
-        let base = platform_base(api_base.trim());
-        let invalid = || {
-            value_error(
-                "llm_settings.api_base must be an absolute http(s) URL without credentials, query or fragment".to_owned(),
-            )
-        };
-        let base = Url::parse(&base).map_err(|_| invalid())?;
-        if !matches!(base.scheme(), "http" | "https")
-            || base.host_str().is_none()
-            || !base.username().is_empty()
-            || base.password().is_some()
-            || base.query().is_some()
-            || base.fragment().is_some()
-        {
-            return Err(invalid());
-        }
+        let project_id = project
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| {
+                value_error(format!(
+                    "llm_settings.organization must be the invoking project's id, not {}",
+                    py_repr(&project)
+                ))
+            })?;
         Ok(Self {
-            base,
             api_key,
             project_id,
         })
     }
 
-    /// The platform base URL (no credential in it).
     #[must_use]
-    pub fn base(&self) -> &Url {
-        &self.base
+    pub fn project_id(&self) -> i64 {
+        self.project_id
     }
 
-    #[must_use]
-    pub fn project_id(&self) -> &str {
-        &self.project_id
-    }
-
-    /// `{base}/api/v2/artifacts/objects/{project}/{bucket}[/{key…}]`, every
-    /// segment percent-encoded on its own (a key's `/` stays a separator,
-    /// as Python's `quote(name, safe="/")`).
-    fn url(&self, bucket: &str, key: Option<&str>) -> Url {
-        let mut url = self.base.clone();
-        if let Ok(mut segments) = url.path_segments_mut() {
-            segments.pop_if_empty();
-            segments.extend(OBJECTS_ROUTE);
-            segments.push(&self.project_id);
-            segments.push(bucket);
-            if let Some(key) = key {
-                segments.extend(key.split('/'));
-            }
-        }
-        url
-    }
-
-    async fn get(
-        &self,
-        client: &Client,
-        url: Url,
-        timeout: Duration,
-        cancel: &AtomicBool,
-    ) -> Result<Result<Response, reqwest::Error>, EngineError> {
-        interruptible(
-            client
-                .get(url)
-                .bearer_auth(self.api_key.expose())
-                .timeout(timeout)
-                .send(),
-            cancel,
-        )
-        .await
+    fn caller(&self) -> Result<Caller, EngineError> {
+        Bearer::new(self.api_key.expose())
+            .map(|bearer| Caller::new(bearer, self.project_id))
+            .ok_or_else(|| value_error("the artifact credential is not usable".to_owned()))
     }
 }
 
@@ -596,101 +534,94 @@ async fn interruptible<F: Future>(
     }
 }
 
-/// A request that never got a status, or a body cut short. The message
-/// names the transfer and the cause; neither ever holds the header.
-fn transfer_error(action: &str, error: &reqwest::Error) -> EngineError {
-    let cause = if error.is_timeout() {
-        "timed out".to_owned()
-    } else if error.is_connect() {
-        "could not connect".to_owned()
-    } else {
-        elitea_engine_core::errors::error_chain(error)
+/// A call that got no answer from the platform, or a stream cut short.
+/// The message names the transfer and the cause; neither ever holds the
+/// bearer.
+fn transfer_error(action: &str, error: &ArtifactError) -> EngineError {
+    let cause = match error {
+        ArtifactError::Hop(status) => match status.code() {
+            tonic::Code::DeadlineExceeded => "timed out".to_owned(),
+            tonic::Code::Unavailable => "could not connect".to_owned(),
+            code => format!("the platform's artifact service failed ({code:?})"),
+        },
+        ArtifactError::Refused(refusal) => format!("HTTP {}", refusal.http_status),
+        other => other.to_string(),
     };
     runtime_error(format!("Failed to {action}: {cause}"))
 }
 
-/// The `objects[]` of every listing page under `source`'s folder.
+/// One listing page, or the refusal elitea-main answered.
+async fn list_page(
+    artifacts: &ArtifactClient,
+    caller: &Caller,
+    query: ListObjects,
+) -> Result<Option<elitea_platform_rpc::pb::ArtifactListObjectsResponseV1>, ArtifactError> {
+    artifacts.list_objects(caller, query).await?.next().await
+}
+
+/// The `objects[]` of every listing page under `source`'s folder, as the
+/// route's JSON entries.
 ///
 /// Stops early, with Python's count message, once there are more objects
 /// than any limit admits: a server that pages forever cannot hold the run.
 async fn list_folder(
     platform: &PlatformObjects,
-    client: &Client,
+    artifacts: &ArtifactClient,
     source: &ArtifactSource,
     most_objects: u64,
     names: &SettingNames,
     cancel: &AtomicBool,
 ) -> Result<Vec<Value>, EngineError> {
+    let caller = platform.caller()?;
     let prefix = source.list_prefix();
     let target = format!("list the artifact folder {}", source.url());
     let mut items = Vec::new();
     let mut objects: u64 = 0;
     let mut cursor = String::new();
     for _ in 0..MAX_LIST_PAGES {
-        let mut url = platform.url(&source.bucket, None);
-        if !prefix.is_empty() || !cursor.is_empty() {
-            let mut query = url.query_pairs_mut();
-            if !prefix.is_empty() {
-                query.append_pair("prefix", &prefix);
+        let query = ListObjects {
+            bucket: source.bucket.clone(),
+            prefix: prefix.clone(),
+            cursor: cursor.clone(),
+            ..ListObjects::default()
+        };
+        let answer = interruptible(
+            tokio::time::timeout(LIST_TIMEOUT, list_page(artifacts, &caller, query)),
+            cancel,
+        )
+        .await?
+        .map_err(|_| runtime_error(format!("Failed to {target}: timed out")))?;
+        let page = match answer {
+            Ok(Some(page)) => page,
+            Ok(None) => {
+                return Err(runtime_error(format!(
+                    "Failed to {target}: the listing ended without a page"
+                )));
             }
-            if !cursor.is_empty() {
-                query.append_pair("cursor", &cursor);
-            }
-        }
-        let response = platform
-            .get(client, url, LIST_TIMEOUT, cancel)
-            .await?
-            .map_err(|e| transfer_error(&target, &e))?;
-        match response.status() {
             // Python: an unknown bucket lists as empty. Only the first
             // page can say so: a 404 after a cursor (the bucket removed
             // mid-listing, a stale cursor) leaves the listing partial, and
             // a partial listing must not be indexed as the whole folder.
-            StatusCode::NOT_FOUND if cursor.is_empty() => return Ok(items),
-            StatusCode::NOT_FOUND => {
+            Err(ArtifactError::Refused(refusal)) if refusal.http_status == 404 => {
+                if cursor.is_empty() {
+                    return Ok(items);
+                }
                 return Err(runtime_error(format!(
                     "Failed to {target}: HTTP 404 on a later listing page; the listing is incomplete"
                 )));
             }
-            StatusCode::OK => {}
-            status => {
-                return Err(runtime_error(format!(
-                    "Failed to {target}: HTTP {}",
-                    status.as_u16()
-                )));
-            }
-        }
-        let body = read_bounded(response, MAX_LIST_PAGE_BYTES, cancel)
-            .await?
-            .map_err(|e| transfer_error(&target, &e))?
-            .ok_or_else(|| {
-                runtime_error(format!(
-                    "Failed to {target}: a listing page is larger than {MAX_LIST_PAGE_BYTES} bytes"
-                ))
-            })?;
-        let page: Value = serde_json::from_slice(&body).map_err(|_| {
-            runtime_error(format!("Failed to {target}: a listing page is not JSON"))
-        })?;
-        let Value::Object(page) = page else {
-            return Err(runtime_error(format!(
-                "Failed to {target}: a listing page is not a JSON object"
-            )));
+            Err(error) => return Err(transfer_error(&target, &error)),
         };
-        if let Some(Value::Array(page_items)) = page.get("objects") {
-            for item in page_items {
-                let holds_bytes = item
-                    .get("key")
-                    .filter(|v| py_truthy(v))
-                    .map(py_str)
-                    .is_some_and(|key| {
-                        let key = pystr::strip(&key);
-                        !key.is_empty() && !key.ends_with('/')
-                    });
-                if holds_bytes {
-                    objects += 1;
-                }
-                items.push(item.clone());
+        for info in page.objects {
+            let key = pystr::strip(&info.key);
+            if !key.is_empty() && !key.ends_with('/') {
+                objects += 1;
             }
+            items.push(json!({
+                "key": info.key,
+                "size_bytes": info.size_bytes,
+                "modified_at": info.modified_at,
+            }));
         }
         if objects > most_objects {
             return Err(value_error(format!(
@@ -700,12 +631,8 @@ async fn list_folder(
                 names.max_file_count
             )));
         }
-        // Omitted when the listing is exhausted.
-        cursor = page
-            .get("next_cursor")
-            .filter(|v| py_truthy(v))
-            .map(py_str)
-            .unwrap_or_default();
+        // Empty when the listing is exhausted.
+        cursor = page.next_cursor;
         if cursor.is_empty() {
             return Ok(items);
         }
@@ -713,27 +640,6 @@ async fn list_folder(
     Err(runtime_error(format!(
         "Failed to {target}: the listing did not end within {MAX_LIST_PAGES} pages"
     )))
-}
-
-/// A body of at most `limit` bytes (`Ok(None)` when it is longer).
-async fn read_bounded(
-    mut response: Response,
-    limit: usize,
-    cancel: &AtomicBool,
-) -> Result<Result<Option<Vec<u8>>, reqwest::Error>, EngineError> {
-    let mut body = Vec::new();
-    loop {
-        match interruptible(response.chunk(), cancel).await? {
-            Err(error) => return Ok(Err(error)),
-            Ok(None) => return Ok(Ok(Some(body))),
-            Ok(Some(chunk)) => {
-                if body.len() + chunk.len() > limit {
-                    return Ok(Ok(None));
-                }
-                body.extend_from_slice(&chunk);
-            }
-        }
-    }
 }
 
 /// The path `relative` takes under `root`, its parent directories created.
@@ -834,7 +740,7 @@ impl Received<'_> {
 /// Download one object into `path` (created new), returning its size.
 async fn download(
     platform: &PlatformObjects,
-    client: &Client,
+    artifacts: &ArtifactClient,
     bucket: &str,
     object: &ArtifactObject,
     path: &Path,
@@ -843,54 +749,53 @@ async fn download(
 ) -> Result<u64, EngineError> {
     let name = format!("{bucket}/{}", object.key);
     let action = format!("download artifact {}", py_repr(&name));
-    let url = platform.url(bucket, Some(&object.key));
-    let mut response = platform
-        .get(client, url, DOWNLOAD_TIMEOUT, cancel)
-        .await?
-        .map_err(|e| transfer_error(&action, &e))?;
-    match response.status() {
-        StatusCode::OK => {}
-        StatusCode::FORBIDDEN => {
-            return Err(runtime_error(format!(
-                "Not authorized to access artifact (HTTP 403): {name}"
-            )));
+    let caller = platform.caller()?;
+    let transfer = async {
+        let mut reader = match artifacts.get_object(&caller, bucket, &object.key).await {
+            Ok(reader) => reader,
+            Err(ArtifactError::Refused(refusal)) => {
+                return Err(match refusal.http_status {
+                    403 => runtime_error(format!(
+                        "Not authorized to access artifact (HTTP 403): {name}"
+                    )),
+                    404 => runtime_error(format!("Artifact not found: {name}")),
+                    status => runtime_error(format!(
+                        "Failed to download artifact: HTTP {status} ({name})"
+                    )),
+                });
+            }
+            Err(error) => return Err(transfer_error(&action, &error)),
+        };
+        let write_error = |e: std::io::Error| {
+            runtime_error(format!(
+                "Cannot write the artifact {}: {e}",
+                py_repr(&object.relative_path)
+            ))
+        };
+        // O_CREAT|O_EXCL: never through an existing entry, link or not.
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .await
+            .map_err(write_error)?;
+        let mut size: u64 = 0;
+        while let Some(chunk) = reader
+            .chunk()
+            .await
+            .map_err(|e| transfer_error(&action, &e))?
+        {
+            let more = chunk.len() as u64;
+            size = size.saturating_add(more);
+            received.admit(&object.relative_path, size, more)?;
+            file.write_all(&chunk).await.map_err(write_error)?;
         }
-        StatusCode::NOT_FOUND => {
-            return Err(runtime_error(format!("Artifact not found: {name}")));
-        }
-        status => {
-            return Err(runtime_error(format!(
-                "Failed to download artifact: HTTP {} ({name})",
-                status.as_u16()
-            )));
-        }
-    }
-    let write_error = |e: std::io::Error| {
-        runtime_error(format!(
-            "Cannot write the artifact {}: {e}",
-            py_repr(&object.relative_path)
-        ))
+        file.flush().await.map_err(write_error)?;
+        Ok(size)
     };
-    // O_CREAT|O_EXCL: never through an existing entry, link or not.
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await
-        .map_err(write_error)?;
-    let mut size: u64 = 0;
-    loop {
-        let chunk = interruptible(response.chunk(), cancel)
-            .await?
-            .map_err(|e| transfer_error(&action, &e))?;
-        let Some(chunk) = chunk else { break };
-        let more = chunk.len() as u64;
-        size = size.saturating_add(more);
-        received.admit(&object.relative_path, size, more)?;
-        file.write_all(&chunk).await.map_err(write_error)?;
-    }
-    file.flush().await.map_err(write_error)?;
-    Ok(size)
+    interruptible(tokio::time::timeout(DOWNLOAD_TIMEOUT, transfer), cancel)
+        .await?
+        .map_err(|_| runtime_error(format!("Failed to {action}: timed out")))?
 }
 
 /// Removes a partly written directory unless disarmed.
@@ -908,8 +813,8 @@ impl Drop for PartialDirectory {
 pub struct Materialise<'a> {
     pub target: &'a ArtifactTarget,
     pub platform: &'a PlatformObjects,
-    /// The model transport's client (rustls, no redirects).
-    pub client: &'a Client,
+    /// `ArtifactObjectService` over the engine's platform channel.
+    pub artifacts: &'a ArtifactClient,
     pub limits: &'a IngestLimits,
     pub caps: ArtifactCaps,
     pub job_scratch: &'a Path,
@@ -929,7 +834,7 @@ impl Materialise<'_> {
         let most = self.caps.max_files.min(self.limits.max_file_count);
         let items = list_folder(
             self.platform,
-            self.client,
+            self.artifacts,
             source,
             most,
             self.limits.names,
@@ -974,7 +879,7 @@ impl Materialise<'_> {
             let path = prepare_path(&destination, &canonical_root, &object.relative_path)?;
             let size = download(
                 self.platform,
-                self.client,
+                self.artifacts,
                 &source.bucket,
                 object,
                 &path,

@@ -2527,3 +2527,153 @@ async fn pre_send_refusals_are_marked_by_the_facade_and_sent_calls_are_not() {
     assert_eq!(limit.code, "model_gateway.turn_limit");
     assert!(was_not_sent(&limit));
 }
+
+/// A test `ModelService` (#1359 U2) on loopback that answers each chat call
+/// with `answer` and records the headers each call arrived with.
+async fn model_service(
+    answer: fn() -> axum::response::Response,
+) -> (
+    tonic::transport::Channel,
+    std::sync::Arc<std::sync::Mutex<Vec<http::HeaderMap>>>,
+) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&seen);
+    let app = axum::Router::new().route(
+        "/llm/v1/chat/completions",
+        axum::routing::post(move |headers: http::HeaderMap| {
+            recorded.lock().expect("seen").push(headers);
+            std::future::ready(answer())
+        }),
+    );
+    let app = elitea_model_rpc::testing::with_model_service(app, "/llm/v1");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .expect("endpoint")
+        .connect()
+        .await
+        .expect("connect");
+    (channel, seen)
+}
+
+/// A unary `ModelService` answer (embeddings, images) is up to the gateway's
+/// 64 MiB cap plus its head, which the platform listener sends (elitea-main
+/// `runtimegrpc.PlatformMaxSendMessageBytes`): the production client decodes
+/// one well past the listener's 16 MiB receive cap.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_unary_answer_over_sixteen_mib_is_received() {
+    const ANSWER_BYTES: usize = 20 * 1_024 * 1_024;
+    let app = axum::Router::new().route(
+        "/llm/v1/embeddings",
+        axum::routing::post(|| {
+            std::future::ready(axum::response::IntoResponse::into_response((
+                [(CONTENT_TYPE, "application/json")],
+                format!(r#"{{"padding":"{}"}}"#, "x".repeat(ANSWER_BYTES)),
+            )))
+        }),
+    );
+    let app = elitea_model_rpc::testing::with_model_service(app, "/llm/v1");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .expect("endpoint")
+        .connect()
+        .await
+        .expect("connect");
+    let client = super::openai_compatible_facade::test_grpc_model_gateway_client(
+        channel,
+        test_model_gateway_config(),
+    )
+    .expect("client");
+    let request = http::Request::post("/llm/v1/embeddings")
+        .header(AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::new(Full::new(Bytes::from_static(
+            br#"{"input":"x"}"#,
+        ))))
+        .expect("request");
+    let Ok(response) = client.transport.post(request).await else {
+        panic!("a unary answer over 16 MiB was refused")
+    };
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .expect("the answer")
+        .to_bytes();
+    assert_eq!(body.len(), ANSWER_BYTES + r#"{"padding":""}"#.len());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_turn_streams_over_the_model_service() {
+    let (channel, seen) = model_service(|| {
+        axum::response::IntoResponse::into_response((
+            [(CONTENT_TYPE, "text/event-stream")],
+            ordinary_sse(),
+        ))
+    })
+    .await;
+    let client = super::openai_compatible_facade::test_grpc_model_gateway_client(
+        channel,
+        test_model_gateway_config(),
+    )
+    .expect("client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            23,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let stream = bound
+        .generate_for_test(test_model_request("request"))
+        .await
+        .expect("stream");
+    drain(stream).await.expect("the streamed answer");
+    assert_eq!(
+        bound.take_completion_for_test().expect("completion"),
+        "Hello 🌍"
+    );
+    let seen = seen.lock().expect("seen");
+    let headers = seen.first().expect("one call");
+    assert_eq!(headers[AUTHORIZATION], format!("Bearer {TOKEN}").as_str());
+    assert_eq!(headers["x-project-id"], "17");
+    assert_eq!(
+        headers["x-elitea-execution-id"],
+        "0123456789abcdef0123456789abcdef"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_budget_refusal_over_the_model_service_reads_as_the_http_refusal() {
+    let (channel, _) = model_service(|| {
+        axum::response::IntoResponse::into_response((
+            StatusCode::PAYMENT_REQUIRED,
+            [(CONTENT_TYPE, "application/json")],
+            r#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","scope":"project","message":"secret"}}"#,
+        ))
+    })
+    .await;
+    let client = super::openai_compatible_facade::test_grpc_model_gateway_client(
+        channel,
+        test_model_gateway_config(),
+    )
+    .expect("client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+        panic!("a budget refusal must fail")
+    };
+    assert_eq!(error.code, "model_gateway.project_budget_exhausted");
+    assert!(!format!("{error:?} {error}").contains("secret"));
+}

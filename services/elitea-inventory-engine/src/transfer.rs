@@ -124,8 +124,23 @@ pub async fn import_graph(
     text: &str,
     replace_state: bool,
 ) -> Result<ImportReport, TransferError> {
+    import_graph_into(&PgGraphStore::new(pool.clone()), key, text, replace_state).await
+}
+
+/// [`import_graph`] into `graphs`, which carries the invocation's vector
+/// access (the `import_graph` tool; the `import-graph` command has none, and
+/// the first ranking backfills the imported graph's vectors).
+///
+/// # Errors
+///
+/// See [`import_graph`].
+pub async fn import_graph_into(
+    graphs: &PgGraphStore,
+    key: GraphKey,
+    text: &str,
+    replace_state: bool,
+) -> Result<ImportReport, TransferError> {
     let graph = parse_document(text)?;
-    let graphs = PgGraphStore::new(pool.clone());
     let Some(_lease) = graphs.lease(key).await? else {
         return Err(TransferError::Refused(
             "an ingestion of this Inventory toolkit is running; import when it finishes".to_owned(),

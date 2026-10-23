@@ -313,7 +313,7 @@ func fixtureDeepResearch(arguments map[string]any) map[string]any {
 // its progress by step, with the egress policy and the callback CA from
 // the host's settings.
 func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
-	transport := ArtifactClientFrom(settings.CallbackCA())
+	transport := ArtifactClientFrom(settings.Callback())
 	canned := FixtureTools(step)
 	tools := map[string]Tool{}
 	for name, tool := range canned {
@@ -339,5 +339,17 @@ func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
 		Tools:      tools,
 		Egress:     spi.ParseEgressPolicy(settings.GitAllowlist),
 		Artifacts:  transport,
+		// The fixture builds no search index, so a project's index deletion
+		// truthfully removes nothing. Answering it (rather than refusing as
+		// an engine-less host) lets elitea-main's project deprovisioning
+		// complete against a fixture host; the wiki artifacts themselves are
+		// purged by the platform's own project deletion.
+		deleteProject: fixtureDeleteProjectWikis,
 	}
+}
+
+// fixtureDeleteProjectWikis is delete_project_wikis on a host with no index:
+// no live builds, no stale builds, no wikis.
+func fixtureDeleteProjectWikis(context.Context, map[string]any, *spi.Context) (map[string]any, error) {
+	return map[string]any{"success": true, "live_builds": 0, "builds": 0, "per_wiki": []any{}}, nil
 }

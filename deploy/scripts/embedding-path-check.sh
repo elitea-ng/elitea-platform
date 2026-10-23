@@ -120,7 +120,7 @@ PY
 # One container on the stack's network with the runtime CA mounted. The mock
 # image is the only one in the stack with a python runtime; --user 0:0 so it can
 # read the 0600 signing material. The same pattern `check` uses.
-MOCK_IMAGE="ghcr.io/eliteaai/elitea-mock-llm:standalone"
+MOCK_IMAGE="ghcr.io/elitea-ng/elitea-mock-llm:standalone"
 probe_py() {
   $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
     --entrypoint python3 "$MOCK_IMAGE" -c "$1" 2>&1 || true
@@ -150,7 +150,7 @@ llm_post() {
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/$1', data=json.dumps($2).encode(),
+    'http://elitea-main:8080/llm/v1/$1', data=json.dumps($2).encode(),
     headers={'Authorization': 'Bearer ${DRIVER_JWT}', 'Content-Type': 'application/json'})
 try:
     print('OK', urllib.request.urlopen(request, context=context, timeout=30).read().decode()[:400])
@@ -166,7 +166,7 @@ llm_models() {
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/models',
+    'http://elitea-main:8080/llm/v1/models',
     headers={'Authorization': 'Bearer ${DRIVER_JWT}'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())

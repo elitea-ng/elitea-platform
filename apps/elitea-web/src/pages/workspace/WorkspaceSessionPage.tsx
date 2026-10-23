@@ -5,7 +5,8 @@
  * Toolbar: the folder ▸ thread title (its path card re-binds the project).
  * Composer footer: agent·version, Act | Plan, where it runs. Body: the thread's exchanges — your prompt, then what the
  * agent did (text, collapsible tool lines). Bottom: the composer ("@" files,
- * "/" commands). Right (⌘⌥\): the changes panel (`SessionPanel`).
+ * "/" commands). Right (⌘⌥\): the thread's tabs in the frame's inspector —
+ * Changes, Approvals, Index (`SessionPanel.tsx`).
  *
  * The thread is the URL's `conversation`. A new thread has none; its first
  * send creates the conversation and the URL then names it (without
@@ -23,21 +24,22 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
+import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
 import { useHasIndexHost } from '@/features/workspace-index';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
 import { HandoffDialogs } from './HandoffControls';
-import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
-import { SessionPanel } from './SessionPanel';
+import { COLUMN, EarlierTurns, Exchanges, ForkNotices, ThreadIntro } from './sessionParts';
+import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
 import { useCloudChat } from './useCloudChat';
+import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
 import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
@@ -48,22 +50,34 @@ import { useThreadSession, type ThreadSession, type ThreadSessionInput } from '.
 const LIST_KEY = ['workspace', 'list'] as const;
 
 /** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
-const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
+const attentionOf = (session: ThreadSession): number =>
+  session.turn.view.approvals.length + (session.turn.view.planProposal === undefined ? 0 : 1) + (session.undoTurnId === null ? 0 : 1);
+
+/**
+ * What the thread's inspector tabs show: the thread's title, or its folder's
+ * name (a new thread). Read through the sidebar's threads query (the same
+ * key, invalidated after `recordThread`), not from storage on every render.
+ */
+function useThreadSubject(workspace: Workspace, conversationId: string): string {
+  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
+  return threads.data?.find((x) => x.id === conversationId)?.title ?? workspace.name;
+}
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
+  const subject = useThreadSubject(workspace, conversationId);
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
-  const changesOpen = useDesktopLayout((state) => state.changesOpen);
-  // "Continue?" at the step limit is a card in the transcript; the rest are the dialog's queue.
-  const continueRequest = turn.view.approvals.find((approval) => approval.kind === 'continue');
-  const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => approval.kind !== 'continue');
+  // "Continue?" at the step limit and an MCP sign-in are cards in the transcript; the rest are the dialog's queue.
+  const inline = (kind: string | undefined): boolean => kind === 'continue' || kind === 'mcp_authorization';
+  const continueRequest = turn.view.approvals.find((approval) => inline(approval.kind));
+  const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => !inline(approval.kind));
   const busy = turn.busy || session.rebind.isPending;
   const started = turn.turnId !== null || turn.earlier.length > 0;
   // The intro stands in for a thread with nothing to show: new, or its history unreadable.
@@ -75,6 +89,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
 
   useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index') });
+  const forking = useSessionFork({ ipc, workspaceId: workspace.id, projectId, conversationId, offLaptop: handoff.offLaptop });
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -92,6 +107,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           onPathOpenChange={setProjectMenuOpen}
           attention={attentionOf(session)}
           onIndexSettings={indexSettingsOpener(hasIndex)}
+          onFork={forking.onForkThread}
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -110,32 +126,35 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                   title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
                 />
               )}
-              <EarlierTurns history={session.history} shown={session.shown} />
-              <Exchanges turn={turn} prompts={session.prompts} />
-              <ApprovalDialog request={continueRequest} queued={0} onRespond={session.answer} />
+              <ForkNotices fork={forking} />
+              <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
+              <Exchanges turn={turn} prompts={session.prompts} onFork={forking.onFork} />
+              <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
+              <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
               </>
             )}
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <ThreadComposer ipc={ipc} workspaceId={workspace.id} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
+          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
         </Box>
       </Box>
-      {changesOpen && (
-        <SessionPanel
-          ipc={ipc}
-          appIpc={appIpc}
-          workspaceId={workspace.id}
-          hasIndex={hasIndex}
-          changeSets={session.changeSets}
-          undoTurnId={session.undoTurnId}
-          undoRequest={commands.undoRequest}
-          waiting={turn.view.approvals}
-          decided={session.decided}
-        />
-      )}
+      <SessionInspector
+        ipc={ipc}
+        appIpc={appIpc}
+        workspaceId={workspace.id}
+        subject={subject}
+        hasIndex={hasIndex}
+        changeSets={session.changeSets}
+        undoTurnId={session.undoTurnId}
+        undoRequest={commands.undoRequest}
+        waiting={turn.view.approvals}
+        decided={session.decided}
+        plan={session.plan}
+        planMode={commands.planMode}
+      />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
-      <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
+      <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>
   );
 }

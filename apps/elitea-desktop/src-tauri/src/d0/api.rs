@@ -668,6 +668,24 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// A project skill as the person may read it (`getSkill`: its `base`
+    /// version's `name` and `instructions`), for a skill picked in the "/"
+    /// menu that the agent's version does not carry.
+    ///
+    /// # Errors
+    ///
+    /// Refused (`403`, `404`) or failed.
+    pub async fn project_skill(&self, project_id: i64, skill_id: i64) -> Result<Value, ApiError> {
+        self.send(
+            Method::GET,
+            &format!("/api/v2/elitea_core/skill/prompt_lib/{project_id}/{skill_id}"),
+            None,
+            &[],
+        )
+        .await?
+        .into_ok()
+    }
+
     /// The signed-in user's id (`GET /api/v2/social/author`): with the
     /// origin, whose thread history is whose (`history.rs`).
     ///

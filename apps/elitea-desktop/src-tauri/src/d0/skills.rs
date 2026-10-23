@@ -10,9 +10,17 @@
 //! own request field instead of a sigil in the text. Every attached skill
 //! stays in the runtime's catalogue for `load_skill` as before; an invoked
 //! one is in addition loaded up front, so the model need not ask for it.
+//!
+//! A **project skill** (one of the bound project's skills that the version
+//! does not carry, picked from the menu's "Project skills") is named by its
+//! id only: the host reads it itself under the person's token (`getSkill`,
+//! its `base` version), never from the UI's text, admits it with the same
+//! `check_skills` bounds and applies it the same way. It counts toward
+//! [`MAX_SKILLS`] and [`MAX_SKILL_BYTES`] and is not added to the
+//! `load_skill` catalogue (that stays the version's).
 
-use elitea_agent_runtime::instruction_authority::check_skills;
-use serde_json::{Map, Value};
+use elitea_agent_runtime::instruction_authority::{check_skills, content_digest};
+use serde_json::{Map, Value, json};
 
 use super::framing;
 use super::turn::TurnError;
@@ -43,15 +51,79 @@ fn invalid(message: &str) -> TurnError {
     TurnError::new("invalid_request", message)
 }
 
+/// `agent_turn_start.skills`: a version skill's name, or
+/// `{source: "project", id}` for one of the project's own skills.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+#[serde(untagged)]
+pub enum SkillPick {
+    Name(String),
+    Project(ProjectSkillPick),
+}
+
+/// A project skill picked by id.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectSkillPick {
+    pub source: ProjectSource,
+    /// The skill's id, a number or its decimal string.
+    pub id: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSource {
+    Project,
+}
+
+/// The picks as the turn request holds them: the version skills' names,
+/// then the project skills' ids, each in request order.
+#[must_use]
+pub fn split(picks: Vec<SkillPick>) -> (Vec<String>, Vec<Value>) {
+    let mut names = Vec::new();
+    let mut ids = Vec::new();
+    for pick in picks {
+        match pick {
+            SkillPick::Name(name) => names.push(name),
+            SkillPick::Project(project) => ids.push(project.id),
+        }
+    }
+    (names, ids)
+}
+
+/// A project skill's id as the route takes it: 1 to `i32::MAX`.
+fn project_skill_id(id: &Value) -> Option<i64> {
+    let id = match id {
+        Value::Number(number) => number.as_i64()?,
+        Value::String(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+            text.parse().ok()?
+        }
+        _ => return None,
+    };
+    (1..=i64::from(i32::MAX)).contains(&id).then_some(id)
+}
+
+/// The project skills' ids, checked.
+///
+/// # Errors
+///
+/// `invalid_request` for an id that is not a positive integer.
+pub fn project_ids(ids: &[Value]) -> Result<Vec<i64>, TurnError> {
+    ids.iter()
+        .map(|id| project_skill_id(id).ok_or_else(|| invalid("A project skill's id is not valid.")))
+        .collect()
+}
+
 /// The request's own checks, before any request goes out: at most
-/// [`MAX_SKILLS`] names, each non-blank, at most [`MAX_NAME_BYTES`], with
-/// no control character.
+/// [`MAX_SKILLS`] picks (names and project skills together), each name
+/// non-blank, at most [`MAX_NAME_BYTES`], with no control character, each
+/// project skill id a positive integer.
 ///
 /// # Errors
 ///
 /// `invalid_request`.
-pub fn check(names: &[String]) -> Result<(), TurnError> {
-    if names.len() > MAX_SKILLS {
+pub fn check(names: &[String], project: &[Value]) -> Result<(), TurnError> {
+    project_ids(project)?;
+    if names.len() + project.len() > MAX_SKILLS {
         return Err(invalid("A turn can apply at most five skills."));
     }
     for name in names {
@@ -162,6 +234,88 @@ pub fn resolve(
     Ok(invoked)
 }
 
+/// A project skill as `getSkill` answered it, admitted with the runtime's
+/// own bounds (`check_skills`: its name and instructions within the
+/// catalogue's bounds), as one invoked skill.
+///
+/// # Errors
+///
+/// `skill_unknown` for one without instructions, `skill_invalid` for one
+/// the runtime would refuse.
+pub fn from_project(project_id: i64, id: i64, skill: &Value) -> Result<InvokedSkill, TurnError> {
+    let name = skill
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let instructions = skill
+        .get("instructions")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty());
+    let (Some(name), Some(instructions)) = (name, instructions) else {
+        return Err(TurnError::new(
+            "skill_unknown",
+            format!("The project skill {id} has no instructions to apply."),
+        ));
+    };
+    let snapshot = json!({
+        "id": format!("project-skill-{id}"),
+        "name": name,
+        "instructions": instructions,
+        "revision": content_digest(instructions),
+        "scope": format!("project:{project_id}"),
+    });
+    check_skills(std::slice::from_ref(&snapshot)).map_err(|_| {
+        TurnError::new(
+            "skill_invalid",
+            format!(
+                "The project skill \u{201c}{name}\u{201d} did not pass its integrity check (a field is missing or too long), so the turn was not started."
+            ),
+        )
+    })?;
+    Ok(InvokedSkill {
+        name: name.to_owned(),
+        instructions: instructions.to_owned(),
+    })
+}
+
+/// The version's picked skills, then the project's (one already picked by
+/// name is not applied twice), within [`MAX_SKILLS`] and, together,
+/// [`MAX_SKILL_BYTES`].
+///
+/// # Errors
+///
+/// `invalid_request` past [`MAX_SKILLS`], `skill_too_large` past
+/// [`MAX_SKILL_BYTES`].
+pub fn with_project(
+    version: &[InvokedSkill],
+    project: &[InvokedSkill],
+) -> Result<Vec<InvokedSkill>, TurnError> {
+    let mut all = version.to_vec();
+    for skill in project {
+        if !all.iter().any(|seen| same_name(&seen.name, &skill.name)) {
+            all.push(skill.clone());
+        }
+    }
+    if all.len() > MAX_SKILLS {
+        return Err(invalid("A turn can apply at most five skills."));
+    }
+    let mut total = 0usize;
+    for skill in &all {
+        total += skill.instructions.len();
+        if total > MAX_SKILL_BYTES {
+            return Err(TurnError::new(
+                "skill_too_large",
+                format!(
+                    "The skill \u{201c}{}\u{201d} is too long to apply to one turn (over 64 KiB together); the agent can still load it itself.",
+                    skill.name
+                ),
+            ));
+        }
+    }
+    Ok(all)
+}
+
 /// The precedence line of the skills section. The order of the system
 /// instructions is the order of authority: the agent's own instructions,
 /// then the skill picked for this turn, then the workspace's AGENTS.md
@@ -240,15 +394,40 @@ mod tests {
 
     #[test]
     fn names_are_checked_before_any_request() {
-        assert!(check(&[]).is_ok());
-        assert!(check(&names(&["Style", "Code review"])).is_ok());
+        assert!(check(&[], &[]).is_ok());
+        assert!(check(&names(&["Style", "Code review"]), &[json!(3), json!("4")]).is_ok());
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!("x"),
+            json!(""),
+            json!(1.5),
+            json!(null),
+            json!(i64::from(i32::MAX) + 1),
+        ] {
+            assert_eq!(
+                check(&[], std::slice::from_ref(&bad)).unwrap_err().code,
+                "invalid_request",
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            check(&names(&["a", "b", "c"]), &[json!(1), json!(2), json!(3)])
+                .unwrap_err()
+                .code,
+            "invalid_request"
+        );
         for bad in [
             names(&[" "]),
             names(&["a\nb"]),
             vec!["x".repeat(MAX_NAME_BYTES + 1)],
             names(&["a"; MAX_SKILLS + 1]),
         ] {
-            assert_eq!(check(&bad).unwrap_err().code, "invalid_request", "{bad:?}");
+            assert_eq!(
+                check(&bad, &[]).unwrap_err().code,
+                "invalid_request",
+                "{bad:?}"
+            );
         }
     }
 
@@ -337,6 +516,80 @@ mod tests {
         assert_eq!(resolve(&names(&["A"]), &details).unwrap().len(), 1);
         assert_eq!(
             resolve(&names(&["A", "B"]), &details).unwrap_err().code,
+            "skill_too_large"
+        );
+    }
+
+    #[test]
+    fn picks_split_into_names_and_project_ids() {
+        let picks: Vec<SkillPick> = serde_json::from_value(json!([
+            "Style", {"source": "project", "id": 12}, {"source": "project", "id": "13"}
+        ]))
+        .unwrap();
+        assert_eq!(
+            split(picks),
+            (names(&["Style"]), vec![json!(12), json!("13")])
+        );
+        for bad in [
+            json!([{"source": "version", "id": 1}]),
+            json!([{"source": "project", "id": 1, "instructions": "x"}]),
+        ] {
+            assert!(
+                serde_json::from_value::<Vec<SkillPick>>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_skill_is_admitted_and_counted_with_the_versions() {
+        let skill = from_project(
+            1,
+            12,
+            &json!({"id": "12", "name": " Deploy ", "instructions": "Ship it."}),
+        )
+        .unwrap();
+        assert_eq!(
+            skill,
+            InvokedSkill {
+                name: "Deploy".into(),
+                instructions: "Ship it.".into()
+            }
+        );
+        for empty in [
+            json!({"name": "Deploy"}),
+            json!({"name": " ", "instructions": "x"}),
+            json!({"name": "D", "instructions": " "}),
+        ] {
+            assert_eq!(
+                from_project(1, 12, &empty).unwrap_err().code,
+                "skill_unknown",
+                "{empty}"
+            );
+        }
+        let long_name = json!({"name": "n".repeat(10_000), "instructions": "x"});
+        assert_eq!(
+            from_project(1, 12, &long_name).unwrap_err().code,
+            "skill_invalid"
+        );
+        let style = InvokedSkill {
+            name: "Style".into(),
+            instructions: "Write tersely.".into(),
+        };
+        let same = InvokedSkill {
+            name: "style".into(),
+            instructions: "Other.".into(),
+        };
+        assert_eq!(
+            with_project(std::slice::from_ref(&style), &[same, skill.clone()]).unwrap(),
+            vec![style.clone(), skill]
+        );
+        let big = InvokedSkill {
+            name: "Big".into(),
+            instructions: "b".repeat(MAX_SKILL_BYTES),
+        };
+        assert_eq!(
+            with_project(&[style], &[big]).unwrap_err().code,
             "skill_too_large"
         );
     }

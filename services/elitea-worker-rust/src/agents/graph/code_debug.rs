@@ -206,8 +206,7 @@ pub(super) async fn export(
         selection
             .graph_step
             .parse::<usize>()
-            .ok()
-            .is_some_and(|step| node_authority.matches(&selection.node_id, node_digest, step))
+            .is_ok_and(|step| node_authority.matches(&selection.node_id, node_digest, step))
     });
     let original_snapshot =
         if invocation.activation == node_authority.dispatch_activation() && selection_matches {

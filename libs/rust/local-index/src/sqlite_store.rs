@@ -8,7 +8,8 @@
 //!
 //! ```sql
 //! meta      (key TEXT PRIMARY KEY, value TEXT)            -- schema_version, revision_seq, setting:*,
-//!                                                           -- policy (the fingerprint of the last build's policy)
+//!                                                           -- policy (the fingerprint of the last build's policy),
+//!                                                           -- drift_files (files changed since the last full build)
 //! graphs    (project_id, application_id, revision, attributes, metadata, schema)
 //! entities  (project_id, application_id, entity_id, ordinal UNIQUE per graph,
 //!            attributes, embedding BLOB NULL, embedding_hash TEXT NULL, attr_hash)
@@ -1086,6 +1087,41 @@ impl SqliteGraphStore {
         })
     }
 
+    /// How many files changed since the last full build (`meta.drift_files`;
+    /// 0 when never recorded).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn drift_files(&self) -> Result<u64> {
+        self.read(|conn| {
+            let value: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'drift_files'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(value.and_then(|value| value.parse().ok()).unwrap_or(0))
+        })
+    }
+
+    /// Record [`Self::drift_files`].
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn set_drift_files(&self, files: u64) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('drift_files', ?1)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                [files.to_string()],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Store a setting.
     ///
     /// # Errors
@@ -1290,12 +1326,10 @@ fn encode(vector: &[f64]) -> Vec<u8> {
 
 fn decode(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|chunk| {
-            let mut word = [0_u8; 8];
-            word.copy_from_slice(chunk);
-            f64::from_le_bytes(word)
-        })
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| f64::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -2124,6 +2158,10 @@ fn status_document(conn: &Connection, key: GraphKey) -> Result<Value> {
     Ok(json!({"sources": sources, "last_modified": last_modified}))
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "synchronous SQLite I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
+)]
 impl GraphStore for SqliteGraphStore {
     type Error = StoreError;
     type Lease = Lease;
@@ -2417,8 +2455,17 @@ mod tests {
     fn a_bad_expression_finds_nothing_and_a_good_one_runs() {
         let dir = tempfile::tempdir().unwrap();
         let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
-        assert!(store.search_fts("\"unterminated", 10).unwrap().is_empty());
-        assert!(store.search_fts("AND OR (", 10).unwrap().is_empty());
-        assert!(store.search_fts("\"word\"", 10).unwrap().is_empty());
+        assert_eq!(
+            store.search_fts("\"unterminated", 10).unwrap(),
+            [] as [(i64, f64); 0]
+        );
+        assert_eq!(
+            store.search_fts("AND OR (", 10).unwrap(),
+            [] as [(i64, f64); 0]
+        );
+        assert_eq!(
+            store.search_fts("\"word\"", 10).unwrap(),
+            [] as [(i64, f64); 0]
+        );
     }
 }

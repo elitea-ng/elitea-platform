@@ -9,17 +9,6 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-# Only needed to RE-RECORD the fixtures from the legacy deepwiki_plugin
-# checkout (tools/record_*.py).  These stay in this directory's own
-# environment; nothing here enters the elitea-platform workspace, and none of
-# the engine's heavy dependencies (torch, faiss, tree-sitter) are required.
-record = [
-  "networkx>=3.0",
-  "sqlite-vec>=0.1.6",
-  "langchain-core>=0.3",
-  "langchain-community>=0.3",
-  "pydantic>=2.0",
-]
 dev = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]

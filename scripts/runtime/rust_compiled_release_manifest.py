@@ -19,7 +19,7 @@ PROFILE = "/workspace/rust-job/profile"
 ADAPTER = "/usr/local/bin/elitea-code-rust"
 ENV = {"PATH":"/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin", "RUSTUP_HOME":"/usr/local/rustup", "CARGO_HOME":"/workspace/rust-job/cargo-home", "CARGO_INCREMENTAL":"0", "CARGO_TERM_COLOR":"never", "HOME":"/workspace", "TMPDIR":"/workspace/rust-job/tmp"}
 # The pinned toolchain release (scripts/ci/check-rust-toolchain.sh holds it to the pin).
-RUST_RELEASE = "1.97.1"
+RUST_RELEASE = "1.99.1"
 TARGETS = {"arm64":"aarch64-unknown-linux-gnu", "amd64":"x86_64-unknown-linux-gnu"}
 MEASURED = ("cargo_manifest_sha256", "cargo_lock_sha256", "cargo_config_sha256", "vendor_sha256", "toolchain_sha256", "adapter_sha256", "wrapper_sha256", "compiler_flags_sha256")
 AUDIT_FIELDS = ("revision", "kind", "image_digest", "image_id", "platform", "target", "policy_revision", "dependency_bundle_sha256", "native_metadata_sha256", "native_record_sha256", "native_archive_sha256", "container_id", "image_inspection_sha256", "container_policy_sha256", "measured")

@@ -2,7 +2,7 @@ package run_test
 
 // The wiki_query family, against the P0 recording in
 // conformance/provider/fixtures/deepwiki/wiki_query/, which was produced by
-// running the legacy handlers themselves (tools/record_wiki_query.py).
+// running the legacy handlers themselves (a one-off recorder, since retired).
 //
 // The three answers that are NOT compared to the recording are delete_wiki's,
 // and the fixture says why: the legacy delete never worked in production —

@@ -90,7 +90,7 @@ func TestPrincipalName_ForeignProjectIsRefused(t *testing.T) {
 }
 
 // TestPrincipalName_MemberProjectIsBilled is direction 2 of issue #459. The
-// name asks for project 42. The caller is a member of 42. The Pylon system
+// name asks for project 42. The caller is a member of 42. The legacy system
 // project-user behaviour is unchanged.
 func TestPrincipalName_MemberProjectIsBilled(t *testing.T) {
 	queries := &fakeMemberQuerier{allow: map[int32]bool{namedOwnProject: true}}

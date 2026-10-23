@@ -241,7 +241,7 @@ func TestServiceDescriptorListingReturnsNoRows(t *testing.T) {
 		t.Errorf("the refusal carries a rows array: %s", recorder.Body.String())
 	}
 	// The invented rows' own fields, not their values: the REASON legitimately
-	// names `elitea_core` (it is the plugin that owns the pylon endpoint), so a
+	// names `elitea_core` (it is the plugin that owns the legacy endpoint), so a
 	// substring test on the plugin name would fail against the correct answer.
 	for _, invented := range []string{`"status"`, `"version"`, `"2.0.0"`, `"Core platform service"`} {
 		if bytes.Contains(recorder.Body.Bytes(), []byte(invented)) {
@@ -328,10 +328,10 @@ func TestServiceDescriptorRoutesRefuseACallerWithoutThePermission(t *testing.T) 
 	}
 }
 
-// TestServiceDescriptorListingHasNoOtherMode — pylon registers `administration`
-// and nothing else on this path (`mode_handlers = {'administration': AdminAPI}`).
-// The route it replaces was `/admin/{mode}`, which answered its three invented
-// rows to any mode a caller cared to name.
+// TestServiceDescriptorListingHasNoOtherMode — the legacy runtime registers
+// `administration` and nothing else on this path (`mode_handlers =
+// {'administration': AdminAPI}`). The route it replaces was `/admin/{mode}`,
+// which answered its three invented rows to any mode a caller cared to name.
 func TestServiceDescriptorListingHasNoOtherMode(t *testing.T) {
 	pool := newAuditPool(t)
 	grantDescriptorPermissions(t, pool, 1)

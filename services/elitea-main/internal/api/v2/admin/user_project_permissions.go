@@ -40,10 +40,10 @@ package admin
 //
 //     `system` is the one role name that is neither written nor rejected. It is
 //     the platform's own role, it appears in every body this endpoint's own GET
-//     produces (every project pylon creates has one — projects/utils/
-//     project_steps.py assigns `role_name='system'` to its system user), and
-//     rejecting it made the GET → edit → PUT round trip impossible. roles.go
-//     drops it from the submission the same way.
+//     produces (every project the legacy runtime creates has one —
+//     projects/utils/ project_steps.py assigns `role_name='system'` to its
+//     system user), and rejecting it made the GET → edit → PUT round trip
+//     impossible. roles.go drops it from the submission the same way.
 //   - the reference reads the role map through its admin RPC, which returns the
 //     CENTRAL default-mode grants filtered by project role name
 //     (admin/rpc/roles.py `get_permissions`) — i.e. it reports the central
@@ -64,7 +64,7 @@ import (
 
 const (
 	// UserProjectPermissionsViewPermission and …EditPermission are what the
-	// pylon originals declare in their check_api decorators.
+	// legacy originals declare in their check_api decorators.
 	UserProjectPermissionsViewPermission = "configuration.roles.user_project_permissions.view"
 	UserProjectPermissionsEditPermission = "configuration.roles.user_project_permissions.edit"
 )

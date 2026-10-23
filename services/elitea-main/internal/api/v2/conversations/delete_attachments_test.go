@@ -3,8 +3,8 @@ package conversations_test
 // DEFECT #599: DELETE /attachments/prompt_lib/{projectID}/{conversationID}
 // stripped chat_conversations.meta.attachments and nothing else — the uploaded
 // bytes and their elitea_storage.objects rows survived until the retention
-// sweeper expired them. Pylon's equivalent route removes the bytes at the same
-// moment (legacy/plugins/elitea_core/api/v2/attachments.py:240,
+// sweeper expired them. The legacy equivalent route removes the bytes at the
+// same moment (legacy/plugins/elitea_core/api/v2/attachments.py:240,
 // `mc.remove_file(bucket_name, filename)`), which is the parity baseline these
 // tests encode.
 //
@@ -63,6 +63,7 @@ func (f *fakeAttachmentStore) DeleteAttachmentObjects(_ context.Context, bucketI
 	drop := map[string]bool{}
 	for _, k := range keys {
 		drop[k] = true
+		delete(f.reserved, fmt.Sprintf("%d/%s", bucketID, k))
 	}
 	kept := f.recorded[:0:0]
 	for _, row := range f.recorded {
@@ -452,9 +453,9 @@ func deleteMessageHandler(att *fakeAttachmentStore, obj *deleteFakeObjectStore, 
 	return conversations.NewHandler(repo).WithObjectStore(obj).WithAttachmentStore(att)
 }
 
-// Without the flag the bytes stay. Pylon makes this opt-in too — a delete that
-// silently destroyed uploaded files would be a bigger surprise than one that
-// leaves them for the retention sweeper.
+// Without the flag the bytes stay. The legacy runtime makes this opt-in too — a
+// delete that silently destroyed uploaded files would be a bigger surprise than
+// one that leaves them for the retention sweeper.
 func TestDeleteMessage_LeavesAttachmentBytesWithoutTheFlag(t *testing.T) {
 	att := newFakeAttachmentStore()
 	att.seedBucket(1, "chat-attachments", 7)
@@ -490,10 +491,10 @@ func TestDeleteMessage_DeletesAttachmentBytesWithTheFlag(t *testing.T) {
 	assertStrings(t, "surviving metadata rows", att.recordedKeys(), []string{"conv/keep.pdf"})
 }
 
-// PRESENCE, not value. Pylon tests `'delete_attachment' in request.args`, so a
-// bare flag counts and so does `=false`. A client that has been sending the
-// bare form at pylon for years must keep working, which a `== "true"` check
-// would silently break.
+// PRESENCE, not value. The legacy runtime tests `'delete_attachment' in
+// request.args`, so a bare flag counts and so does `=false`. A legacy client
+// that has been sending the bare form for years must keep working, which a
+// `== "true"` check would silently break.
 func TestDeleteMessage_AttachmentFlagIsPresenceNotValue(t *testing.T) {
 	for _, query := range []string{"?delete_attachment", "?delete_attachment=", "?delete_attachment=false", "?delete_attachment=1"} {
 		att := newFakeAttachmentStore()

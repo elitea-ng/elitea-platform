@@ -10,13 +10,13 @@
  *
  * All six tests pass on chromium and webkit. J20b-J20e carried
  * `test.fail()` until issue #138 was fixed: the client addressed the LEGACY
- * Pylon artifact URLs (`/artifacts/s3/...`, `/artifacts/artifact/default/...`,
- * `/artifacts/buckets/default/{projectId}`) while elitea-main serves only
- * `/api/v2/artifacts/{buckets,objects,grants}` (`mountArtifactRoutes`,
- * router.go:255-311), so no bucket, file table, preview, download or ZIP was
- * reachable at all; and a collapsing `FormHelperText` on the create-bucket
- * form moved the button row 22.9 px on the blur that the first click itself
- * produced, so that click never landed.
+ * legacy-runtime artifact URLs (`/artifacts/s3/...`,
+ * `/artifacts/artifact/default/...`, `/artifacts/buckets/default/{projectId}`)
+ * while elitea-main serves only `/api/v2/artifacts/{buckets,objects,grants}`
+ * (`mountArtifactRoutes`, router.go:255-311), so no bucket, file table,
+ * preview, download or ZIP was reachable at all; and a collapsing
+ * `FormHelperText` on the create-bucket form moved the button row 22.9 px on
+ * the blur that the first click itself produced, so that click never landed.
  *
  * Artifacts are ENABLED in the E2E stack — `ELITEA_ARTIFACTS_ENABLED` is only
  * read at `services/elitea-main/cmd/elitea-main/main.go:103` (`!= "false"`)
@@ -684,14 +684,26 @@ test.describe('J20 artifacts lifecycle', () => {
       // project-wide, so a bucket another spec creates or drops in this window
       // moves it for a reason that has nothing to do with this upload.
       await expect
-        .poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 })
-        .toBe(await serverTotalSize(request, projectId));
+        .poll(
+          async () => {
+            const [shown, server] = [(await footerSize.textContent())?.trim(), await serverTotalSize(request, projectId)];
+            return shown === server ? 'equal' : `footer ${shown}, server ${server}`;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe('equal');
 
       await page.reload();
       await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
       await expect
-        .poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 })
-        .toBe(await serverTotalSize(request, projectId));
+        .poll(
+          async () => {
+            const [shown, server] = [(await footerSize.textContent())?.trim(), await serverTotalSize(request, projectId)];
+            return shown === server ? 'equal' : `footer ${shown}, server ${server}`;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe('equal');
     } finally {
       const removed = await request.post(
         `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,

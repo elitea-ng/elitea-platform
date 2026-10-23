@@ -38,8 +38,7 @@ import type { ToolkitModelSection } from '../../../api/toolkitChatSession';
  *
  * The kind is reachable only since PR #352 (issue #330). That change makes the
  * Go catalogue serve a `$defs` block with `$ref` properties — credentials for
- * `github`, `jira` and `openapi`, vectorstorage for `artifact`, `github` and
- * `jira`. `toolkitSchema.helpers.ts`'s `configProps` keys the kind off exactly
+ * `github`, `jira` and `openapi`. `toolkitSchema.helpers.ts`'s `configProps` keys the kind off exactly
  * that block. Before it, no property was ever typed `configuration`, and this
  * hook's earlier revision recorded that as the blocker.
  *

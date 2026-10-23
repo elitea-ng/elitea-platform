@@ -1,0 +1,57 @@
+# HA profile for the bundled Qdrant (ADR-0031 decision 8): three nodes, every
+# collection replicated twice, so the vector store survives the loss of any one
+# node. values.yaml runs ONE node (clustering off) because a default install
+# should not need three volumes and three nodes' worth of memory to start.
+#
+# Layer it on the chart's values.yaml:
+#   helm upgrade --install elitea deploy/helm/elitea -f values-qdrant-ha.yaml ...
+#
+# What it turns on, on the upstream qdrant subchart (values.yaml `qdrant`):
+#   * three pods that form a Raft cluster through pod 0 (Parallel pod
+#     management, stable names under the headless Service
+#     elitea-vectordb-headless);
+#   * peer TLS (config.cluster.p2p.enable_tls) beside the REST and gRPC TLS
+#     every install has: each node dials its peers at
+#     https://<pod>.elitea-vectordb-headless.<namespace>.svc:6335 with the same
+#     cert-manager pair, whose wildcard SAN names every pod. The render refuses
+#     more than one node without it;
+#   * a PodDisruptionBudget of maxUnavailable 1.
+#
+# GOING FROM ONE NODE TO THREE ON A LIVE INSTALL. Qdrant does not re-replicate
+# collections that already exist when nodes join: collections created on the
+# single node keep replication factor 1 until you raise it (PATCH
+# /collections/<name> with replication_factor 2) and the cluster moves the
+# shards. New collections take vector.collection.replicationFactor below. The
+# render refuses a replicationFactor above the node count.
+#
+# Each node keeps its own PersistentVolumeClaim (qdrant.persistence.size), so
+# the cluster needs a StorageClass that can provision three of them, ideally
+# in different zones (the affinity below spreads the pods over nodes).
+vector:
+  collection:
+    # Two copies of every shard: one node may fail with no data loss.
+    replicationFactor: 2
+qdrant:
+  replicaCount: 3
+  config:
+    cluster:
+      enabled: true
+      p2p:
+        enable_tls: true
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 8Gi
+  # One node per Kubernetes node, so a node failure costs one replica.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: elitea-qdrant
+          topologyKey: kubernetes.io/hostname

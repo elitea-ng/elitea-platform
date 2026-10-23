@@ -27,7 +27,7 @@ import (
 )
 
 // parityPermissions is the set issue 255's routes resolve, and the roles that
-// must hold them. Transcribed from the pylon `check_api` declarations; see
+// must hold them. Transcribed from the legacy `check_api` declarations; see
 // migrations/shared/0061_admin_parity_permissions.sql for the two
 // transcription traps.
 var parityPermissions = []string{

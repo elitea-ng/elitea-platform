@@ -6,9 +6,11 @@
 #
 # What is asserted, and why it would fail silently otherwise:
 #   * egressProxy off (the default) renders nothing of it;
-#   * on, the Deployment runs 2 replicas, non-root, read-only root, all
-#     capabilities dropped, no service-account token, with anti-affinity and a
-#     zone spread, and a PDB keeps one up;
+#   * on, a CPU HPA scales the Deployment from 2 to 6 replicas and the
+#     Deployment has no `replicas:` (with autoscaling off it runs
+#     replicaCount); the pod is non-root, read-only root, all capabilities
+#     dropped, no service-account token, with anti-affinity and a zone spread,
+#     and a PDB keeps one up;
 #   * the proxy env names the mounted key directory, and the deny list the
 #     proxy enforces itself equals the ranges the NetworkPolicy excepts;
 #   * the NetworkPolicy admits ONLY workspace-run pods of the execution
@@ -20,8 +22,20 @@
 #   * the half-configured shapes are refused.
 #
 # Usage: deploy/helm/tests/render-egress-proxy.sh
-# Needs: helm, python3 with PyYAML. No cluster, no network.
+# Needs: helm, yq, python3 with PyYAML. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 cd "$(dirname "$0")/../../.."
 
 chart=deploy/helm/elitea
@@ -69,7 +83,14 @@ dep = by(on, "Deployment", "elitea-egress-proxy")
 spec = dep["spec"]
 pod = spec["template"]["spec"]
 c = pod["containers"][0]
-assert spec["replicas"] == 2, spec["replicas"]
+# The HPA owns the count, so the Deployment states none: a value here is
+# written back at each helm upgrade.
+assert "replicas" not in spec, spec.get("replicas")
+hpa = by(on, "HorizontalPodAutoscaler", "elitea-egress-proxy")
+assert hpa["spec"]["scaleTargetRef"]["name"] == "elitea-egress-proxy", hpa["spec"]["scaleTargetRef"]
+assert (hpa["spec"]["minReplicas"], hpa["spec"]["maxReplicas"]) == (2, 6), hpa["spec"]
+assert hpa["spec"]["metrics"][0]["resource"]["name"] == "cpu", hpa["spec"]["metrics"]
+assert hpa["metadata"]["annotations"]["elitea.ai/autoscaling-source"] == "cpu"
 assert spec["selector"]["matchLabels"] == selector
 assert spec["strategy"]["rollingUpdate"]["maxUnavailable"] == 0
 assert pod["automountServiceAccountToken"] is False
@@ -304,7 +325,26 @@ expect_refusal "no client pod labels" "clientPodLabels must name" \
   --set egressProxy.networkPolicy.clientPodLabels=null
 expect_refusal "a malformed deny CIDR" "is not an explicit CIDR block" \
   --set 'egressProxy.networkPolicy.denyCidrs[0]=metadata.internal'
-expect_refusal "one replica" "replicaCount must be at least 2" --set egressProxy.replicaCount=1
+# The floor is at least two: autoscaling.minReplicas while the HPA owns the
+# count, else replicaCount. The refusal names the field that applies.
+expect_refusal "an autoscaler floor of one" "egressProxy.autoscaling.minReplicas must be at least 2" \
+  --set egressProxy.autoscaling.minReplicas=1
+expect_refusal "one replica with autoscaling off" "egressProxy.replicaCount must be at least 2" \
+  --set egressProxy.autoscaling.enabled=false --set egressProxy.replicaCount=1
+if helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.replicaCount=1 >/dev/null 2>&1; then
+  note "replicaCount 1 renders while the HPA (floor 2) owns the count"
+else
+  fail "replicaCount 1 is refused while autoscaling.minReplicas is 2; the HPA, not replicaCount, sets the floor"
+fi
+fixed="$(helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.autoscaling.enabled=false)" \
+  || fail "egressProxy with autoscaling off does not render"
+fixed_replicas="$(printf '%s' "$fixed" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-egress-proxy") | .spec.replicas' -)"
+fixed_hpa="$(printf '%s' "$fixed" | yq eval-all 'select(.kind == "HorizontalPodAutoscaler" and .metadata.name == "elitea-egress-proxy") | .metadata.name' -)"
+if [ "$fixed_replicas" = "2" ] && [ -z "$fixed_hpa" ]; then
+  note "autoscaling off: replicas 2 and no HPA"
+else
+  fail "autoscaling off: replicas '$fixed_replicas' (want 2), HPA '$fixed_hpa' (want none)"
+fi
 # The integer limits: a unit suffix, a fraction, a leading zero (octal to
 # sprig's int64), hex, and zero are refused by name instead of reaching the
 # proxy as a different number.
@@ -323,7 +363,7 @@ expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSe
 expect_refusal "a grace period without the audit's last reports" "plus 10 for the last audit reports" \
   --set egressProxy.terminationGracePeriodSeconds=75
 expect_refusal "the audit identity is elitea-vector's" "must differ from vector.mtls.clientDnsName" \
-  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=q --set postgresql.maxConnections=1000 \
+  --set vector.enabled=true --set qdrant.enabled=true --set postgresql.maxConnections=1000 \
   --set egressProxy.audit.clientDnsName=elitea-vector
 # The default values keep elitea-main's runtime plane off.
 if out="$(helm template t "$chart" --namespace platform -f "$fixture" \

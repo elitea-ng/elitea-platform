@@ -6,23 +6,23 @@ package admin
 //	PUT  /admin/plugin_config_values/administration/{section}  — save them
 //	GET  /admin/plugin_config_values/prompt_lib/resources      — the one public section
 //
-// ## What this page configured in pylon, and why almost none of it survives
+// ## What the legacy page configured, and why almost none of it survives
 //
-// The reference Configuration page is not a form over a settings table. pylon
-// has no settings table. Every pylon announces its loaded plugins every 15
-// seconds over the Arbiter bus — name, parsed config, raw config YAML and an
-// `admin_schema.json` — and the admin plugin keeps the last announcement of each
-// in an IN-PROCESS dict with a 60-second freshness cut-off
+// The reference Configuration page is not a form over a settings table. The
+// legacy runtime has no settings table. Every runtime announces its loaded
+// plugins every 15 seconds over the Arbiter bus — name, parsed config, raw
+// config YAML and an `admin_schema.json` — and the admin plugin keeps the last
+// announcement of each in an IN-PROCESS dict with a 60-second freshness cut-off
 // (legacy/plugins/bootstrap/tools/event.py:29-103,
 // legacy/plugins/admin/events/runtime_remote.py:28-50). The GET aggregates that
 // dict. The PUT re-serialises the whole of a plugin's YAML with the changed
 // paths patched in and fires `bootstrap_runtime_update` fire-and-forget; a
-// handler on the target pylon upserts the bytes into THAT pylon's own
+// handler on the target runtime upserts the bytes into THAT runtime's own
 // `plugin_config` table and calls `descriptor.load_config()`
 // (legacy/plugins/admin/api/v2/plugin_config_values.py:275-305,
-// legacy/pylon/pylon/core/providers/internal/db_config.py:65-88).
+// core/providers/internal/db_config.py:65-88 in the legacy runtime's own package).
 //
-// That is Pylon plugin loading over Arbiter transport, which AGENTS.md's
+// That is legacy plugin loading over Arbiter transport, which AGENTS.md's
 // architecture boundaries name explicitly as things the target architecture does
 // NOT preserve. There is no dict of announcements here, no plugin descriptor to
 // reconfigure, and no plan for either.
@@ -32,15 +32,15 @@ package admin
 //
 //   - `resources` — the Help Center cards every user sees. Owned here, in
 //     `centry.platform_config`, and READ BACK by the Help Center: the public
-//     `prompt_lib` route below is the same one pylon exposes for exactly this
-//     section (`_PUBLIC_SECTIONS = {"resources"}`), and apps/elitea-web's
-//     `pages/help-center` now calls it. This is the whole of the page's live
-//     write surface, and it is live end to end.
-//   - everything else — Pylon plugin configuration with no store and no consumer
-//     in this platform. Those sections answer 501 WITH A REASON on both verbs,
-//     and the page renders the reason instead of a form. A form over values
-//     nothing reads is the worst version of this defect: the operator believes
-//     the setting took effect.
+//     `prompt_lib` route below is the same one the legacy runtime exposes for
+//     exactly this section (`_PUBLIC_SECTIONS = {"resources"}`), and
+//     apps/elitea-web's `pages/help-center` now calls it. This is the whole of
+//     the page's live write surface, and it is live end to end.
+//   - everything else — legacy plugin configuration with no store and no
+//     consumer in this platform. Those sections answer 501 WITH A REASON on
+//     both verbs, and the page renders the reason instead of a form. A form
+//     over values nothing reads is the worst version of this defect: the
+//     operator believes the setting took effect.
 //
 // The three shapes this replaced were all present at once: `PluginConfigValues`
 // returned the schema's DEFAULTS as if they were current values (a read that
@@ -82,15 +82,15 @@ package admin
 // ## Authorisation
 //
 // The administration routes are gated in internal/api/router.go on
-// `runtime.plugins`, which is the permission every pylon handler in this set
+// `runtime.plugins`, which is the permission every legacy handler in this set
 // declares (`@auth.decorators.check_api(["runtime.plugins"])`). Sections
 // carrying `required_permission` are checked here as well, because the
 // permission depends on the SECTION and route middleware cannot see it.
 //
 // The `prompt_lib` read is deliberately ungated beyond authentication, matching
-// pylon's `PromptLibAPI`: the Help Center is a page for every user, and its card
-// titles and documentation links are not sensitive. It is restricted to the
-// `resources` section by having its own route rather than by a parameter.
+// the legacy `PromptLibAPI`: the Help Center is a page for every user, and its
+// card titles and documentation links are not sensitive. It is restricted to
+// the `resources` section by having its own route rather than by a parameter.
 //
 // ## Mode is stated, never sniffed
 //
@@ -121,10 +121,10 @@ const resourcesSectionID = "resources"
 // bound, one paste turns the Help Center into a multi-megabyte response.
 const maxConfigValueBytes = 64 * 1024
 
-// configValuesResponse is pylon's GET shape. `fields_meta` is present because
-// the reference client reads it; the per-pylon members pylon puts there
-// (`plugin`, `pylon_id`) are absent by design — there are no pylons — and the
-// page does not invent them.
+// configValuesResponse is the legacy GET shape. `fields_meta` is present
+// because the reference client reads it; the per-runtime members the legacy
+// runtime puts there (`plugin` and a runtime id) are absent by design — there
+// are no such runtimes — and the page does not invent them.
 type configValuesResponse struct {
 	Values     map[string]any             `json:"values"`
 	FieldsMeta map[string]configFieldMeta `json:"fields_meta,omitempty"`
@@ -140,8 +140,8 @@ type configFieldMeta struct {
 // AdministrationPluginConfigValues serves
 // `GET /admin/plugin_config_values/administration/{plugin}`.
 //
-// `{plugin}` is pylon's name for what is really the SECTION id; the reference
-// client sends the section id there and this preserves that.
+// `{plugin}` is the legacy name for what is really the SECTION id; the
+// reference client sends the section id there and this preserves that.
 func (h *Handler) AdministrationPluginConfigValues(w http.ResponseWriter, r *http.Request) {
 	section, ok := h.resolveWritableSection(w, r)
 	if !ok {
@@ -169,9 +169,9 @@ func (h *Handler) AdministrationPluginConfigValues(w http.ResponseWriter, r *htt
 // `GET /admin/plugin_config_values/prompt_lib/resources` — the Help Center's own
 // read, for any authenticated user.
 //
-// pylon exposes exactly one section this way (`_PUBLIC_SECTIONS = {"resources"}`)
-// and this route is restricted the same way, by being a route rather than a
-// parameter: there is no section id a caller could substitute.
+// The legacy runtime exposes exactly one section this way (`_PUBLIC_SECTIONS =
+// {"resources"}`) and this route is restricted the same way, by being a route
+// rather than a parameter: there is no section id a caller could substitute.
 func (h *Handler) PromptLibResourcesValues(w http.ResponseWriter, r *http.Request) {
 	section, ok := findConfigSection(resourcesSectionID)
 	if !ok {
@@ -190,7 +190,7 @@ func (h *Handler) PromptLibResourcesValues(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"values": mergeSectionValues(section, stored)})
 }
 
-// configSaveBody is the accepted write. pylon's shape, unchanged.
+// configSaveBody is the accepted write. The legacy shape, unchanged.
 type configSaveBody struct {
 	Values map[string]any `json:"values"`
 }
@@ -271,11 +271,12 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	writeJSON(w, http.StatusOK, configValuesResponse{
 		Saved:  true,
 		Values: mergeSectionValues(section, stored),
-		// Always empty, and honestly so. `requires_restart` in pylon names the
-		// PYLONS whose plugins must reload; the only writable section here has
-		// no field carrying the flag, and this service has no reload signal to
-		// offer even if it did (`plugin_config_restart` answers 501). The page
-		// therefore renders no restart bar rather than a button that no-ops.
+		// Always empty, and honestly so. `requires_restart` in the legacy
+		// runtime names the RUNTIMES whose plugins must reload; the only
+		// writable section here has no field carrying the flag, and this
+		// service has no reload signal to offer even if it did (no reload route
+		// is mounted). The page therefore renders no restart bar rather than a
+		// button that no-ops.
 		Restart: []map[string]any{},
 	})
 }

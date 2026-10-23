@@ -31,9 +31,9 @@
 -- change this file does not also make.
 --
 -- WHY NO FOREIGN KEY TO A projects TABLE. Same reason 0071's project_id and
--- 0064's project_id carry none: project membership lives in pylon-owned
+-- 0064's project_id carry none: project membership lives in legacy-owned
 -- `centry.project`/`auth_core` tables this corpus does not always have (a
--- pylon-less Go-only database), and the #496 permission gate — not a foreign
+-- legacy-free Go-only database), and the #496 permission gate — not a foreign
 -- key — is what stops a caller naming a project it cannot see.
 --
 -- WHAT webhook_deliveries IS. One row per COMPLETED attempt sequence — not

@@ -281,7 +281,7 @@ impl Policy {
         }
         let (mut left, mut right) = (0, messages.len());
         let mut candidate = messages.len();
-        let iterations = usize::BITS - messages.len().leading_zeros() + 1;
+        let iterations = messages.len().bit_width() + 1;
         for _ in 0..iterations {
             if left >= right {
                 break;

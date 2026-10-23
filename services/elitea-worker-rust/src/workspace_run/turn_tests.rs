@@ -607,7 +607,7 @@ async fn a_stale_epoch_moves_nothing() {
     let error = turn.finish(TurnEnd::Completed).await.expect_err("refused");
     assert_eq!(error.code(), "workspace_run.stale_epoch");
     let state = harness.store.state();
-    assert!(state.publishes.is_empty());
+    assert_eq!(state.publishes, []);
     assert_eq!(state.refs.get(REF_CLOUD).map(String::as_str), Some(CLOUD));
 }
 
@@ -654,7 +654,7 @@ async fn an_upload_failure_publishes_nothing() {
         .await
         .expect("hydrated");
     assert!(turn.finish(TurnEnd::Completed).await.is_err());
-    assert!(harness.store.state().publishes.is_empty());
+    assert_eq!(harness.store.state().publishes, []);
 }
 
 #[tokio::test]
@@ -684,7 +684,7 @@ async fn a_secret_in_the_tree_fails_the_turn_before_any_sandbox_starts() {
         panic!("scan_blocked expected: {events:?}");
     };
     assert_eq!(*findings, 1);
-    assert!(!rules.is_empty());
+    assert_ne!(rules.as_slice(), [] as [String; 0]);
     assert!(
         rules
             .iter()

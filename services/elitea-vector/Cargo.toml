@@ -2,7 +2,7 @@
 name = "elitea-vector"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 description = "The platform's vector facade: the only Qdrant client, with project scope injection (ADR-0031)."
 
@@ -11,7 +11,10 @@ description = "The platform's vector facade: the only Qdrant client, with projec
 arc-swap = "=1.9.2"
 async-trait = "=0.1.92"
 # Process tracing and OTLP span export, shared with the engines.
-elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
+elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar", default-features = false, features = ["telemetry"] }
+# The request bounds and point-key limit, shared with the callers' client
+# (`service`), so the two sides cannot drift. Ring, this service's provider.
+elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-ring"] }
 # The introspection cache: a bounded LRU with single-flight misses.
 # Bounded-concurrency fan-out over collections (`buffer_unordered`).
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }

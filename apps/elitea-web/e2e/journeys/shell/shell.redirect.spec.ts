@@ -246,6 +246,9 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // and failed the next document's entry script. Wait for the signed-in shell
   // before another document navigation. Keep the deep link and logout checks.
   await expect(page.getByTestId('sidebar-collapse-toggle')).toBeVisible({ timeout: 30_000 });
+  // The visible shell is not a settled one: the sidebar's own reads are still
+  // in flight, and a WebKit navigation over them can drop the session cookie.
+  await page.waitForLoadState('networkidle');
 
   await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 

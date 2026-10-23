@@ -21,7 +21,7 @@ answered 500 `{"error":"failed to list feedback"}` for projects 1 and 2. Main lo
 
 ## Business behaviour
 
-Taken from the current platform (pylon `social` plugin: `api/v2/feedbacks.py`, `models/feedbacks.py`,
+Taken from the current platform (legacy `social` plugin: `api/v2/feedbacks.py`, `models/feedbacks.py`,
 `rpc/feedbacks.py`):
 
 - Storage is one shared table, `centry.social_feedbacks`: `id, user_id, referrer, description, rating, user_agent,

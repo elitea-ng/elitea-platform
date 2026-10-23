@@ -10,8 +10,8 @@ import (
 //
 // WHAT IS AND IS NOT COMPUTED HERE. `current_tokens`,
 // `message_groups_in_context` and `summary_count` are not derivable from the
-// transcript by this service: they are a RUNTIME record. In pylon they are
-// written by the chat runtime as it assembles a turn
+// transcript by this service: they are a RUNTIME record. In the legacy runtime
+// they are written by the chat runtime as it assembles a turn
 // (legacy/plugins/elitea_core/utils/chat_history.py counts tokens with the
 // model's own tokenizer, marks each message group `context.included`, and
 // increments `summaries_generated` when it summarizes), and every reader —
@@ -51,10 +51,10 @@ type ConversationState struct {
 	MessageGroupsTotal int
 }
 
-// Status is pylon's ContextStatus plus two fields this service owes the
-// caller: `strategy_name` (which pylon's build_context_response also returns)
-// and the availability pair that keeps an absent runtime record from reading
-// as a real zero.
+// Status is the legacy ContextStatus plus two fields this service owes the
+// caller: `strategy_name` (which the legacy build_context_response also
+// returns) and the availability pair that keeps an absent runtime record from
+// reading as a real zero.
 type Status struct {
 	RuntimeContext         *RuntimeContext `json:"runtime_context,omitempty"`
 	BudgetMode             BudgetMode      `json:"budget_mode,omitempty"`
@@ -88,7 +88,7 @@ type Status struct {
 // whatever the runtime recorded. `analytics` is the raw
 // `meta.context_analytics` value; absent or unparseable means "not recorded".
 //
-// Utilization is a 0..1 RATIO rounded to four places, which is pylon's
+// Utilization is a 0..1 RATIO rounded to four places, which is the legacy
 // `build_context_response` (`current_tokens / max_tokens`), not the percentage
 // the previous Go implementation returned. apps/elitea-web does not read the
 // field — widgets/context-budget/lib/contextStatus.ts derives its percentage

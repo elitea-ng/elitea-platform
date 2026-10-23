@@ -42,8 +42,11 @@ var ErrIncompleteConfig = errors.New("incomplete provider facade configuration")
 // how to prove who is calling. Everything a provider does with a request is
 // outside it.
 type Config struct {
-	Enabled        bool
-	BaseURL        string
+	Enabled bool
+	// Target is the provider service's gRPC listener, host:port (#1359): the
+	// sub-application host serves the provider SPI and the platform
+	// operations on it, behind one TLS configuration.
+	Target         string
 	ClientCertFile string
 	ClientKeyFile  string
 	CAFile         string
@@ -69,8 +72,12 @@ type Config struct {
 // operator has to set. Every name here appears in a chart and in an
 // env-drift allowlist, and both are searched by the literal.
 type EnvNames struct {
-	Enabled        string
-	BaseURL        string
+	Enabled string
+	Target  string
+	// RetiredBaseURL is the HTTPS origin the facade proxied to before #1359.
+	// Set, it is refused: the provider no longer serves HTTP, and a facade
+	// that read the old value as nothing would leave an operator guessing.
+	RetiredBaseURL string
 	ClientCertFile string
 	ClientKeyFile  string
 	CAFile         string
@@ -98,12 +105,15 @@ func ConfigFromEnv(names EnvNames, lookup func(string) (string, bool)) (Config, 
 	if err != nil {
 		return Config{}, fmt.Errorf("%w: %s must be true or false", ErrIncompleteConfig, names.Enabled)
 	}
+	if err := RefuseRetiredBaseURL(names.RetiredBaseURL, names.Target, lookup); err != nil {
+		return Config{}, err
+	}
 	cfg := Config{Enabled: enabled}
 	if !enabled {
 		return cfg, nil
 	}
 
-	cfg.BaseURL = get(names.BaseURL)
+	cfg.Target = get(names.Target)
 	cfg.ClientCertFile = get(names.ClientCertFile)
 	cfg.ClientKeyFile = get(names.ClientKeyFile)
 	cfg.CAFile = get(names.CAFile)
@@ -114,7 +124,7 @@ func ConfigFromEnv(names EnvNames, lookup func(string) (string, bool)) (Config, 
 	// provider otherwise learns about one missing variable per restart.
 	missing := make([]string, 0, 5)
 	for _, required := range []struct{ name, value string }{
-		{names.BaseURL, cfg.BaseURL},
+		{names.Target, cfg.Target},
 		{names.ClientCertFile, cfg.ClientCertFile},
 		{names.ClientKeyFile, cfg.ClientKeyFile},
 		{names.CAFile, cfg.CAFile},
@@ -134,6 +144,20 @@ func ConfigFromEnv(names EnvNames, lookup func(string) (string, bool)) (Config, 
 	}
 	cfg.Timeout = timeout
 	return cfg, nil
+}
+
+// RefuseRetiredBaseURL fails when the retired HTTPS origin variable is set,
+// naming the gRPC target variable that replaced it (#1359). It refuses
+// whether the facade is on or off: an operator who set it meant it.
+func RefuseRetiredBaseURL(retired, target string, lookup func(string) (string, bool)) error {
+	if retired == "" {
+		return nil
+	}
+	if value, _ := lookup(retired); strings.TrimSpace(value) != "" {
+		return fmt.Errorf("%w: %s is retired (#1359): the provider is reached over gRPC with mutual TLS; set %s to its listener's host:port and unset %s",
+			ErrIncompleteConfig, retired, target, retired)
+	}
+	return nil
 }
 
 func parseBool(raw string) (bool, error) {
@@ -203,13 +227,13 @@ func Guard(
 // serves perfectly well without a validator, it simply does not authenticate,
 // and that is invisible at runtime.
 func Composable(authConfig apimw.AuthConfig, permissions auth.PermissionResolver) bool {
-	// A forwarded-identity verifier (production Form authentication) OR a
-	// token validator (OIDC-only, where APPLICATION_SECRET_KEY-signed tokens
-	// are read back by a LocalValidator): either authenticates a caller. The
-	// principal validator is required in both — it is the check that turns a
-	// deactivated user away, and a nil one serves without saying so.
+	// A Form session reader (production Form authentication) OR a token
+	// validator (OIDC-only, where APPLICATION_SECRET_KEY-signed tokens are read
+	// back by a LocalValidator): either authenticates a caller. The principal
+	// validator is required in both — it is the check that turns a deactivated
+	// user away, and a nil one serves without saying so.
 	return authConfig.PrincipalValidator != nil &&
-		(authConfig.ForwardedIdentityVerifier != nil || authConfig.Validator != nil) &&
+		(authConfig.FormSessions != nil || authConfig.Validator != nil) &&
 		permissions != nil
 }
 

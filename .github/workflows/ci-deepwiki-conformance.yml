@@ -11,9 +11,8 @@ name: CI — Provider conformance fixtures
 # The Python DeepWiki service and its service, storage-parity and image jobs
 # were removed with services/elitea-deepwiki; the Rust engine's gates are in
 # ci-deepwiki-engine.yml, and the Go host replays the same fixtures in
-# ci-go.yml. Re-recording the fixtures from the legacy deepwiki_plugin
-# checkout (conformance/provider/tools/record_*.py) is a local step — the
-# legacy plugin is not available to CI.
+# ci-go.yml. The fixtures are frozen; conformance/provider/README.md says how
+# they are maintained.
 
 on:
   pull_request:
@@ -25,21 +24,10 @@ on:
       # serves.
       - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
       - ".github/workflows/ci-deepwiki-conformance.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "conformance/provider/**"
-      - "libs/provider/**"
-      - "scripts/provider/**"
-      # The descriptor guard compares the fixture with the copy the Go host
-      # serves.
-      - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
-      - ".github/workflows/ci-deepwiki-conformance.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

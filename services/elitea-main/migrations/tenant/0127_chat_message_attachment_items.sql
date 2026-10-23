@@ -2,26 +2,29 @@
 --
 -- This is option 1 of #606, chosen deliberately over the alternatives: Go takes
 -- migration ownership of the table, and an uploaded chat attachment becomes a
--- message item hanging off a message group, the way pylon models it.
+-- message item hanging off a message group, the way the legacy runtime models
+-- it.
 --
 -- WHY THE QUESTION WAS OPEN. internal/api/v2/conversations/attachments.go:34-55
 -- records that the S20a attachment port stored bytes and
 -- `elitea_storage.objects` metadata but deliberately did NOT write the
--- `chat_messages_attachment` row pylon writes, because nothing established who
--- owns that table's DDL: inventing a migration risked colliding with pylon's
--- own history in a shared database. The consequences accumulated. An attachment
--- was conversation-scoped only — bytes keyed `{conversationUUID}/{filename}`,
--- a listing in `chat_conversations.meta.attachments` — with NO association to
--- the message it was sent with. So it never appeared inline in the transcript,
--- and pylon's per-message attachment cleanup (api/v2/message.py:103-107) had
+-- `chat_messages_attachment` row the legacy runtime writes, because nothing
+-- established who owns that table's DDL: inventing a migration risked colliding
+-- with the legacy runtime's own history in a shared database. The consequences
+-- accumulated. An attachment was conversation-scoped only — bytes keyed
+-- `{conversationUUID}/{filename}`, a listing in
+-- `chat_conversations.meta.attachments` — with NO association to the message it
+-- was sent with. So it never appeared inline in the transcript, and the legacy
+-- runtime's per-message attachment cleanup (api/v2/message.py:103-107) had
 -- nothing to iterate and could not be ported at all.
 --
 -- WHY THE COLLISION RISK IS ADDRESSABLE, AND ADDRESSED. `CREATE TABLE IF NOT
--- EXISTS` makes this a no-op wherever pylon already created the table, which is
--- every deployment restored from the shared database. It becomes the definition
--- only where nothing else provides one — a pylon-free deployment, the
--- compose/standalone stack, a freshly created tenant. That is the same bargain
--- 0123, 0124, 0125 and 0126 already struck for the rest of this graph.
+-- EXISTS` makes this a no-op wherever the legacy runtime already created the
+-- table, which is every deployment restored from the shared database. It
+-- becomes the definition only where nothing else provides one — a legacy-free
+-- deployment, the compose/standalone stack, a freshly created tenant. That is
+-- the same bargain 0123, 0124, 0125 and 0126 already struck for the rest of
+-- this graph.
 --
 -- The shape is not transcribed from the SQLAlchemy model. It is MEASURED from
 -- `testdata/postgres/legacy-centry-catalog.json`, the pg_catalog dump of the
@@ -44,9 +47,9 @@
 -- column is `json`. The two types are not interchangeable here: `jsonb`
 -- normalises whitespace, reorders object keys and silently drops duplicate
 -- keys, so a value written through this migration's table and read back by
--- pylon — or the reverse, in a deployment running both — would not be the bytes
--- that were stored. Every other jsonb column in 0123 is one this repository
--- owns end to end; this one is shared, so it matches.
+-- the legacy runtime — or the reverse, in a deployment running both — would not
+-- be the bytes that were stored. Every other jsonb column in 0123 is one this
+-- repository owns end to end; this one is shared, so it matches.
 --
 -- SHARING chat_message_items' PRIMARY KEY, rather than carrying its own, is
 -- what makes the item's `item_type` discriminator and its payload impossible to
@@ -65,8 +68,8 @@
 --
 -- No index beyond the primary key, matching the deployed table. The only access
 -- path is a join from chat_message_items on `id`, which the primary key already
--- serves; an index this repository added and pylon's table lacked would be a
--- shape difference for no gain.
+-- serves; an index this repository added and the legacy runtime's table lacked
+-- would be a shape difference for no gain.
 --
 -- Guarded on the PARENT with to_regclass, exactly as 0125 and 0126 are: several
 -- integration fixtures apply the tenant chain to a schema of their own making

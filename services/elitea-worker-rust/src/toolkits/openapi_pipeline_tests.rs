@@ -144,7 +144,7 @@ async fn openapi_expiry_resumes_only_the_paused_node_or_stops_on_skip() {
         let checkpoint = checkpointer.load(THREAD).await.unwrap().unwrap();
         let refreshed = authorize && refreshed_status == StatusCode::OK;
         assert_requests(&transport, authorize, refreshed);
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         assert_eq!(checkpoint.state["first_result"], "private-provider-body");
         if refreshed {
             assert_eq!(

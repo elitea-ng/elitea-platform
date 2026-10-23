@@ -23,6 +23,7 @@
 
 import React, { useCallback, useEffect, useState, memo, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
 import Grid from '@mui/material/Grid';
 import { useTheme } from '@mui/material/styles';
 
@@ -183,6 +184,8 @@ export interface ParticipantsWrapperProps {
   readonly selectedManager?: string;
   /** Same as `selectedManager`, but for a conversation still being composed (not yet persisted). */
   readonly newConversationSelectedManager?: string;
+  /** `inspector`: the desktop inspector pane hosts it (fills the pane, never collapses, native captions); `rail` (default): the web chat's right column. */
+  readonly appearance?: 'rail' | 'inspector';
 }
 
 /**
@@ -236,6 +239,7 @@ export const ParticipantsWrapper = memo(
     maxVisibleUsers = 5,
     selectedManager,
     newConversationSelectedManager,
+    appearance = 'rail',
   }: ParticipantsWrapperProps) => {
     const theme = useTheme();
     const { isSmallWindow } = useIsSmallWindow();
@@ -264,17 +268,17 @@ export const ParticipantsWrapper = memo(
     // old-app `ParticipantsWrapper.jsx`'s `if (hidden) return null;`.
     if (hidden) return null;
 
+    const inspector = appearance === 'inspector';
+    const Frame = inspector ? InspectorFrame : RailFrame;
+
     return (
-      <Grid
-        size={{ xs: responsive.xsSize, lg: responsive.lgSize }}
-        sx={wrapperSx(theme, responsive.styleParams, responsive.paddingLeft)}
-        data-testid="participants-wrapper"
-      >
+      <Frame theme={theme} responsive={responsive}>
         <ParticipantDetailsProvider participants={derived.participants}>
           <Participants
             participants={derived.participants}
-            collapsed={collapsed}
-            onCollapsed={onCollapsed}
+            collapsed={inspector ? false : collapsed}
+            onCollapsed={inspector ? undefined : onCollapsed}
+            inspector={inspector}
             disabledEdit={derived.isPlayback}
             disabledAdd={disabledAdd}
             activeParticipantId={derived.activeParticipantId}
@@ -294,10 +298,32 @@ export const ParticipantsWrapper = memo(
             newConversationSelectedManager={newConversationSelectedManager}
           />
         </ParticipantDetailsProvider>
-      </Grid>
+      </Frame>
     );
   },
 );
+
+/** The web chat's right column: a grid cell sized by the collapse state and the window. */
+function RailFrame({ theme, responsive, children }) {
+  return (
+    <Grid
+      size={{ xs: responsive.xsSize, lg: responsive.lgSize }}
+      sx={wrapperSx(theme, responsive.styleParams, responsive.paddingLeft)}
+      data-testid="participants-wrapper"
+    >
+      {children}
+    </Grid>
+  );
+}
+
+/** The desktop inspector's body: the pane sets the width; the panel fills it. */
+function InspectorFrame({ children }) {
+  return (
+    <Box data-testid="participants-wrapper" data-appearance="inspector" sx={{ flex: 1, minHeight: 0, width: '100%', boxSizing: 'border-box', paddingX: 1.5, paddingBottom: 1.5 }}>
+      {children}
+    </Box>
+  );
+}
 
 /* ── custom hooks ──────────────────────────────────────────────────────── */
 

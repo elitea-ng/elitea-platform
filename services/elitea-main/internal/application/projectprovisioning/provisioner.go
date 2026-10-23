@@ -1,6 +1,6 @@
 // Package projectprovisioning creates a project and its tenant, which is the
-// one capability that kept legacy pylon on the critical path (#333). A
-// pylon-free deployment could serve the projects it already had; it could not
+// one capability that kept the legacy runtime on the critical path (#333). A
+// deployment without it could serve the projects it already had; it could not
 // take a new one.
 //
 // The reference is legacy/plugins/projects/utils/project_steps.py. This package
@@ -13,8 +13,9 @@
 // centry.project on a connection it takes from the pool itself, and opens its
 // own transaction to apply the corpus. So the project row must be COMMITTED
 // before the tenant corpus can be applied to it, and no single transaction can
-// span both. pylon has the same shape for a different reason (it commits after
-// every step), so the compensation model is a port rather than an invention.
+// span both. The legacy runtime has the same shape for a different reason (it
+// commits after every step), so the compensation model is a port rather than an
+// invention.
 //
 // THE INVARIANT THAT MATTERS. `create_success` is written TRUE only after every
 // step succeeded. It is not decoration: cmd/elitea-migrate's `-all-tenants`
@@ -49,12 +50,13 @@ type TenantMigrator interface {
 	ApplyTenant(ctx context.Context, projectID int64) error
 }
 
-// ErrNameRequired reports an empty project name. pylon's ProjectCreatePD
+// ErrNameRequired reports an empty project name. The legacy ProjectCreatePD
 // declares `name: constr(min_length=1)`, so an empty name is a 400 there too.
 var ErrNameRequired = errors.New("projectprovisioning: project name is required")
 
-// ErrOwnerRequired reports a missing or non-positive owner. pylon takes the
-// owner from `g.auth.id` and never from the request body; so does the handler.
+// ErrOwnerRequired reports a missing or non-positive owner. The legacy runtime
+// takes the owner from `g.auth.id` and never from the request body; so does the
+// handler.
 var ErrOwnerRequired = errors.New("projectprovisioning: owner id must be positive")
 
 // Limits carries the per-project ceilings written to centry.project_quota.
@@ -74,7 +76,8 @@ type Limits struct {
 }
 
 // DefaultLimits are ProjectCreatePD's field defaults, transcribed exactly.
-// A caller that omits a limit gets the same ceiling pylon would have given it.
+// A caller that omits a limit gets the same ceiling the legacy runtime would
+// have given it.
 func DefaultLimits() Limits {
 	return Limits{
 		DataRetentionLimit:     1_000_000_000,
@@ -93,17 +96,17 @@ func DefaultLimits() Limits {
 // Request is one project-create instruction. Name and OwnerID are mandatory.
 type Request struct {
 	Name string
-	// Plugins is stored verbatim on centry.project.plugins. pylon defaults it
+	// Plugins is stored verbatim on centry.project.plugins. Legacy defaults it
 	// to the empty list and never validates the entries.
 	Plugins []string
 	// OwnerID is the authenticated caller. It is never read from a request body.
 	OwnerID int64
 	// AdminEmails receive membership in the new project, with AdminRoles.
-	// pylon's ProjectAdmin step does exactly this and skips silently when the
-	// list is empty.
+	// The legacy ProjectAdmin step does exactly this and skips silently when
+	// the list is empty.
 	AdminEmails []string
 	// AdminRoles are the project roles AdminEmails are granted. The HTTP
-	// handler hardcodes {"admin"}, as pylon's AdminAPI.post does.
+	// handler hardcodes {"admin"}, as the legacy AdminAPI.post does.
 	AdminRoles []string
 	Limits     Limits
 }
@@ -115,9 +118,6 @@ type Result struct {
 	ProjectID     int64
 	Steps         []StepStatus
 	RollbackSteps []StepStatus
-	// VectorDatabase names the PgVector database a delete could not drop. It is
-	// empty unless ErrVectorStoreNotDropped. The cleanup journal retries it.
-	VectorDatabase string
 	// Pending names the cleanup steps a delete left to the journal: those that
 	// ran and failed, and those its budget did not reach (every one after
 	// HandOffCleanup). Empty means the cleanup is complete. Journal retries
@@ -157,60 +157,6 @@ type ProjectVaultBootstrapper interface {
 	RemoveProjectVaultTx(ctx context.Context, tx pgx.Tx, projectID string) error
 }
 
-// ProjectVectorStore creates and removes a project's vector-store credentials
-// and its `vectorstorage` configuration row — the state an index run resolves
-// before it can write a vector (#371).
-//
-// It is satisfied by runtimecomposition's adapter over
-// internal/application/vectorstore.ProjectPgvectorService, and it is optional
-// for the same reason ArtifactBootstrapper is: a deployment that runs no
-// PgVector bootstrap still creates projects. Unlike the bucket bootstrapper,
-// though, its absence is NOT a no-op that leaves a working project — see
-// createProjectVectorStore.
-type ProjectVectorStore interface {
-	ProvisionProjectVectorStore(ctx context.Context, projectID int64) error
-	// RemoveProjectVectorStore undoes what provisioning wrote to this platform
-	// (the configuration row). It never drops the PgVector database or role, so
-	// it is safe for the create-failure rollback.
-	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
-	// ProjectHasVectorStore reports whether the project has a PgVector
-	// configuration row on this platform. Deprovision asks it INSIDE the
-	// transaction that decides the delete, through that transaction (query), so
-	// the answer is read from the same snapshot that removes the project and no
-	// second pool connection is taken while the project row is locked. The answer
-	// is recorded in the cleanup journal and later handed to
-	// DropProjectVectorStore.
-	ProjectHasVectorStore(ctx context.Context, query Querier, projectID int64) (bool, error)
-	// DropProjectVectorStore irreversibly drops the project's PgVector database
-	// and login role (#1211). It is reached only from Deprovision's cleanup
-	// journal, after the project row is gone, never from the create-failure
-	// rollback. It is idempotent. It attempts the drop whenever a PgVector
-	// bootstrap is configured, whatever hadStore (the probe's answer, recorded in
-	// the journal) says, so a database with no configuration row is caught. Only
-	// the absence of a bootstrap depends on hadStore: false is a skip ("", nil),
-	// true means the database exists and cannot be reached, which is an error. It returns the name of the database it was
-	// asked to drop (also on failure, so the caller can name the leftover), or
-	// "" when there is nothing to drop.
-	DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (database string, err error)
-}
-
-// VectorDatabaseProbe is the optional half of a ProjectVectorStore that can ask
-// the PgVector server whether a project's database or role exists. Deprovision
-// uses it to find the leftovers of a project whose row is already gone (#1211).
-// checkable is false when the deployment has no PgVector bootstrap, so nothing
-// can be asked. A store without it is simply not asked.
-type VectorDatabaseProbe interface {
-	ProjectVectorDatabaseExists(ctx context.Context, projectID int64) (exists bool, checkable bool, err error)
-}
-
-// Querier is the read half of a pgx transaction, plus Begin, which on a
-// transaction opens a savepoint. A probe that has to install a tenant
-// search_path uses the savepoint to scope it. pgx.Tx satisfies it.
-type Querier interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
 // ProjectDefaultModelSeeder copies the platform default model into a new
 // project's vault (#6826). It is satisfied by
 // configurations.PlatformModelDefaultService.
@@ -226,11 +172,10 @@ type ProjectDefaultModelSeeder interface {
 
 // Provisioner runs the project-create pipeline.
 type Provisioner struct {
-	pool        *pgxpool.Pool
-	migrator    TenantMigrator
-	buckets     ArtifactBootstrapper
-	vault       ProjectVaultBootstrapper
-	vectorStore ProjectVectorStore
+	pool     *pgxpool.Pool
+	migrator TenantMigrator
+	buckets  ArtifactBootstrapper
+	vault    ProjectVaultBootstrapper
 	// commit ends the deciding transaction of a delete. Nil is tx.Commit; a test
 	// replaces it to simulate a commit that reports an error.
 	commit        func(context.Context, pgx.Tx) error
@@ -245,6 +190,12 @@ type Provisioner struct {
 	// pending vector step on a replica without a vector remover is closed as
 	// abandoned rather than left pending (application_data.go).
 	vectorCleanupAbandoned bool
+	// legacyVectorDatabases drops a deleted project's legacy PgVector database
+	// and role (WithLegacyVectorDatabases); legacyVectorDatabasesRetired is the
+	// operator's statement that their server is gone. See
+	// legacy_vector_database.go.
+	legacyVectorDatabases        LegacyVectorDatabases
+	legacyVectorDatabasesRetired bool
 
 	// lifecycle is the context whose end means the process is shutting down.
 	// The detached cleanup runs of a delete derive from it, so a shutdown
@@ -252,11 +203,8 @@ type Provisioner struct {
 	lifecycle context.Context
 	// inflight counts the detached cleanup runs (WaitForCleanups).
 	inflight sync.WaitGroup
-	// quietDropLimit is how many times a drop that fails for a store the
-	// project was never recorded as having is retried before the journal gives
-	// up on it. decisionLockTimeout and decisionStatementTimeout bound the
-	// deciding transaction of a delete.
-	quietDropLimit           int
+	// decisionLockTimeout and decisionStatementTimeout bound the deciding
+	// transaction of a delete.
 	decisionLockTimeout      time.Duration
 	decisionStatementTimeout time.Duration
 }
@@ -279,41 +227,15 @@ func WithProjectVault(vault ProjectVaultBootstrapper) Option {
 
 // WithDefaultModelSeeder supplies the platform default model seed (#6826).
 // Without it a new project stores no default and reads the platform default at
-// request time. A typed nil is treated as absent, for the reason
-// WithVectorStore gives.
+// request time. A typed nil is treated as absent (#377): a composition root
+// that assigns a nil concrete pointer into the interface hands over a value
+// that passes every `!= nil` check and then fails on a nil receiver.
 func WithDefaultModelSeeder(seeder ProjectDefaultModelSeeder) Option {
 	return func(p *Provisioner) {
 		if seeder == nil || cleanupjournal.IsNilPointer(seeder) {
 			return
 		}
 		p.defaultModels = seeder
-	}
-}
-
-// WithVectorStore supplies the project vector-store provisioner. Without it the
-// project_pgvector step is inert — see createProjectVectorStore.
-//
-// A TYPED NIL IS TREATED AS ABSENT (#377). A composition root that declares its
-// variable as the concrete pointer type and assigns it into this interface hands
-// over a value that is not nil as an interface and is nil as a pointer. Every
-// `!= nil` check upstream then passes, this option stores the collaborator, and
-// the project_pgvector step calls a nil receiver — which answers "project vector
-// store is not configured" and fails the WHOLE create pipeline, rolling a fully
-// built tenant back. Measured on the end-to-end stack: a deployment that
-// composes no Configurations runtime could not create a project at all, and the
-// operator read a 500.
-//
-// The composition root is corrected as well (cmd/elitea-main/main.go declares
-// the interface type), because passing a typed nil is the defect. This guard is
-// here because the constructor is public: the next caller cannot be made to read
-// that comment first, and the failure it produces names a step rather than the
-// wiring that caused it.
-func WithVectorStore(vectorStore ProjectVectorStore) Option {
-	return func(p *Provisioner) {
-		if cleanupjournal.IsNilPointer(vectorStore) {
-			return
-		}
-		p.vectorStore = vectorStore
 	}
 }
 
@@ -324,7 +246,6 @@ func New(pool *pgxpool.Pool, migrator TenantMigrator, logger *slog.Logger, optio
 	provisioner := &Provisioner{
 		pool: pool, migrator: migrator, logger: logger,
 		lifecycle:                context.Background(),
-		quietDropLimit:           DefaultQuietDropLimit,
 		decisionLockTimeout:      DefaultDecisionLockTimeout,
 		decisionStatementTimeout: DefaultDecisionStatementTimeout,
 	}
@@ -344,17 +265,6 @@ func WithLifecycleContext(ctx context.Context) Option {
 	return func(p *Provisioner) {
 		if ctx != nil {
 			p.lifecycle = ctx
-		}
-	}
-}
-
-// WithQuietDropLimit sets how many times a PgVector drop that fails for a store
-// the project was never recorded as having is attempted before the journal marks
-// the step done ("gave up"). Zero or negative keeps DefaultQuietDropLimit.
-func WithQuietDropLimit(limit int) Option {
-	return func(p *Provisioner) {
-		if limit > 0 {
-			p.quietDropLimit = limit
 		}
 	}
 }
@@ -433,9 +343,10 @@ func (p *Provisioner) Provision(ctx context.Context, request Request) (Result, e
 		result.Steps = append(result.Steps, status)
 	}
 
-	// The completion marker, written last and on its own. pylon sets
-	// create_success outside the step list too, for the same reason: it is not a
-	// provisioning action, it is the assertion that provisioning finished.
+	// The completion marker, written last and on its own. The legacy runtime
+	// sets create_success outside the step list too, for the same reason: it is
+	// not a provisioning action, it is the assertion that provisioning
+	// finished.
 	//
 	// If this write fails the tenant is fully built but unmarked, and every
 	// reader that filters on create_success would ignore it — a project that
@@ -472,15 +383,15 @@ func (p *Provisioner) markCreated(ctx context.Context, projectID int64) error {
 // surviving tenant. project_schema creates the schema and THEN applies the
 // corpus; when the corpus fails, the schema is already there while the step
 // reports failure. Compensating only the steps that reported success left that
-// schema behind, which the integration test caught. pylon appends each step to
-// its progress list BEFORE calling create for the same reason, so this matches
-// the reference as well as being correct. Every remove is written to tolerate a
-// step that never ran.
+// schema behind, which the integration test caught. The legacy runtime appends
+// each step to its progress list BEFORE calling create for the same reason, so
+// this matches the reference as well as being correct. Every remove is written
+// to tolerate a step that never ran.
 //
-// Unlike pylon's rollback loop — which has no per-step try/except, so the first
-// undo that raises aborts every remaining undo and discards the progress report
-// — every compensation here is isolated. One failing undo cannot strand the
-// rest.
+// Unlike the legacy rollback loop — which has no per-step try/except, so the
+// first undo that raises aborts every remaining undo and discards the progress
+// report — every compensation here is isolated. One failing undo cannot strand
+// the rest.
 //
 // THE SCHEMA DROP IS THE EXCEPTION, AND IT RUNS LAST (#374). Reverse order puts
 // project_schema before project_model, so the schema went first and the row
@@ -574,7 +485,7 @@ func (p *Provisioner) removeTenantSchemaWhenTheRowIsGone(
 	return status
 }
 
-// provisionState carries values between steps. It replaces pylon's mutable
+// provisionState carries values between steps. It replaces the legacy mutable
 // `context` kwargs bag, which is the source of two defects this port does not
 // reproduce: a step that returns a scalar instead of a dict silently fails to
 // populate the next step's argument, and a compensation invoked before its
@@ -601,9 +512,9 @@ func (s *provisionState) tenantSchema() string {
 
 // safeStepMessage is what the caller is told about a failed step.
 //
-// pylon puts `str(exception)` in the status `msg`, which crosses a trust
-// boundary with a raw database error in it. AGENTS.md forbids that, and the
-// cause is logged with the project id instead. The step NAME is the part a
+// The legacy runtime puts `str(exception)` in the status `msg`, which crosses a
+// trust boundary with a raw database error in it. AGENTS.md forbids that, and
+// the cause is logged with the project id instead. The step NAME is the part a
 // caller can act on, and it is preserved exactly.
 func safeStepMessage(step string) string {
 	return "step " + step + " did not complete"

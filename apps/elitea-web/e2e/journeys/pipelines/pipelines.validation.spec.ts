@@ -174,6 +174,11 @@ function nodeIssues(page: Page, nodeId: string): Locator {
 test('J16: an output naming an undeclared state key is named in the panel and never reaches the backend', async ({
   page,
 }) => {
+  // test.slow() (90 s, as the other create-edit-save-reload journeys in this
+  // folder): on a webkit CI leg with four workers this journey measured
+  // 30-35 s with no single slow call (every API read < 0.3 s), so the
+  // default 30 s budget cut it off mid-reload and it read as a hang.
+  test.slow();
   const name = `${AUTOTEST_PREFIX}adm-${Date.now() % 1e9}`;
   const id = await createPipeline(page, name);
 

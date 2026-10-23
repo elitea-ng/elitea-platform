@@ -1,0 +1,10 @@
+: fixture hitl-terminal.sse: a human-in-the-loop pause of the run itself is terminal for the stream
+
+id: 1
+event: execution.node_event
+data: {"type":"agent_start","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:00Z","response_metadata":{}}
+
+id: 2
+event: execution.node_event
+data: {"type":"agent_hitl_interrupt","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:01Z","content":"[approval prompt]","response_metadata":{"hitl_interrupts":[{"tool_name":"send_email"}],"metadata":{}}}
+

@@ -5,7 +5,7 @@ import type { PipelineInboundTrigger, PipelineSchedule } from '@/shared/api/gene
  * What the application-information panel says started, or will start, this
  * pipeline.
  *
- * NOTE(#899): this was a read of pylon's deleted
+ * NOTE(#899): this was a read of the legacy runtime's deleted
  * `/elitea_core/pipeline_trigger/...` route, which answered one row carrying a
  * `type` discriminator and a schedule/webhook blob. The Go backend has no
  * trigger-type column — it serves a cron schedule and an inbound trigger

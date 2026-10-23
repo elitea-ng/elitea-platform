@@ -136,7 +136,9 @@ async fn harness(memory_model: Option<&str>, refuse: Option<StatusCode>) -> Harn
             Duration::from_secs(5),
         ),
         removal: None,
-        platform_origin: "https://platform.internal".to_owned(),
+        platform_artifacts: elitea_platform_rpc::artifacts::ArtifactClient::new(
+            tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy(),
+        ),
         allowlist: elitea_connectors::egress::HostAllowlist::parse(Some("*")),
         extractor: None,
         transport: Arc::new(
@@ -289,7 +291,7 @@ async fn the_four_tools_work_end_to_end_with_the_deployments_model() {
 
     // Every embedding used the deployment's memory model, nothing else.
     let models = harness.gateway.models.lock().expect("models").clone();
-    assert!(!models.is_empty());
+    assert_ne!(models, [] as [String; 0]);
     assert!(
         models.iter().all(|model| model == MEMORY_MODEL),
         "{models:?}"

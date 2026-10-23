@@ -17,10 +17,11 @@ services:
       # one durable); the native worker serves them from this change on.
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
-      # The registry, not the per-project pgvector index_meta rows, holds
-      # index metadata (ADR-0031 V1); nothing is migrated, indexes created
-      # under the Python path are not visible here, and new projects get no
-      # project_pgvector database.
+      # The registry holds index metadata (ADR-0031 V1) and the vectors are in
+      # Qdrant behind elitea-vector. Nothing is migrated from the legacy
+      # Python path (its per-project index_meta rows and project databases):
+      # indexes created there are not visible here, and new projects get no
+      # per-project vector database.
       ELITEA_INDEXING_RUNTIME: "rust"
 
   elitea-worker:
@@ -35,18 +36,16 @@ services:
       - --toolkit-security-config
       - /run/elitea/toolkit-security.json
     environment:
-      ELITEA_DISABLE_SYSTEM_CA: !reset null
-      REQUESTS_CA_BUNDLE: !reset null
       ELITEA_SENSITIVE_TOOLS: !reset null
 
-      # TLS trust for the REMOTE MCP client, and for nothing else.
+      # TLS trust for the OUTBOUND clients — the remote MCP client and the
+      # toolkits — and for nothing internal.
       #
-      # The Python worker points this at the runtime CA alone. The Rust worker
-      # cannot: every internal destination it dials — control, output, content,
+      # Every internal destination the worker dials — control, output, content,
       # the model gateway — is handed the runtime CA EXPLICITLY in code
       # (src/security.rs:136 `private_ca()`, fanned out at src/bootstrap.rs:122-142),
-      # so the process-wide trust store governs exactly one client, the MCP one.
-      # That client is `reqwest-mcp` (reqwest 0.13 with the `rustls` feature),
+      # so the process-wide trust store governs only the outbound clients. The
+      # MCP one is `reqwest-mcp` (reqwest 0.13 with the `rustls` feature),
       # which resolves to `rustls-platform-verifier` → `rustls-native-certs`
       # → `SSL_CERT_FILE` on Linux.
       #
@@ -54,7 +53,8 @@ services:
       # REPLACES the platform trust store rather than adding to it
       # (rustls-native-certs-0.8.4/src/lib.rs:50-57), and pointing it at a
       # single self-signed certificate would strip the public roots that the
-      # reqwest-0.12 toolkit families (github, slack, …) verify against.
+      # reqwest-0.12 toolkit families (github, slack, …) verify against. Those
+      # roots are why a toolkit calling api.github.com works here (#1203).
       #
       # Left unset — as it was before the MCP journey — the worker falls back
       # to the distroless image's own `SSL_CERT_FILE`, mcp-mock's certificate
@@ -68,8 +68,7 @@ services:
     volumes:
       # Same deployment as ./runtime/worker-runtime.json plus the Rust-only
       # `agent_node_recovery` journal, which effectful pipeline direct tool nodes
-      # require. The Python worker forbids unknown keys, so the shared file stays
-      # without it. Keep the two files identical apart from that key.
+      # require. Keep the two files identical apart from that key.
       - ./runtime/worker-runtime.rust.json:/run/elitea/runtime.json:ro
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_mcp_mock_trust:/run/elitea-mcp-trust:ro

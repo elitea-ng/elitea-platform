@@ -114,9 +114,8 @@
 // (internal/application/scheduling), which already leases occurrences across
 // replicas and already carries one tenant-facing recurring job —
 // `index.schedule.scan.v1`. That is the direction the platform has already
-// taken: services/elitea-scheduler/RETIREMENT.md records that the daemon's
-// `index_scheduling` row is DISABLED in the hybrid deployment in favour of
-// elitea-main's own scan.
+// taken: elitea-main's own `index.schedule.scan.v1` replaced the daemon's
+// `index_scheduling` row.
 //
 // What moved with it, so nothing is lost:
 //

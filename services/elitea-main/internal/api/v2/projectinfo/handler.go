@@ -148,8 +148,7 @@ func NewCurrentProjectInfoRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentProjectInfoRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentProjectInfoRoute
 	}
 

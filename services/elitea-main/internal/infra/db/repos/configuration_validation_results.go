@@ -786,7 +786,7 @@ WHERE event_id = $1`, eventID)
 
 // persistCurrentIndexMetaTerminalIntent records only lightweight PostgreSQL
 // work for the standalone reconciler. It deliberately performs no secret
-// redemption, PgVector connection, or external metadata write.
+// redemption, vector-store call, or external metadata write.
 func persistCurrentIndexMetaTerminalIntent(
 	ctx context.Context,
 	tx sqlExecutor,

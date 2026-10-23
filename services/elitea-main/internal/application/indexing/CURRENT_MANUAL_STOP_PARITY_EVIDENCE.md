@@ -1,5 +1,14 @@
 # Current manual Stop cleanup parity evidence
 
+> **Superseded in part (#1359).** The "Go target" PgVector half below is gone
+> with the per-project PgVector store. The cleanup intent (migration `0048`)
+> and its reconciler remain, but the effect is now
+> `indexing.RegistryManualStopCleaner`: it verifies that the index registry row
+> is cancelled for exactly the stopped run and deletes nothing, because the
+> registry's vectors belong to the index namespace in elitea-vector and a
+> reindex is incremental (ADR-0030 decision 3). This document is kept as the
+> record of the PgVector-era contract.
+
 This slice preserves the current application distinction between explicit
 index Stop and system/dependency cancellation. It does not redefine the index
 deletion API.

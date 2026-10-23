@@ -57,6 +57,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
@@ -100,10 +101,6 @@ func (gatePermissions) ResolvePermissions(context.Context, auth.User, string, st
 func (gatePermissions) ResolveMembershipPermissions(context.Context, auth.User, string) (auth.PermissionResolution, error) {
 	return auth.PermissionResolution{}, nil
 }
-
-type gatePeerVerifier struct{}
-
-func (gatePeerVerifier) VerifyForwardedIdentityPeer(*http.Request) error { return http.ErrNoCookie }
 
 // outsideTheGroupByDesign are /api/v2 surfaces deliberately mounted outside
 // the API group. They are exempt from EVERY check here.
@@ -175,9 +172,9 @@ func apiRoutesUnderTest(t *testing.T, router chi.Router) (all, gated []gatedAPIR
 func gatesRouterConfig(t *testing.T) RouterConfig {
 	t.Helper()
 	group := apimw.AuthConfig{
-		Validator:                 gateValidator{},
-		PrincipalValidator:        testPrincipalValidator{},
-		ForwardedIdentityVerifier: gatePeerVerifier{},
+		Validator:          gateValidator{},
+		PrincipalValidator: testPrincipalValidator{},
+		FormSessions:       authtest.FormSessions{},
 	}
 	permissions := gatePermissions{}
 	reached := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -189,7 +186,7 @@ func gatesRouterConfig(t *testing.T) RouterConfig {
 	cfg := fullSurfaceRouterConfig(t)
 	cfg.AuthValidator = group.Validator
 	cfg.PrincipalValidator = group.PrincipalValidator
-	cfg.Auth.ForwardedIdentityVerifier = group.ForwardedIdentityVerifier
+	cfg.Auth.FormSessions = group.FormSessions
 
 	policy := platformconfig.DefaultNativeClientPolicy()
 	policy.MinClientVersion = "1.0.0"
@@ -216,7 +213,7 @@ func gatesRouterConfig(t *testing.T) RouterConfig {
 		}
 	}
 	var err error
-	cfg.ProductionRuntime, err = NewProductionRuntimeRoutes(reached, reached, group.PrincipalValidator, group.ForwardedIdentityVerifier, group)
+	cfg.ProductionRuntime, err = NewProductionRuntimeRoutes(reached, reached, group.PrincipalValidator, group)
 	must(err)
 	cfg.CurrentProjectList, err = v2projects.NewCurrentProjectListRoute(
 		struct {
@@ -303,7 +300,7 @@ func gateFacadeConfig(t *testing.T) facade.Config {
 	certificate := write("client.pem", "CERTIFICATE", der)
 	return facade.Config{
 		Enabled:        true,
-		BaseURL:        "https://gates.internal:1",
+		Target:         "gates.internal:1",
 		ClientCertFile: certificate,
 		ClientKeyFile:  write("client-key.pem", "EC PRIVATE KEY", keyDER),
 		CAFile:         certificate,

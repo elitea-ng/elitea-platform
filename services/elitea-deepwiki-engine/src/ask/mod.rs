@@ -204,6 +204,9 @@ pub struct QueryDeps {
     pub embedding_options: EmbeddingOptions,
     pub limits: Limits,
     pub clock: Clock,
+    /// elitea-vector, with the invocation's bearer: the dense branch.
+    /// `None` answers lexically.
+    pub dense: Option<crate::storage::dense::DenseIndex>,
 }
 
 /// The parsed arguments of `ask` / `deep_research`.
@@ -735,7 +738,8 @@ pub async fn run_tool(
             deps.pool.clone(),
             crate::storage::WikiKey::new(project, request.wiki_id.clone()),
         )
-        .expecting_embedding_model(embedding_model),
+        .expecting_embedding_model(embedding_model)
+        .with_dense(deps.dense.clone()),
     );
     run_agent(&spec, &request, &client, &store, &embedder, context).await
 }

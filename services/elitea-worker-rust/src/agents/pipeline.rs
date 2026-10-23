@@ -466,7 +466,6 @@ impl PipelineNativeAgentAssembler {
         self
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_mcp_connector(mut self, connector: Arc<dyn McpConnector>) -> Self {
         self.mcp_connector = connector;

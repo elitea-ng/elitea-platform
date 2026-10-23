@@ -26,7 +26,7 @@
     ]
   },
   "repo_identifier": "acme/notes-service:main:0000000",
-  "chunker": "conformance/tools/record_retrieval.py::chunk_corpus (NOT the legacy tree-sitter pipeline — chunker parity is out of P0 scope; this chunk set is the frozen input)",
+  "chunker": "chunk_corpus in the retired one-off recorder (conformance/provider/tools/record_retrieval.py, removed; see the README) (NOT the legacy tree-sitter pipeline — chunker parity is out of P0 scope; this chunk set is the frozen input)",
   "node_count": 20,
   "nodes": [
     {

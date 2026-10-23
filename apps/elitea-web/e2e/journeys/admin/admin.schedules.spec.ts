@@ -27,9 +27,6 @@
  *  - `rpc_func` is asserted to be READ-ONLY. It names an internal platform RPC
  *    that runs unattended with full privilege and no caller identity, so the
  *    absence of an editor for it is a security property, not a layout detail.
- *  - The Tasks and Active Tasks tabs are asserted to state a REASON. They have
- *    no backend — they are Pylon/Arbiter runtime introspection — and an empty
- *    table there would read as "nothing is running".
  *
  * The journey restores what it changed, so it is re-runnable against a stack
  * that was not re-seeded.
@@ -213,23 +210,6 @@ adminTest('J33d: the server refuses a cron its own scheduler could not run', asy
   await expect(
     page.getByRole('row').filter({ hasText: SEEDED_SCHEDULE }).getByText(SEEDED_CRON),
   ).toBeVisible();
-});
-
-adminTest('J33e: the tabs with no backend say so instead of showing an empty list', async ({ page }, testInfo) => {
-  await openSchedules(page, seededSchedule(testInfo.project.name));
-
-  for (const tab of ['Tasks', 'Active Tasks']) {
-    await page.getByRole('tab', { name: tab, exact: true }).click();
-    const notice = page.getByTestId('admin-task-nodes-unavailable');
-    await expect(notice).toBeVisible();
-    // The reason names the system, so an operator can tell "this platform
-    // cannot see them" from "there are none". An empty table would say the
-    // second when the truth is the first.
-    await expect(notice).toContainText('Pylon plugin runtime');
-    await expect(page.getByRole('table')).toHaveCount(0);
-  }
-
-  await checkA11y(page);
 });
 
 /** Reads the seeded schedule's real id out of the listing the page just fetched. */

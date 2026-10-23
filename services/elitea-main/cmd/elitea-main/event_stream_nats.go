@@ -15,6 +15,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 
 	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
@@ -245,4 +246,50 @@ func newCanvasPresenceStore(ctx context.Context, conn *nats.Conn) (*v2canvaspres
 		store.Resync()
 	})
 	return store, nil
+}
+
+// composePlatformMCPReplays is the platform MCP replay store elitea-main
+// runs with, or a nil interface (never a typed nil) when there is none.
+//
+// The store is an optional dependency: only platform MCP tools of desktop
+// local turns need it, so a missing live-update NATS, a bucket the
+// nats-bootstrap Job has not created yet, or one with settings the replay
+// window cannot rest on (newPlatformMCPReplayStore's checks) does not stop
+// startup. It is logged at error level, naming the Job, and every platform
+// call then answers 501 remote_toolkit_unavailable: the call never runs
+// without the shared store. Restart elitea-main after the Job has run.
+func composePlatformMCPReplays(ctx context.Context, conn *nats.Conn, logger *slog.Logger) desktopopsapi.PlatformReplayStore {
+	if conn == nil {
+		logger.Warn("platform MCP tools of local turns are disabled: " + eventsNATSURLEnv +
+			" is unset, so there is no shared Idempotency-Key store (executeRemoteToolkitTool answers 501 for toolkit id 0)")
+		return nil
+	}
+	store, err := newPlatformMCPReplayStore(ctx, conn)
+	if err != nil {
+		logger.Error("platform MCP tools of local turns are disabled: the platform MCP replay store could not be bound; "+
+			"run the nats-bootstrap Job (deploy/helm/elitea natsBootstrap; in compose, the nats-bootstrap service), which creates and configures KV bucket "+
+			desktopopsapi.PlatformReplayBucket+", then restart elitea-main (until then executeRemoteToolkitTool answers 501 for toolkit id 0)",
+			"bucket", desktopopsapi.PlatformReplayBucket, "err", err)
+		return nil
+	}
+	return store
+}
+
+// newPlatformMCPReplayStore binds the platform MCP replay bucket on the
+// live-update connection (issue 1231): every replica claims a platform call's
+// Idempotency-Key there before running it, so a retry that lands on another
+// replica never runs a write twice. Like the presence bucket it is the
+// nats-bootstrap Job's (#1076); unlike presence, a missing one degrades
+// (composePlatformMCPReplays) instead of stopping startup.
+func newPlatformMCPReplayStore(ctx context.Context, conn *nats.Conn) (*desktopopsapi.NATSPlatformReplays, error) {
+	if conn == nil {
+		return nil, errors.New("a NATS connection is required")
+	}
+	js, err := jetstream.New(conn)
+	if err != nil {
+		return nil, fmt.Errorf("open JetStream: %w", err)
+	}
+	bindCtx, cancel := context.WithTimeout(ctx, eventsNATSConnectTimeout)
+	defer cancel()
+	return desktopopsapi.NewNATSPlatformReplays(bindCtx, js, desktopopsapi.PlatformReplayBucket)
 }

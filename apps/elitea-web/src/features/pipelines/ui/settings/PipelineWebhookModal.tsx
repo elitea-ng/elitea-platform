@@ -36,7 +36,7 @@ import {
  *
  * THE TYPE SELECTOR IS BACK (#970), AND GITLAB IS BACK IN IT (legacy issue
  * 6664). The baseline offered GitHub / GitLab / Custom, each naming a
- * different signature header, because pylon's endpoint verified all three.
+ * different signature header, because the legacy endpoint verified all three.
  * When this dialog was rebuilt the Go route verified ONE credential — a bearer
  * secret in one of three carriers — so the group was removed rather than left
  * selecting something the backend ignored. The route now carries a

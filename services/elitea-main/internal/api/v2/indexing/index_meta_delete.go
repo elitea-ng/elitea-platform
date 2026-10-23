@@ -28,8 +28,6 @@ type CurrentIndexMetaDeleter interface {
 	Delete(context.Context, indexmetaapp.DeleteRequest) error
 }
 
-var _ CurrentIndexMetaDeleter = (*indexmetaapp.DeleteService)(nil)
-
 // CurrentIndexMetaDeleteRoute remains source-only until independent review
 // composes it. Auth and project RBAC always run before the application service.
 type CurrentIndexMetaDeleteRoute struct {
@@ -41,8 +39,7 @@ func NewCurrentIndexMetaDeleteRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexMetaDeleteRoute, error) {
-	if deleter == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if deleter == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexMetaDeleteRoute
 	}
 
@@ -158,16 +155,10 @@ func writeCurrentIndexMetaDeleteError(
 			"ok":    false,
 			"error": "Toolkit id is missing for toolkit None",
 		})
-	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaConnectionMissing):
-		writeJSON(writer, http.StatusBadRequest, map[string]any{
-			"ok": false,
-			"error": "Connection string is missing in PGVector configuration for toolkit " +
-				strconv.FormatInt(toolkitID, 10),
-		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaTargetMissing):
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
 			"ok": false,
-			"error": "PGVector configuration is missing for toolkit " +
+			"error": "Index storage is not available for toolkit " +
 				strconv.FormatInt(toolkitID, 10),
 		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaNotFound):

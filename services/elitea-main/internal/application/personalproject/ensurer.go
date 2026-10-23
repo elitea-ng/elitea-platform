@@ -4,10 +4,10 @@
 // THE DEFECT IT CLOSES. `GET /social/author` answers `personal_project_id`, and
 // internal/api/v2/social/handler.go's resolvePersonalProjectID said so in its
 // own doc comment: "this Go stack never PROVISIONS a `project_user_<uid>`
-// project, so branch 1 only ever fires for data migrated from pylon". On a
-// deployment with no pylon data behind it — every fresh install — that value is
-// therefore `""` for every account, forever. The SPA reads it as "no personal
-// project yet" and sends the browser to `/onboarding`
+// project, so branch 1 only ever fires for data migrated from the legacy
+// runtime". On a deployment with no legacy data behind it — every fresh install
+// — that value is therefore `""` for every account, forever. The SPA reads it
+// as "no personal project yet" and sends the browser to `/onboarding`
 // (apps/elitea-web/src/routes/-guards/indexRoute.ts), which waits for a project
 // that nothing was ever going to create. Every new user was stuck on that
 // screen.
@@ -15,12 +15,12 @@
 // THE REFERENCE is legacy/plugins/projects: `create_personal_project`
 // (rpc/poc.py:64) names the project `project_user_<uid>` and provisions it
 // through the same create-project pipeline an ordinary project uses, and
-// methods/private_projects.py runs it OFF the request path — pylon's auth layer
-// fires an `auth_visitor` event for every authenticated request, the projects
-// plugin queues the visitor, and a background thread provisions the project
-// while the SPA polls `/social/author` every five seconds until the id appears.
-// The onboarding screen's "Configuring Personal project… about 5 min" is that
-// wait.
+// methods/private_projects.py runs it OFF the request path — the legacy auth
+// layer fires an `auth_visitor` event for every authenticated request, the
+// projects plugin queues the visitor, and a background thread provisions the
+// project while the SPA polls `/social/author` every five seconds until the id
+// appears. The onboarding screen's "Configuring Personal project… about 5 min"
+// is that wait.
 //
 // WHAT IS PORTED, AND WHAT IS NOT.
 //
@@ -32,15 +32,15 @@
 //     advisory lock instead, which the single-process reference did not need
 //     and a multi-replica deployment does. Ensure is deduplicated per user
 //     inside the process on top of both.
-//   - pylon's `plugins=('configuration', 'models')` is kept verbatim. Nothing
-//     in this service reads centry.project.plugins — it is echoed back by the
-//     project listings and nothing else — so the value is parity rather than
-//     behaviour. It is what a pylon-created personal project carries.
-//   - pylon grants the owner `editor`, `viewer` and `monitor` on their own
-//     project. This grants `admin`, which is what projectprovisioning already
-//     gives the maker of any project whose request names no administrator
-//     (steps.go's ownerProjectRole). A personal project's owner is the only
-//     person who can administer it, and `monitor` no longer exists
+//   - the legacy `plugins=('configuration', 'models')` is kept verbatim.
+//     Nothing in this service reads centry.project.plugins — it is echoed back
+//     by the project listings and nothing else — so the value is parity rather
+//     than behaviour. It is what a legacy-created personal project carries.
+//   - the legacy runtime grants the owner `editor`, `viewer` and `monitor` on
+//     their own project. This grants `admin`, which is what projectprovisioning
+//     already gives the maker of any project whose request names no
+//     administrator (steps.go's ownerProjectRole). A personal project's owner
+//     is the only person who can administer it, and `monitor` no longer exists
 //     (auth_core's 202602231400_remove_monitor_role migration).
 package personalproject
 
@@ -68,7 +68,7 @@ import (
 //
 // Deprovision is part of it on purpose. See Ensure's repair branch: a project
 // row left behind with `create_success = false` is a personal project its owner
-// can never be given, and pylon's own `fix_create_personal_projects` repairs
+// can never be given, and the legacy `fix_create_personal_projects` repairs
 // exactly that state by deleting and recreating.
 type Provisioner interface {
 	Provision(ctx context.Context, request projectprovisioning.Request) (projectprovisioning.Result, error)
@@ -87,7 +87,7 @@ type AsyncEnsurer interface {
 	EnsureAsync(userID int64)
 }
 
-// NamePrefix is pylon's PROJECT_PERSONAL_NAME_TEMPLATE
+// NamePrefix is the legacy PROJECT_PERSONAL_NAME_TEMPLATE
 // (legacy/plugins/projects/constants.py:13) without its id.
 //
 // IT IS EXPORTED BECAUSE THE WRITER AND THE READERS MUST AGREE. This package
@@ -104,12 +104,12 @@ func Name(userID int64) string {
 	return NamePrefix + strconv.FormatInt(userID, 10)
 }
 
-// personalProjectPlugins is pylon's create_personal_project default
+// personalProjectPlugins is the legacy create_personal_project default
 // (legacy/plugins/projects/rpc/poc.py:64). See the package comment.
 var personalProjectPlugins = []string{"configuration", "models"}
 
-// systemUserEmail matches the per-project system identity pylon creates for
-// every project (`system_user_<n>@centry.user`,
+// systemUserEmail matches the per-project system identity the legacy runtime
+// creates for every project (`system_user_<n>@centry.user`,
 // legacy/plugins/projects/constants.py:11). Those accounts already resolve a
 // personal project id — it is the second branch of resolvePersonalProjectID —
 // and giving one a project of its own would create a project per project.
@@ -142,7 +142,7 @@ const advisoryLockClass = 0x454C5041 // "ELPA"
 // their locks and then block forever waiting for a connection to do the work
 // with — starving the whole API until the timeout fired.
 //
-// One, matching the reference: pylon's private_projects.py runs a SINGLE
+// One, matching the reference: the legacy private_projects.py runs a SINGLE
 // worker thread over a visitor queue. Waiting is free here, because nothing is
 // waiting on the result — the SPA polls.
 const maxConcurrentProvisions = 1
@@ -161,8 +161,8 @@ const maxConcurrentProvisions = 1
 //
 // THE BOUND IS KEPT AND THE OUTCOME IS CHANGED. The reference this package
 // ports is a QUEUE with one worker thread, not a one-deep budget with a bin
-// beside it; pylon's private_projects.py enqueues every visitor and the single
-// worker drains it. So this queue is the same shape: at most
+// beside it; the legacy private_projects.py enqueues every visitor and the
+// single worker drains it. So this queue is the same shape: at most
 // maxConcurrentProvisions attempts run at once, the rest wait in arrival order,
 // and no goroutine is created for a waiting entry — the running worker picks up
 // the next entry itself when its own attempt ends. A burst of fifty first
@@ -612,8 +612,8 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 	// A row this caller OWNS that provisioning never finished.
 	// projectprovisioning compensates its own failures, so reaching this state
 	// means the compensation itself failed, or the process died mid-flight.
-	// pylon repairs it the same way (fix_create_personal_projects: delete then
-	// create).
+	// The legacy runtime repairs it the same way (fix_create_personal_projects:
+	// delete then create).
 	//
 	// The ownership test is the guard, not decoration: `centry.project.name` is
 	// caller-supplied free text on `POST /projects` and carries no unique
@@ -638,7 +638,7 @@ func (e *Ensurer) ensureLocked(ctx context.Context, userID int64, accountKey int
 			//
 			// It also does not wait for the cleanup: the decision (the row and
 			// every credential) is committed when Deprovision returns, and the
-			// artifact bytes, the schema and the PgVector database are the
+			// artifact bytes, the schema and the application data are the
 			// journal's, which the reconciler finishes. A login must not wait on
 			// an object store or a vector server.
 			if _, err := e.provisioner.Deprovision(ctx, candidate.id,
@@ -763,7 +763,7 @@ func candidateIDs(candidates []existingCandidate) string {
 // eligible reports whether this account is one that should own a personal
 // project.
 //
-// Three accounts are excluded, and each exclusion is pylon's:
+// Three accounts are excluded, and each exclusion is the legacy runtime's:
 //
 //   - one that does not exist. Nothing to own a project.
 //   - a suspended one. Every other provisioning path in this service refuses a

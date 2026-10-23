@@ -38,7 +38,7 @@ type Repository interface {
 // THE LEGACY MATRIX HAS NO ENTRY FOR THIS SURFACE, so these are a proposal
 // rather than a transcription, and the reason is recorded here.
 //
-// There is no pylon `webhooks` plugin. The reference's only webhook module is
+// There is no legacy `webhooks` plugin. The reference's only webhook module is
 // elitea_core's INBOUND pipeline trigger (api/v2/webhook.py, api/v2/
 // pipeline_trigger.py), which hangs a signature secret off an application
 // VERSION and gates on `models.applications.version.details` / `.update`. This

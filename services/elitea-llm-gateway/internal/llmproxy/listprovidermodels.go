@@ -156,6 +156,13 @@ func (h *Handler) ListProviderModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if fe := h.admitProbeAuthMode(r, &req); fe != nil {
+		writeJSON(w, http.StatusOK, listProviderModelsResponse{
+			Reason: fe.reason, Detail: fe.detail, Models: []string{},
+		})
+		return
+	}
+
 	// Resolve every host BEFORE anything is dialled, from the checker's own
 	// function, so a payload that cannot name a legitimate destination is
 	// refused with the offending FIELD named and no value echoed.
@@ -205,6 +212,12 @@ func (h *Handler) ListProviderModels(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), checkConnectionProbeTimeout)
 	defer cancel()
 
+	if fe := h.mintProbeToken(ctx, &req); fe != nil {
+		writeJSON(w, http.StatusOK, listProviderModelsResponse{
+			Reason: fe.reason, Detail: fe.detail, Models: []string{},
+		})
+		return
+	}
 	ids, err := lister(ctx, client, req)
 	if err != nil {
 		reason, detail := classifyListProviderModelsError(err)
@@ -393,12 +406,8 @@ func listAzureDeployments(ctx context.Context, client *http.Client, req checkCon
 	}
 	target := checkConnectionJoinURL(req.APIBase, "/openai/deployments") +
 		"?api-version=" + url.QueryEscape(apiVersion)
-	headers := map[string]string{}
-	if req.APIKey != "" {
-		headers["api-key"] = req.APIKey
-	}
 	var listing openAIModelListing
-	if err := listProviderModelsGET(ctx, client, target, headers, &listing); err != nil {
+	if err := listProviderModelsGET(ctx, client, target, azureAuthHeaders(req), &listing); err != nil {
 		return nil, err
 	}
 	return listing.ids(), nil

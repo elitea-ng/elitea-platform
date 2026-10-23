@@ -63,7 +63,7 @@ const STANDARD_ROWS: MatrixRow[] = [
   { name: 'models.alpha.view', system: true, admin: true, editor: true, viewer: false },
 ];
 
-/** `SUPPORT_PROJECT_ID` unset — pylon and roles.go both answer 404 with this. */
+/** `SUPPORT_PROJECT_ID` unset — the legacy API and roles.go both 404 with this. */
 const SUPPORT_UNAVAILABLE = 'project not configured: set SUPPORT_PROJECT_ID';
 
 function matrixBody(rows: MatrixRow[]): { rows: MatrixRow[]; total: number } {

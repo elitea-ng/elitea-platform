@@ -9,23 +9,25 @@
  *
  * ## What this page configures, and where that lives
  *
- * The reference page is not a form over a settings table. pylon has no settings
- * table. Every pylon announces its loaded plugins every 15 seconds over the
- * Arbiter bus — including each plugin's parsed config, its raw YAML and an
- * `admin_schema.json` — and the admin plugin keeps the last announcement of each
- * in an in-process dict with a 60-second freshness cut-off. The page reads that
- * dict; saving re-serialises the affected plugin's whole YAML and fires
- * `bootstrap_runtime_update` fire-and-forget, and a handler on the target pylon
- * writes the bytes into THAT pylon's `plugin_config` table and reloads the
- * descriptor (legacy/plugins/admin/api/v2/plugin_config_values.py).
+ * The reference page is not a form over a settings table. The legacy runtime
+ * has no settings table. Every legacy runtime instance announces its loaded
+ * plugins every 15 seconds over the Arbiter bus — including each plugin's
+ * parsed config, its raw YAML and an `admin_schema.json` — and the admin plugin
+ * keeps the last announcement of each in an in-process dict with a 60-second
+ * freshness cut-off. The page reads that dict; saving re-serialises the
+ * affected plugin's whole YAML and fires `bootstrap_runtime_update`
+ * fire-and-forget, and a handler on the target instance writes the bytes into
+ * THAT instance's `plugin_config` table and reloads the descriptor
+ * (legacy/plugins/admin/api/v2/plugin_config_values.py).
  *
- * That is Pylon plugin loading over Arbiter transport, which AGENTS.md names
- * explicitly as things the target architecture does NOT preserve. So the
+ * That is legacy-runtime plugin loading over Arbiter transport, which AGENTS.md
+ * names explicitly as things the target architecture does NOT preserve. So the
  * sections divide, and the division is declared BY THE SERVER — every section
  * carries an `unavailable_reason` or none, and the value endpoints answer 501
  * with that same string. This page renders what it is told; it does not decide.
  *
- *   - **LLM Proxy** — Pylon plugin configuration. Unavailable, with the reason.
+ *   - **LLM Proxy** — legacy-runtime plugin configuration. Unavailable, with
+ *     the reason.
  *   - **Guardrails** — live, and the first section that left the list above. Its
  *     fields address `toolkit_security.*` like a plugin's, but the test was
  *     never "the path looks like a plugin's": it is "does anything here read
@@ -57,17 +59,17 @@
  *     corpus is a list of scoped rows and this page is a flat form over one
  *     value document — the row editor is the only shape that can express it.
  *   - **Maintenance** — LIVE, and ENFORCED. It was withheld because the switch
- *     "would toggle a setting nothing enforces": pylon's maintenance mode was a
- *     request hook on a plugin runtime, and this service installs no hooks.
+ *     "would toggle a setting nothing enforces": the legacy maintenance mode
+ *     was a request hook on a plugin runtime, and this service installs no hooks.
  *     elitea-main's Maintenance middleware is the port — 503 for every caller
  *     without administration access, the admin surface and the auth routes
  *     exempt so the window stays reversible from inside itself.
- *   - **Advanced** — GONE, not unavailable. Its subject is Pylon plugin
- *     loading, which the target architecture removes on purpose, so there was
- *     nothing to wait for. A withheld section is a promise that the capability
- *     is coming; this was the one section that could never keep it, and a
- *     permanent row saying "not available here" spends an operator's attention
- *     on a control that will never exist.
+ *   - **Advanced** — GONE, not unavailable. Its subject is legacy-runtime
+ *     plugin loading, which the target architecture removes on purpose, so
+ *     there was nothing to wait for. A withheld section is a promise that the
+ *     capability is coming; this was the one section that could never keep it,
+ *     and a permanent row saying "not available here" spends an operator's
+ *     attention on a control that will never exist.
  *   - **Observability, Runtime, Admin Panel** — GONE too, and for the same
  *     reason as Advanced: every field in the three addressed a per-process
  *     environment variable, a deployment-mounted YAML file, or a table this
@@ -108,16 +110,16 @@
  *
  * ## What is deliberately absent
  *
- * The reference's **restart bar**. `requires_restart` names the pylons whose
- * plugins must reload; there are none, `plugin_config_restart` answers 501, and
- * the one writable section declares no field carrying the flag. A reload button
+ * The reference's **restart bar**. `requires_restart` names the runtimes whose
+ * plugins must reload; there are none, no reload route exists, and the one
+ * writable section declares no field carrying the flag. A reload button
  * with nothing behind it is the control this unit exists to remove.
  *
  * ## Authorisation
  *
  * `window.admin_ui_config.permissions` is presentation state and never a gate —
  * see `./adminUiConfig`. Every route here is gated server-side on
- * `runtime.plugins`, the permission every pylon handler in this set declares,
+ * `runtime.plugins`, the permission every legacy handler in this set declares,
  * and sections carrying a `required_permission` are checked again inside the
  * handler because that permission depends on the section.
  */

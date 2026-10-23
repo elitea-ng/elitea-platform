@@ -90,6 +90,12 @@ func (r *CurrentModelsRepository) List(
 	if err := validateCurrentModelRepositoryRequest(ctx, projectID, section); err != nil {
 		return nil, err
 	}
+	// The vector storage section held `pgvector` rows only, and that type is
+	// retired (application/configurations/retired.go): a stored row is kept
+	// but never offered, so the section's catalogue is always empty.
+	if section == configurationapp.CurrentModelSectionVectorStorage {
+		return []configurationapp.CurrentModelCatalogItem{}, nil
+	}
 
 	rows := []sqlcgen.ListCurrentModelConfigurationsRow{}
 	err := r.projects.WithinProjectTx(ctx, int64(projectID), pgx.TxOptions{

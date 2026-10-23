@@ -198,9 +198,9 @@ func toolkitSettingsFieldErrors(violations []configurationapp.CurrentToolkitSett
 // set at all (internal/auth/types.go). Every production authentication path sets
 // it to a positive numeric id, including both token paths:
 //
-//   - the edge's forwarded identity sets UserID from X-Auth-ID for
-//     `X-Auth-Type: user` and from X-Auth-User-ID for `X-Auth-Type: token`
-//     (internal/api/middleware/auth.go's tryTraefikHeaders);
+//   - a Form session sets ID and UserID to the session's user, which the
+//     Form service has already reloaded as an active positive id
+//     (internal/api/browserauth/form_session.go);
 //   - direct PAT validation sets ID, UserID and TokenID from the token row, and
 //     refuses the row outright unless both ids are positive
 //     (internal/infra/authsvc/local_validator.go);
@@ -216,13 +216,12 @@ func toolkitSettingsFieldErrors(violations []configurationapp.CurrentToolkitSett
 // gate genuinely has nothing to resolve against: no auth.User in the request
 // context at all, an id outside int32, and a projectID that is not a positive
 // tenant-shaped integer. The (0,false) arm of OwningUserID needs an auth.User
-// that is a token AND has no UserID, and the one writer that could produce it
-// is the Pylon Redis RPC client (internal/infra/authsvc/rpc.go), which copies
-// user_id straight from the response without checking it — and which has no
-// non-test caller (the same latency internal/api/middleware/project.go's
-// project-by-name note records). A hybrid deployment that composes that client
-// would make the arm live, and the skip is what keeps it from validating
-// against the wrong user when it does.
+// that is a token AND has no UserID. The one writer that could produce it was
+// the legacy Redis RPC client, which copied user_id straight from the response
+// without checking it and has since been deleted (the same history
+// internal/api/middleware/project.go's project-by-name note records). The skip
+// keeps any later writer of such a user from validating against the wrong
+// user.
 //
 // Substituting the "1" that Create defaults userID to would validate against
 // USER 1's credential visibility instead of the caller's, which is worse than
@@ -431,10 +430,10 @@ func (h *Handler) answerToolkitSettingsFailure(
 // NO LEGITIMATE ROUND TRIP CARRIES IT, so this refuses nothing a normal edit
 // does. ReferenceMode's marked output is never persisted into
 // elitea_tools.settings (see refuseUnresolvableToolkitSettings' first bullet),
-// claim-time materialization strips the key before the SDK sees it
-// (configurations_materializer.go), and the index-meta reader already treats a
-// marked pgvector_configuration in a stored toolkit as unusable
-// (indexing/index_meta.go's currentIndexMetaTarget). A stored row that DOES
+// and claim-time materialization strips the key before the SDK sees it
+// (configurations_materializer.go). (The legacy index-meta reader also treated
+// a marked pgvector_configuration as unusable; that setting is now retired and
+// dropped on every save, application/configurations/retired.go.) A stored row that DOES
 // carry one is therefore a row forged through the bypass this refusal closes;
 // it can still be renamed by a settings-free PATCH and deleted, but it cannot
 // be saved back with the forgery intact, which is the intended outcome.

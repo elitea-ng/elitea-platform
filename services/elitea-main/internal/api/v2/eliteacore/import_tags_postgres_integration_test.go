@@ -22,7 +22,7 @@ package eliteacore_test
 //
 // The IMPORT wrote NEITHER table. It read the `tags` key not at all, so an
 // agent exported with its tags came back with none of them, and the document
-// could not survive a second round trip. `meta` cannot stand in: pylon's
+// could not survive a second round trip. `meta` cannot stand in: the legacy
 // `update_version` dumps with `exclude={'tags', 'variables', 'tools'}`, so no
 // tag ever reaches that column.
 //

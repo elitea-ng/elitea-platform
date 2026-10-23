@@ -99,7 +99,7 @@ func TestMasterKeyFromEnvRejectsAMalformedKeyAndNamesTheVariable(t *testing.T) {
 // A key read from a mounted file usually ends with a newline. Go's base64
 // decoder ignores "\r" and "\n", so that key decodes to the same 32 bytes and
 // the deployment works. Python's base64.urlsafe_b64decode ignores them too, so
-// pylon's secrets engine reads the same rows. Turning a newline into a
+// the legacy secrets engine reads the same rows. Turning a newline into a
 // start-up failure would stop a stack that is running correctly today, so this
 // case pins the tolerance deliberately rather than leaving it to chance.
 func TestMasterKeyFromEnvAcceptsAKeyWithATrailingNewline(t *testing.T) {

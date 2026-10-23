@@ -67,7 +67,7 @@ import (
 // Header is the hop-marker header name.
 //
 // It is in the X-Elitea-* namespace, which the browser edges otherwise DELETE
-// in full (deploy/traefik/dynamic.yml, dynamic.e2e.yml). This one name carries
+// in full (elitea-main's own strip, and the Gateway API HTTPRoute). This one name carries
 // a narrow, documented exception, because the marker must survive the canonical
 // loop path:
 //

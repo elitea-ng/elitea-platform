@@ -26,6 +26,12 @@ type Querier interface {
 	// owner's access to project_user_<userID>.
 	CanManageCurrentTracingConfiguration(ctx context.Context, arg CanManageCurrentTracingConfigurationParams) (bool, error)
 	CancelCurrentAgentExecution(ctx context.Context, arg CancelCurrentAgentExecutionParams) (CancelCurrentAgentExecutionRow, error)
+	// The same single-use stamp as MarkArtifactTransferGrantConsumed, taken
+	// BEFORE a single-shot commit touches the grant's final key, and returning
+	// the stamp so a failed commit can hand the grant back
+	// (ReleaseArtifactTransferGrantClaim). No row means already consumed (or
+	// claimed by a commit in flight).
+	ClaimArtifactTransferGrantForCommit(ctx context.Context, id string) (pgtype.Timestamptz, error)
 	// Claim only the oldest unfinished revision for each configuration. A lower
 	// pending, retrying, processing, or dead revision remains an explicit ordering
 	// barrier. Expired processing rows are reclaimed with a new caller-owned lease
@@ -61,6 +67,10 @@ type Querier interface {
 	ClaimPendingIndexMetaInitializations(ctx context.Context, arg ClaimPendingIndexMetaInitializationsParams) ([]ClaimPendingIndexMetaInitializationsRow, error)
 	ClaimScheduledJobCursor(ctx context.Context, arg ClaimScheduledJobCursorParams) (int64, error)
 	ClaimScheduledOccurrence(ctx context.Context, arg ClaimScheduledOccurrenceParams) (int64, error)
+	// Run after the staging object is gone. The row is kept (a late commit still
+	// answers 409), with key reset to the grant id, which drops it from
+	// ListExpiredArtifactGrantStaging.
+	ClearArtifactGrantStaging(ctx context.Context, arg ClearArtifactGrantStagingParams) error
 	CompareAndSwapCurrentConfigurationRenameToolkit(ctx context.Context, arg CompareAndSwapCurrentConfigurationRenameToolkitParams) (int64, error)
 	CompleteScheduledOccurrence(ctx context.Context, arg CompleteScheduledOccurrenceParams) (int64, error)
 	// The tenant executor installs a transaction-local search_path. These queries
@@ -138,17 +148,12 @@ type Querier interface {
 	DeleteCurrentAgentProvisionalText(ctx context.Context, arg DeleteCurrentAgentProvisionalTextParams) error
 	DeleteCurrentConfiguration(ctx context.Context, arg DeleteCurrentConfigurationParams) (int32, error)
 	DeleteCurrentNotification(ctx context.Context, arg DeleteCurrentNotificationParams) (int64, error)
-	// The exact inverse of the statement above, and only that row. The four
-	// identity predicates repeat the ones the upsert conflicts on, so a
-	// user-created configuration that happens to carry the same title is never
-	// removed by a rollback of the system row.
-	DeleteCurrentProjectPgvectorConfiguration(ctx context.Context, arg DeleteCurrentProjectPgvectorConfigurationParams) (int64, error)
 	DeletePATByID(ctx context.Context, id int32) (int64, error)
 	// Reclaims chunk rows for a chunked upload that was abandoned before its
 	// final chunk arrived (browser tab closed, connection lost) — the only
 	// other path that deletes these rows is the completed-merge path
 	// (DeleteAttachmentChunks above), which an abandoned upload never reaches.
-	// Legacy's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
+	// The legacy runtime's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
 	// 12-hour local-disk TTL swept by the elitea_core_cleanup_stale_chunks RPC.
 	DeleteStaleAttachmentChunks(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	// The list and get responses read the binding back through the LEFT JOIN
@@ -157,17 +162,12 @@ type Querier interface {
 	// Token deletion deletes the binding explicitly, in the same transaction, and
 	// does NOT rely on ON DELETE CASCADE (spec-llm-project-scope §3.1). Migration
 	// 0071 guards its foreign key with to_regclass, because elitea-migrate can run
-	// before pylon creates auth_core. When the guard skips, the migration is still
-	// ledgered as applied and no later run adds the constraint, so that database
-	// has no cascade for its whole life. The constraint stays as the second of two
-	// independent guarantees; this query is the first.
+	// before the legacy runtime creates auth_core. When the guard skips, the
+	// migration is still ledgered as applied and no later run adds the constraint,
+	// so that database has no cascade for its whole life. The constraint stays as
+	// the second of two independent guarantees; this query is the first.
 	DeleteTokenProjectBinding(ctx context.Context, tokenID int32) error
 	EnsureRuntimeAdmissionPolicy(ctx context.Context, arg EnsureRuntimeAdmissionPolicyParams) error
-	// Whether the project's system PgVector row exists. It reads the same four
-	// identity predicates the upsert and the delete above use, so a user-created
-	// configuration that happens to carry the title does not count. The project
-	// delete asks it inside its deciding transaction (#1211).
-	ExistsCurrentProjectPgvectorConfiguration(ctx context.Context, arg ExistsCurrentProjectPgvectorConfigurationParams) (bool, error)
 	FinalizeCurrentAgentAuthorizationPause(ctx context.Context, arg FinalizeCurrentAgentAuthorizationPauseParams) (int64, error)
 	FinalizeCurrentAgentFullMessage(ctx context.Context, arg FinalizeCurrentAgentFullMessageParams) (int64, error)
 	FinalizeCurrentAgentHITLPause(ctx context.Context, arg FinalizeCurrentAgentHITLPauseParams) (int64, error)
@@ -350,13 +350,13 @@ type Querier interface {
 	// InsertCurrentAgentTextItem does it: these items are written inside the
 	// admission transaction immediately after the question item, so the caller
 	// already knows the sequence (1, 2, ... — the question's text item holds 0,
-	// matching pylon's enumerate(attachments_info, start=1) at
+	// matching the legacy enumerate(attachments_info, start=1) at
 	// rpc/chat_all.py:303). A count(*) here would additionally re-read a table it
 	// is writing to, per attachment.
 	//
 	// `content` is cast to json, NOT jsonb: 0127 records why the deployed column
-	// is json (a shared table pylon also reads/writes, where jsonb's key
-	// reordering and whitespace normalisation would change the stored bytes).
+	// is json (a shared table the legacy runtime also reads/writes, where jsonb's
+	// key reordering and whitespace normalisation would change the stored bytes).
 	InsertCurrentAgentAttachmentItem(ctx context.Context, arg InsertCurrentAgentAttachmentItemParams) error
 	InsertCurrentAgentTextContent(ctx context.Context, arg InsertCurrentAgentTextContentParams) error
 	InsertCurrentAgentTextItem(ctx context.Context, messageGroupID int64) (int32, error)
@@ -425,7 +425,7 @@ type Querier interface {
 	ListArtifactProjectIDsWithBuckets(ctx context.Context) ([]int64, error)
 	// Read by the merge step once CountAttachmentChunks reaches total_chunks —
 	// ORDER BY chunk_index reconstructs the original byte stream regardless of
-	// arrival order, matching legacy's merge_chunks reading 0..total_chunks-1.
+	// arrival order, matching the legacy runtime's merge_chunks reading 0..total_chunks-1.
 	ListAttachmentChunksOrdered(ctx context.Context, arg ListAttachmentChunksOrderedParams) ([]ListAttachmentChunksOrderedRow, error)
 	ListClaimableScheduledOccurrences(ctx context.Context, arg ListClaimableScheduledOccurrencesParams) ([]ListClaimableScheduledOccurrencesRow, error)
 	// This deliberately projects only the six fields exposed by nested
@@ -461,6 +461,19 @@ type Querier interface {
 	ListCurrentToolkitTypes(ctx context.Context, arg ListCurrentToolkitTypesParams) ([]string, error)
 	ListCurrentUserProjects(ctx context.Context, arg ListCurrentUserProjectsParams) ([]ListCurrentUserProjectsRow, error)
 	ListExpectedIndexIngestEntries(ctx context.Context, arg ListExpectedIndexIngestEntriesParams) ([]ListExpectedIndexIngestEntriesRow, error)
+	// The presigned single-shot grants whose staging object may still exist
+	// after they stopped being usable (api/v2/artifacts grants.go,
+	// grantStagingKey). Such a grant's URL addresses key = id || '.upload', not
+	// the object a commit serves, and a commit deletes it — but the URL stays
+	// valid until expires_at, so a PUT after the commit recreates it, with no
+	// metadata row to count or expire it. Once the URL has expired nothing can
+	// write there again, so the sweeper deletes the object and then clears the
+	// marker (ClearArtifactGrantStaging).
+	//
+	// The key predicate is EXACT on purpose: other writers record consumed
+	// grants whose key differs from their id (toolkit discovery inventory), and
+	// those keys name live objects.
+	ListExpiredArtifactGrantStaging(ctx context.Context, arg ListExpiredArtifactGrantStagingParams) ([]ListExpiredArtifactGrantStagingRow, error)
 	ListExpiredArtifactObjects(ctx context.Context, arg ListExpiredArtifactObjectsParams) ([]EliteaStorageObject, error)
 	// The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 	// see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
@@ -543,12 +556,22 @@ type Querier interface {
 	// unmaterialized row is released, so this is a no-op after a successful
 	// materialize and safe to run on every non-created outcome.
 	ReleaseAgentAdmissionReservation(ctx context.Context, arg ReleaseAgentAdmissionReservationParams) (int64, error)
+	// Undoes ClaimArtifactTransferGrantForCommit after a commit that did not
+	// complete, so the caller can retry on the same grant. The stamp match makes
+	// it a no-op on anything but this commit's own claim.
+	ReleaseArtifactTransferGrantClaim(ctx context.Context, arg ReleaseArtifactTransferGrantClaimParams) (int64, error)
 	ReleaseIndexMetaInitialization(ctx context.Context, arg ReleaseIndexMetaInitializationParams) (int64, error)
 	ReleaseScheduledOccurrenceForRetry(ctx context.Context, arg ReleaseScheduledOccurrenceForRetryParams) (int64, error)
 	ReplaceCurrentConfiguration(ctx context.Context, arg ReplaceCurrentConfigurationParams) (ReplaceCurrentConfigurationRow, error)
 	ReplaceCurrentDeletedLLMApplicationReferences(ctx context.Context, arg ReplaceCurrentDeletedLLMApplicationReferencesParams) (ReplaceCurrentDeletedLLMApplicationReferencesRow, error)
 	RequestCurrentIndexIngestCancellation(ctx context.Context, arg RequestCurrentIndexIngestCancellationParams) (bool, error)
 	ReserveAgentAdmission(ctx context.Context, arg ReserveAgentAdmissionParams) (string, error)
+	// Claims (bucket_id, key) for a write that has not happened yet, and never
+	// touches a row that already holds the key: objects_bucket_key_uniq decides
+	// between two concurrent claims, so exactly one of them affects a row. The
+	// placeholder is overwritten by UpsertArtifactObject once the bytes are
+	// stored (#1059).
+	ReserveArtifactObjectKey(ctx context.Context, arg ReserveArtifactObjectKeyParams) (int64, error)
 	ResetCurrentAgentResponse(ctx context.Context, arg ResetCurrentAgentResponseParams) (ResetCurrentAgentResponseRow, error)
 	// Chat history for this turn: one entry per prior message group, whose
 	// `content` is the group's items flattened into ONE LangChain content array.
@@ -559,14 +582,14 @@ type Querier interface {
 	// rendered it, the prompt did not mention it, and a follow-up question about
 	// that file had nothing to answer from.
 	//
-	// The rule is pylon's, not an invention: chat_history.py:67-73 EXTENDS an
-	// attachment item's stored `content` LIST into the group's content array,
-	// in item order, alongside the text chunks -- it does not nest it, and does
-	// not append one object per file. That is why the per-item CROSS JOIN LATERAL
-	// emits chunk ROWS rather than a per-item array: `jsonb_agg` over the rows is
-	// the flattening, and one ORDER BY (order_index, id, chunk_index) then orders
-	// items and, within an item, its chunks -- the pre-#606 ordering unchanged for
-	// a group that has only text.
+	// The rule is the legacy runtime's, not an invention: chat_history.py:67-73
+	// EXTENDS an attachment item's stored `content` LIST into the group's content
+	// array, in item order, alongside the text chunks -- it does not nest it, and
+	// does not append one object per file. That is why the per-item CROSS JOIN
+	// LATERAL emits chunk ROWS rather than a per-item array: `jsonb_agg` over the
+	// rows is the flattening, and one ORDER BY (order_index, id, chunk_index) then
+	// orders items and, within an item, its chunks -- the pre-#606 ordering
+	// unchanged for a group that has only text.
 	//
 	// WHY THE JOINS BECAME LEFT JOINS AND THE FILTER BECAME A WHERE. The old
 	// `FILTER (WHERE message_text.content <> '')` cannot survive: it tests a
@@ -582,7 +605,7 @@ type Querier interface {
 	// represent at all) now survives it.
 	//
 	// `content` IS `json`, NOT `jsonb` (migrations/tenant/0127 records why), and
-	// it is nullable with a pylon-era default of `'{}'::json` -- an OBJECT, not an
+	// it is nullable with a legacy-era default of `'{}'::json` -- an OBJECT, not an
 	// array. chat_history.py:70-74 carries a non-list fallback for exactly that
 	// data. Here the CASE demands `jsonb_typeof(...) = 'array'` before expanding,
 	// because `jsonb_array_elements` on a non-array raises 22023 and would fail
@@ -601,7 +624,7 @@ type Querier interface {
 	// A participant that names the catalogue twin of a PUBLISHED agent therefore
 	// has no row to join here at all, and an inner join answered no rows -- the
 	// 422 a conversation in project A got when it addressed an agent published in
-	// the catalogue, which legacy allowed. The version for that one case is read
+	// the catalogue, which the legacy runtime allowed. The version for that one case is read
 	// afterwards, from the catalogue project's own schema
 	// (CurrentAgentStartRepository.resolveCatalogueApplicationVersion), so this
 	// join is allowed to miss and the projection below is then a document of
@@ -620,14 +643,14 @@ type Querier interface {
 	// rendered it, the prompt did not mention it, and a follow-up question about
 	// that file had nothing to answer from.
 	//
-	// The rule is pylon's, not an invention: chat_history.py:67-73 EXTENDS an
-	// attachment item's stored `content` LIST into the group's content array,
-	// in item order, alongside the text chunks -- it does not nest it, and does
-	// not append one object per file. That is why the per-item CROSS JOIN LATERAL
-	// emits chunk ROWS rather than a per-item array: `jsonb_agg` over the rows is
-	// the flattening, and one ORDER BY (order_index, id, chunk_index) then orders
-	// items and, within an item, its chunks -- the pre-#606 ordering unchanged for
-	// a group that has only text.
+	// The rule is the legacy runtime's, not an invention: chat_history.py:67-73
+	// EXTENDS an attachment item's stored `content` LIST into the group's content
+	// array, in item order, alongside the text chunks -- it does not nest it, and
+	// does not append one object per file. That is why the per-item CROSS JOIN
+	// LATERAL emits chunk ROWS rather than a per-item array: `jsonb_agg` over the
+	// rows is the flattening, and one ORDER BY (order_index, id, chunk_index) then
+	// orders items and, within an item, its chunks -- the pre-#606 ordering
+	// unchanged for a group that has only text.
 	//
 	// WHY THE JOINS BECAME LEFT JOINS AND THE FILTER BECAME A WHERE. The old
 	// `FILTER (WHERE message_text.content <> '')` cannot survive: it tests a
@@ -643,7 +666,7 @@ type Querier interface {
 	// represent at all) now survives it.
 	//
 	// `content` IS `json`, NOT `jsonb` (migrations/tenant/0127 records why), and
-	// it is nullable with a pylon-era default of `'{}'::json` -- an OBJECT, not an
+	// it is nullable with a legacy-era default of `'{}'::json` -- an OBJECT, not an
 	// array. chat_history.py:70-74 carries a non-list fallback for exactly that
 	// data. Here the CASE demands `jsonb_typeof(...) = 'array'` before expanding,
 	// because `jsonb_array_elements` on a non-array raises 22023 and would fail
@@ -771,13 +794,13 @@ type Querier interface {
 	// #607: persist the text the worker extracted from ONE of this turn's
 	// attachments, so a LATER turn sees the file's contents and not just its name.
 	//
-	// Pylon never needed this statement. It extracts at message-persist time and
-	// appends the text to the item it has in hand, in the same process and the same
-	// session (rpc/chat_all.py:344-377, with flag_modified(item, "content") at :376
-	// because the column is `json`). Here the reader is the worker and the writer is
-	// elitea-main, so the text comes back across a protocol
-	// (AgentExecutionResultV1.attachment_contents) and lands here, on the terminal
-	// path elitea-main already owns.
+	// The legacy runtime never needed this statement. It extracts at
+	// message-persist time and appends the text to the item it has in hand, in the
+	// same process and the same session (rpc/chat_all.py:344-377, with
+	// flag_modified(item, "content") at :376 because the column is `json`). Here
+	// the reader is the worker and the writer is elitea-main, so the text comes
+	// back across a protocol (AgentExecutionResultV1.attachment_contents) and lands
+	// here, on the terminal path elitea-main already owns.
 	//
 	// MATCHED ON item.uuid, NOT ON (bucket, name). Attaching the same file twice in
 	// one conversation is an ordinary thing to do and produces two rows with
@@ -819,24 +842,19 @@ type Querier interface {
 	// accident.
 	//
 	// `content` is cast to json, NOT jsonb, for the reason 0127 records: the column
-	// is `json` because pylon reads and writes the same table, and jsonb's key
-	// reordering and whitespace normalisation would change the stored bytes -- which
-	// for this value includes the `elitea_attachment` marker a later turn's worker
-	// reads to decide the file has already been extracted.
+	// is `json` because the legacy runtime reads and writes the same table, and
+	// jsonb's key reordering and whitespace normalisation would change the stored
+	// bytes -- which for this value includes the `elitea_attachment` marker a later
+	// turn's worker reads to decide the file has already been extracted.
 	UpdateCurrentAgentAttachmentContent(ctx context.Context, arg UpdateCurrentAgentAttachmentContentParams) (int64, error)
 	UpdateCurrentIndexScheduleToolkitMeta(ctx context.Context, arg UpdateCurrentIndexScheduleToolkitMetaParams) (int64, error)
 	UpsertArtifactObject(ctx context.Context, arg UpsertArtifactObjectParams) (EliteaStorageObject, error)
 	// ON CONFLICT DO UPDATE, not DO NOTHING: a retried chunk_index (client
 	// timeout, network retry) must overwrite the previous bytes for that index,
-	// matching legacy's own local-disk behavior (writing to the same filename
+	// matching the legacy runtime's own local-disk behavior (writing to the same filename
 	// twice replaces it) — never double-counted, since the primary key already
 	// de-duplicates by chunk_index.
 	UpsertAttachmentChunk(ctx context.Context, arg UpsertAttachmentChunkParams) error
-	// The project transaction establishes the authorized p_<project_id>
-	// search_path before this statement runs. The public PgVector bootstrap
-	// configuration is never copied into this tenant row: only the current vault
-	// reference is stored.
-	UpsertCurrentProjectPgvectorConfiguration(ctx context.Context, arg UpsertCurrentProjectPgvectorConfigurationParams) (int32, error)
 }
 
 var _ Querier = (*Queries)(nil)

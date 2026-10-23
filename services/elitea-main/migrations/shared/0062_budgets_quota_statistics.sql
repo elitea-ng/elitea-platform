@@ -5,11 +5,12 @@
 -- API surface:
 --
 --   1. centry.project_quota and centry.statistic. Both exist in every
---      pylon-backed database (legacy/plugins/projects/models/{quota,statistics}.py
---      create them) and in NO Go-bootstrapped one — 001_initial.sql never
---      carried them. `GET/PUT /api/v2/projects/quota/{project_id}` and
---      `GET /api/v2/projects/statistics/{project_id}` read them, so a fresh
---      database needs them or those three routes answer 500 forever.
+--      legacy-backed database
+--      (legacy/plugins/projects/models/{quota,statistics}.py create them) and
+--      in NO Go-bootstrapped one — 001_initial.sql never carried them. `GET/PUT
+--      /api/v2/projects/quota/{project_id}` and `GET
+--      /api/v2/projects/statistics/{project_id}` read them, so a fresh database
+--      needs them or those three routes answer 500 forever.
 --   2. The two administration-mode grants the admin budget routes are gated on.
 --   3. The default-mode grant the project-scoped budget/usage READS are gated
 --      on.
@@ -133,8 +134,8 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- it. This is a project-scoped permission being granted to project-scoped
 -- roles; it is not the "central admin permission leaking into project
 -- resolution" that 001_initial.sql warns about. It is also parity, not
--- invention: the pylon database grants exactly this permission to default-mode
--- admin, editor, viewer, super_admin and system.
+-- invention: the legacy runtime database grants exactly this permission to
+-- default-mode admin, editor, viewer, super_admin and system.
 --
 -- WHAT ELSE THIS CHANGES, because it is more than the budgets routes.
 --
@@ -148,7 +149,7 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 --   * a NON-MEMBER still resolves to [] — the central fallback is joined
 --     through the caller's assigned project roles, so it cannot reach anyone
 --     outside the project;
---   * a project that carries its OWN per-project grants — every pylon-backed
+--   * a project that carries its OWN per-project grants — every legacy-backed
 --     database and every legacy dump — suppresses the fallback entirely, so
 --     this grant is INERT there and cannot change what an existing deployment's
 --     members can do.

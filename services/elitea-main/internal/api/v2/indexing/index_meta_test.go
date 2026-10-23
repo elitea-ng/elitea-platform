@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -59,8 +60,7 @@ func TestCurrentIndexMetaRoutePreservesPathPermissionAndRawArray(t *testing.T) {
 	route := newCurrentIndexMetaRoute(t, reader, permissions)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/elitea_core/index_meta/prompt_lib/007/009", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, request)
@@ -83,8 +83,7 @@ func TestCurrentIndexMetaRouteAuthorizesBeforeReading(t *testing.T) {
 	route := newCurrentIndexMetaRoute(t, reader, permissions)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/elitea_core/index_meta/prompt_lib/7/9", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, request)
@@ -102,8 +101,7 @@ func TestCurrentIndexMetaRouteMapsCurrentValidationFailures(t *testing.T) {
 	route := newCurrentIndexMetaRoute(t, reader, permissions)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/elitea_core/index_meta/prompt_lib/7/9", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, request)
@@ -128,12 +126,7 @@ func newCurrentIndexMetaRoute(
 				}
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)

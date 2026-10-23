@@ -79,6 +79,31 @@ class SandboxSupervisorServiceStub(object):
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesResponseV1.FromString,
                 _registered_method=True)
+        self.CodeOwnerRecoveryRead = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoveryRead',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoveryReadRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoveryReadResponseV1.FromString,
+                _registered_method=True)
+        self.CodeOwnerRecoverySealNoEffect = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoverySealNoEffect',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoverySealNoEffectRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoverySealNoEffectResponseV1.FromString,
+                _registered_method=True)
+        self.CodePlatformOwnerReadRetainedRuntime = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadRetainedRuntime',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadRetainedRuntimeRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadRetainedRuntimeResponseV1.FromString,
+                _registered_method=True)
+        self.CodePlatformOwnerReadPendingCall = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadPendingCall',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadPendingCallRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadPendingCallResponseV1.FromString,
+                _registered_method=True)
+        self.CodePlatformOwnerPublishReply = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerPublishReply',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerPublishReplyRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerPublishReplyResponseV1.FromString,
+                _registered_method=True)
 
 
 class SandboxSupervisorServiceServicer(object):
@@ -140,6 +165,43 @@ class SandboxSupervisorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CodeOwnerRecoveryRead(self, request, context):
+        """Main's owner observations (#1359 U4; they replaced the JSON-over-h2
+        routes /elitea.runtime.node-code-recovery.v1 and
+        /elitea.runtime.code-platform.v1). The caller must be Main's configured
+        workload identity, and each request is the exact canonical owner document
+        carrying a Main-signed owner grant for this supervisor's audience. None of
+        them submits, starts or resumes a runtime. Any refusal is a non-OK status
+        that carries nothing from the ledger.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CodeOwnerRecoverySealNoEffect(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CodePlatformOwnerReadRetainedRuntime(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CodePlatformOwnerReadPendingCall(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CodePlatformOwnerPublishReply(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -187,6 +249,31 @@ def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
                     servicer.HydrateSandboxDependencies,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesResponseV1.SerializeToString,
+            ),
+            'CodeOwnerRecoveryRead': grpc.unary_unary_rpc_method_handler(
+                    servicer.CodeOwnerRecoveryRead,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoveryReadRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoveryReadResponseV1.SerializeToString,
+            ),
+            'CodeOwnerRecoverySealNoEffect': grpc.unary_unary_rpc_method_handler(
+                    servicer.CodeOwnerRecoverySealNoEffect,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoverySealNoEffectRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoverySealNoEffectResponseV1.SerializeToString,
+            ),
+            'CodePlatformOwnerReadRetainedRuntime': grpc.unary_unary_rpc_method_handler(
+                    servicer.CodePlatformOwnerReadRetainedRuntime,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadRetainedRuntimeRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadRetainedRuntimeResponseV1.SerializeToString,
+            ),
+            'CodePlatformOwnerReadPendingCall': grpc.unary_unary_rpc_method_handler(
+                    servicer.CodePlatformOwnerReadPendingCall,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadPendingCallRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadPendingCallResponseV1.SerializeToString,
+            ),
+            'CodePlatformOwnerPublishReply': grpc.unary_unary_rpc_method_handler(
+                    servicer.CodePlatformOwnerPublishReply,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerPublishReplyRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerPublishReplyResponseV1.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -432,6 +519,141 @@ class SandboxSupervisorService(object):
             '/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies',
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CodeOwnerRecoveryRead(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoveryRead',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoveryReadRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoveryReadResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CodeOwnerRecoverySealNoEffect(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/CodeOwnerRecoverySealNoEffect',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoverySealNoEffectRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodeOwnerRecoverySealNoEffectResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CodePlatformOwnerReadRetainedRuntime(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadRetainedRuntime',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadRetainedRuntimeRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadRetainedRuntimeResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CodePlatformOwnerReadPendingCall(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerReadPendingCall',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadPendingCallRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerReadPendingCallResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CodePlatformOwnerPublishReply(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/CodePlatformOwnerPublishReply',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerPublishReplyRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CodePlatformOwnerPublishReplyResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

@@ -2318,7 +2318,7 @@ fn check_large_tool_result(is_error: bool) {
         return;
     }
     let mut output = String::new();
-    for pair in finish.chunks_exact(2) {
+    for pair in finish.as_chunks::<2>().0 {
         assert_eq!(pair[0]["type"], "partial_message");
         let metadata = &pair[1]["response_metadata"];
         let final_error = is_error && metadata["tool_output_chunk_v1"]["final"] == true;
@@ -2754,7 +2754,7 @@ fn a_tool_result_between_inline_limit_and_frame_limit_is_chunked() {
         .iter()
         .filter(|event| event["type"] == "agent_tool_output_chunk")
         .collect::<Vec<_>>();
-    assert!(!chunks.is_empty());
+    assert_ne!(chunks, [] as [&serde_json::Value; 0]);
     let reassembled = chunks
         .iter()
         .map(|event| event["content"].as_str().expect("chunk text"))

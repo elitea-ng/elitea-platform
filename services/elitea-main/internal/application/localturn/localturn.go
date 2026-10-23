@@ -56,11 +56,14 @@ const (
 	MaxUserMessageBytes      = 256 * 1024
 	MaxAssistantMessageBytes = 1024 * 1024
 	MaxAssistantErrorBytes   = 4 * 1024
-	MaxToolCalls             = 512
-	MaxThinkingSteps         = 512
-	MaxHITLExchanges         = 64
-	MaxHITLFieldBytes        = 4 * 1024
-	MaxHITLTokenBytes        = 128
+	// MaxModelNameBytes bounds the model the turn ran on (the gateway's
+	// model header bound).
+	MaxModelNameBytes = 256
+	MaxToolCalls      = 512
+	MaxThinkingSteps  = 512
+	MaxHITLExchanges  = 64
+	MaxHITLFieldBytes = 4 * 1024
+	MaxHITLTokenBytes = 128
 
 	// The local work report: at most MaxReportedCommands commands of at most
 	// MaxReportedCommandBytes each, and MaxReportedPaths paths of at most
@@ -227,6 +230,9 @@ type CommitRequest struct {
 	AssistantMessage string
 	AssistantIsError bool
 	AssistantError   string
+	// ModelName is the model the turn ran on (the agent's, or the one the
+	// person chose for the turn); "" when the client does not say.
+	ModelName string
 	// ToolCalls is the runtime's `tool_calls` object, keyed by run id, in the
 	// shape a worker streams in partial_message.response_metadata.
 	ToolCalls json.RawMessage
@@ -394,7 +400,7 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 	if err != nil {
 		return CommittedTurn{}, err
 	}
-	responseMeta, err := json.Marshal(map[string]any{
+	response := map[string]any{
 		"executed_by":                 ExecutedByDesktop,
 		"local_execution_id":          request.ExecutionID,
 		"is_error":                    request.AssistantIsError,
@@ -402,7 +408,12 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 		"hitl_exchanges":              exchanges,
 		"resolved_hitl_interrupt_ids": resolved,
 		"local_work":                  report,
-	})
+	}
+	// The model the turn ran on, as a cloud turn's answer carries it.
+	if request.ModelName != "" {
+		response["model_name"] = request.ModelName
+	}
+	responseMeta, err := json.Marshal(response)
 	if err != nil {
 		return CommittedTurn{}, err
 	}
@@ -481,6 +492,7 @@ func validCommit(request CommitRequest) bool {
 		!validText(request.UserMessage, MaxUserMessageBytes, false) ||
 		!validText(request.AssistantMessage, MaxAssistantMessageBytes, true) ||
 		!validText(request.AssistantError, MaxAssistantErrorBytes, true) ||
+		!validText(request.ModelName, MaxModelNameBytes, true) ||
 		len(request.ThinkingSteps) > MaxThinkingSteps ||
 		len(request.HITLExchanges) > MaxHITLExchanges {
 		return false
@@ -676,13 +688,14 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 		AssistantMessage string            `json:"assistant_message"`
 		AssistantIsError bool              `json:"assistant_is_error"`
 		AssistantError   string            `json:"assistant_error"`
+		ModelName        string            `json:"model_name,omitempty"`
 		ToolCalls        json.RawMessage   `json:"tool_calls"`
 		ThinkingSteps    []json.RawMessage `json:"thinking_steps"`
 		HITLExchanges    []HITLExchange    `json:"hitl_exchanges"`
 		Report           LocalWorkReport   `json:"local_work"`
 	}{
 		request.ExecutionID, request.UserMessage, request.AssistantMessage,
-		request.AssistantIsError, request.AssistantError, toolCalls, steps,
+		request.AssistantIsError, request.AssistantError, request.ModelName, toolCalls, steps,
 		exchanges, report,
 	})
 	if err != nil {

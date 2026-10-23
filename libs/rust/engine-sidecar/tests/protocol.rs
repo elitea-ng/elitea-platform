@@ -1,4 +1,5 @@
-//! The sidecar protocol over a REAL Unix socket, with a toy engine: what
+//! The sidecar protocol (elitea.engine.v1, gRPC) over a REAL Unix socket,
+//! with a toy engine: what
 //! every engine gets from this crate regardless of its tools. Each engine
 //! keeps its own suite for what its tools answer (`DeepWiki`:
 //! `services/elitea-deepwiki-engine/tests/sidecar.rs`).
@@ -6,17 +7,15 @@
 
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::Context;
+use elitea_engine_sidecar::client::EngineClient;
 use elitea_engine_sidecar::{Engine, healthcheck, server};
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming};
-use hyper_util::rt::TokioIo;
 use serde_json::{Map, Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::net::UnixStream;
 use tokio::sync::oneshot;
+use tonic::Code;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -112,6 +111,19 @@ impl Sidecar {
     }
 }
 
+impl Sidecar {
+    async fn client(&self) -> EngineClient {
+        // The server task may not have reached accept yet.
+        for _ in 0..200 {
+            if let Ok(client) = EngineClient::connect(&self.socket).await {
+                return client;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("cannot connect to {}", self.socket.display());
+    }
+}
+
 impl Drop for Sidecar {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
@@ -123,77 +135,16 @@ impl Drop for Sidecar {
     }
 }
 
-async fn send(
-    socket: &Path,
-    method: &str,
-    path: &str,
-    body: Option<&Value>,
-) -> hyper::Response<Incoming> {
-    let stream = UnixStream::connect(socket).await.expect("connect");
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .expect("handshake");
-    tokio::spawn(connection);
-    let bytes = body.map(|b| Bytes::from(b.to_string())).unwrap_or_default();
-    let request = hyper::Request::builder()
-        .method(method)
-        .uri(path)
-        .header("host", "engine")
-        .header("content-type", "application/json")
-        .body(Full::new(bytes))
-        .expect("request");
-    sender.send_request(request).await.expect("send")
-}
-
-async fn read_json(response: hyper::Response<Incoming>) -> (u16, Value) {
-    let status = response.status().as_u16();
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
-}
-
-async fn lines(response: hyper::Response<Incoming>) -> Vec<Value> {
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
-    String::from_utf8_lossy(&body)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("line is JSON"))
-        .collect()
-}
-
-fn request(id: &str, tool: &str, arguments: &Value) -> Value {
-    json!({"invocation_id": id, "tool": tool, "arguments": arguments})
-}
-
 #[tokio::test]
 async fn a_run_streams_progress_then_tokens_then_one_result() {
     let toy = Toy::default();
     let sidecar = Sidecar::start(toy.clone());
-    let response = send(
-        &sidecar.socket,
-        "POST",
-        "/engine/invoke",
-        Some(&request("i-1", "echo", &json!({"q": 1}))),
-    )
-    .await;
-    assert_eq!(response.status().as_u16(), 200);
-    assert_eq!(
-        response
-            .headers()
-            .get("content-type")
-            .map(|v| v.to_str().unwrap_or_default()),
-        Some("application/x-ndjson")
-    );
-    let lines = lines(response).await;
+    let lines = sidecar
+        .client()
+        .await
+        .invoke("i-1", "echo", &json!({"q": 1}))
+        .await
+        .expect("a run");
     assert_eq!(
         lines,
         [
@@ -213,21 +164,20 @@ async fn a_run_streams_progress_then_tokens_then_one_result() {
 }
 
 #[tokio::test]
-async fn a_failure_is_an_error_line_with_its_python_class_and_category() {
+async fn a_failure_is_an_error_event_with_its_python_class_and_category() {
     let toy = Toy::default();
     let sidecar = Sidecar::start(toy.clone());
-    let response = send(
-        &sidecar.socket,
-        "POST",
-        "/engine/invoke",
-        Some(&request("i-2", "fail", &json!({}))),
-    )
-    .await;
-    let lines = lines(response).await;
-    let last = lines.last().expect("a line");
+    let lines = sidecar
+        .client()
+        .await
+        .invoke("i-2", "fail", &json!({}))
+        .await
+        .expect("a run");
+    let last = lines.last().expect("an event");
     assert_eq!(last["error"]["error_type"], "ValueError");
     assert_eq!(last["error"]["message"], "the toy refuses");
     assert!(last["error"]["error_category"].is_string());
+    assert!(last["error"].get("code").is_none(), "no code, no key");
     assert_eq!(
         toy.published.load(Ordering::SeqCst),
         0,
@@ -235,23 +185,32 @@ async fn a_failure_is_an_error_line_with_its_python_class_and_category() {
     );
 }
 
-/// The body limit is the router's parameter: 2 MB by default, whatever an
-/// engine asks for otherwise. A 3 MB document is refused by the default and
-/// served under a 4 MiB limit, and one above the raised limit is refused again.
+/// The Invoke limit is the service's parameter: 2 MiB by default, whatever
+/// an engine asks for otherwise. A 3 MiB document is refused by the default
+/// and served under a 4 MiB limit, and one above the raised limit is refused
+/// again.
 #[tokio::test]
-async fn the_invoke_body_limit_is_a_parameter_with_a_two_megabyte_default() {
-    let big = |bytes: usize| request("i-big", "echo", &json!({"document": "x".repeat(bytes)}));
-    let body = big(3 << 20);
+async fn the_invoke_limit_is_a_parameter_with_a_two_megabyte_default() {
+    let big = |bytes: usize| json!({"document": "x".repeat(bytes)});
+    let too_large = |code: Code| matches!(code, Code::ResourceExhausted | Code::OutOfRange);
 
     let default = Sidecar::start(Toy::default());
-    let (code, _) =
-        read_json(send(&default.socket, "POST", "/engine/invoke", Some(&body)).await).await;
-    assert_eq!(code, 413, "the default is axum's 2 MB");
+    let refused = default
+        .client()
+        .await
+        .invoke("i-big", "echo", &big(3 << 20))
+        .await
+        .expect_err("the default is 2 MiB");
+    assert!(too_large(refused.code()), "{refused:?}");
 
     let raised = Sidecar::start_with_limit(Toy::default(), 4 << 20);
-    let lines = lines(send(&raised.socket, "POST", "/engine/invoke", Some(&body)).await).await;
-    let last = lines.last().expect("a line");
-    assert_eq!(last["result"]["success"], json!(true), "served under 4 MiB");
+    let mut client = raised.client().await;
+    let lines = client
+        .invoke("i-big", "echo", &big(3 << 20))
+        .await
+        .expect("served under 4 MiB");
+    let last = lines.last().expect("an event");
+    assert_eq!(last["result"]["success"], json!(true));
     assert_eq!(
         last["result"]["arguments"]["document"]
             .as_str()
@@ -259,123 +218,93 @@ async fn the_invoke_body_limit_is_a_parameter_with_a_two_megabyte_default() {
         Some(3 << 20),
         "the arguments reach the engine whole"
     );
-    let (code, _) = read_json(
-        send(
-            &raised.socket,
-            "POST",
-            "/engine/invoke",
-            Some(&big(5 << 20)),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(code, 413, "above the raised limit");
+    let refused = client
+        .invoke("i-big-2", "echo", &big(5 << 20))
+        .await
+        .expect_err("above the raised limit");
+    assert!(too_large(refused.code()), "{refused:?}");
 }
 
 #[tokio::test]
 async fn the_door_refuses_a_bad_request_before_any_run() {
     let sidecar = Sidecar::start(Toy::default());
-    for (body, status, detail) in [
-        (json!([1]), 422, "the request body must be a JSON object"),
+    let mut client = sidecar.client().await;
+    for (id, tool, arguments, code, message) in [
         (
-            json!({"tool": "echo", "arguments": {}}),
-            400,
+            "",
+            "echo",
+            json!({}),
+            Code::InvalidArgument,
             "invocation_id is required",
         ),
         (
-            request("i-3", "nope", &json!({})),
-            400,
+            "i-3",
+            "nope",
+            json!({}),
+            Code::InvalidArgument,
             "Unknown tool: nope",
         ),
         (
-            json!({"invocation_id": "i-3", "tool": "echo"}),
-            400,
+            "i-3",
+            "echo",
+            json!([1]),
+            Code::InvalidArgument,
             "arguments must be an object",
         ),
     ] {
-        let (code, answer) =
-            read_json(send(&sidecar.socket, "POST", "/engine/invoke", Some(&body)).await).await;
-        assert_eq!(code, status, "{body}");
-        assert_eq!(answer["detail"], detail, "{body}");
+        let refused = client
+            .invoke(id, tool, &arguments)
+            .await
+            .expect_err("refused");
+        assert_eq!(
+            (refused.code(), refused.message()),
+            (code, message),
+            "{tool} {arguments}"
+        );
     }
-    let (code, answer) = read_json(send(&sidecar.socket, "GET", "/nowhere", None).await).await;
-    assert_eq!((code, answer), (404, json!({"detail": "Not Found"})));
+    assert_eq!(
+        client.health().await.expect("health")["active"],
+        0,
+        "no run was registered"
+    );
 }
 
 #[tokio::test]
 async fn a_stop_reaches_the_running_tool_and_a_repeat_id_conflicts() {
     let sidecar = Sidecar::start(Toy::default());
-    let socket = sidecar.socket.clone();
-    let running = tokio::spawn(async move {
-        lines(
-            send(
-                &socket,
-                "POST",
-                "/engine/invoke",
-                Some(&request("i-4", "wait", &json!({}))),
-            )
-            .await,
-        )
-        .await
-    });
+    let mut client = sidecar.client().await;
+    let mut runner = client.clone();
+    let running = tokio::spawn(async move { runner.invoke("i-4", "wait", &json!({})).await });
     // Wait until the run is registered.
     for _ in 0..200 {
-        let (_, health) =
-            read_json(send(&sidecar.socket, "GET", "/engine/health", None).await).await;
-        if health["active"] == 1 {
+        if client.health().await.expect("health")["active"] == 1 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let (code, answer) = read_json(
-        send(
-            &sidecar.socket,
-            "POST",
-            "/engine/invoke",
-            Some(&request("i-4", "wait", &json!({}))),
-        )
-        .await,
-    )
-    .await;
+    let conflict = client
+        .invoke("i-4", "wait", &json!({}))
+        .await
+        .expect_err("a repeated id");
     assert_eq!(
-        (code, answer["detail"].clone()),
-        (409, json!("i-4 is already running"))
+        (conflict.code(), conflict.message()),
+        (Code::AlreadyExists, "i-4 is already running")
     );
 
-    let (code, answer) = read_json(
-        send(
-            &sidecar.socket,
-            "POST",
-            "/engine/invocations/i-4/stop",
-            None,
-        )
-        .await,
-    )
-    .await;
-    assert_eq!((code, answer), (202, json!({"stopped": true})));
+    assert!(client.stop("i-4").await.expect("stop"));
     let lines = tokio::time::timeout(Duration::from_secs(10), running)
         .await
         .expect("the run ended")
-        .expect("joined");
+        .expect("joined")
+        .expect("a stream");
     assert_eq!(lines.first(), Some(&json!({"thinking": "waiting"})));
     assert!(
         lines.last().is_some_and(|l| l.get("error").is_some()),
         "{lines:?}"
     );
 
-    let (code, answer) = read_json(
-        send(
-            &sidecar.socket,
-            "POST",
-            "/engine/invocations/i-4/stop",
-            None,
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        (code, answer),
-        (202, json!({"stopped": false})),
+    assert!(
+        !client.stop("i-4").await.expect("stop"),
         "a finished run is unknown"
     );
 }
@@ -383,20 +312,16 @@ async fn a_stop_reaches_the_running_tool_and_a_repeat_id_conflicts() {
 #[tokio::test]
 async fn a_reader_that_goes_away_stops_the_run_and_frees_the_id() {
     let sidecar = Sidecar::start(Toy::default());
-    let response = send(
-        &sidecar.socket,
-        "POST",
-        "/engine/invoke",
-        Some(&request("i-5", "wait", &json!({}))),
-    )
-    .await;
-    assert_eq!(response.status().as_u16(), 200);
-    drop(response);
+    let mut client = sidecar.client().await;
+    let mut stream = client
+        .start("i-5", "wait", &json!({}))
+        .await
+        .expect("started");
+    assert!(stream.message().await.expect("an event").is_some());
+    drop(stream);
     let mut active = Value::Null;
     for _ in 0..500 {
-        let (_, health) =
-            read_json(send(&sidecar.socket, "GET", "/engine/health", None).await).await;
-        active = health["active"].clone();
+        active = client.health().await.expect("health")["active"].clone();
         if active == 0 {
             break;
         }
@@ -408,11 +333,9 @@ async fn a_reader_that_goes_away_stops_the_run_and_frees_the_id() {
 #[tokio::test]
 async fn health_names_the_runner_and_the_probe_reads_it() {
     let sidecar = Sidecar::start(Toy::default());
-    let (code, health) =
-        read_json(send(&sidecar.socket, "GET", "/engine/health", None).await).await;
     assert_eq!(
-        (code, health),
-        (200, json!({"status": "UP", "runner": "toy", "active": 0}))
+        sidecar.client().await.health().await.expect("health"),
+        json!({"status": "UP", "runner": "toy", "active": 0})
     );
     assert_eq!(
         healthcheck::probe(&sidecar.socket, Duration::from_secs(5)).await,
@@ -450,13 +373,8 @@ async fn health_lists_the_tools_an_engine_names() {
         listed: true,
         ..Toy::default()
     });
-    let (code, health) =
-        read_json(send(&sidecar.socket, "GET", "/engine/health", None).await).await;
     assert_eq!(
-        (code, health),
-        (
-            200,
-            json!({"status": "UP", "runner": "toy", "active": 0, "tools": ["echo", "wait", "fail"]})
-        )
+        sidecar.client().await.health().await.expect("health"),
+        json!({"status": "UP", "runner": "toy", "active": 0, "tools": ["echo", "wait", "fail"]})
     );
 }

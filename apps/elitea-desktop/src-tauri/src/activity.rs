@@ -136,7 +136,8 @@ impl ActivityState {
     /// a turn ends at `done`, and also at an `error` event or a terminal
     /// `status` (`done`, `cancelled`, `error`) — a turn refused at the start
     /// never sends `done`. An approval is open until `approval_respond`
-    /// answers it (`answered`) or its turn ends: no other event closes it.
+    /// answers it (`answered`), the host closes it at its wait
+    /// (`approval_closed`), or its turn ends: no other event closes it.
     pub fn observe_agent(&mut self, event: &AgentEvent, now: Instant) {
         let turn = event.turn_id.as_str();
         match event.kind {
@@ -148,9 +149,12 @@ impl ActivityState {
                     self.end(turn);
                 }
             }
-            "approval_request" => {
+            // A plan card (#1225) waits for the person like an approval.
+            "approval_request" | "plan_proposed" => {
                 if let Some(id) = event.payload["request_id"].as_str() {
-                    let tool = if event.payload["kind"] == "continue" {
+                    let tool = if event.kind == "plan_proposed" {
+                        "plan".to_owned()
+                    } else if event.payload["kind"] == "continue" {
                         "continue".to_owned()
                     } else {
                         shown(event.payload["tool"].as_str().unwrap_or("a tool"), 40)
@@ -163,6 +167,11 @@ impl ActivityState {
                             tool,
                         },
                     );
+                }
+            }
+            "approval_closed" => {
+                if let Some(id) = event.payload["request_id"].as_str() {
+                    self.answered(id);
                 }
             }
             "error" | "done" => self.end(turn),
@@ -431,7 +440,10 @@ impl Activity {
     /// Look the folder up once per turn, never on a streamed token and never
     /// while the state lock is held.
     fn remember_name(&self, event: &AgentEvent) {
-        if matches!(event.kind, "text_delta" | "usage" | "tool_result") {
+        if matches!(
+            event.kind,
+            "text_delta" | "usage" | "context" | "tool_result"
+        ) {
             return;
         }
         let known = self
@@ -790,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_answer_or_the_end_of_its_turn_closes_an_approval() {
+    fn only_an_answer_its_close_or_the_end_of_its_turn_closes_an_approval() {
         let t0 = Instant::now();
         let mut state = ActivityState::default();
         state.observe_agent(&approval("t1", "r1", "run_command"), t0);
@@ -802,6 +814,16 @@ mod tests {
         assert_eq!(state.title(t0), "⚠ 2");
         state.answered("r1");
         assert_eq!(state.title(t0), "⚠ 1");
+        // The host closed the other at its wait.
+        state.observe_agent(
+            &event(
+                "t1",
+                "approval_closed",
+                json!({"request_id": "r2", "reason": "timeout"}),
+            ),
+            t0,
+        );
+        assert!(!state.title(t0).starts_with('⚠'));
         state.observe_agent(&event("t1", "done", json!({"committed": true})), t0);
         assert_eq!(state.title(t0), "");
     }

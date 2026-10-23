@@ -2,14 +2,16 @@
 //! refusals for what it does not run locally yet.
 //!
 //! D0 runs one ordinary agent: its instructions, its model, its frozen
-//! skills and project context, and its credentialed toolkits as remote
-//! tools. A pipeline, a nested agent and a project MCP server are refused
-//! before the turn starts, so no execution is opened for them.
+//! skills and project context, and its credentialed toolkits and platform
+//! MCP servers as remote tools. A pipeline, a nested agent and a platform MCP
+//! server without a `toolkit_ref` (an older platform) are refused before the
+//! turn starts, so no execution is opened for them.
 
 use serde_json::{Map, Value};
 
 use super::api::ResolvedVersion;
 use elitea_agent_runtime::host::ReasoningEffort;
+use elitea_local_tools::session::EditProfile;
 
 /// Model steps of a workspace turn's run when neither the workspace's
 /// settings nor the agent (`meta.step_limit`) set them. At the limit
@@ -36,13 +38,105 @@ impl Refusal {
     }
 }
 
-/// The frozen model settings (`version_details.llm_settings`).
+/// The frozen model settings (`version_details.llm_settings`), or the
+/// person's choice for the turn over them ([`Admitted::with_model_choice`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelSettings {
     pub model_name: String,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// `llm_settings.pin_model: true`: the agent's model is the only one
+    /// its turns run on (no choice per turn). Absent: not pinned.
+    pub pinned: bool,
+}
+
+/// The model the person chose for a turn (#1228): `agent_turn_start`'s
+/// `model`, or the thread's choice kept in its session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub name: String,
+    /// `None`: the model's own default (or the agent's effort, when the
+    /// choice is the agent's own model).
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// The state key of a thread's model choice in its session (#1212 store).
+pub const MODEL_CHOICE_KEY: &str = "elitea.model.v1";
+
+/// A reasoning effort's wire name.
+#[must_use]
+pub const fn effort_name(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::None => "none",
+    }
+}
+
+/// A reasoning effort from its wire name.
+#[must_use]
+pub fn parse_effort(name: &str) -> Option<ReasoningEffort> {
+    match name {
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "none" => Some(ReasoningEffort::None),
+        _ => None,
+    }
+}
+
+impl ModelChoice {
+    /// A choice as the IPC (or the session) carries it.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`: a name no gateway header could carry, or an
+    /// effort other than `none`, `low`, `medium`, `high`.
+    pub fn parse(name: &str, reasoning_effort: Option<&str>) -> Result<Self, Refusal> {
+        if !elitea_llm_wire::headers::bounded_header_text(name, 256) {
+            return Err(Refusal::new(
+                "invalid_request",
+                "The chosen model name is not valid.",
+            ));
+        }
+        let reasoning_effort = match reasoning_effort {
+            None => None,
+            Some(effort) => Some(parse_effort(effort).ok_or_else(|| {
+                Refusal::new(
+                    "invalid_request",
+                    "The reasoning effort must be none, low, medium or high.",
+                )
+            })?),
+        };
+        Ok(Self {
+            name: name.to_owned(),
+            reasoning_effort,
+        })
+    }
+
+    /// As the session keeps it.
+    #[must_use]
+    pub fn to_state(&self) -> Value {
+        let mut value = Map::new();
+        value.insert("name".into(), Value::String(self.name.clone()));
+        if let Some(effort) = self.reasoning_effort {
+            value.insert(
+                "reasoning_effort".into(),
+                Value::String(effort_name(effort).into()),
+            );
+        }
+        Value::Object(value)
+    }
+
+    /// A kept choice; `None` for none (or one this build cannot read).
+    #[must_use]
+    pub fn from_state(value: &Value) -> Option<Self> {
+        let name = value.get("name")?.as_str()?;
+        let effort = value.get("reasoning_effort").and_then(Value::as_str);
+        Self::parse(name, effort).ok()
+    }
 }
 
 /// One remote tool the model may call.
@@ -53,11 +147,29 @@ pub struct RemoteToolSpec {
     pub toolkit_id: i64,
     pub toolkit_ref: String,
     pub toolkit_name: String,
+    /// The toolkit's `type` (`mcp_*` names an MCP server toolkit), for the
+    /// web app page that signs in to it.
+    pub toolkit_type: String,
     pub description: String,
     /// `None`: the toolkit's every tool (`all_tools`); the model names the
     /// tool in a `tool_name` argument.
     pub tool_name: Option<String>,
+    /// The tools a platform MCP server offers (`tools`, client contract
+    /// 1.16), for the generic tool's description and its `tool_name` enum;
+    /// empty when the definition names none.
+    pub tools: Vec<RemoteToolInfo>,
 }
+
+/// One tool of a platform MCP server, as the definition names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// At most this many named tools reach one generic tool's description and
+/// enum (a server lists a few dozen).
+pub const MAX_NAMED_TOOLS: usize = 64;
 
 /// A definition D0 can run.
 #[derive(Clone, Debug)]
@@ -70,8 +182,15 @@ pub struct Admitted {
     /// `meta.step_limit`, else [`DEFAULT_STEP_LIMIT`]; at most
     /// [`MAX_STEP_LIMIT`].
     pub step_limit: u32,
+    /// The edit tools the model is offered: the agent's
+    /// `meta.edit_format` (`auto`, `str_replace`, `patch`), else the
+    /// model family's ([`EditProfile::for_model`]).
+    pub edit_profile: EditProfile,
     /// The version document, for the runtime's instruction authority.
     pub version_details: Map<String, Value>,
+    /// The person chose `model` for this turn over the agent's own
+    /// ([`Admitted::with_model_choice`]).
+    pub model_chosen: bool,
 }
 
 /// Check a resolved definition against what D0 runs.
@@ -107,10 +226,17 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
                     "This agent uses other agents as tools, which do not run locally yet; run it in the cloud.",
                 ));
             }
+            // A platform MCP server runs on the platform like a credentialed
+            // toolkit (ADR-0029 decision 3): a server that hands it a
+            // `toolkit_ref` (client contract 1.16) is called through
+            // `executeRemoteToolkitTool`; an older one cannot be reached.
+            Some("platform_mcp") if tool.get("toolkit_ref").is_some_and(Value::is_object) => {
+                remote_tools.extend(remote_specs(tool)?);
+            }
             Some("platform_mcp") => {
                 return Err(Refusal::new(
                     "platform_mcp_unsupported",
-                    "This agent uses a project MCP server, which local turns cannot reach yet; run it in the cloud.",
+                    "This agent uses a project MCP server that this platform version cannot reach from a local turn; update the platform or run it in the cloud.",
                 ));
             }
             _ => {
@@ -122,16 +248,20 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
         }
     }
     name_tools(&mut remote_tools, reserved);
+    let model = model_settings(details)?;
+    let edit_profile = EditProfile::select(&model.model_name, agent_edit_format(details));
     Ok(Admitted {
         instructions: details
             .get("instructions")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        model: model_settings(details)?,
+        model,
         remote_tools,
         step_limit: agent_step_limit(details).unwrap_or(DEFAULT_STEP_LIMIT),
+        edit_profile,
         version_details: details.clone(),
+        model_chosen: false,
     })
 }
 
@@ -147,6 +277,96 @@ impl Admitted {
         }
         self
     }
+
+    /// The turn runs on `choice` instead of the agent's model (#1228): the
+    /// model name and effort the gateway gets, and the edit tools and
+    /// context limits that follow from the model. A choice of the agent's
+    /// own model with no effort of its own changes nothing. The agent
+    /// version on the server is never changed.
+    ///
+    /// # Errors
+    ///
+    /// `model_pinned`: the agent pins its model (`llm_settings.pin_model`).
+    pub fn with_model_choice(mut self, choice: &ModelChoice) -> Result<Self, Refusal> {
+        let same_model = choice.name == self.model.model_name;
+        if same_model
+            && choice
+                .reasoning_effort
+                .is_none_or(|e| Some(e) == self.model.reasoning_effort)
+        {
+            return Ok(self);
+        }
+        if self.model.pinned {
+            return Err(Refusal::new(
+                "model_pinned",
+                "This agent always runs on its own model; the model cannot be changed for a turn.",
+            ));
+        }
+        let effort = choice.reasoning_effort.or(if same_model {
+            self.model.reasoning_effort
+        } else {
+            None
+        });
+        self.model.model_name.clone_from(&choice.name);
+        self.set_effort(effort);
+        self.edit_profile = EditProfile::select(
+            &self.model.model_name,
+            agent_edit_format(&self.version_details),
+        );
+        self.model_chosen = true;
+        Ok(self)
+    }
+
+    /// The turn runs on the agent version's own model (no choice, or one of
+    /// an effort only): the version's frozen model facts still apply.
+    #[must_use]
+    pub fn on_own_model(&self) -> bool {
+        self.version_details
+            .get("llm_settings")
+            .and_then(|settings| settings.get("model_name"))
+            .and_then(Value::as_str)
+            == Some(self.model.model_name.as_str())
+    }
+
+    /// A chosen model the project's catalogue describes (`row`, its chat
+    /// model row): one it says cannot reason (`supports_reasoning: false`)
+    /// is sent no reasoning effort, and so the agent's temperature again.
+    /// No row (the catalogue could not answer), a row that says nothing, or
+    /// the agent's own model: as chosen.
+    #[must_use]
+    pub fn fit_reasoning(mut self, row: Option<&Value>) -> Self {
+        let cannot_reason = row
+            .and_then(|row| row.get("supports_reasoning"))
+            .is_some_and(|value| value == &Value::Bool(false));
+        if self.model_chosen && cannot_reason && self.model.reasoning_effort.is_some() {
+            self.set_effort(None);
+        }
+        self
+    }
+
+    /// `effort` for the turn's model, and the temperature that goes with it:
+    /// none next to an effort applied (the gateway refuses the two
+    /// together), else the agent's own.
+    fn set_effort(&mut self, effort: Option<ReasoningEffort>) {
+        self.model.reasoning_effort = effort;
+        self.model.temperature = if effort.is_some_and(|e| e != ReasoningEffort::None) {
+            None
+        } else {
+            self.version_details
+                .get("llm_settings")
+                .and_then(Value::as_object)
+                .and_then(frozen_temperature)
+        };
+    }
+}
+
+/// `llm_settings.temperature`, as the agent sets it.
+#[allow(clippy::cast_possible_truncation)] // a temperature is 0..=2
+fn frozen_temperature(settings: &Map<String, Value>) -> Option<f32> {
+    settings
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
 }
 
 fn invalid_model() -> Refusal {
@@ -173,18 +393,11 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
         .and_then(Value::as_u64)
         .filter(|tokens| *tokens > 0 && !auto)
         .and_then(|tokens| u32::try_from(tokens).ok());
-    #[allow(clippy::cast_possible_truncation)] // a temperature is 0..=2
-    let temperature = settings
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .map(|value| value as f32);
-    let reasoning_effort = match settings.get("reasoning_effort").and_then(Value::as_str) {
-        Some("low") => Some(ReasoningEffort::Low),
-        Some("medium") => Some(ReasoningEffort::Medium),
-        Some("high") => Some(ReasoningEffort::High),
-        Some("none") => Some(ReasoningEffort::None),
-        _ => None,
-    };
+    let temperature = frozen_temperature(settings);
+    let reasoning_effort = settings
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .and_then(parse_effort);
     Ok(ModelSettings {
         model_name,
         max_tokens,
@@ -192,7 +405,16 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
         temperature: temperature
             .filter(|_| reasoning_effort.is_none_or(|e| e == ReasoningEffort::None)),
         reasoning_effort,
+        pinned: settings.get("pin_model") == Some(&Value::Bool(true)),
     })
+}
+
+/// The agent's `meta.edit_format`, when it is a string.
+fn agent_edit_format(details: &Map<String, Value>) -> Option<&str> {
+    details
+        .get("meta")
+        .and_then(|meta| meta.get("edit_format"))
+        .and_then(Value::as_str)
 }
 
 /// The agent's own `meta.step_limit`, capped at [`MAX_STEP_LIMIT`].
@@ -234,6 +456,7 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
         .unwrap_or("toolkit")
         .to_owned();
     let description = text("description").unwrap_or_default().to_owned();
+    let toolkit_type = text("type").unwrap_or_default().to_owned();
     let all_tools = tool.get("all_tools") == Some(&Value::Bool(true));
     let selected: Vec<String> = tool
         .get("selected_tools")
@@ -246,18 +469,65 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
                 .collect()
         })
         .unwrap_or_default();
-    let spec = |tool_name: Option<String>| RemoteToolSpec {
-        exposed_name: String::new(),
-        toolkit_id,
-        toolkit_ref: toolkit_ref.to_owned(),
-        toolkit_name: toolkit_name.clone(),
-        description: description.clone(),
-        tool_name,
+    let tools = named_tools(tool);
+    let spec = |tool_name: Option<String>| {
+        // A named tool of a platform server says what it does.
+        let own = tool_name
+            .as_deref()
+            .and_then(|name| tools.iter().find(|t| t.name == name))
+            .map(|t| t.description.as_str())
+            .filter(|d| !d.is_empty());
+        RemoteToolSpec {
+            exposed_name: String::new(),
+            toolkit_id,
+            toolkit_ref: toolkit_ref.to_owned(),
+            toolkit_name: toolkit_name.clone(),
+            toolkit_type: toolkit_type.clone(),
+            description: own.map_or_else(|| description.clone(), str::to_owned),
+            tool_name: tool_name.clone(),
+            tools: if tool_name.is_none() {
+                tools.clone()
+            } else {
+                Vec::new()
+            },
+        }
     };
     if all_tools {
         return Ok(vec![spec(None)]);
     }
     Ok(selected.into_iter().map(|name| spec(Some(name))).collect())
+}
+
+/// A platform MCP server's `tools` (`[{name, description}]`): named,
+/// de-duplicated, at most [`MAX_NAMED_TOOLS`].
+fn named_tools(tool: &Value) -> Vec<RemoteToolInfo> {
+    let mut named: Vec<RemoteToolInfo> = Vec::new();
+    for entry in tool
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        if named.len() >= MAX_NAMED_TOOLS || named.iter().any(|t| t.name == name) {
+            continue;
+        }
+        let description = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        named.push(RemoteToolInfo {
+            name: name.to_owned(),
+            description: description.to_owned(),
+        });
+    }
+    named
 }
 
 fn valid_toolkit_ref(value: &str) -> bool {
@@ -369,6 +639,45 @@ mod tests {
         assert_eq!(admit_meta(json!({"step_limit": "many"})).step_limit, 100);
     }
 
+    /// #1214: the edit tools follow the model family; the agent's
+    /// `meta.edit_format` overrides it.
+    #[test]
+    fn the_edit_profile_follows_the_model_and_meta_edit_format() {
+        let admit_with = |model: &str, meta: Value| {
+            admit(
+                &resolved(json!({
+                    "llm_settings": {"model_name": model},
+                    "meta": meta,
+                })),
+                &[],
+            )
+            .unwrap()
+            .edit_profile
+        };
+        assert_eq!(admit_with("gpt-5", json!({})), EditProfile::Patch);
+        assert_eq!(admit_with("gpt-5.1-codex", json!({})), EditProfile::Patch);
+        assert_eq!(
+            admit_with("claude-sonnet-4-5", json!({})),
+            EditProfile::StrReplace
+        );
+        assert_eq!(
+            admit_with("claude-sonnet-4-5", json!({"edit_format": "patch"})),
+            EditProfile::Patch
+        );
+        assert_eq!(
+            admit_with("gpt-5", json!({"edit_format": "str_replace"})),
+            EditProfile::StrReplace
+        );
+        assert_eq!(
+            admit_with("gpt-5", json!({"edit_format": "auto"})),
+            EditProfile::Patch
+        );
+        assert_eq!(
+            admit_with("gpt-5", json!({"edit_format": 3})),
+            EditProfile::Patch
+        );
+    }
+
     #[test]
     fn an_ordinary_agent_is_admitted_with_one_tool_per_selected_tool() {
         let admitted = admit(
@@ -439,8 +748,86 @@ mod tests {
             admit(&nested, &[]).unwrap_err().code,
             "nested_agents_unsupported"
         );
+        let old_platform = resolved(json!({
+            "llm_settings": {"model_name": "m"},
+            "tools": [{"kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                       "server_name": "mcp_elitea_internal_applications"}]
+        }));
+        assert_eq!(
+            admit(&old_platform, &[]).unwrap_err().code,
+            "platform_mcp_unsupported"
+        );
         let no_model = resolved(json!({"tools": []}));
         assert_eq!(admit(&no_model, &[]).unwrap_err().code, "model_unresolved");
+    }
+
+    #[test]
+    fn a_platform_mcp_server_with_a_ref_is_one_generic_remote_tool() {
+        let admitted = admit(
+            &resolved(json!({
+                "llm_settings": {"model_name": "m"},
+                "tools": [{
+                    "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                    "server_name": "mcp_elitea_internal_applications",
+                    "name": "Elitea Applications", "toolkit_name": "Elitea Applications",
+                    "selected_tools": [], "all_tools": true,
+                    "toolkit_ref": {"toolkit_id": 0, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
+                }]
+            })),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(admitted.remote_tools.len(), 1);
+        let spec = &admitted.remote_tools[0];
+        assert_eq!(spec.toolkit_id, 0);
+        assert_eq!(spec.tool_name, None);
+        assert_eq!(spec.exposed_name, "Elitea_Applications_call");
+    }
+
+    /// A platform server names its tools (client contract 1.16): the
+    /// generic tool carries them; a server whose guardrails blocked some
+    /// lists the rest, one tool each, with its own description.
+    #[test]
+    fn a_platform_mcp_servers_tools_reach_the_model() {
+        let server = |all_tools: bool, selected: Value| {
+            resolved(json!({
+                "llm_settings": {"model_name": "m"},
+                "tools": [{
+                    "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                    "server_name": "mcp_elitea_internal_applications", "toolkit_name": "Elitea Applications",
+                    "selected_tools": selected, "all_tools": all_tools,
+                    "tools": [
+                        {"name": "get_elitea_core_applications", "description": "List the project's agents."},
+                        {"name": "post_elitea_core_applications", "description": ""},
+                        {"name": "get_elitea_core_applications", "description": "a duplicate"},
+                        {"description": "no name"}
+                    ],
+                    "toolkit_ref": {"toolkit_id": 0, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
+                }]
+            }))
+        };
+        let generic = admit(&server(true, json!([])), &[]).unwrap();
+        let spec = &generic.remote_tools[0];
+        assert_eq!(spec.tool_name, None);
+        let names: Vec<&str> = spec.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "get_elitea_core_applications",
+                "post_elitea_core_applications"
+            ]
+        );
+        assert_eq!(spec.tools[0].description, "List the project's agents.");
+
+        let listed = admit(&server(false, json!(["get_elitea_core_applications"])), &[]).unwrap();
+        assert_eq!(listed.remote_tools.len(), 1);
+        let spec = &listed.remote_tools[0];
+        assert_eq!(
+            spec.tool_name.as_deref(),
+            Some("get_elitea_core_applications")
+        );
+        assert_eq!(spec.description, "List the project's agents.");
+        assert!(spec.tools.is_empty());
     }
 
     #[test]
@@ -451,8 +838,10 @@ mod tests {
                 toolkit_id: 1,
                 toolkit_ref: String::new(),
                 toolkit_name: "read".into(),
+                toolkit_type: String::new(),
                 description: String::new(),
                 tool_name: Some("file".into()),
+                tools: Vec::new(),
             };
             2
         ];

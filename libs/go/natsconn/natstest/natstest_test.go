@@ -71,8 +71,8 @@ func TestEveryIdentityIsInItsPlanesAccount(t *testing.T) {
 func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	s := natstest.Start(t)
 	out := s.Bootstrap(t, nil) // also asserts no bootstrap identity hit a violation
-	if !strings.Contains(out, "13 of 13 expected assertions") {
-		t.Fatalf("bootstrap did not verify thirteen assets:\n%s", out)
+	if !strings.Contains(out, "14 of 14 expected assertions") {
+		t.Fatalf("bootstrap did not verify fourteen assets:\n%s", out)
 	}
 	for _, acct := range []string{"main", "gateway", "runtime"} {
 		if !strings.Contains(out, "account "+acct+": reconciling") {
@@ -505,5 +505,37 @@ func TestKEDAReadsTheCommandBusLagInTheRuntimeAccount(t *testing.T) {
 	}
 	if _, ok := pending("$G"); ok {
 		t.Error("/jsz?acc=$G reports the command bus; the streams belong to RUNTIME")
+	}
+}
+
+// The sub-application hosts' cancellation fan-out (#1359): each host
+// publishes and subscribes its OWN application's cancel subjects in SUBAPP,
+// and nothing of the other application's or any other plane's.
+func TestSubappHostsCancelOnlyTheirOwnRuns(t *testing.T) {
+	s := natstest.Start(t)
+	s.Bootstrap(t, nil)
+	for _, own := range []struct{ identity, app, other string }{
+		{natsconn.IdentitySubappDeepWiki, "deepwiki", "inventory"},
+		{natsconn.IdentitySubappInventory, "inventory", "deepwiki"},
+	} {
+		as := cliAs(t, s, own.identity)
+		if out, err := as("pub", natsconn.SubappCancelSubject(own.app, "invocation_1"), "").CombinedOutput(); err != nil {
+			t.Errorf("%s could not publish its own cancel: %v\n%s", own.identity, err, out)
+		}
+		forged := natsconn.SubappCancelSubject(own.other, "invocation_1")
+		_ = as("pub", forged, "").Run()
+		s.RequireViolation(t, own.identity, "Publish", forged)
+		// A subscription the server refuses is logged when it arrives; the
+		// CLI then waits for messages, so it is started and stopped.
+		sub := as("sub", natsconn.SubappCancelWildcard(own.other))
+		if err := sub.Start(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(500 * time.Millisecond)
+		_ = sub.Process.Kill()
+		_ = sub.Wait()
+		s.RequireViolation(t, own.identity, "Subscription", natsconn.SubappCancelWildcard(own.other))
+		_ = as("pub", "elitea.rt.v1.replay.wake", "").Run()
+		s.RequireViolation(t, own.identity, "Publish", "elitea.rt.v1.replay.wake")
 	}
 }

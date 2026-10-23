@@ -7,11 +7,12 @@ Indexing turns content from an external system — a repository, a wiki, a set o
 
 ## What indexing needs
 
-Before you can index anything, three things must be in place:
+Before you can index anything, two things must be in place:
 
 - **A credential** for the target system, attached to the toolkit (not required for the built-in Artifact type, which indexes files you've already uploaded).
 - **An embedding model** configuration, selected at the project level (Settings › AI Providers).
-- **A vector store** configuration (PostgreSQL with the pgvector extension), also selected at the project level.
+
+There is no vector-store configuration to create. Indexes are kept in the platform's own vector store (Qdrant, behind the elitea-vector service), which your administrator turns on for the whole deployment. Each index is kept apart per project.
 
 <Note>
 The Indexes tab only appears on a toolkit whose type declares an indexing tool, and it renders the tab even when the currently running worker can't execute it — in that case it shows the server's own explanation instead of the create-index form, rather than hiding the tab.

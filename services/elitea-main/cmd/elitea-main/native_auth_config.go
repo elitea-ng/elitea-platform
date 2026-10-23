@@ -10,7 +10,6 @@ import (
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicorigin"
 )
@@ -27,14 +26,6 @@ type nativeAuthComposition struct {
 // a typed nil pointer boxed into apimw.TokenValidator would read as configured
 // (#86).
 func (n nativeAuthComposition) apiTokens() apimw.TokenValidator {
-	if n.validator == nil {
-		return nil
-	}
-	return n.validator
-}
-
-// graphTokens is the same validator for the Form graph's gateway edge.
-func (n nativeAuthComposition) graphTokens() authsvc.TokenValidator {
 	if n.validator == nil {
 		return nil
 	}

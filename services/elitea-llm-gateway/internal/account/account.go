@@ -39,6 +39,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
 )
 
 // SelfReferentialCredentialReason is the rejection reason emitted when a
@@ -194,6 +195,12 @@ type EliteaAccount struct {
 	// gateway detects no loop. See GetConfigForProvider.
 	hopMarker *hopmarker.Marker
 
+	// workloadIdentityEnabled and identityTokens are the keyless platform
+	// credential mode (workload_identity.go). identityTokens is nil when the
+	// mode is off.
+	workloadIdentityEnabled bool
+	identityTokens          workloadidentity.Tokens
+
 	logger *slog.Logger
 }
 
@@ -209,7 +216,7 @@ type Config struct {
 	// bifrost's CheckAndSetDefaults applies its own default.
 	ProviderConcurrency int
 	// SelfOrigins are the platform's own /llm origins (e.g.
-	// "https://dev.elitea.ai/llm/v1", "http://pylon_main:8080/llm/v1"). Any
+	// "https://dev.elitea.ai/llm/v1", "http://elitea-main:8080/llm/v1"). Any
 	// credential api_base matching one of these origins is rejected with
 	// SELF_REFERENTIAL_CREDENTIAL. Values are normalised (scheme+host+path,
 	// trailing slash stripped) before comparison.
@@ -248,6 +255,14 @@ type Config struct {
 	// credential names, and a provider class the marker skipped would be a
 	// class the guard cannot see.
 	HopMarker *hopmarker.Marker
+	// WorkloadIdentityEnabled arms the keyless mode for PLATFORM credentials
+	// (GATEWAY_WORKLOAD_IDENTITY_ENABLED, workload_identity.go). false — the
+	// default — refuses every auth_mode=workload_identity row.
+	WorkloadIdentityEnabled bool
+	// IdentityTokens mints the ID tokens a workload-identity DIAL credential
+	// sends. nil with the mode armed selects workloadidentity.NewADC; tests
+	// supply a fake.
+	IdentityTokens workloadidentity.Tokens
 	// Logger is used for structured logging; never logs secret material. When
 	// nil, slog.Default is used.
 	Logger *slog.Logger
@@ -283,15 +298,26 @@ func New(cfg Config) (*EliteaAccount, error) {
 			return nil, fmt.Errorf("account: public project id: %w", err)
 		}
 	}
+	// Mode off means no token source at all, so no code path can mint a
+	// platform token by mistake.
+	var tokens workloadidentity.Tokens
+	if cfg.WorkloadIdentityEnabled {
+		tokens = cfg.IdentityTokens
+		if tokens == nil {
+			tokens = workloadidentity.NewADC()
+		}
+	}
 	return &EliteaAccount{
-		db:                  cfg.DB,
-		vault:               cfg.Vault,
-		providerConcurrency: cfg.ProviderConcurrency,
-		selfOrigins:         origins,
-		egress:              egress,
-		publicProjectID:     cfg.PublicProjectID,
-		hopMarker:           cfg.HopMarker,
-		logger:              logger,
+		workloadIdentityEnabled: cfg.WorkloadIdentityEnabled,
+		identityTokens:          tokens,
+		db:                      cfg.DB,
+		vault:                   cfg.Vault,
+		providerConcurrency:     cfg.ProviderConcurrency,
+		selfOrigins:             origins,
+		egress:                  egress,
+		publicProjectID:         cfg.PublicProjectID,
+		hopMarker:               cfg.HopMarker,
+		logger:                  logger,
 	}, nil
 }
 
@@ -486,6 +512,14 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 	}
 
 	keys := make([]schemas.Key, 0, len(creds))
+	// dialAudiences maps the Key ID of every admitted workload-identity DIAL
+	// key to its ID-token audience (workload_identity.go).
+	dialAudiences := map[string]string{}
+	// skipped is the first refused keyless row of an unlinked request. It is
+	// returned only when no other credential is left, so a set of nothing but
+	// refused rows still fails with the named reason, not as "no key".
+	_, linked := linkedCredentialFromContext(ctx)
+	var skipped error
 	for _, c := range creds {
 		// Self-referential guard: reject any credential pointing back at the
 		// platform's own /llm origin before its secret is ever resolved.
@@ -524,6 +558,47 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 			return nil, fmt.Errorf("account: credential %s: %w", c.configID, ErrEgressNotAllowed)
 		}
 
+		// Keyless platform credentials (workload_identity.go). Decided from the
+		// ROW before any secret is resolved, so a refused row never causes a
+		// decrypt, and a refusal is never a fallback to the key mode.
+		//
+		// A refused keyless row is SKIPPED on an unlinked request: it is one
+		// row's state (the flag off, a tenant row, an ambiguous row) and must
+		// not take every other credential of the provider down with it. A
+		// request whose model LINKS that row still fails with the named
+		// reason: the model named it, and serving another credential instead
+		// is the silent substitution credential_selector.go forbids.
+		wi, err := a.admitWorkloadIdentity(provider, c)
+		var audience string
+		if err == nil && wi && provider == schemas.Azure {
+			var aerr error
+			if audience, aerr = workloadidentity.Audience(c.apiBase, c.tokenAudience); aerr != nil {
+				err = fmt.Errorf("%w: api_base", ErrIncompleteCredential)
+			}
+		}
+		if err != nil {
+			a.logger.WarnContext(ctx, "rejected provider credential",
+				"reason", credentialRejectionReason(err),
+				"project_id", projectID,
+				"credential_project_id", c.ownerProjectID,
+				"provider", string(provider),
+				"config_id", c.configID,
+				"skipped", !linked,
+			)
+			refusal := fmt.Errorf("account: credential %s: %w", c.configID, err)
+			if linked {
+				return nil, refusal
+			}
+			if skipped == nil {
+				skipped = refusal
+			}
+			continue
+		}
+		c.workloadIdentity = wi
+		if audience != "" {
+			dialAudiences[c.keyID] = audience
+		}
+
 		// Resolve the secret against the project that OWNS the credential, not
 		// the caller. A shared credential's {{secret.NAME}} reference names a
 		// secret in the public project's Fernet vault; resolving it against the
@@ -558,6 +633,14 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 			return nil, fmt.Errorf("account: credential %s: %w", c.configID, err)
 		}
 		keys = append(keys, key)
+	}
+	if len(keys) == 0 && skipped != nil {
+		bctx, _ := ctx.(*schemas.BifrostContext)
+		clearDialIdentityToken(bctx)
+		return nil, skipped
+	}
+	if provider == schemas.Azure {
+		return a.bindDialIdentityToken(ctx, projectID, keys, dialAudiences)
 	}
 	return keys, nil
 }
@@ -600,6 +683,14 @@ func credentialRejectionReason(err error) string {
 		return UnsupportedAPIBaseReason
 	case errors.Is(err, ErrDialProtocolUnroutable):
 		return DialProtocolUnroutableReason
+	case errors.Is(err, ErrWorkloadIdentityNotAllowed):
+		return WorkloadIdentityNotAllowedReason
+	case errors.Is(err, ErrWorkloadIdentityTokenUnavailable):
+		return WorkloadIdentityTokenUnavailableReason
+	case errors.Is(err, ErrInvalidAuthMode):
+		return InvalidAuthModeReason
+	case errors.Is(err, ErrWorkloadIdentityAmbiguous):
+		return WorkloadIdentityAmbiguousReason
 	default:
 		return "INVALID_PROVIDER_CREDENTIAL"
 	}
@@ -660,7 +751,12 @@ func buildKey(
 		// named. The gateway configures no service-principal or managed-identity
 		// mode for a tenant credential, so an Azure-class credential must carry
 		// its own key. This is the Bedrock rule below, for the same reason.
-		if strings.TrimSpace(apiKey) == "" {
+		//
+		// The one exception is an ADMITTED workload-identity DIAL credential
+		// (workload_identity.go): it carries no key on purpose, and
+		// GetKeysForProvider puts its Google ID token on the request context,
+		// which bifrost sends ahead of both the key and DefaultAzureCredential.
+		if strings.TrimSpace(apiKey) == "" && !c.workloadIdentity {
 			return schemas.Key{}, missingCredentialFields("api_key")
 		}
 		key.AzureKeyConfig = &schemas.AzureKeyConfig{Endpoint: plainSecret(c.apiBase)}
@@ -739,7 +835,12 @@ func buildKey(
 		if c.vertexLocation == "" {
 			missing = append(missing, "vertex_location")
 		}
-		if c.vertexCredentialsRef == "" {
+		// An ADMITTED workload-identity credential carries no service-account
+		// document on purpose: the empty AuthCredentials below makes bifrost
+		// use the pod's own Google identity (workload_identity.go). Every other
+		// Vertex credential must carry one, or that same fallback would serve a
+		// tenant with the platform's identity.
+		if c.vertexCredentialsRef == "" && !c.workloadIdentity {
 			missing = append(missing, "vertex_credentials")
 		}
 		if len(missing) > 0 {

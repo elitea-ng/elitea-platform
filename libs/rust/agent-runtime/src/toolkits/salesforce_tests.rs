@@ -824,7 +824,7 @@ async fn invalid_selection_and_arguments_fail_before_provider_use() {
     ] {
         assert!(tools[0].execute(context(), invalid).await.is_err());
     }
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 
     let unknown = SalesforceToolkitConfig::parse(&settings(&["drop_org"]))
         .expect("bounded unknown Salesforce selection parses");

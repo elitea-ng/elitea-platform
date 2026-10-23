@@ -1,6 +1,6 @@
 [package]
 name = "elitea-engine-sidecar"
-description = "The engine sidecar's Unix-socket NDJSON server, container probe and cgroup reader."
+description = "The engine sidecar's Unix-socket gRPC server (elitea.engine.v1), container probe and cgroup reader."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,22 +8,22 @@ publish.workspace = true
 
 [features]
 default = ["server", "telemetry"]
-# The NDJSON protocol server (`server`, `Engine`) and the container probe
-# (`healthcheck`): axum and hyper. Off, the crate is the socket binder and
-# the cgroup reader alone, for a sidecar that speaks another protocol over
-# the socket (elitea-doc-extractor: gRPC) and must link no HTTP client.
-server = ["dep:axum", "dep:elitea-engine-core", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:serde_json", "dep:tokio-stream", "tokio/macros", "tokio/sync", "tokio/time"]
+# The engine protocol (`server`, `Engine`: elitea.engine.v1 over the socket,
+# #1359), its client (`client`) and the container probe (`healthcheck`):
+# tonic, without TLS. Off, the crate is the socket binder and the cgroup
+# reader alone, for a sidecar that speaks another protocol over the socket
+# (elitea-doc-extractor: elitea.extract.v1) and must link no client at all.
+server = ["dep:elitea-engine-core", "dep:hyper-util", "dep:prost", "dep:protoc-bin-vendored", "dep:serde_json", "dep:tokio-stream", "dep:tonic", "dep:tonic-prost", "dep:tonic-prost-build", "dep:tower", "tokio/macros", "tokio/sync", "tokio/time"]
 # Span export over OTLP (`telemetry`): the OpenTelemetry SDK and its reqwest
 # 0.13 HTTP client. Off, a process has stderr log lines and nothing that can
 # open a network connection.
 telemetry = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:reqwest", "dep:tracing-opentelemetry", "dep:tracing-subscriber", "tokio/rt"]
 
 [dependencies]
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"], optional = true }
 elitea-engine-core = { path = "../engine-core", optional = true }
-http-body-util = { version = "0.1.5", optional = true }
-hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"], optional = true }
+# The client's connector over the socket (`client`, `healthcheck`).
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"], optional = true }
+prost = { version = "0.14.4", optional = true }
 # Span export, the agent worker's versions and switches (telemetry.rs). The
 # OTLP exporter's HTTP client is reqwest 0.13 with rustls, the engines' own.
 opentelemetry = { version = "0.33.0", default-features = false, features = ["trace"], optional = true }
@@ -32,10 +32,18 @@ opentelemetry_sdk = { version = "0.33.0", default-features = false, features = [
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"], optional = true }
 serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"], optional = true }
 tokio = { version = "1.53.1", features = ["net"] }
-tokio-stream = { version = "0.1.19", features = ["sync"], optional = true }
+tokio-stream = { version = "0.1.19", features = ["net", "sync"], optional = true }
+# No TLS feature: the socket is reachable only through its directory.
+tonic = { version = "0.14.6", default-features = false, features = ["channel", "codegen", "router", "server"], optional = true }
+tonic-prost = { version = "0.14.6", optional = true }
+tower = { version = "0.5.3", default-features = false, features = ["util"], optional = true }
 tracing = "0.1.44"
 tracing-opentelemetry = { version = "0.34.0", default-features = false, optional = true }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "registry", "std"], optional = true }
+
+[build-dependencies]
+protoc-bin-vendored = { version = "3.2.0", optional = true }
+tonic-prost-build = { version = "0.14.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }

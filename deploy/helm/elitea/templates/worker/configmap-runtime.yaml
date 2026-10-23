@@ -47,16 +47,16 @@ data:
       "limits" $r.limits
     }}
     {{- /* The deployment's PUBLIC base URL, for links the Rust worker puts in an
-    answer (a chart's Markdown image): platformOrigin is the in-cluster edge,
+    answer (a chart's Markdown image): platformOrigin is elitea-main's in-cluster platform listener,
     which a browser cannot open. Written only when set. Links are
     root-relative without it. */}}
     {{- if $r.publicBaseUrl }}
     {{- $_ := set $config "public_base_url" $r.publicBaseUrl }}
     {{- end }}
-    {{- if .Values.nats.tls.enabled }}
-    {{- $_ := set $config "nats_ca_path" (printf "%s/ca.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
-    {{- $_ := set $config "nats_certificate_path" (printf "%s/tls.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
-    {{- $_ := set $config "nats_private_key_path" (printf "%s/tls.key" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
+    {{- if .Values.natsClient.tls.enabled }}
+    {{- $_ := set $config "nats_ca_path" (printf "%s/ca.crt" (trimSuffix "/" .Values.natsClient.tls.mountPath)) }}
+    {{- $_ := set $config "nats_certificate_path" (printf "%s/tls.crt" (trimSuffix "/" .Values.natsClient.tls.mountPath)) }}
+    {{- $_ := set $config "nats_private_key_path" (printf "%s/tls.key" (trimSuffix "/" .Values.natsClient.tls.mountPath)) }}
     {{- end }}
     {{- $pairs := dict "ELITEA_RT_V1_VALIDATE" "elitea-configuration-worker-v1" "ELITEA_RT_V1_AGENT" "elitea-agent-worker-v1" "ELITEA_RT_V1_INDEX" "elitea-index-worker-v1" }}
     {{- if ne (get $pairs ($r.natsStream | toString)) ($r.natsConsumer | toString) }}

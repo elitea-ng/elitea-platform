@@ -1847,13 +1847,7 @@ mod typed_refusal_gate_tests {
             let ToolkitExecuteReadTerminalOutput::CallTool(result) = old else {
                 unreachable!()
             };
-            assert!(
-                !result
-                    .result_summary
-                    .expect("summary")
-                    .error_message
-                    .is_empty()
-            );
+            assert_ne!(result.result_summary.expect("summary").error_message, "");
         }
         // Other statuses are untouched either way.
         assert_eq!(

@@ -4,10 +4,10 @@ package authcomposition
 // authorizing at once (docs/UPGRADING.md), not live on for the rest of
 // cookie.lifetime_seconds. TestFormSessionsRefusedWhileFormSignInIsDisabled
 // covers the decorator; these tests cover the WIRING: a real session in the
-// graph's own session store, a real active user row, sent through both
-// composed kernels (Main via AuthorizeMain, Direct via Routes()). Dropping the
-// decorator in newFormGraph, or handing the bare flow to either kernel, turns
-// the disabled case green here into an authorized session.
+// graph's own session store, a real active user row, read by the composed
+// Form session reader apimw.Auth and the admin UI use (FormSessions()).
+// Dropping the decorator in newFormGraph, or handing the bare flow to the
+// reader, turns the disabled case green here into an authorized session.
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,6 @@ import (
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
@@ -53,34 +53,16 @@ func TestAnExistingFormSessionStopsAuthorizingWhenFormSignInIsDisabled(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			graph, config, sessionID := newGraphWithSession(t, pool, test.enabled, test.provider, userID)
 
-			request := publicMainRequest("/api/v2/private")
-			request.BrowserSession = forwardapp.BrowserSessionInput{
-				Present: true, ID: sessionID, Reference: sessionID,
+			request := httptest.NewRequest(http.MethodGet, "/api/v2/private", nil)
+			request.AddCookie(&http.Cookie{Name: config.Cookie.Name, Value: browserapi.CookieValuePrefix + sessionID})
+			principal, err := graph.FormSessions().AuthenticateFormSession(request)
+			authorized := err == nil
+			if authorized != test.authorized {
+				t.Fatalf("Form session reader: authorized=%v (%+v, %v), want %v",
+					authorized, principal, err, test.authorized)
 			}
-			decision, err := graph.AuthorizeMain(context.Background(), request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mainAuthorized := decision.Kind == forwardapp.DecisionAllow &&
-				decision.Authentication.Type == forwardapp.AuthenticationUser
-			if mainAuthorized != test.authorized {
-				t.Fatalf("Main kernel: authorized=%v, want %v (decision %+v)", mainAuthorized, test.authorized, decision)
-			}
-
-			direct := httptest.NewRequest(http.MethodGet, "http://auth-internal/check", nil)
-			direct.RemoteAddr = "10.1.2.3:1234"
-			direct.Header.Set("X-Forwarded-For", "203.0.113.7")
-			direct.Header.Set("X-Forwarded-Method", http.MethodGet)
-			direct.Header.Set("X-Forwarded-Proto", "https")
-			direct.Header.Set("X-Forwarded-Host", "elitea.example")
-			direct.Header.Set("X-Forwarded-Uri", "/api/v2/private")
-			direct.AddCookie(&http.Cookie{Name: config.Cookie.Name, Value: browserapi.CookieValuePrefix + sessionID})
-			response := httptest.NewRecorder()
-			graph.Routes().ServeHTTP(response, direct)
-			directAuthorized := response.Code == http.StatusOK
-			if directAuthorized != test.authorized {
-				t.Fatalf("Direct kernel: status=%d, want authorized=%v (location %q)",
-					response.Code, test.authorized, response.Header().Get("Location"))
+			if authorized && principal.UserID != strconv.FormatInt(userID, 10) {
+				t.Fatalf("Form session principal = %+v, want user %d", principal, userID)
 			}
 		})
 	}
@@ -99,9 +81,8 @@ func newGraphWithSession(
 		context.Background(),
 		config,
 		FormGraphDependencies{
-			PostgreSQL:           pool,
-			FormSignInEnabled:    formSignInEnabled,
-			MainRoutePublicRules: []forwardapp.PublicRule{},
+			PostgreSQL:        pool,
+			FormSignInEnabled: formSignInEnabled,
 		},
 		nil,
 	)
@@ -163,9 +144,8 @@ func TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled(t *testing
 				context.Background(),
 				config,
 				FormGraphDependencies{
-					PostgreSQL:           pool,
-					FormSignInEnabled:    test.enabled,
-					MainRoutePublicRules: []forwardapp.PublicRule{},
+					PostgreSQL:        pool,
+					FormSignInEnabled: test.enabled,
 				},
 				nil,
 			)

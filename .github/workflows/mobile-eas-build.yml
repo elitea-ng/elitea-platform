@@ -1,0 +1,103 @@
+# Manual EAS Build of apps/elitea-mobile (apps/elitea-mobile/docs/release.md, "Builds
+# from GitHub Actions"). Runs only when dispatched; ci-mobile.yml never builds or
+# talks to Expo.
+#
+# Needs the EXPO_TOKEN repository secret (an Expo robot-user access token) and a
+# linked EAS project (app.config.ts `easLink`). The build itself runs on EAS
+# servers: this job queues it (--no-wait) and prints the build page links, so it
+# takes a few minutes of Actions time, not the length of a native build.
+name: Mobile EAS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: eas.json build profile
+        type: choice
+        options: [preview, production, development, development-simulator]
+        default: preview
+      platform:
+        description: Platform
+        type: choice
+        options: [all, ios, android]
+        default: all
+      submit:
+        description: "production only: when the build finishes, submit it to TestFlight / Play internal testing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-eas-build-${{ inputs.profile }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  # Bump deliberately (eas.json cli.version is the floor).
+  EAS_CLI_VERSION: 24.12.0
+
+jobs:
+  build:
+    name: EAS build (${{ inputs.profile }}, ${{ inputs.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/elitea-mobile
+    steps:
+      - name: Require the EXPO_TOKEN secret
+        working-directory: .
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Repository secret EXPO_TOKEN is not set (apps/elitea-mobile/docs/release.md, 'GitHub Actions secret')."
+            exit 1
+          fi
+
+      - name: Submit only with the production profile
+        if: inputs.submit && inputs.profile != 'production'
+        working-directory: .
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          echo "::error::Only production builds go to TestFlight / Play (got profile '$PROFILE')."
+          exit 1
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # Stated, not defaulted (scripts/ci/check-workflow-cache-writes.mjs).
+          package-manager-cache: false
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - uses: expo/expo-github-action@9da89d3617bb88139671bad31b09c65714c2ee06 # v9.0.1
+        with:
+          eas-version: ${{ env.EAS_CLI_VERSION }}
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Project is linked to EAS
+        run: node scripts/eas-preflight.mjs build
+
+      # --auto-submit needs the submit settings too: fail before the build queues, not after it.
+      - name: Ready to submit
+        if: ${{ inputs.submit }}
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: node scripts/eas-preflight.mjs submit "$PLATFORM"
+
+      - name: Queue the build
+        env:
+          PROFILE: ${{ inputs.profile }}
+          PLATFORM: ${{ inputs.platform }}
+          SUBMIT: ${{ inputs.submit }}
+        run: |
+          args=(build --profile "$PROFILE" --platform "$PLATFORM" --non-interactive --no-wait)
+          if [ "$SUBMIT" = "true" ]; then args+=(--auto-submit); fi
+          eas "${args[@]}"

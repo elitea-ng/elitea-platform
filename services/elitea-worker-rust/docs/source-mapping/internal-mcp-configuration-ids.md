@@ -4,8 +4,8 @@
 
 | Current platform source | New platform owner | Contract |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/configurations/api/v2/configurations.py`, `get` | Main `internal/api/v2/configurations/read.go` and `handler.go` | Forward the optional comma-separated `ids` filter. |
-| `projects/centry/pylon_main/plugins/configurations/utils.py`, `parse_ids_filter` | Main `internal/application/configurations/ids.go` | Bound IDs and treat empty input as no filter. |
+| `legacy/centry/<main runtime>/plugins/configurations/api/v2/configurations.py`, `get` | Main `internal/api/v2/configurations/read.go` and `handler.go` | Forward the optional comma-separated `ids` filter. |
+| `legacy/centry/<main runtime>/plugins/configurations/utils.py`, `parse_ids_filter` | Main `internal/application/configurations/ids.go` | Bound IDs and treat empty input as no filter. |
 | Same source, `get_configurations` project and shared queries | Main `internal/application/configurations/crud.go`, `internal/db/queries/configurations.sql`, `internal/infra/db/repos/configurations.go` | Apply IDs before count and pagination in each tenant query. |
 | Current configuration endpoint MCP registration | Main `internal/api/v2/mcp/internal_configurations_catalog.go` and `internal_configurations_execute.go` | Expose and forward the same filter through internal MCP. |
 

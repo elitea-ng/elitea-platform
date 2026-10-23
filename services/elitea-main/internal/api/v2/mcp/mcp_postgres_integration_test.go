@@ -732,9 +732,9 @@ func TestToolsCallRefusesWithTheStatedReason(t *testing.T) {
 // BOTH forms of the internal endpoint URL count — the unresolved
 // `{project_id}` marker and a URL already resolved to a concrete project id.
 // The resolved form is the one this stack can actually produce: the marker is
-// written only by pylon's prebuilt-config machinery, which was not ported, so a
-// template-only match would make the whole `internal: true` branch unreachable
-// here and every caller would be told VALID whatever their token state.
+// written only by the legacy prebuilt-config machinery, which was not ported,
+// so a template-only match would make the whole `internal: true` branch
+// unreachable here and every caller would be told VALID whatever their token state.
 //
 // A non-`mcp_` type is not internal whatever its URL says, and an endpoint URL
 // that is not this platform's is not internal either.
@@ -744,11 +744,11 @@ func TestPATStatusRecognisesTheInternalEndpointInBothURLForms(t *testing.T) {
 	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
 
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_internal",
-		"http://pylon_main:8080/app/{project_id}/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/{project_id}/mcp/elitea_core/applications")
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_resolved",
-		"http://pylon_main:8080/app/1/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/1/mcp/elitea_core/applications")
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_external", "https://mcp.example.com/sse")
-	seedMCPToolkitWithURL(t, pool, homeSchema, "github", "http://pylon_main:8080/app/{project_id}/mcp/toolkits")
+	seedMCPToolkitWithURL(t, pool, homeSchema, "github", "http://legacy-main:8080/app/{project_id}/mcp/toolkits")
 
 	for toolkitType, wantInternal := range map[string]bool{
 		"mcp_elitea_internal": true,
@@ -774,7 +774,7 @@ func TestPATStatusRecognisesTheInternalEndpointInBothURLForms(t *testing.T) {
 //
 // Seeded with the RESOLVED URL on purpose: that is the form a toolkit created
 // in this stack carries, so this exercises the state machine on the shape
-// production can actually produce rather than only on the pylon-written
+// production can actually produce rather than only on the legacy-written
 // template.
 func TestPATStatusReportsMissingThenExpiredThenValid(t *testing.T) {
 	pool := newMCPPool(t)
@@ -815,14 +815,14 @@ func TestPATStatusReportsMissingThenExpiredThenValid(t *testing.T) {
 	}
 }
 
-// A token with no expiry never expires — pylon's rule, and the one every
+// A token with no expiry never expires — the legacy rule, and the one every
 // non-expiring PAT in a real deployment relies on.
 func TestPATStatusTreatsANullExpiryAsValid(t *testing.T) {
 	pool := newMCPPool(t)
 	seedUser(t, pool, callerUserID)
 	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_internal",
-		"http://pylon_main:8080/app/{project_id}/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/{project_id}/mcp/elitea_core/applications")
 	seedToken(t, pool, callerUserID, nil)
 
 	body := decode(t, do(t, router, http.MethodGet,
@@ -839,7 +839,7 @@ func TestPATStatusReadsOnlyTheCallersTokens(t *testing.T) {
 	seedUser(t, pool, callerUserID)
 	seedUser(t, pool, callerUserID+1)
 	seedMCPToolkitWithURL(t, pool, homeSchema, "mcp_elitea_internal",
-		"http://pylon_main:8080/app/{project_id}/mcp/elitea_core/applications")
+		"http://legacy-main:8080/app/{project_id}/mcp/elitea_core/applications")
 
 	future := time.Now().UTC().Add(24 * time.Hour)
 	seedToken(t, pool, callerUserID+1, &future)

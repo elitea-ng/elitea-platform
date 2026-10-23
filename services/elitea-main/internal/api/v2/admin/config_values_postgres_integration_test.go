@@ -18,7 +18,7 @@ package admin_test
 //     the schema DEFAULTS for every section at once, ignoring the `{plugin}`
 //     segment — so a configured platform and a fresh install were indistinguishable.
 //     TestReadIsPerSectionAndOverlaysStoredValuesOnDefaults.
-//   - 200-WITH-EMPTY FOR A SURFACE THAT DOES NOT EXIST. Every Pylon-runtime
+//   - 200-WITH-EMPTY FOR A SURFACE THAT DOES NOT EXIST. Every legacy-runtime
 //     endpoint answered success. TestUnavailableSectionsRefuseWithAReason.
 //   - THE HELP CENTER'S OWN READ ANSWERING SOMETHING ELSE ENTIRELY.
 //     `/plugin_config_values/prompt_lib/resources` returned chat and upload
@@ -328,10 +328,10 @@ func TestSaveLeavesUnmentionedKeysAlone(t *testing.T) {
 	}
 }
 
-// TestSaveRequiresRestartIsEmptyAndHonest — pylon returns the pylons whose
-// plugins must reload. There are none here, and `plugin_config_restart` answers
-// 501, so a non-empty list would put a reload button on screen with nothing
-// behind it.
+// TestSaveRequiresRestartIsEmptyAndHonest — the legacy runtime returns the
+// runtimes whose plugins must reload. There are none here, and no reload route
+// is mounted, so a non-empty list would put a reload button on screen with
+// nothing behind it.
 func TestSaveRequiresRestartIsEmptyAndHonest(t *testing.T) {
 	_, router := newConfigEnvironment(t)
 	recorder := saveResources(t, router, map[string]any{"resources_tutorials_title": "Guides"})
@@ -499,7 +499,7 @@ func TestUnavailableSectionsRefuseWithAReason(t *testing.T) {
 		// is live now and is covered by the Features suite instead.
 		//
 		// `guardrails` left this list the same way, and for a reason of the same
-		// shape: it was withheld as "Pylon plugin configuration nothing here
+		// shape: it was withheld as "legacy plugin configuration nothing here
 		// reads", which was true of the mechanism and stopped being true of the
 		// claim once the toolkit surfaces, the write paths and the agent tool
 		// freeze started reading it. Its consumers are recorded in
@@ -518,9 +518,9 @@ func TestUnavailableSectionsRefuseWithAReason(t *testing.T) {
 		//
 		// `advanced` is not here either, and unlike every other name that left
 		// this list it did not become available — it was REMOVED. Its subject is
-		// Pylon plugin loading, which the target architecture drops on purpose,
-		// so there was never going to be a consumer; a section withheld forever
-		// is a promise that cannot be kept.
+		// legacy plugin loading, which the target architecture drops on
+		// purpose, so there was never going to be a consumer; a section
+		// withheld forever is a promise that cannot be kept.
 		//
 		// `observability`, `runtime` and `admin_panel` are gone from this list
 		// for the same reason `advanced` is: they were REMOVED, not ported. See
@@ -544,9 +544,10 @@ func TestUnavailableSectionsRefuseWithAReason(t *testing.T) {
 	}
 }
 
-// TestGovernanceIsWithheldWithItsOwnReason — governance is not a Pylon surface;
-// it has a real CRUD elsewhere. Collapsing it into the generic Pylon reason
-// would tell the operator something false about where to go.
+// TestGovernanceIsWithheldWithItsOwnReason — governance is not a legacy-runtime
+// surface; it has a real CRUD elsewhere. Collapsing it into the generic
+// legacy-runtime reason would tell the operator something false about where to
+// go.
 func TestGovernanceIsWithheldWithItsOwnReason(t *testing.T) {
 	pool := newConfigPool(t)
 	principal := auth.User{ID: "7", Email: "operator@example.com"}

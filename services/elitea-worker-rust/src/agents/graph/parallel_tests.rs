@@ -1000,8 +1000,8 @@ impl ParallelBranchGraphFactory for PausingBranchGraphs {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        assert!(!pause.thread_id.is_empty());
-        assert!(!pause.checkpoint_id.is_empty());
+        assert_ne!(pause.thread_id, "");
+        assert_ne!(pause.checkpoint_id, "");
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].interrupt_id, format!("card-{}", branch.node()));
         Ok(HashMap::from([(

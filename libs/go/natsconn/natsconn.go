@@ -19,7 +19,7 @@
 // A client is identified by the URI SAN of its certificate,
 // spiffe://<trust domain>/nats/<identity>. The NATS server runs with
 // `verify_and_map`, so the SAN is the user name and the permission table in
-// deploy/helm/nats/values.yaml decides which account the user is in and what
+// deploy/helm/elitea/values.yaml decides which account the user is in and what
 // it may publish and subscribe to there. Nothing in a URL is a credential: URLs are tls://host:port
 // and can sit in a ConfigMap.
 //
@@ -43,7 +43,7 @@ import (
 
 // The client identities. Each is the last path segment of the certificate's
 // URI SAN and the suffix of the client's inbox prefix. The NATS chart's
-// permission table (deploy/helm/nats/values.yaml) declares each in exactly
+// permission table (deploy/helm/elitea/values.yaml) declares each in exactly
 // one account; a new identity needs a row there first.
 const (
 	// MAIN account.
@@ -76,6 +76,13 @@ const (
 	// durables only through service imports (WorkerRuntimeJSAPIPrefix).
 	IdentityWorker          = "elitea-worker"
 	IdentityBootstrapWorker = "elitea-nats-bootstrap-worker"
+
+	// SUBAPP account: the sub-application hosts' cancel fan-out
+	// (elitea.subapp.<app>.cancel.<invocation id>, core NATS, no JetStream).
+	// One identity per application, each confined to its own application's
+	// subjects, so neither host can stop the other's invocations.
+	IdentitySubappDeepWiki  = "elitea-deepwiki"
+	IdentitySubappInventory = "elitea-inventory"
 )
 
 // The accounts, one per plane. A subject or a stream in one account is not
@@ -91,7 +98,32 @@ const (
 	AccountScheduler = "SCHEDULER"
 	AccountRuntime   = "RUNTIME"
 	AccountWorker    = "WORKER"
+	AccountSubapp    = "SUBAPP"
 )
+
+// SubappCancelSubject is the subject a sub-application host publishes a
+// cancel of one invocation on, and SubappCancelWildcard the one every
+// replica of that application's host subscribes to. The NATS chart's SUBAPP
+// grants are exactly SubappCancelWildcard per application identity
+// (templates/guards.yaml pins them).
+func SubappCancelSubject(app, invocationID string) string {
+	return "elitea.subapp." + app + ".cancel." + invocationID
+}
+
+// SubappCancelWildcard: see SubappCancelSubject.
+func SubappCancelWildcard(app string) string { return "elitea.subapp." + app + ".cancel.*" }
+
+// SubappIdentity is the NATS identity of an application's host, or "" for an
+// application with none.
+func SubappIdentity(app string) string {
+	switch app {
+	case "deepwiki":
+		return IdentitySubappDeepWiki
+	case "inventory":
+		return IdentitySubappInventory
+	}
+	return ""
+}
 
 // SchedulerGatewayJSAPIPrefix is the JetStream API prefix under which the
 // SCHEDULER account imports GATEWAY's budget-writeback consumer API
@@ -151,6 +183,8 @@ func AccountOf(identity string) string {
 		return AccountRuntime
 	case IdentityWorker, IdentityBootstrapWorker:
 		return AccountWorker
+	case IdentitySubappDeepWiki, IdentitySubappInventory:
+		return AccountSubapp
 	}
 	return ""
 }
@@ -163,6 +197,7 @@ func Identities() []string {
 		IdentityScheduler,
 		IdentityMainRuntime, IdentityBootstrapRuntime,
 		IdentityWorker, IdentityBootstrapWorker,
+		IdentitySubappDeepWiki, IdentitySubappInventory,
 	}
 }
 

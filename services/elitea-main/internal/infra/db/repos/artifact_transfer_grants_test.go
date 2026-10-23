@@ -178,6 +178,18 @@ func (stub *artifactTransferGrantQueriesStub) GetArtifactTransferGrantByID(
 	return stub.getByIDRow, stub.getByIDErr
 }
 
+func (stub *artifactTransferGrantQueriesStub) ClaimArtifactTransferGrantForCommit(
+	_ context.Context, _ string,
+) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{}, errors.New("not used")
+}
+
+func (stub *artifactTransferGrantQueriesStub) ReleaseArtifactTransferGrantClaim(
+	_ context.Context, _ sqlcgen.ReleaseArtifactTransferGrantClaimParams,
+) (int64, error) {
+	return 0, errors.New("not used")
+}
+
 func (stub *artifactTransferGrantQueriesStub) MarkArtifactTransferGrantConsumed(
 	_ context.Context, _ string,
 ) (int64, error) {
@@ -189,6 +201,18 @@ func (stub *artifactTransferGrantQueriesStub) ClaimExpiredArtifactTransferGrants
 ) ([]sqlcgen.ClaimExpiredArtifactTransferGrantsRow, error) {
 	stub.claimArg = arg
 	return stub.claimRows, stub.claimErr
+}
+
+func (stub *artifactTransferGrantQueriesStub) ListExpiredArtifactGrantStaging(
+	_ context.Context, _ sqlcgen.ListExpiredArtifactGrantStagingParams,
+) ([]sqlcgen.ListExpiredArtifactGrantStagingRow, error) {
+	return nil, nil
+}
+
+func (stub *artifactTransferGrantQueriesStub) ClearArtifactGrantStaging(
+	_ context.Context, _ sqlcgen.ClearArtifactGrantStagingParams,
+) error {
+	return nil
 }
 
 // TestArtifactGrantRepositoryClaimsExpiredGrants covers the query that lets

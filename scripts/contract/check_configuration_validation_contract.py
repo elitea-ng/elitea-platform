@@ -315,7 +315,7 @@ def check_catalog_snapshot() -> None:
     assert canonical_json_no_lf(json.loads(catalog_bytes)) == catalog_bytes
     assert digest_bytes(catalog_bytes) == CATALOG_DIGEST
     catalog = json.loads(catalog_bytes)
-    assert len(catalog["entries"]) == 32
+    assert len(catalog["entries"]) == 31
     openapi = next(entry for entry in catalog["entries"] if entry["type"] == "openapi")
     assert digest_bytes(canonical_json_no_lf(openapi["schema"])) == SCHEMA_DIGEST
     assert openapi["validation_supported"] is True

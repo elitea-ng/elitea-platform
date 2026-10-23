@@ -20,15 +20,12 @@ on:
       - "services/elitea-main/internal/infra/db/repos/workspace_*"
       - "services/elitea-main/migrations/shared/**"
       - ".github/workflows/ci-handoff-loadgate.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "services/elitea-main/internal/application/workspacestore/**"
-      - "services/elitea-main/internal/application/workspacehandoff/**"
-      - "services/elitea-main/internal/infra/db/repos/workspace_*"
-      - "services/elitea-main/migrations/shared/**"
-      - ".github/workflows/ci-handoff-loadgate.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "59 0 * * *"
   workflow_dispatch:
 
 permissions:
@@ -36,7 +33,7 @@ permissions:
 
 concurrency:
   group: ci-handoff-loadgate-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   loadgate:
@@ -45,9 +42,9 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        # The same image as ci-go.yml's test job: the repos package's
-        # TestMain builds its migrated template with CREATE EXTENSION vector.
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        # Plain PostgreSQL 18 (Debian 13), the server every deployment runs:
+        # the repos package's migrated template needs no extension.
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

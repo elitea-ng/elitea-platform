@@ -30,6 +30,7 @@ import { Route as ShellAppsCreateRouteImport } from './routes/_shell/apps/create
 import { Route as ShellArtifactsIndexRouteImport } from './routes/_shell/artifacts/index'
 import { Route as ShellArtifactsCreateBucketRouteImport } from './routes/_shell/artifacts/create-bucket'
 import { Route as ShellChatConversationIdRouteImport } from './routes/_shell/chat.$conversationId'
+import { Route as ShellChatArchivedRouteImport } from './routes/_shell/chat_.archived'
 import { Route as ShellCredentialsIndexRouteImport } from './routes/_shell/credentials/index'
 import { Route as ShellCredentialsTabRouteImport } from './routes/_shell/credentials/$tab'
 import { Route as ShellCredentialsCreateCredentialRouteImport } from './routes/_shell/credentials/create-credential'
@@ -203,6 +204,11 @@ const ShellChatConversationIdRoute = ShellChatConversationIdRouteImport.update({
   id: '/$conversationId',
   path: '/$conversationId',
   getParentRoute: () => ShellChatRoute,
+} as any)
+const ShellChatArchivedRoute = ShellChatArchivedRouteImport.update({
+  id: '/chat_/archived',
+  path: '/chat/archived',
+  getParentRoute: () => ShellRouteRoute,
 } as any)
 const ShellCredentialsIndexRoute = ShellCredentialsIndexRouteImport.update({
   id: '/credentials/',
@@ -592,6 +598,7 @@ export interface FileRoutesByFullPath {
   '/apps/create': typeof ShellAppsCreateRouteWithChildren
   '/artifacts/create-bucket': typeof ShellArtifactsCreateBucketRoute
   '/chat/$conversationId': typeof ShellChatConversationIdRoute
+  '/chat/archived': typeof ShellChatArchivedRoute
   '/credentials/$tab': typeof ShellCredentialsTabRouteWithChildren
   '/credentials/create-credential': typeof ShellCredentialsCreateCredentialRouteWithChildren
   '/deepwiki/$toolkitId': typeof ShellDeepwikiToolkitIdRoute
@@ -681,6 +688,7 @@ export interface FileRoutesByTo {
   '/apps/create': typeof ShellAppsCreateRouteWithChildren
   '/artifacts/create-bucket': typeof ShellArtifactsCreateBucketRoute
   '/chat/$conversationId': typeof ShellChatConversationIdRoute
+  '/chat/archived': typeof ShellChatArchivedRoute
   '/credentials/$tab': typeof ShellCredentialsTabRouteWithChildren
   '/credentials/create-credential': typeof ShellCredentialsCreateCredentialRouteWithChildren
   '/deepwiki/$toolkitId': typeof ShellDeepwikiToolkitIdRoute
@@ -773,6 +781,7 @@ export interface FileRoutesById {
   '/_shell/apps/create': typeof ShellAppsCreateRouteWithChildren
   '/_shell/artifacts/create-bucket': typeof ShellArtifactsCreateBucketRoute
   '/_shell/chat/$conversationId': typeof ShellChatConversationIdRoute
+  '/_shell/chat_/archived': typeof ShellChatArchivedRoute
   '/_shell/credentials/$tab': typeof ShellCredentialsTabRouteWithChildren
   '/_shell/credentials/create-credential': typeof ShellCredentialsCreateCredentialRouteWithChildren
   '/_shell/deepwiki/$toolkitId': typeof ShellDeepwikiToolkitIdRoute
@@ -865,6 +874,7 @@ export interface FileRouteTypes {
     | '/apps/create'
     | '/artifacts/create-bucket'
     | '/chat/$conversationId'
+    | '/chat/archived'
     | '/credentials/$tab'
     | '/credentials/create-credential'
     | '/deepwiki/$toolkitId'
@@ -954,6 +964,7 @@ export interface FileRouteTypes {
     | '/apps/create'
     | '/artifacts/create-bucket'
     | '/chat/$conversationId'
+    | '/chat/archived'
     | '/credentials/$tab'
     | '/credentials/create-credential'
     | '/deepwiki/$toolkitId'
@@ -1045,6 +1056,7 @@ export interface FileRouteTypes {
     | '/_shell/apps/create'
     | '/_shell/artifacts/create-bucket'
     | '/_shell/chat/$conversationId'
+    | '/_shell/chat_/archived'
     | '/_shell/credentials/$tab'
     | '/_shell/credentials/create-credential'
     | '/_shell/deepwiki/$toolkitId'
@@ -1273,6 +1285,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/chat/$conversationId'
       preLoaderRoute: typeof ShellChatConversationIdRouteImport
       parentRoute: typeof ShellChatRoute
+    }
+    '/_shell/chat_/archived': {
+      id: '/_shell/chat_/archived'
+      path: '/chat/archived'
+      fullPath: '/chat/archived'
+      preLoaderRoute: typeof ShellChatArchivedRouteImport
+      parentRoute: typeof ShellRouteRoute
     }
     '/_shell/credentials/': {
       id: '/_shell/credentials/'
@@ -2054,6 +2073,7 @@ interface ShellRouteRouteChildren {
   ShellAppsTabRoute: typeof ShellAppsTabRouteWithChildren
   ShellAppsCreateRoute: typeof ShellAppsCreateRouteWithChildren
   ShellArtifactsCreateBucketRoute: typeof ShellArtifactsCreateBucketRoute
+  ShellChatArchivedRoute: typeof ShellChatArchivedRoute
   ShellCredentialsTabRoute: typeof ShellCredentialsTabRouteWithChildren
   ShellCredentialsCreateCredentialRoute: typeof ShellCredentialsCreateCredentialRouteWithChildren
   ShellDeepwikiToolkitIdRoute: typeof ShellDeepwikiToolkitIdRoute
@@ -2101,6 +2121,7 @@ const ShellRouteRouteChildren: ShellRouteRouteChildren = {
   ShellAppsTabRoute: ShellAppsTabRouteWithChildren,
   ShellAppsCreateRoute: ShellAppsCreateRouteWithChildren,
   ShellArtifactsCreateBucketRoute: ShellArtifactsCreateBucketRoute,
+  ShellChatArchivedRoute: ShellChatArchivedRoute,
   ShellCredentialsTabRoute: ShellCredentialsTabRouteWithChildren,
   ShellCredentialsCreateCredentialRoute:
     ShellCredentialsCreateCredentialRouteWithChildren,

@@ -204,14 +204,14 @@ func TestANewSubjectCannotJoinAnAccountBoundToAnotherSubject(t *testing.T) {
 	}
 }
 
-// A pylon-created database holds BARE provider refs. legacy auth_init writes
+// A legacy-created database holds BARE provider refs. legacy auth_init writes
 // `provider_attr["nameid"]`, which is the preferred_username or the raw subject
 // (legacy/plugins/auth_init/rpc/processor.py:55). No row there carries an
 // `oidc:` prefix.
 //
 // A namespace-blind bound-account guard therefore refuses every user who ever
-// logged in on pylon. The staging dump shows 61 such rows against 133 accounts.
-// The guard must read this handler's own namespace only.
+// logged in on the previous platform. The staging dump shows 61 such rows
+// against 133 accounts. The guard must read this handler's own namespace only.
 func TestTheBoundAccountGuardReadsOnlyThisHandlersNamespace(t *testing.T) {
 	tx := &scriptedTx{rows: []scriptedRow{
 		{err: pgx.ErrNoRows}, // no link for this subject

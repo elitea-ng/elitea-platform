@@ -46,7 +46,7 @@ func invalid(field, reason string) error {
 	return ValidationError{Field: field, Reason: reason}
 }
 
-// wellKnownSuffix is the discovery path pylon's `metadata_endpoint` carries.
+// wellKnownSuffix is the discovery path the legacy `metadata_endpoint` carries.
 //
 // An operator moving a definition across from the reference page has that URL
 // in hand, and typing it here is the obvious mistake. The issuer is what an

@@ -116,7 +116,7 @@ type Handler struct {
 	// workerCapability decides whether a catalogued type is offered as
 	// creatable. Nil offers every catalogued type.
 	workerCapability ToolkitCapabilitySource
-	// memoryOnVectorStore serves the memory type without pgvector_configuration
+	// memoryOnVectorStore serves the memory type with its memory_scope setting
 	// (WithMemoryOnVectorStore).
 	memoryOnVectorStore bool
 	// workerImplementation is the plain "python"/"rust" name of the worker
@@ -239,8 +239,9 @@ func NewPostgresRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepo{pool: pool}
 }
 
-// knownToolkitTypes is the baseline list of toolkit types pylon_indexer supports.
-// DB types are merged in at runtime so newly-registered types appear automatically.
+// knownToolkitTypes is the baseline list of toolkit types the legacy indexer
+// supports. DB types are merged in at runtime so newly-registered types appear
+// automatically.
 var knownToolkitTypes = []string{
 	"datasource",
 	"file_loader",
@@ -401,9 +402,8 @@ var toolkitTypeSchemas = map[string]map[string]any{
 		// asks for it instead of saving into a 400.
 		"required": []any{"bucket"},
 		"properties": map[string]any{
-			"bucket":                 map[string]any{"type": "string"},
-			"pgvector_configuration": map[string]any{"type": "object"},
-			"embedding_model":        map[string]any{"type": "string"},
+			"bucket":          map[string]any{"type": "string"},
+			"embedding_model": map[string]any{"type": "string"},
 			"selected_tools": map[string]any{
 				"type": "object",
 				"args_schemas": map[string]any{
@@ -753,9 +753,9 @@ func (h *Handler) toolkitSettingsDefinitions(
 //
 // A configuration property REPLACES the hand-written entry of the same name.
 // The pinned SDK snapshot is authoritative about which settings field is a
-// configuration reference, and the hand-written stubs predate that: artifact's
-// pgvector_configuration was a bare {"type":"object"}, which the client sorts
-// into the ordinary-property bucket and renders as a plain object field.
+// configuration reference, and the hand-written stubs predate that: a bare
+// {"type":"object"} stub is sorted by the client into the ordinary-property
+// bucket and rendered as a plain object field.
 // Settings that no configuration property names are carried over untouched.
 func withSettingsDefinitions(
 	settingsSchema map[string]any,
@@ -945,7 +945,7 @@ func (h *Handler) TestTool(w http.ResponseWriter, r *http.Request) {
 	h.runToolkitTool(w, r, chi.URLParam(r, "toolID"))
 }
 
-// TestToolkitTool is the same run reached through pylon's own path,
+// TestToolkitTool is the same run reached through the legacy path,
 // `POST /test_toolkit_tool/prompt_lib/{projectID}`, which names the toolkit in
 // the body rather than the route.
 //
@@ -1244,6 +1244,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	dropRetiredToolkitSettings(body)
 
 	createdType, _ := body["type"].(string)
 	if h.refuseBlockedToolkitType(w, r, "create_toolkit", createdType) {
@@ -1343,6 +1344,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		h.updateToolRelation(w, r, projectID, toolkitID, body)
 		return
 	}
+	dropRetiredToolkitSettings(body)
 
 	// A body that names a blocked type is refused. A body that omits `type` is
 	// not: an update that does not restate the type cannot be used to introduce
@@ -1854,15 +1856,27 @@ func (r *pgRepo) ListToolkitInstances(ctx context.Context, projectID string, fil
 	return items, total, nil
 }
 
+// dropRetiredToolkitSettings removes the retired `pgvector_configuration`
+// key from a save body's settings (application/configurations/retired.go).
+// The key is accepted and discarded rather than refused, so an older client
+// that still sends it, usually as null, keeps saving.
+func dropRetiredToolkitSettings(body map[string]any) {
+	if settings, ok := body["settings"].(map[string]any); ok {
+		body["settings"] = configurationapp.WithoutRetiredToolkitSettings(settings)
+	}
+}
+
 // redactSettings returns a deep copy of settings with credential-like values
 // removed. Toolkit configuration is not a secret transport; execution code
 // reads the stored JSON directly and must never depend on this API response.
+// The retired `pgvector_configuration` key, which a toolkit saved before its
+// retirement may still hold, is never served either.
 func redactSettings(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, nested := range v {
-			if isSensitiveSettingKey(key) {
+			if isSensitiveSettingKey(key) || key == configurationapp.RetiredPgvectorToolkitSetting {
 				continue
 			}
 			out[key] = redactSettings(nested)
@@ -1922,48 +1936,18 @@ func tenantOwnerID(projectID string) (int, error) {
 //     only coherent if the value is a property of the project, not of the
 //     user who happens to be forking.
 //
-// The current Pylon schema has no owner_id column. The standalone migration
-// adds it as NOT NULL. The write must therefore select the statement that
-// matches the tenant table that is actually deployed.
-func createToolkitInsertSQL(schema string, includeOwnerID bool) string {
-	if !includeOwnerID {
-		// %s, not %q: `schema` arrives ALREADY quoted from tenantSchema
-		// (tenant_schema.go), which uses tenantschema.Quote rather than Go's
-		// own quoting — %q here would wrap the quotes in quotes and every
-		// create against a current pylon table would name no such schema.
-		return fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() AT TIME ZONE 'UTC')
-		RETURNING id, type, name, COALESCE(description,''),
-		          COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
-		       created_at, author_id`, schema)
-	}
+// The tenant table declares owner_id INTEGER NOT NULL with no default
+// (internal/infra/db/migrations/001_initial.sql), so the INSERT always binds it.
+//
+// %s, not %q: `schema` arrives ALREADY quoted from tenantschema.Quote — %q
+// here would wrap the quotes in quotes and name no such schema.
+func createToolkitInsertSQL(schema string) string {
 	return fmt.Sprintf(`
 		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now() AT TIME ZONE 'UTC')
 		RETURNING id, type, name, COALESCE(description,''),
 		          COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id`, schema)
-}
-
-func (r *pgRepo) toolkitOwnerIDExists(
-	ctx context.Context,
-	queryer toolkitQueryer,
-	schema string,
-) (bool, error) {
-	var exists bool
-	err := queryer.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = $1
-      AND table_name = 'elitea_tools'
-      AND column_name = 'owner_id'
-)`, schema).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("read toolkit table shape: %w", err)
-	}
-	return exists, nil
 }
 
 func (r *pgRepo) CreateToolkit(ctx context.Context, projectID string, body map[string]any) (map[string]any, error) {
@@ -2013,33 +1997,11 @@ func (r *pgRepo) createToolkit(
 		return nil, err
 	}
 
-	// toolkitOwnerIDExists binds the schema as a PARAMETER against
-	// information_schema, which stores the UNQUOTED name — `s` carries the
-	// identifier quotes and would match nothing, silently locking every write
-	// onto the owner_id-less fallback.
-	//
-	// Both branches fixed this independently and this keeps the canonical
-	// helper rather than a second `p_%d` spelling: a hand-built name is how
-	// the bug came back the first time, through a merge that fed the quoted
-	// `s` here (#129 D1).
-	schemaName, err := tenantschema.Name(projectID)
-	if err != nil {
-		return nil, err
-	}
-	includeOwnerID, err := r.toolkitOwnerIDExists(ctx, queryer, schemaName)
-	if err != nil {
-		return nil, err
-	}
-	q := createToolkitInsertSQL(s, includeOwnerID)
+	q := createToolkitInsertSQL(s)
 	var id, retType, retName, retDesc string
 	var settingsRaw, metaRaw []byte
 	var createdAt, authorID any
-	var row pgx.Row
-	if includeOwnerID {
-		row = queryer.QueryRow(ctx, q, name, typ, desc, string(settingsJSON), string(metaJSON), ownerID, authorIDStr)
-	} else {
-		row = queryer.QueryRow(ctx, q, name, typ, desc, string(settingsJSON), string(metaJSON), authorIDStr)
-	}
+	row := queryer.QueryRow(ctx, q, name, typ, desc, string(settingsJSON), string(metaJSON), ownerID, authorIDStr)
 	err = row.Scan(
 		&id, &retType, &retName, &retDesc, &settingsRaw, &metaRaw,
 		&createdAt, &authorID)

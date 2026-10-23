@@ -9,6 +9,7 @@ import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
 import ChatPage from '@/pages/chat';
+import { useInspectorSlot } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { useSelectedProject } from '@/widgets/app-shell';
@@ -199,6 +200,12 @@ export function ChatWithEditors(): ReactNode {
    */
   const isAnyEditorOpen = isEditingAgent || isEditingPipeline || isEditingToolkit;
 
+  // Inside the desktop frame (it provides the inspector slot) the conversations
+  // are rows of the frame's own sidebar, the one list: the page never shows its
+  // in-page list there, also while the sidebar is hidden (as in Mail).
+  const inDesktopFrame = useInspectorSlot() !== null;
+  const showInPageList = !inDesktopFrame;
+
   /*
    * The pipeline editor's EDIT-mode Configuration tab and its Save
    * (#940 A12, ELITEA-0928). Both deps come from one hook because they share
@@ -248,8 +255,8 @@ export function ChatWithEditors(): ReactNode {
         * it was always written for this, it was simply never given a parent
         * with a height.
         */}
-      <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box', py: 2, pl: 3 }}>
-        <ChatConversationSidebar />
+      <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box', py: 2, pl: 3, pr: inDesktopFrame ? 3 : 0 }}>
+        {showInPageList && <ChatConversationSidebar />}
         <Box
           sx={{
             flexGrow: 1,

@@ -54,7 +54,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	// The pylon-era schema FIRST, and only when the database does not already
+	// The legacy-era schema FIRST, and only when the database does not already
 	// carry it. The histories below cannot run without it — shared/0030 has a
 	// foreign key to centry.project — so an empty database used to need a human
 	// with psql before this binary could do anything at all.
@@ -63,7 +63,7 @@ func main() {
 		exitError(err)
 	}
 	if bootstrapped {
-		slog.Info("applied the pylon-era schema to an empty database")
+		slog.Info("applied the legacy-era schema to an empty database")
 	}
 
 	runner := migrate.New(pool, platformmigrations.Files)
@@ -73,10 +73,10 @@ func main() {
 
 	// Enumerated AFTER the shared history, not before it.
 	//
-	// TenantProjects reads centry.project. On a database that pylon populated
-	// that table is already there, so reading it first worked and this ordering
-	// never mattered. On an EMPTY database it does not exist yet, and
-	// -all-tenants failed before applying anything:
+	// TenantProjects reads centry.project. On a database the legacy runtime
+	// populated that table is already there, so reading it first worked and
+	// this ordering never mattered. On an EMPTY database it does not exist yet,
+	// and -all-tenants failed before applying anything:
 	//
 	//   preflight legacy tenant projects: ERROR: relation "centry.project"
 	//   does not exist (SQLSTATE 42P01)

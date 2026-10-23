@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // waitForArrivals waits until the backend has seen want requests.
@@ -30,18 +31,30 @@ func waitForArrivals(t *testing.T, arrived *atomic.Int64, want int64, what strin
 // upload of one member before any byte of it is forwarded.
 func TestAudio_InFlightCapRefusesTheExtraRequestBeforeForwarding(t *testing.T) {
 	var arrived atomic.Int64
+	// One release channel per member. With a single shared channel, the send
+	// that should free one of member 11's slots could wake member 12's request
+	// instead; member 11 then still held every slot, its next upload was
+	// refused, and the last wait timed out ("saw 5 requests, want 6").
 	unblock := make(chan struct{})
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	unblockOther := make(chan struct{})
+	var sawOther atomic.Bool
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		arrived.Add(1)
 		_, _ = io.Copy(io.Discard, r.Body)
-		<-unblock
+		if r.Header.Get(HeaderUserID) == "12" {
+			sawOther.Store(true)
+			<-unblockOther
+		} else {
+			<-unblock
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"text":"ok"}`))
 	}))
 	defer backend.Close()
 	defer close(unblock)
+	defer close(unblockOther)
 
-	p := proxyTo(t, backend.URL, "sekret")
+	p := proxyTo(t, backend, "sekret")
 	member := func(userID string) *http.Request {
 		req := audioRequest("/llm/v1/audio/transcriptions", strings.NewReader("audio"))
 		return req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: userID, UserID: userID}))
@@ -73,6 +86,9 @@ func TestAudio_InFlightCapRefusesTheExtraRequestBeforeForwarding(t *testing.T) {
 	// Another member is not affected by the first member's uploads.
 	go serve(member("12"), done)
 	waitForArrivals(t, &arrived, maxAudioInFlightPerPrincipal+1, "another member's upload")
+	if !sawOther.Load() {
+		t.Fatal("member 12's upload reached the backend without its user id; the release below would race")
+	}
 
 	// A finished request frees its slot.
 	unblock <- struct{}{}

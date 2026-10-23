@@ -173,10 +173,28 @@ struct State {
     /// retry. One that is done or off is not looked at again (no prune, no
     /// scan of its chunks) until something marks it.
     dirty: HashSet<String>,
+    /// Bumped by every mark (add, wake, force, reprioritise). A pass that
+    /// planned before a mark must not clear it: a wake that lands while
+    /// `pick` is still reading the old setting would otherwise be erased by
+    /// that stale "off" or "done", and the workspace would wait for the
+    /// ten-minute sweep.
+    marks: u64,
     /// When every workspace was last marked (a slow sweep: the policy may
     /// have changed what is allowed without telling anyone).
     swept: Option<Instant>,
     woken: bool,
+}
+
+impl State {
+    /// A pass planned at `marks` found the workspace done or off: it is not
+    /// looked at again until something marks it, unless something already
+    /// did while the pass was planning (then it stays dirty, and the next
+    /// pass reads the new setting).
+    fn settle(&mut self, workspace_id: &str, marks: u64) {
+        if self.marks == marks {
+            self.dirty.remove(workspace_id);
+        }
+    }
 }
 
 /// How often every workspace is looked at again, dirty or not.
@@ -382,6 +400,7 @@ impl Embedding {
             let id = service.workspace_id().to_owned();
             state.services.insert(id.clone(), Arc::downgrade(service));
             state.dirty.insert(id);
+            state.marks += 1;
         }
         self.shared.notify();
     }
@@ -406,6 +425,7 @@ impl Embedding {
             state.retry_at.clear();
             let all: Vec<String> = state.services.keys().cloned().collect();
             state.dirty.extend(all);
+            state.marks += 1;
         }
         self.shared.notify();
     }
@@ -417,6 +437,7 @@ impl Embedding {
             let mut state = self.shared.state();
             state.retry_at.remove(workspace_id);
             state.dirty.insert(workspace_id.to_owned());
+            state.marks += 1;
         }
         self.shared.notify();
     }
@@ -442,6 +463,7 @@ impl Embedding {
             *list = merged;
             state.reprioritised.insert(workspace_id.to_owned());
             state.dirty.insert(workspace_id.to_owned());
+            state.marks += 1;
         }
         self.shared.notify();
     }
@@ -454,6 +476,7 @@ impl Embedding {
             state.forced.insert(workspace_id.to_owned());
             state.retry_at.remove(workspace_id);
             state.dirty.insert(workspace_id.to_owned());
+            state.marks += 1;
         }
         self.shared.notify();
     }
@@ -543,7 +566,7 @@ fn run(shared: &Shared) {
 
 /// The workspaces to look at now (dirty, not waiting for a retry), each
 /// with whether it is forced; every one is marked dirty once per sweep.
-fn candidates(shared: &Shared) -> Vec<(String, Weak<IndexService>, bool)> {
+fn candidates(shared: &Shared) -> (u64, Vec<(String, Weak<IndexService>, bool)>) {
     let mut state = shared.state();
     state
         .services
@@ -560,21 +583,21 @@ fn candidates(shared: &Shared) -> Vec<(String, Weak<IndexService>, bool)> {
     let retry_at = state.retry_at.clone();
     let forced = state.forced.clone();
     let dirty = state.dirty.clone();
-    state
+    let services = state
         .services
         .iter()
         .filter(|(id, _)| dirty.contains(*id))
         .filter(|(id, _)| retry_at.get(*id).is_none_or(|at| *at <= now))
         .map(|(id, service)| (id.clone(), service.clone(), forced.contains(id)))
-        .collect()
+        .collect();
+    (state.marks, services)
 }
 
 /// The next workspace with chunks to embed (pruning what each no longer
 /// needs on the way); a workspace found done or off is not dirty any more.
 fn pick(shared: &Shared) -> Option<Job> {
-    let candidates = candidates(shared);
+    let (marks, mut candidates) = candidates(shared);
     // Forced workspaces first.
-    let mut candidates = candidates;
     candidates.sort_by_key(|(_, _, forced)| !forced);
     for (workspace_id, service, forced) in candidates {
         let Some(service) = service.upgrade() else {
@@ -595,7 +618,7 @@ fn pick(shared: &Shared) -> Option<Job> {
             let mut state = shared.state();
             state.statuses.remove(&workspace_id);
             state.forced.remove(&workspace_id);
-            state.dirty.remove(&workspace_id);
+            state.settle(&workspace_id, marks);
             continue;
         };
         let stamp = set.stamp();
@@ -633,8 +656,9 @@ fn pick(shared: &Shared) -> Option<Job> {
             {
                 let mut state = shared.state();
                 state.forced.remove(&workspace_id);
-                // Done: not looked at again until something changes.
-                state.dirty.remove(&workspace_id);
+                // Done: not looked at again until something changes (unless
+                // something did while this pass was planning).
+                state.settle(&workspace_id, marks);
             }
             shared.set_status(
                 &workspace_id,
@@ -876,4 +900,29 @@ fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u6
         .put_vectors(&job.stamp, &rows)
         .map_err(|error| error.to_string())?;
     Ok(rows.len() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::State;
+
+    // The CI flake behind `vectors_join_the_search_once_they_exist`: the
+    // pass read the setting as "off", the test turned embedding on and woke
+    // the scheduler, and the stale "off" then cleared the mark the wake had
+    // just set, so nothing looked at the workspace again for ten minutes.
+    #[test]
+    fn a_mark_made_while_a_pass_planned_survives_that_pass() {
+        let mut state = State::default();
+        state.dirty.insert("ws".to_owned());
+        let planned_at = state.marks;
+        // wake(): marks the workspace again while the pass is planning.
+        state.dirty.insert("ws".to_owned());
+        state.marks += 1;
+        state.settle("ws", planned_at);
+        assert!(state.dirty.contains("ws"), "the wake was lost");
+        // The next pass plans after the wake and settles it.
+        let planned_at = state.marks;
+        state.settle("ws", planned_at);
+        assert!(!state.dirty.contains("ws"));
+    }
 }

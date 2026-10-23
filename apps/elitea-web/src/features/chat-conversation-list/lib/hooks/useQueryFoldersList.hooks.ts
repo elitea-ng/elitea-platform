@@ -10,6 +10,7 @@ import { conversationListErrorMessage } from '../errorMessage';
 import { sortConversations } from '../helpers/conversationList.helpers';
 import { useHasPermission } from '../useHasPermission';
 import type { DateGroupListItem, FolderListItem } from './conversationListState.types';
+import { useConversationActivityLiveEvents } from './useConversationActivityLive.hooks';
 
 /**
  * `entities/folder`'s `FolderConversationRef` now models `name`/`isPrivate`
@@ -33,6 +34,10 @@ function toConversation(ref: FolderConversationRef, extra?: Partial<Conversation
     ...(ref.createdAt !== undefined ? { createdAt: ref.createdAt } : {}),
     ...(ref.isPlayback !== undefined ? { isPlayback: ref.isPlayback } : {}),
     ...(ref.source !== undefined ? { source: ref.source } : {}),
+    ...(ref.uuid !== undefined ? { uuid: ref.uuid } : {}),
+    ...(ref.activity !== undefined ? { activity: ref.activity } : {}),
+    ...(ref.lastActivityAt !== undefined ? { lastActivityAt: ref.lastActivityAt } : {}),
+    ...(ref.unread !== undefined ? { unread: ref.unread } : {}),
     ...extra,
   };
 }
@@ -110,6 +115,9 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
   const [isConversationsLoaded, setIsConversationsLoaded] = useState(false);
   const hasGetPermission = useHasPermission(projectId, PERMISSIONS.chat.folders.get);
 
+  // Client contract 1.12: the rows' activity follows the project's live frames.
+  useConversationActivityLiveEvents(projectId);
+
   const query = folderApi.useList(
     {
       projectId: projectId ?? '',
@@ -146,6 +154,7 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
         conversations,
         offset: group.offset ?? conversations.length,
         ...(group.total !== undefined ? { total: group.total } : {}),
+        ...(group.needsYou !== undefined ? { needsYou: group.needsYou } : {}),
       };
     });
     setDateGroupsRef.current(processedGroups);

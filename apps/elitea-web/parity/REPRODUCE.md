@@ -1,5 +1,12 @@
 # Reproducing the parity manifest (unit P1, spec §8.3)
 
+> **Historical (2026-10-22).** The `apps/elitea-ui` baseline submodule was
+> removed, together with `tools/uictl`, `tools/parity-extract` and the CI
+> `parity` job that ran the commands below. The steps here no longer run in
+> this repository; they record how the manifest was produced. The manifest and
+> its shards stay in place as a record and as input to the gates that still
+> read them (endpoint manifest, contract coverage, visual coverage).
+
 The manifest is **generated, not hand-authored** (§8.3 steps 1–5 are fully
 mechanical; step 6 is scripted with the dedup mapping reviewed below; step 7
 is scripted with a documented batching choice). This file records the exact

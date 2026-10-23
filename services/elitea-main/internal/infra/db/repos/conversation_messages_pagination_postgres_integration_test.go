@@ -4,8 +4,8 @@ package repos
 // every pagination and ordering parameter its callers send.
 //
 // The repository computed its window from `page`/`page_size` and hardcoded
-// `ORDER BY mg.created_at DESC`, while the web client has always sent pylon's
-// `limit`/`offset`/`sort_by`/`sort_order`
+// `ORDER BY mg.created_at DESC`, while the web client has always sent the
+// legacy `limit`/`offset`/`sort_by`/`sort_order`
 // (apps/elitea-web/src/entities/conversation/api/messageApi.ts:59-63,
 // legacy/plugins/elitea_core/api/v2/messages.py:71-107). Neither `page` nor
 // `page_size` was ever on the wire, so every request collapsed to page 1 of
@@ -38,10 +38,10 @@ import (
 // The timestamps are set explicitly rather than left to the column default.
 // `now()` in Postgres is transaction-scoped, so groups inserted by one
 // transaction share a timestamp to the microsecond — which is the very reason
-// pylon sorts by `id` as a tiebreaker (messages.py:94-97). Under a shared
-// timestamp an ordering assertion would be decided by the id tiebreaker alone
-// and would pass even if the created_at ordering were ignored. Spacing the
-// rows a minute apart makes the sort key the thing under test.
+// the legacy runtime sorts by `id` as a tiebreaker (messages.py:94-97). Under a
+// shared timestamp an ordering assertion would be decided by the id tiebreaker
+// alone and would pass even if the created_at ordering were ignored. Spacing
+// the rows a minute apart makes the sort key the thing under test.
 func seedOrderedTranscript(t *testing.T, repo *ConversationsRepo, count int) (conversationUUID string, oldestFirst []string) {
 	t.Helper()
 	ctx := context.Background()
@@ -262,7 +262,8 @@ func TestListMessagesSortsByID(t *testing.T) {
 	}
 }
 
-// --- The free-text filter, pylon's `query` parameter (messages.py:86-91). ---
+// --- The free-text filter, the legacy `query` parameter (messages.py:86-91).
+// ---
 
 // seedTimedTranscript writes one message group per content string, each a
 // minute apart, so ordering assertions rest on the timestamps rather than on
@@ -333,7 +334,7 @@ func TestListMessagesFiltersByQuery(t *testing.T) {
 	}
 }
 
-// ILIKE, not LIKE: pylon's filter is case-insensitive.
+// ILIKE, not LIKE: the legacy filter is case-insensitive.
 func TestListMessagesQueryIsCaseInsensitive(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)
@@ -369,9 +370,9 @@ func TestListMessagesEmptyQueryIsNoFilter(t *testing.T) {
 }
 
 // The metacharacter escape. `%` and `_` are ILIKE wildcards, so an unescaped
-// term silently matches far more than the user typed — pylon interpolated the
-// raw term and had exactly that behaviour. Drop the escaping and every one of
-// these searches returns rows it should not.
+// term silently matches far more than the user typed — the legacy runtime
+// interpolated the raw term and had exactly that behaviour. Drop the escaping
+// and every one of these searches returns rows it should not.
 func TestListMessagesQueryTreatsWildcardsLiterally(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)
@@ -398,8 +399,8 @@ func TestListMessagesQueryTreatsWildcardsLiterally(t *testing.T) {
 }
 
 // A group whose text is split across several matching items must appear ONCE.
-// Pylon joined the item table instead, so such a group came back duplicated and
-// was double-counted in `total`; EXISTS answers per group.
+// The legacy runtime joined the item table instead, so such a group came back
+// duplicated and was double-counted in `total`; EXISTS answers per group.
 func TestListMessagesQueryReturnsAGroupOnceWhenSeveralItemsMatch(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)

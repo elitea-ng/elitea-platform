@@ -9,12 +9,12 @@
 -- nobody can reach. That is the 403-for-everyone outcome 0060 exists to
 -- prevent, arriving by a different door.
 --
--- The grants are transcribed from the `recommended_roles` each pylon handler
--- declares, with the two transcription traps 0060 and 001_initial.sql both
--- document: a BARE `check_api([...])` list parses into the RecommendedRoles
--- defaults (system/super_admin/admin True), and a dict naming only
--- `{"admin": True, "viewer": False, "editor": False}` still leaves super_admin
--- at its default True. `modes.py`, `user_invite.py` and
+-- The grants are transcribed from the `recommended_roles` each legacy runtime
+-- handler declares, with the two transcription traps 0060 and 001_initial.sql
+-- both document: a BARE `check_api([...])` list parses into the
+-- RecommendedRoles defaults (system/super_admin/admin True), and a dict naming
+-- only `{"admin": True, "viewer": False, "editor": False}` still leaves
+-- super_admin at its default True. `modes.py`, `user_invite.py` and
 -- `admin_published_agents.py` are the first form; `user_project_permissions.py`
 -- is the second. All four therefore land on super_admin and admin, and on
 -- neither editor nor viewer.

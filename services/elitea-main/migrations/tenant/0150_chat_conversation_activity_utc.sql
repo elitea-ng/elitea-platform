@@ -4,13 +4,13 @@
 -- THE DEFECT
 --
 -- chat_conversations.updated_at is a `timestamp` WITHOUT time zone. Its
--- meaning is the UTC wall clock: pylon wrote it with server_default now() in
--- UTC containers, and the web client appends `Z` to a naive timestamp before
--- it parses one. 0145's trigger stamps it with a bare now(), which is a
--- timestamptz, so Postgres stores it in the SESSION time zone. On a server or
--- session that is not UTC the bump wrote local time: the list's "last
--- modified" was off by the offset, and the one-second throttle compared that
--- local stamp with a local now(), so it held only by accident.
+-- meaning is the UTC wall clock: the legacy runtime wrote it with
+-- server_default now() in UTC containers, and the web client appends `Z` to a
+-- naive timestamp before it parses one. 0145's trigger stamps it with a bare
+-- now(), which is a timestamptz, so Postgres stores it in the SESSION time
+-- zone. On a server or session that is not UTC the bump wrote local time: the
+-- list's "last modified" was off by the offset, and the one-second throttle
+-- compared that local stamp with a local now(), so it held only by accident.
 --
 -- THE CHANGE
 --

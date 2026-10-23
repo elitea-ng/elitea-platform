@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -61,7 +62,22 @@ export const ConversationMessage = zod
     author_participant_id: zod.int().optional(),
     sent_to_id: zod.int().optional(),
     reply_to_id: zod.int().optional(),
-    metadata: zod.record(zod.string(), zod.unknown()).optional(),
+    metadata: zod
+      .object({
+        mentioned_user_ids: zod
+          .array(zod.int())
+          .optional()
+          .describe(
+            "Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender.",
+          ),
+        mentions_everyone: zod
+          .boolean()
+          .optional()
+          .describe(
+            "Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise.",
+          ),
+      })
+      .optional(),
     message_items: zod
       .array(AttachmentMessageItem)
       .optional()

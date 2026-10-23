@@ -11,16 +11,16 @@ package toolkits
 // which is why a registered provider was visible to an operator and invisible
 // to a user.
 //
-// # Two of pylon's mistakes are deliberately not copied
+// # Two of the legacy runtime's mistakes are deliberately not copied
 //
-//  1. pylon probes `service_location_url` from the server on every catalogue
-//     read. Nothing here dials a provider. The origin is reported as metadata
-//     and never fetched, so a catalogue read cannot be turned into a
+//  1. The legacy runtime probes `service_location_url` from the server on every
+//     catalogue read. Nothing here dials a provider. The origin is reported as
+//     metadata and never fetched, so a catalogue read cannot be turned into a
 //     server-side request to an attacker-named host.
-//  2. pylon drops an unhealthy provider out of the catalogue entirely, so a
-//     toolkit a user already configured silently stops being offered. Health is
-//     not consulted here at all. Admission decides, and admission is a recorded
-//     decision with a reason.
+//  2. The legacy runtime drops an unhealthy provider out of the catalogue
+//     entirely, so a toolkit a user already configured silently stops being
+//     offered. Health is not consulted here at all. Admission decides, and
+//     admission is a recorded decision with a reason.
 //
 // # What admission allows
 //
@@ -70,8 +70,8 @@ type providerHubProjection struct {
 // deployment's public project at boot (`cmd/elitea-main/main.go` passes
 // `PublicProjectID` into `startProviderRegistrar`), so a reader keyed on the
 // caller's project would query rows nothing ever writes. This is the same
-// project-union rule pylon expresses as `expand_project_ids`, reduced to the
-// one member that this service actually writes.
+// project-union rule the legacy runtime expresses as `expand_project_ids`,
+// reduced to the one member that this service actually writes.
 type poolManifestSource struct {
 	pool      *pgxpool.Pool
 	projectID int64
@@ -111,10 +111,10 @@ func (p *providerHubProjection) Name() string { return "provider_hub" }
 
 // ProjectToolkitTypes answers one type per admitted toolkit.
 //
-// A manifest that will not parse fails ONE provider, not the read: pylon wraps
-// its own per-provider projection in a try/except for the same reason. The
-// difference is that this records the failure as an error on the returned
-// slice's behalf — the caller logs it — rather than swallowing it.
+// A manifest that will not parse fails ONE provider, not the read: the legacy
+// runtime wraps its own per-provider projection in a try/except for the same
+// reason. The difference is that this records the failure as an error on the
+// returned slice's behalf — the caller logs it — rather than swallowing it.
 func (p *providerHubProjection) ProjectToolkitTypes(ctx context.Context) ([]ProjectedToolkitType, error) {
 	if p == nil || p.manifests == nil {
 		return nil, nil
@@ -177,7 +177,7 @@ func projectProviderToolkits(
 		if typeName == "" {
 			typeName = providerName + "_" + toolkit.Name
 		}
-		// pylon's `if name in result: continue` — the first declaration of a
+		// The legacy `if name in result: continue` — the first declaration of a
 		// type name wins.
 		if _, taken := seen[typeName]; taken {
 			continue
@@ -215,8 +215,8 @@ func providerToolkitSchema(
 		"default":      []any{},
 		"args_schemas": argsSchemas,
 	}
-	// pylon writes FOUR hidden routing fields; two are reproduced here and two
-	// are deliberately not.
+	// The legacy runtime writes FOUR hidden routing fields; two are reproduced
+	// here and two are deliberately not.
 	//
 	// `provider` and `toolkit` name WHICH provider and WHICH of its toolkits a
 	// stored row belongs to. They are the routing facts, they are what a worker
@@ -224,7 +224,7 @@ func providerToolkitSchema(
 	// routed at all.
 	//
 	// `module` (`plugins.provider_worker.utils.tools`) and `class` (`Toolkit`)
-	// are NOT reproduced. They are a Python import path into a pylon plugin
+	// are NOT reproduced. They are a Python import path into a legacy plugin
 	// that this service does not load and will not load — AGENTS.md forbids
 	// carrying plugin loading into the target architecture. Writing them would
 	// put a dead import path in every stored toolkit and would read as a
@@ -242,8 +242,9 @@ func providerToolkitSchema(
 		"icon_url": nil,
 		"label":    toolkit.Name,
 	}
-	// The descriptor's own metadata wins, exactly as pylon's `**toolkit_metadata`
-	// spread does: a provider may state its own label, icon or interface.
+	// The descriptor's own metadata wins, exactly as the legacy
+	// `**toolkit_metadata` spread does: a provider may state its own label,
+	// icon or interface.
 	for key, value := range toolkit.ToolkitMetadata {
 		metadata[key] = value
 	}
@@ -285,7 +286,7 @@ func providerToolkitSettings(
 	return properties, required
 }
 
-// providerParameterPrefix is pylon's `f"toolkit_configuration_{key}"`. The
+// providerParameterPrefix is the legacy `f"toolkit_configuration_{key}"`. The
 // prefix is part of the stored settings shape, so it is not an implementation
 // detail this port may drop.
 const providerParameterPrefix = "toolkit_configuration_"
@@ -293,8 +294,9 @@ const providerParameterPrefix = "toolkit_configuration_"
 // orderedParameterKeys applies fields_order, then appends what it did not name.
 //
 // Map iteration in Go is randomised, so without this the served property order
-// would differ between two reads of the same descriptor. pylon's `items()` is
-// insertion-ordered; `fields_order` is how a provider states the order it wants.
+// would differ between two reads of the same descriptor. The legacy `items()`
+// is insertion-ordered; `fields_order` is how a provider states the order it
+// wants.
 func orderedParameterKeys(config providerhub.ToolkitConfigDescriptor) []string {
 	ordered := make([]string, 0, len(config.Parameters))
 	named := make(map[string]struct{}, len(config.FieldsOrder))
@@ -319,7 +321,7 @@ func orderedParameterKeys(config providerhub.ToolkitConfigDescriptor) []string {
 	return append(ordered, remaining...)
 }
 
-// providerParameterSchema is pylon's per-parameter branch.
+// providerParameterSchema is the legacy per-parameter branch.
 func providerParameterSchema(key string, parameter providerhub.ParameterDescriptor) map[string]any {
 	property := map[string]any{}
 	declared := parameter.DeclaredType()
@@ -355,9 +357,9 @@ func providerParameterSchema(key string, parameter providerhub.ParameterDescript
 
 	// json_schema_extra merges in WITHOUT overwriting a key already computed,
 	// then flips the property to the client's `configuration` kind unless the
-	// extra names a reference picker. Both rules are pylon's, in pylon's order:
-	// the type flip runs after the merge and does clobber a `type` the merge
-	// carried in.
+	// extra names a reference picker. Both rules are the legacy runtime's, in
+	// its order: the type flip runs after the merge and does clobber a `type`
+	// the merge carried in.
 	if len(parameter.JSONSchemaExtra) > 0 {
 		for key, value := range parameter.JSONSchemaExtra {
 			if _, present := property[key]; present {
@@ -386,7 +388,7 @@ func referencePickerExtra(extra map[string]any) bool {
 	return false
 }
 
-// convertArgsSchema is pylon's `convert_args_schema`.
+// convertArgsSchema is the legacy `convert_args_schema`.
 func convertArgsSchema(
 	args map[string]providerhub.ArgDescriptor,
 	title, description string,
@@ -447,7 +449,8 @@ func convertArgsSchema(
 	return schema
 }
 
-// argumentDescription falls back to the argument's own name, as pylon does.
+// argumentDescription falls back to the argument's own name, as the legacy
+// runtime does.
 func argumentDescription(argument providerhub.ArgDescriptor, name string) string {
 	if argument.Description != "" {
 		return argument.Description
@@ -457,7 +460,7 @@ func argumentDescription(argument providerhub.ArgDescriptor, name string) string
 
 // applyNumericBounds maps pydantic's gt/ge/lt/le onto JSON Schema, for numeric
 // properties only. A strict bound wins over a non-strict one in the same
-// direction, which is pylon's own conflict rule.
+// direction, which is the legacy runtime's own conflict rule.
 func applyNumericBounds(property map[string]any, argument providerhub.ArgDescriptor) {
 	kind, _ := property["type"].(string)
 	if kind != "integer" && kind != "number" {
@@ -477,7 +480,7 @@ func applyNumericBounds(property map[string]any, argument providerhub.ArgDescrip
 	}
 }
 
-// titleAbbreviations is pylon's `_ABBREVIATIONS`.
+// titleAbbreviations is the legacy `_ABBREVIATIONS`.
 var titleAbbreviations = map[string]struct{}{
 	"api": {}, "url": {}, "id": {}, "uuid": {}, "http": {}, "https": {}, "uri": {},
 	"sql": {}, "html": {}, "css": {}, "json": {}, "xml": {}, "jwt": {}, "oauth": {},
@@ -490,7 +493,7 @@ var (
 	acronymBoundary    = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
 )
 
-// prettifyTitle is pylon's `prettify_title`: split camelCase and PascalCase,
+// prettifyTitle is the legacy `prettify_title`: split camelCase and PascalCase,
 // replace separators, upper-case a known abbreviation, capitalise the rest.
 func prettifyTitle(name string) string {
 	if name == "" {

@@ -620,6 +620,10 @@ mod tests {
         }
     }
 
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+    )]
     impl VectorBackend for Fake {
         async fn search(&self, params: SearchParams) -> Result<Vec<pb::ScoredPoint>> {
             Ok(self.answer(
@@ -734,7 +738,7 @@ mod tests {
             ..Fake::default()
         };
         let mut p = plan();
-        assert!(search_documents(&fake, &p).await.unwrap().is_empty());
+        assert_eq!(search_documents(&fake, &p).await.unwrap(), []);
         p.rerank = rerank::parse(&json!({"kind": {"weight": 1.0, "rules": {"priority": "spec"}}}))
             .unwrap();
         let hits = search_documents(&fake, &p).await.unwrap();

@@ -250,3 +250,42 @@ func TestProjectClientApplicationVersionNamesEveryWithheldSecret(t *testing.T) {
 	require.NotNil(t, withheld, "never null on the wire")
 	require.Empty(t, withheld)
 }
+
+// A platform MCP server is projected with a toolkit_ref (toolkit id 0,
+// domain-separated by its type) and the frozen selection, so the desktop can
+// call it through executeRemoteToolkitTool (issue 1231). The saved toolkit's
+// projection is unchanged.
+func TestClientApplicationVersionAddressesPlatformMCPThroughARef(t *testing.T) {
+	t.Parallel()
+	service, err := NewClientApplicationVersionService(clientVersionSource(clientVersionStoredDetails), newClientVersionFreezer(t))
+	require.NoError(t, err)
+	resolved, err := service.Resolve(t.Context(), 90106, 11, 1, 2)
+	require.NoError(t, err)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal(resolved.VersionDetails, &details))
+	identity := ClientVersionIdentity{ProjectID: 90106, ApplicationID: 1, VersionID: 2}
+	refs := map[string]bool{}
+	platforms := 0
+	for _, raw := range details["tools"].([]any) {
+		tool := raw.(map[string]any)
+		switch tool["kind"] {
+		case ClientToolKindPlatformMCP:
+			platforms++
+			serverName := tool["server_name"].(string)
+			require.Equal(t, tool["type"], serverName)
+			ref := tool["toolkit_ref"].(map[string]any)
+			require.EqualValues(t, 0, ref["toolkit_id"])
+			require.EqualValues(t, 90106, ref["project_id"])
+			require.Equal(t, ClientToolkitRef(identity, 0, serverName), ref["ref"])
+			require.Equal(t, []any{}, tool["selected_tools"])
+			require.Equal(t, true, tool["all_tools"], "a cloud turn's internal MCP has every tool of the category")
+			require.False(t, refs[ref["ref"].(string)], "each server has its own reference")
+			refs[ref["ref"].(string)] = true
+		case ClientToolKindRemoteToolkit:
+			require.Equal(t, []any{"read_file"}, tool["selected_tools"])
+			require.Equal(t, false, tool["all_tools"])
+			require.EqualValues(t, 7, tool["toolkit_ref"].(map[string]any)["toolkit_id"])
+		}
+	}
+	require.Greater(t, platforms, 1, "internal_mcp selects every implemented builder")
+}

@@ -41,8 +41,7 @@ func NewCurrentToolkitTypesRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentToolkitTypesRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentToolkitTypesRoute
 	}
 

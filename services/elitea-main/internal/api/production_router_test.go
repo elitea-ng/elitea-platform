@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -254,8 +255,8 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 		productionChatConfigReader{},
 		productionProjectContextReader{},
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionPromptContextPermissionResolver{},
 	)
@@ -283,8 +284,7 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 	} {
 		request := httptest.NewRequest(test.method, test.path, nil)
 		request.RemoteAddr = "10.0.0.8:43120"
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "11")
+		authtest.SignIn(request, "11")
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
 		if response.Code != test.want {
@@ -304,21 +304,9 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 	}
 }
 
-func TestProductionAuthRoutesRequireBothReviewedEdges(t *testing.T) {
-	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-	for name, test := range map[string]struct {
-		browser http.Handler
-		main    http.Handler
-	}{
-		"missing browser": {main: handler},
-		"missing main":    {browser: handler},
-		"both missing":    {},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := NewProductionAuthRoutes(test.browser, test.main); !errors.Is(err, ErrInvalidProductionAuthRoutes) {
-				t.Fatalf("error = %v, want %v", err, ErrInvalidProductionAuthRoutes)
-			}
-		})
+func TestProductionAuthRoutesRequireTheFormRoutes(t *testing.T) {
+	if _, err := NewProductionAuthRoutes(nil); !errors.Is(err, ErrInvalidProductionAuthRoutes) {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidProductionAuthRoutes)
 	}
 }
 
@@ -330,10 +318,7 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 	browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
-	authRoutes, err := NewProductionAuthRoutes(browser, main)
+	authRoutes, err := NewProductionAuthRoutes(browser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,16 +330,17 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 		want   int
 	}{
 		// The Form router is served under /auth with the prefix stripped
-		// (auth_paths.go). The stub registers no core check, so /auth/check
-		// reaches it and finds nothing. The old prefix is not mounted.
+		// (auth_paths.go). The old prefix is not mounted, and neither the
+		// forward-auth check nor the edge's /internal/auth/main exists any
+		// more (#1359).
 		{http.MethodGet, "/auth/login", http.StatusNoContent},
 		{http.MethodPost, "/auth/form/authorize", http.StatusNoContent},
 		{http.MethodPost, "/auth/auth_form/authorize", http.StatusNotFound},
 		{http.MethodGet, "/forward-" + "auth/login", http.StatusNotFound},
-		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
+		{http.MethodGet, "/internal/auth/main", http.StatusNotFound},
 		{http.MethodGet, "/auth/check", http.StatusNotFound},
 		{http.MethodGet, "/auth/info", http.StatusNotFound},
-		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/internal/auth/main", http.StatusNotFound},
 	} {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -371,19 +357,16 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 	browser.Get("/login", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
 	agentStart := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("X-Reviewed-Agent-Route", "true")
 		writer.WriteHeader(http.StatusAccepted)
 	})
-	authRoutes, err := NewProductionAuthRoutes(browser, main)
+	authRoutes, err := NewProductionAuthRoutes(browser)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// AppsRepo is representative of the current hybrid composition and forces
+	// AppsRepo is one of the broad compatibility repositories, and it forces
 	// the compatibility router until that API has moved to production routes.
 	router := NewRouter(RouterConfig{
 		ProductionAuth:    authRoutes,
@@ -397,8 +380,8 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 		want   int
 	}{
 		{http.MethodGet, "/auth/login", http.StatusNoContent},
-		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
-		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/internal/auth/main", http.StatusNotFound},
+		{http.MethodPost, "/internal/auth/main", http.StatusNotFound},
 		{http.MethodPost, "/api/v2/elitea_core/messages/prompt_lib/2/conversation", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/regenerate/prompt_lib/2/message", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/continue_predict/prompt_lib/2/conversation", http.StatusAccepted},
@@ -431,10 +414,6 @@ func (productionProjectPrincipalValidator) ValidatePrincipal(_ context.Context, 
 	return user, nil
 }
 
-type productionProjectPeerVerifier struct{}
-
-func (productionProjectPeerVerifier) VerifyForwardedIdentityPeer(*http.Request) error { return nil }
-
 type productionProjectPermissionResolver struct{}
 
 func (productionProjectPermissionResolver) ResolvePermissions(
@@ -458,8 +437,8 @@ func TestProductionRouterMountsOnlyExactCurrentProjectListPath(t *testing.T) {
 	projectList, err := v2projects.NewCurrentProjectListRoute(
 		productionProjectStore{},
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionProjectPermissionResolver{},
 	)
@@ -521,8 +500,8 @@ func TestProductionRouterMountsOnlyExactCurrentSocialAuthorsPaths(t *testing.T) 
 	authors, err := v2social.NewCurrentAuthorsRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionSocialAuthorsPermissionResolver{},
 	)
@@ -537,8 +516,7 @@ func TestProductionRouterMountsOnlyExactCurrentSocialAuthorsPaths(t *testing.T) 
 	} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.RemoteAddr = "10.0.0.8:43120"
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "41")
+		authtest.SignIn(request, "41")
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusOK || recorder.Body.String() != "[]\n" {
@@ -616,8 +594,8 @@ func TestProductionRouterMountsOnlyExactCurrentProjectInfoPathWhenComposed(t *te
 	projectInfo, err := projectinfoapi.NewCurrentProjectInfoRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionProjectInfoPermissionResolver{},
 	)
@@ -663,8 +641,7 @@ func TestProductionRouterMountsOnlyExactCurrentProjectInfoPathWhenComposed(t *te
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, nil)
 			if test.authenticated {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -742,8 +719,8 @@ func TestProductionRouterMountsOnlyExactCurrentIndexTypesPathWhenComposed(t *tes
 	indexTypes, err := indextypesapi.NewCurrentIndexTypesRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionIndexTypesPermissionResolver{},
 	)
@@ -789,8 +766,7 @@ func TestProductionRouterMountsOnlyExactCurrentIndexTypesPathWhenComposed(t *tes
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, nil)
 			if test.authenticated {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -803,7 +779,7 @@ func TestProductionRouterMountsOnlyExactCurrentIndexTypesPathWhenComposed(t *tes
 			}
 			// One body, both key sets (#394): the published
 			// DocumentLoadersResponse keys the generated apps/elitea-web
-			// client reads, beside the Pylon maps apps/elitea-ui reads. Each
+			// client reads, beside the legacy maps apps/elitea-ui reads. Each
 			// item lists the extensions of the map its `type` names, so the
 			// two halves cannot disagree.
 			if test.want == http.StatusOK &&
@@ -902,8 +878,8 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 	route, err := applicationskillsapi.NewCurrentApplicationSkillsRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionApplicationSkillsPermissionResolver{},
 	)
@@ -926,7 +902,7 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 			want:          http.StatusOK,
 			// One body, both clients (#395): `items` is the published
 			// SkillsList contract apps/elitea-web reads, `skills` and
-			// `max_skills` are the Pylon keys apps/elitea-ui reads.
+			// `max_skills` are the legacy keys apps/elitea-ui reads.
 			wantBody: "{\"items\":[{\"id\":\"17\",\"project_id\":\"7\",\"name\":\"deploy\"," +
 				"\"description\":\"Deploy safely\",\"type\":\"skill\",\"is_default\":false," +
 				"\"created_at\":\"0001-01-01T00:00:00Z\",\"updated_at\":\"0001-01-01T00:00:00Z\"}]," +
@@ -981,8 +957,7 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, nil)
 			if test.authenticated {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -1747,6 +1722,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	got := routeSet.Patterns()
 
 	want := []string{
+		"DELETE /api/v2/admin/branding/administration",
 		"DELETE /api/v2/admin/gateway/default_model/",
 		"DELETE /api/v2/admin/gateway/governance/{id}",
 		"DELETE /api/v2/admin/gateway/models/{id}",
@@ -1773,7 +1749,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/context_manager/summary/{projectID}/{conversationID}/{summaryID}",
 		"DELETE /api/v2/elitea_core/application/prompt_lib/{projectID}/{applicationID}",
 		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}",
+		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"DELETE /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
+		"DELETE /api/v2/elitea_core/conversation_archive/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"DELETE /api/v2/elitea_core/index_cancel/prompt_lib/{projectID}/{toolkitID}/{indexName}/{taskID}",
 		"DELETE /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}/{indexMetaID}",
@@ -1814,7 +1792,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/docs",
 		"GET /api/openapi.json",
 		"GET /api/openapi.yaml",
-		"GET /api/v2/admin/active_tasks/{mode}",
 		"GET /api/v2/admin/auth_users/{mode}",
 		"GET /api/v2/admin/background_jobs/administration",
 		"GET /api/v2/admin/branding/administration",
@@ -1849,16 +1826,11 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/projects/{mode}",
 		"GET /api/v2/admin/roles/administration/{projectID}",
 		"GET /api/v2/admin/roles/{mode}/{projectID}",
-		"GET /api/v2/admin/runtime_plugin/{mode}/{pluginName}",
-		"GET /api/v2/admin/runtime_remote/{mode}",
-		"GET /api/v2/admin/runtime_remote_config/{mode}/{pluginID}",
 		"GET /api/v2/admin/scim_clients/administration",
 		"GET /api/v2/admin/scim_group_bindings/administration",
 		"GET /api/v2/admin/scim_group_bindings/administration/project_roles/{projectID}",
 		"GET /api/v2/admin/system_info/prompt_lib",
 		"GET /api/v2/admin/system_info/{mode}",
-		"GET /api/v2/admin/tasks/{mode}",
-		"GET /api/v2/admin/tasks/{mode}/",
 		"GET /api/v2/admin/toolkit_types/administration",
 		"GET /api/v2/admin/user_project_permissions/administration",
 		"GET /api/v2/admin/users/administration/{projectID}",
@@ -2035,7 +2007,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /app/{projectID}/mcp/*",
 		"GET /artifacts/s3/{bucket}",
 		"GET /artifacts/s3/{bucket}/*",
-		"GET /auth",
 		"GET /avatars/{projectID}/{filename}",
 		"GET /healthz",
 		"GET /icons/{projectID}/{filename}",
@@ -2050,6 +2021,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"HEAD /artifacts/s3/{bucket}/*",
 		"PATCH /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"PATCH /api/v2/elitea_core/application_relation/prompt_lib/{projectID}/{appID}/{versionID}",
+		"PATCH /api/v2/elitea_core/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}",
 		"PATCH /api/v2/elitea_core/default_version/prompt_lib/{projectID}/{applicationID}/{versionID}",
 		"PATCH /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}",
 		"PATCH /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
@@ -2080,17 +2052,14 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/admin/gateway/providers/{configID}/models",
 		"POST /api/v2/admin/gateway/providers/{configID}/revalidate",
 		// The cross-project bulk membership invite (issue 247). It replaces
-		// pylon's invites_bulkusers and invites_bulkprojects console pages,
+		// the legacy invites_bulkusers and invites_bulkprojects console pages,
 		// which are the same cross product with one side pinned.
 		"POST /api/v2/admin/invites_bulk/administration",
 		"POST /api/v2/admin/moderation_status/project_request",
 		"POST /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"POST /api/v2/admin/modes/administration",
 		"POST /api/v2/admin/permissions/{scope}/{mode}",
-		"POST /api/v2/admin/plugin_config_restart/{mode}/{pylonID}",
 		"POST /api/v2/admin/roles/{scope}/{mode}",
-		"POST /api/v2/admin/runtime_pylons/{mode}",
-		"POST /api/v2/admin/runtime_remote_config/{mode}/{pluginID}",
 		"POST /api/v2/admin/scim_clients/administration",
 		"POST /api/v2/admin/scim_clients/administration/{id}/revoke",
 		"POST /api/v2/admin/scim_clients/administration/{id}/rotate",
@@ -2133,6 +2102,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/batch_replace_version/prompt_lib/{projectID}/{oldVersionID}/{newVersionID}",
 		"POST /api/v2/elitea_core/canvas/prompt_lib/{projectID}/{canvasID}/presence",
 		"POST /api/v2/elitea_core/canvases/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/conversation_fork/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/export_converter/prompt_lib",
 		"POST /api/v2/elitea_core/export_import/prompt_lib/{projectID}/{entityID}",
@@ -2228,7 +2198,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/project_cloud_executor/administration/{projectID}",
 		"PUT /api/v2/admin/project_suspend/{mode}/{projectID}",
 		"PUT /api/v2/admin/roles/{scope}/{mode}",
-		"PUT /api/v2/admin/runtime_plugin/{mode}/{pluginName}",
 		"PUT /api/v2/admin/scim_group_bindings/administration/{id}",
 		"PUT /api/v2/admin/toolkit_types/administration/{type}",
 		"PUT /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID}",
@@ -2246,6 +2215,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/elitea_core/canvas/prompt_lib/{projectID}/{canvasID}",
 		"PUT /api/v2/elitea_core/context_strategy/prompt_lib/{projectID}/{conversationID}",
 		"PUT /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
+		"PUT /api/v2/elitea_core/conversation_archive/prompt_lib/{projectID}/{conversationID}",
+		"PUT /api/v2/elitea_core/conversation_read/prompt_lib/{projectID}/{conversationID}",
 		"PUT /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}",
 		"PUT /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"PUT /api/v2/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",
@@ -2371,8 +2342,7 @@ func TestProductionAuthCandidatesRejectEveryForgedCredentialShape(t *testing.T) 
 				case "invalid":
 					request.Header.Set("Authorization", "Bearer invalid")
 				case "forwarded":
-					request.Header.Set("X-Auth-Type", "user")
-					request.Header.Set("X-Auth-Id", "1")
+					authtest.SignIn(request, "1")
 				case "session":
 					request.AddCookie(&http.Cookie{Name: "elitea_session", Value: "forged.session"})
 				}
@@ -2406,9 +2376,10 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		path   string
 		want   int
 	}{
-		// Not a registered route at all: "/auth/check" (the Traefik
-		// EdgeAuth check) is a top-level "/auth" route, distinct from the
-		// "/auth/*" browser session group.
+		// Not registered routes at all: "/auth/check" and the top-level
+		// "/auth" were the edge's forward-auth checks, removed with the
+		// X-Auth-* projection (#1359).
+		{method: http.MethodGet, path: "/auth", want: http.StatusNotFound},
 		{method: http.MethodGet, path: "/auth/check", want: http.StatusNotFound},
 		{method: http.MethodHead, path: "/auth/check", want: http.StatusNotFound},
 		{method: http.MethodOptions, path: "/auth/check", want: http.StatusNotFound},
@@ -2547,11 +2518,11 @@ func perMessageReadRouter(repo v2convs.Repository, granted ...string) http.Handl
 
 const perMessageReadUID = "0f8f6d1e-9c2a-4a1b-8f3e-2b7c5d4e6a90"
 
-// pylon declares `get` and `delete` on ONE module — elitea_core/api/v2/
-// message.py:176-183 — and this router bound only the delete. The read was
-// implemented (`(*conversations.Handler).GetMessage`) and registered by
-// nothing, which is #126's dead-wiring class: `git log -S` finds no commit
-// that ever routed it, so it is a gap rather than a regression.
+// The legacy runtime declares `get` and `delete` on ONE module —
+// elitea_core/api/v2/ message.py:176-183 — and this router bound only the
+// delete. The read was implemented (`(*conversations.Handler).GetMessage`) and
+// registered by nothing, which is #126's dead-wiring class: `git log -S` finds
+// no commit that ever routed it, so it is a gap rather than a regression.
 //
 // TWO claims are asserted together, because either alone passes against a
 // route that does not work:
@@ -2596,7 +2567,7 @@ func TestProductionRouterServesThePerMessageRead(t *testing.T) {
 	}
 }
 
-// The read carries its OWN permission. pylon gates the get on
+// The read carries its OWN permission. Legacy gates the get on
 // `models.chat.messages.details` and the delete on `models.chat.messages.delete`
 // (message.py:39,73), and the two are withheld differently — delete is denied
 // to a viewer in both modes, details is granted to a viewer in both.
@@ -2605,7 +2576,7 @@ func TestProductionRouterServesThePerMessageRead(t *testing.T) {
 // here. Without this, a gate copied from the DELETE one line below it would
 // look correct in every other test in this file: the route would still answer,
 // still reach the handler, and still return the right message — for a
-// principal pylon does not let read it.
+// principal the legacy runtime would not let read the message.
 func TestPerMessageReadDoesNotAcceptTheDeleteSiblingsPermission(t *testing.T) {
 	repo := &recordingMessageRepo{}
 	router := perMessageReadRouter(repo, "models.chat.messages.delete")

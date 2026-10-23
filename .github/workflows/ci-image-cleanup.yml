@@ -1,0 +1,67 @@
+name: CI Image Cleanup
+
+# Prunes the CI-only `ci-*` container packages ci-web-e2e.yml pushes: one
+# `ci-<image>:<sha>` version per image per commit, and the untagged manifests
+# each nightly run on main strands in `ci-cache-<image>`. The policy, and the rule that
+# no other package is ever touched, live in scripts/ci/prune-ci-images.mjs,
+# run through actions/github-script.
+#
+# WHEN. Daily, and on dispatch — from main only. Never on a pull request: a
+# change to the policy is held by scripts/ci/prune-ci-images.test.mjs in the
+# static gates (no-binaries.yml), and a dispatch with dry_run shows what it
+# would delete before anything is.
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Delete CI image versions older than this many days.
+        type: number
+        default: 7
+      dry_run:
+        description: List what would be deleted, delete nothing.
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  prune:
+    name: Prune CI-only images older than the window
+    # A dispatch from another branch would run another branch's policy.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Deletes versions of the ci-* packages, which this repository's
+      # workflow created and therefore administers.
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: The policy still refuses what it must
+        run: node --test --test-reporter=spec scripts/ci/prune-ci-images.test.mjs
+      # Pinned to the v9.0.0 commit, as cancel-merged-pr-runs.yml pins it:
+      # this step holds packages: write.
+      - name: Prune
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DAYS: ${{ inputs.days || 7 }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          ORG: ${{ github.repository_owner }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-ci-images.mjs`);
+            const code = await main({
+              github,
+              org: process.env.ORG,
+              days: process.env.DAYS,
+              dryRun: process.env.DRY_RUN === "true",
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/prune-ci-images.mjs exited ${code}`);

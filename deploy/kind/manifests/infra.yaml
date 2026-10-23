@@ -10,11 +10,10 @@ metadata:
   name: postgres-initdb
   namespace: elitea
 data:
-  # dbInit is off in values-kind.yaml, so this is what creates the extension
-  # the index plane's unqualified DDL needs. `vector` ships in the image; the
-  # extension still has to be created in the database.
+  # dbInit is off in values-kind.yaml, so this is what creates the
+  # extensions the platform's schema expects. No `vector`: nothing needs
+  # pgvector any more — every dense vector is in Qdrant behind elitea-vector.
   00-extensions.sql: |
-    CREATE EXTENSION IF NOT EXISTS vector;
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 ---
 apiVersion: apps/v1
@@ -32,9 +31,10 @@ spec:
     spec:
       containers:
         - name: postgres
-          # Debian 13. The data volume is an emptyDir, so a new image starts
-          # on a fresh initdb and needs no collation repair.
-          image: docker.io/pgvector/pgvector:0.8.5-pg16-trixie
+          # Plain PostgreSQL 18 on Debian 13 (trixie). The data volume is an
+          # emptyDir, so a new image starts on a fresh initdb and needs no
+          # collation repair.
+          image: docker.io/library/postgres:18
           imagePullPolicy: IfNotPresent
           env:
             - { name: POSTGRES_USER, value: elitea }

@@ -26,10 +26,11 @@ interface AuthorIdentity {
   email?: string;
   avatar?: string;
   personal_project_id?: string;
+  provider_refs?: readonly string[];
 }
 
 /**
- * The five display strings, in one place. Extracted from the component so the
+ * The display values, in one place. Extracted from the component so the
  * chain of `??` fallbacks does not count against its complexity budget — and
  * so "what this page shows when a field is missing" is one readable list.
  */
@@ -40,6 +41,7 @@ function identityFields(author: AuthorIdentity | undefined, authors: unknown) {
     avatar: author?.avatar ?? '',
     userId: author?.id ?? '',
     lastLogin: formatLastLogin(selectLastLogin(authors, author?.id)),
+    providerRefs: author?.provider_refs ?? [],
   };
 }
 

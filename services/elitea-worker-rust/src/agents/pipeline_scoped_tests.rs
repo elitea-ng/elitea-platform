@@ -24,35 +24,30 @@ pub(super) struct SavedVersions {
     project_id: u64,
 }
 
-#[async_trait]
-impl RuntimeContextRpc for SavedVersions {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        let path = request.uri().path();
-        let value = if path.ends_with("/elitea-client-token") {
+#[tonic::async_trait]
+impl ContextRoutes for SavedVersions {
+    async fn answer(&self, call: ContextCall) -> RuntimeReply {
+        let unavailable = || tonic::Status::unavailable("saved version fixture");
+        let value = if call.route == "elitea-client-token" {
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":self.project_id,
                 "token":"ephemeral-scoped-token"})
         } else {
-            let parts = path.split('/').collect::<Vec<_>>();
+            // `applications/{a}/versions/{v}`
+            let parts = call.route.split('/').collect::<Vec<_>>();
             let identity = parts
-                .get(parts.len().wrapping_sub(3))
+                .get(1)
                 .and_then(|value| value.parse::<u64>().ok())
-                .zip(parts.last().and_then(|value| value.parse::<u64>().ok()))
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
-            self.reads
-                .lock()
-                .map_err(|_| RuntimeContextTransportError::Unavailable)?
-                .push(identity);
-            let details = self
-                .versions
-                .get(&identity)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .zip(parts.get(3).and_then(|value| value.parse::<u64>().ok()))
+                .filter(|_| {
+                    parts.len() == 4 && parts[0] == "applications" && parts[2] == "versions"
+                })
+                .ok_or_else(unavailable)?;
+            self.reads.lock().map_err(|_| unavailable())?.push(identity);
+            let details = self.versions.get(&identity).ok_or_else(unavailable)?;
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":self.project_id,
                 "application_id":identity.0,"version_id":identity.1,"version_details":details})
         };
-        Ok(runtime_response(&value))
+        runtime_response(&value)
     }
 }
 
@@ -78,11 +73,11 @@ pub(crate) fn saved_runtime_for_project(
 ) -> SavedRuntime {
     let reads = Arc::new(Mutex::new(Vec::new()));
     let runtime = RuntimeContextClient::with_rpc(
-        SavedVersions {
+        Routes(SavedVersions {
             versions: versions.clone(),
             reads: Arc::clone(&reads),
             project_id,
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),

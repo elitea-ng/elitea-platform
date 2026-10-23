@@ -28,6 +28,8 @@
  * one another).
  */
 
+import type { ConversationActivityState } from '@/shared/lib/conversationActivity';
+
 interface ConversationParticipantRef {
   readonly id: string;
   readonly entityName: string;
@@ -58,6 +60,14 @@ export interface Conversation {
   readonly isNamingPending?: boolean;
   /** `chat_conversations.source` from the rail's listing — `local_work` marks a desktop Local work thread. */
   readonly source?: string;
+  /** Client contract 1.11: the conversation's UUID (the Local work threads know a thread by it). */
+  readonly uuid?: string;
+  /** Client contract 1.12: the activity status (`running` / `needs_you` / `idle`) and since when. */
+  readonly activity?: { readonly state: ConversationActivityState; readonly since?: string };
+  /** Client contract 1.12: the last write of any message of the conversation. */
+  readonly lastActivityAt?: string;
+  /** Client contract 1.12: the caller has an answer here they did not open yet. */
+  readonly unread?: boolean;
 }
 
 /** `DefaultFolderName`/`dummyConversation`-equivalent — a not-yet-persisted conversation. */

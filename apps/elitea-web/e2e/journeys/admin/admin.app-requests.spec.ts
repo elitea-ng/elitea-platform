@@ -384,7 +384,7 @@ adminTest('J34c: a requester cannot decide their own request, and a moderator ca
   await openAppRequests(page);
   const before = await probeRow(page, entity);
 
-  // Half one: SELF-APPROVAL. pylon's create model declares
+  // Half one: SELF-APPROVAL. The legacy runtime's create model declares
   // `status: ModerationStatus = PENDING`, which is a default and not a
   // restriction, so a body carrying "approved" is stored verbatim there — any
   // project member could file a request that arrives already decided.
@@ -436,9 +436,9 @@ adminTest('J34c: a requester cannot decide their own request, and a moderator ca
     ).toBe(400);
   }
 
-  // Half three: a rejection with no reason. pylon's field validator does not fire
-  // when the key is ABSENT, so a null-reason rejection gets through there — and
-  // a bare refusal is all the requester is ever told.
+  // Half three: a rejection with no reason. The legacy field validator does not
+  // fire when the key is ABSENT, so a null-reason rejection gets through there —
+  // and a bare refusal is all the requester is ever told.
   const reasonless = await page.evaluate(
     async ([url, id]) => {
       const response = await fetch(url as string, {

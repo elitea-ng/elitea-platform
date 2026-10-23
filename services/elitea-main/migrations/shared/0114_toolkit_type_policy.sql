@@ -133,9 +133,9 @@ CREATE TABLE IF NOT EXISTS centry.toolkit_type_project_grant (
     toolkit_type TEXT        NOT NULL
         REFERENCES centry.toolkit_type_policy(toolkit_type) ON DELETE CASCADE,
     -- BIGINT, matching every other project reference in this corpus. Not a
-    -- foreign key: projects live in the pylon-owned `centry.project` table on a
-    -- pylon-backed deployment and are created by a different owner, and 0030's
-    -- history records what claiming ownership of that table costs.
+    -- foreign key: projects live in the legacy-owned `centry.project` table on
+    -- a legacy-backed deployment and are created by a different owner, and
+    -- 0030's history records what claiming ownership of that table costs.
     project_id   BIGINT      NOT NULL,
     availability TEXT        NOT NULL,
     reason       TEXT        NOT NULL,
@@ -164,8 +164,9 @@ CREATE INDEX IF NOT EXISTS toolkit_type_project_grant_project_idx
 --
 -- CHOSEN, NOT RECOVERED. The legacy platform has no add-or-remove-a-type
 -- surface at all: its only operator control is the guardrails deny-list, whose
--- editor is gated on `runtime.plugins`. So there is no pylon declaration to
--- transcribe, and testdata/postgres/legacy-rbac-matrix.json has no row for it.
+-- editor is gated on `runtime.plugins`. So there is no legacy runtime
+-- declaration to transcribe, and testdata/postgres/legacy-rbac-matrix.json has
+-- no row for it.
 --
 -- WHY NOT REUSE `runtime.plugins`. That string is the widest configuration
 -- grant on the admin Configuration page and it already reaches the guardrails
@@ -183,7 +184,7 @@ CREATE INDEX IF NOT EXISTS toolkit_type_project_grant_project_idx
 --
 -- `system` is included although internal/infra/db/migrations/001_initial.sql
 -- seeds no administration-mode `system` role — the WHERE clause simply matches
--- nothing there. On a pylon-backed database the role does exist, and omitting
+-- nothing there. On a legacy-backed database the role does exist, and omitting
 -- it would narrow that deployment's existing matrix. 0113 records the same.
 --
 -- WHY A NEW FILE. 0060 returns early when any administration-mode role already

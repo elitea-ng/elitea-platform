@@ -7,6 +7,7 @@ import (
 
 	publicapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
@@ -32,8 +33,8 @@ func TestCurrentIndexMetaDeleteRoutePostgresPermissionMatrix(t *testing.T) {
 	prepareIndexRBACFixtures(t, pool)
 	resolver := legacyrbac.NewPostgresResolver(pool)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        authsvc.NewPrincipalValidator(pool),
-		ForwardedIdentityVerifier: indexRBACPeerVerifier{},
+		PrincipalValidator: authsvc.NewPrincipalValidator(pool),
+		FormSessions:       authtest.FormSessions{},
 	}
 
 	for _, test := range []struct {

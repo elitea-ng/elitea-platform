@@ -33,7 +33,6 @@ Once configured, a toolkit can be attached to any agent or pipeline and used dir
 - **Name** — a descriptive name for the toolkit
 - **Description** — a short summary of the toolkit's purpose
 - **Configurations** — the saved credential used to authenticate with the service
-- **PgVector** — optional vector storage connection for document indexing and semantic search tools
 - **Embedding Model** — required when using semantic search tools
 - **Parameters** — service-specific settings such as URLs, project IDs, or endpoints`,
   },
@@ -44,7 +43,7 @@ Once configured, a toolkit can be attached to any agent or pipeline and used dir
     title: 'Tool Selection',
     content: `Each toolkit exposes a set of tools — discrete actions the AI can perform, such as *Create Issue*, *Search Confluence*, or *Run SQL Query*. Enable only the tools your use case requires; limiting tool selection improves performance and reduces unnecessary access.
 
-Tools that require **PgVector** and an **Embedding Model** — such as *Index data*, *Search index*, *Stepback search index*, *Stepback summary index*, *List collections*, and *Remove index* — become available once those configurations are set.`,
+Tools that require an **Embedding Model** — such as *Index data*, *Search index*, *Stepback search index*, *Stepback summary index*, *List collections*, and *Remove index* — become available once it is set; indexes are kept in the platform vector store and need no configuration of their own.`,
   },
   {
     id: 'indexes-tab',

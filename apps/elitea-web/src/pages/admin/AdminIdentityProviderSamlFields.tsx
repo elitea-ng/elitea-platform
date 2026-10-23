@@ -17,10 +17,12 @@
  */
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
 
+import { nameIdFormatOptions } from './adminIdentityProviderNameId';
 import type { FormUpdate, IdentityProviderForm } from './adminIdentityProviderForm';
 
 /** The SAML 2.0 fields. */
@@ -105,12 +107,39 @@ export function SamlFields({
         required
         // The path is fixed by the router, so naming it here saves the operator
         // guessing it — and the metadata pointer beside it is what they upload
-        // at the identity provider, built from this same row.
+        // at the identity provider, built from this same row. It is served with
+        // request signing off as well; only the certificate depends on it.
         helperText={t(
           'pages.admin.identityProviders.dialog.acsUrlHelp',
-          'This deployment serves it at /auth/saml/acs. Service provider metadata is served at /auth/saml/metadata once this provider is live.',
+          'This deployment serves it at /auth/saml/acs. Service provider metadata is served at /auth/saml/metadata once this provider is enabled, with or without request signing. It carries a certificate only when requests are signed.',
         )}
       />
+      <TextField
+        select
+        label={t('pages.admin.identityProviders.dialog.nameIdFormat', 'NameID format')}
+        value={form.nameIdFormat}
+        onChange={(event) => {
+          update('nameIdFormat', event.target.value);
+        }}
+        fullWidth
+        helperText={t(
+          'pages.admin.identityProviders.dialog.nameIdFormatHelp',
+          'The NameID format this deployment requests and publishes in its metadata. Email address lets the NameID serve as the sign-in address. Persistent is a stable opaque identifier. Transient changes at every sign-in, so set an email attribute with it.',
+        )}
+        // The empty option is the stored default, so it renders its label
+        // rather than an empty box under the field label.
+        slotProps={{
+          select: { displayEmpty: true },
+          inputLabel: { shrink: true },
+          htmlInput: { 'data-testid': 'identity-provider-name-id-format' },
+        }}
+      >
+        {nameIdFormatOptions(form.nameIdFormat).map((option) => (
+          <MenuItem key={option.value} value={option.value}>
+            {option.label}
+          </MenuItem>
+        ))}
+      </TextField>
       <TextField
         label={t('pages.admin.identityProviders.dialog.emailAttribute', 'Email attribute')}
         value={form.emailAttribute}

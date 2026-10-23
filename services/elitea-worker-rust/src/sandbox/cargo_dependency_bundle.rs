@@ -62,6 +62,22 @@ fn identifier(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
+/// `X.Y.Z` with no leading zeros: the shape of a recorded compiler release.
+fn release(value: &str) -> bool {
+    value.len() <= 32
+        && value.split('.').count() == 3
+        && value.split('.').all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|b| b.is_ascii_digit())
+                && (part == "0" || !part.starts_with('0'))
+        })
+}
+/// Whether the pinned `rust-runtime` compiler recorded this release. A bundle
+/// another toolchain prepared is well formed but stale: a lookup misses and the
+/// worker prepares again, in either direction of a rolling deploy.
+pub(crate) fn current_rust_revision(rust_revision: &str) -> bool {
+    rust_revision == "1.99.1"
+}
 
 impl CargoPayload {
     /// Decode typed bytes before constructing the root-bound envelope.
@@ -94,7 +110,7 @@ impl CargoPayload {
             || !sha256(&self.declaration_sha256)
             || !image(&self.profile.preparation_image)
             || !image(&self.profile.execution_image)
-            || self.profile.rust_revision != "1.97.1"
+            || !release(&self.profile.rust_revision)
             || self.profile.os != "linux"
             || self.profile.target != expected_target
             || !identifier(&self.profile.policy_revision)
@@ -181,7 +197,7 @@ mod tests {
             profile: CargoProfile {
                 preparation_image: format!("sha256:{}", "c".repeat(64)),
                 execution_image: format!("sha256:{}", "d".repeat(64)),
-                rust_revision: "1.97.1".into(),
+                rust_revision: "1.99.1".into(),
                 os: "linux".into(),
                 arch: "amd64".into(),
                 target: "x86_64-unknown-linux-gnu".into(),
@@ -253,6 +269,19 @@ mod tests {
         changed = payload();
         changed.objects[0].name = "../../record.json".into();
         assert!(changed.validate().is_err());
+        changed = payload();
+        let older = "1.97.1";
+        changed.profile.rust_revision = older.into();
+        assert!(
+            changed.validate().is_ok(),
+            "another toolchain is stale, not invalid"
+        );
+        assert!(!current_rust_revision(&changed.profile.rust_revision));
+        assert!(current_rust_revision(&p.profile.rust_revision));
+        for release in ["", "1.99", "1.99.1.0", "1.99.x", "1.099.1", "1.99.1 "] {
+            changed.profile.rust_revision = release.into();
+            assert!(changed.validate().is_err(), "{release:?}");
+        }
         assert!(
             p.validate_execution(
                 &"b".repeat(64),

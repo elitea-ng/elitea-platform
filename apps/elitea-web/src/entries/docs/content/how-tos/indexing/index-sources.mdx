@@ -3,12 +3,12 @@ title: "Index data from a source"
 description: "The credential and scope fields each supported source needs before you index it, with the shared setup steps done once."
 ---
 
-The overall indexing procedure is the same for every source: configure a credential, pick the embedding model and vector store, set the source's scope fields, then start the run. This page covers the setup each source needs; for the shared procedure and the index lifecycle itself, see [Index external data](/how-tos/indexing/indexing-overview) and [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface).
+The overall indexing procedure is the same for every source: configure a credential, pick the embedding model, set the source's scope fields, then start the run. This page covers the setup each source needs; for the shared procedure and the index lifecycle itself, see [Index external data](/how-tos/indexing/indexing-overview) and [Use the Indexes tab](/how-tos/indexing/using-indexes-tab-interface).
 
 ## Shared setup (do this once per project)
 
 <Steps>
-1. In **Settings › AI Providers**, configure an embedding model and a pgvector vector-store connection.
+1. In **Settings › AI Providers**, configure an embedding model. Indexes are kept in the platform's vector store, so there is no vector-store connection to set up.
 2. Create a toolkit of the source's type (see the tabs below for which credential it needs).
 3. Turn on the **Index Data** tool in the toolkit's configuration.
 4. Open the toolkit's **Indexes** tab and create an index using the source's scope fields.

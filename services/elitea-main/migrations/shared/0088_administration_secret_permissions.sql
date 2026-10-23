@@ -53,10 +53,10 @@
 --
 -- THE EDITOR MAY WRITE AND MAY NOT READ, AND THAT IS THE MATRIX. The
 -- administration-mode editor gets create, edit and delete, and not view. The
--- asymmetry is pylon's, and admin.go's header already records it. It costs the
--- editor the listing and the single-value read of the GLOBAL vault only; the
--- project vault is a different store, and 0075 gives the default-mode editor
--- the reads there.
+-- asymmetry is the legacy runtime's, and admin.go's header already records it.
+-- It costs the editor the listing and the single-value read of the GLOBAL vault
+-- only; the project vault is a different store, and 0075 gives the default-mode
+-- editor the reads there.
 --
 -- `system` is omitted, as every other file in this corpus omits it. 0060 seeds
 -- four administration-mode roles — super_admin, admin, editor and viewer — and

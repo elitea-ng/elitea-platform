@@ -287,12 +287,7 @@ mod tests {
     fn lifecycle_flushes_buffer_first_at_same_instant() {
         let now = Instant::now();
         let mut coalescer = FanoutProgressCoalescer::new(2).expect("members");
-        assert!(
-            coalescer
-                .push_delta(1, "hello", now)
-                .expect("push")
-                .is_empty()
-        );
+        assert_eq!(coalescer.push_delta(1, "hello", now).expect("push"), []);
         let frames = coalescer
             .lifecycle(1, FanoutLifecycle::Completed)
             .expect("lifecycle");

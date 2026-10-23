@@ -1,18 +1,18 @@
 ---
 title: "Install with Helm"
-description: "Prerequisites, secrets to create beforehand, which values file to start from, and the install sequence from nats through the first admin."
+description: "Prerequisites, secrets to create beforehand, which values file to start from, and the one-chart install through the first admin."
 ---
 
-This walks a Kubernetes install of the `elitea` chart end to end. Read [Production deployment overview](/deployment/overview) first for the topology and what the chart does not provision. For a first install on an empty cluster, [Deploy from scratch](/deployment/from-scratch) has every Secret, certificate authority, database step and edge rule in one place, with a complete values file.
+This walks a Kubernetes install of the `elitea` chart end to end. It is one chart for everything: the platform, NATS JetStream with its stream bootstrap, the vector store and, where a cluster needs it, the sandbox-runtime installer. Read [Production deployment overview](/deployment/overview) first for the topology and what the chart does not provision. For a first install on an empty cluster, [Deploy from scratch](/deployment/from-scratch) has every Secret, certificate authority, database step and edge rule in one place, with a complete values file.
 
 ## Prerequisites
 
 <CardGroup cols={2}>
-  <Card title="Cluster access" icon="server">A Kubernetes cluster with `helm` v3 and `kubectl` configured against it.</Card>
-  <Card title="PostgreSQL" icon="database">Reachable, with a superuser DSN available for the database-preparation Job (`CREATE DATABASE`, `CREATE EXTENSION vector`).</Card>
-  <Card title="NATS JetStream" icon="server">The `nats` and `nats-bootstrap` charts, installed first. The platform needs no Redis: the runtime command bus, live updates and presence are on NATS, and the chart refuses values that still set `runtimeRedis`.</Card>
+  <Card title="Cluster access" icon="server">A Kubernetes cluster with `kubectl` and `helm` configured against it. Helm 4.3 or newer is recommended; Helm 3.8 or newer also renders the chart, which is what Argo CD uses. With Helm 4, `--atomic` is `--rollback-on-failure`.</Card>
+  <Card title="PostgreSQL" icon="database">Reachable, with an administrator DSN available for the database-preparation Job (`CREATE DATABASE`). No extension is needed: vectors are kept in Qdrant through elitea-vector (`vector.enabled`), not in PostgreSQL.</Card>
+  <Card title="NATS JetStream" icon="server">Bundled: the chart runs it (`nats.enabled`, on by default) and creates its streams with a hook Job (`natsBootstrap`). The platform needs no Redis: the runtime command bus, live updates and presence are on NATS, and the chart refuses values that still set `runtimeRedis`.</Card>
   <Card title="Object storage" icon="package">An S3-compatible bucket, created ahead of the first sync and named by `main.env.STORAGE_CONTAINER`.</Card>
-  <Card title="cert-manager" icon="shield-check">Required. The NATS chart, the NATS client identities and the LLM gateway's mTLS hop (on by default) are all cert-manager `Certificate`s. The gateway's issuer (`llmGateway.mtls.issuerRef`, default `ClusterIssuer elitea-internal-ca`) is yours to create.</Card>
+  <Card title="cert-manager" icon="shield-check">Required. The bundled NATS CA, the NATS client identities and the LLM gateway's mTLS hop (on by default) are all cert-manager `Certificate`s. The gateway's issuer (`llmGateway.mtls.issuerRef`, default `ClusterIssuer elitea-internal-ca`) is yours to create.</Card>
 </CardGroup>
 
 ## Secrets to create beforehand
@@ -54,7 +54,7 @@ Also required: `platform.aiProjectId`, the id of the platform's public/shared pr
 
 <Tabs>
 <Tab title="values.yaml (base)">
-The chart's own defaults: a **default install has no production authentication**, so `ELITEA_CONFIGURATIONS_ENABLED`, `ELITEA_PROJECT_INFO_ENABLED`, `ELITEA_INDEX_TYPES_ENABLED` and `ELITEA_APPLICATION_SKILLS_ENABLED` all render off, and `main.runtime.enabled` is off — no chat. Start here only if you are layering capabilities on by hand.
+The chart's own defaults. The runtime plane, the worker, elitea-vector with the bundled Qdrant, DeepWiki and Inventory are **on**, one switch each (`main.runtime.enabled`, `worker.enabled`, `vector.enabled` with `qdrant.enabled`, `deepwiki.enabled`, `inventory.enabled`); set one to `false` explicitly to leave it out. The base file alone does not render: the values only you know (the authentication document and its `public_origin`, the public project, `DEPLOYMENT_URL`, the worker's identity, the git allowlists, the network-policy peers, the gateway's self origins and egress posture) are listed together in one refusal, so a first `helm template` is the checklist. Qdrant needs a PersistentVolumeClaim (`qdrant.persistence`, 50Gi on the default StorageClass).
 </Tab>
 <Tab title="values-standalone.yaml">
 The full capability set, matching `docker-compose.standalone-full.yml` — every capability flag on, the runtime plane on (agent execution, index ingest), sized for `postgresql.maxConnections: 200` across up to `main.autoscaling.maxReplicas: 4`. Needs both the runtime material Secret and the auth material Secret. This is the reference production shape.
@@ -62,49 +62,40 @@ The full capability set, matching `docker-compose.standalone-full.yml` — every
 <Tab title="values-auth-minimal.yaml">
 The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret, but no Redis, no runtime material Secret and no worker: the Form sign-in state is in PostgreSQL.
 </Tab>
+<Tab title="values-gke.yaml">
+Google Kubernetes Engine with no static cloud credential: Cloud SQL with `sslmode=require` and a hand-prepared database, keyless GCS through Workload Identity, the GKE Ingress with its BackendConfig and FrontendConfig, Google's load-balancer ranges in the NetworkPolicy, and every Secret from Secret Manager through `externalSecrets`. Sized for about 4 vCPU and 9 GiB of requests in steady state, with every default on. See [Deploy on GKE with Argo CD](/deployment/gke-argocd).
+</Tab>
 <Tab title="values-staging.yaml">
 A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
 </Tab>
 </Tabs>
 
-## Install order: nats, nats-bootstrap, elitea — one namespace
+## Install: one chart, one namespace
 
-Whether you install by hand or through ArgoCD (sync waves `-2`, `-1`, `0` — see [GitOps with ArgoCD](/deployment/argocd)), the order matters: elitea-main, the LLM gateway's budget counters and the scheduler all dial NATS, and its JetStream assets (KV buckets, streams, the scheduler's consumer) must exist first.
+One release installs everything, in one namespace. NATS requires TLS and a client certificate from every client (mTLS, no anonymous or password access), and those certificates come from the chart's own NATS CA, a *namespaced* cert-manager `Issuer`, so NATS, its bootstrap and the platform share the release's namespace by construction. **cert-manager must be installed first.**
 
-All three go into **one namespace**. NATS requires TLS and a client certificate from every client (mTLS, no anonymous or password access), and those certificates come from the NATS chart's own CA, a *namespaced* cert-manager `Issuer` that signs only in its own namespace. The platform chart refuses a render that points `nats.namespace` elsewhere while it uses that Issuer. **cert-manager must be installed first.**
+From a clone, build the chart's dependencies first. The upstream NATS chart and the sandbox-runtime installer are pinned in the committed `Chart.lock`, and `charts/` is never committed:
 
-<Steps>
-<Step title="NATS">
-TLS-only server with its own CA, one NATS account per plane, and an ingress NetworkPolicy that admits only the platform's NATS clients:
 ```bash
-helm dependency build deploy/helm/nats
-helm install elitea-nats deploy/helm/nats \
-  -f deploy/helm/nats/values-scale1.yaml \
-  -n elitea --create-namespace
-```
-</Step>
-<Step title="NATS bootstrap">
-Idempotent hook Job that creates every stream, KV bucket and consumer, connecting to each account with a short-lived certificate of its own:
-```bash
-helm install elitea-nats-bootstrap deploy/helm/nats-bootstrap \
-  --set natsUrl=tls://elitea-nats:4222 \
-  --set replicas=1 \
-  -n elitea
-```
-</Step>
-<Step title="elitea">
-```bash
+deploy/helm/elitea/build-deps.sh   # helm dependency build, from Chart.lock
 helm install elitea deploy/helm/elitea \
   -f deploy/helm/elitea/values-standalone.yaml \
   --set postgresql.existingSecret=elitea-main-db \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted \
   --set-string platform.aiProjectId=1 \
-  -n elitea
+  -n elitea --create-namespace
 ```
-The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value.
-</Step>
-</Steps>
+
+The published chart is the recommended source: `oci://ghcr.io/elitea-ng/charts/elitea --version <version>` in place of the path. Its package carries the same values files (`helm pull --untar` to read them) and both dependencies, so it needs no `helm dependency build`. In an air-gapped network, mirror that OCI chart; do not build from a clone.
+
+The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler, the worker) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value. The stream and KV bootstrap is a `post-install,post-upgrade` hook Job; until it has run, the workloads restart, then settle.
+
+<Warning title="No --wait on a first install">
+`helm install --wait` waits for workloads that wait for the streams the bootstrap hook creates, and that hook runs only after the wait. Leave `--wait` off the first install; later upgrades may use it.
+</Warning>
+
+For three NATS nodes, add `-f values-nats-ha.yaml` (it raises the bootstrap's replica count too). To use a NATS you run yourself, set `nats.enabled=false` and point `natsClient.*` at it. Under ArgoCD the same chart orders itself with sync waves — see [GitOps with ArgoCD](/deployment/argocd).
 
 <Check title="Prove it renders first">
 `helm template` catches missing prerequisites before any kubectl apply:
@@ -117,7 +108,7 @@ helm template deploy/helm/elitea -f deploy/helm/elitea/values-standalone.yaml \
 
 ## The migration job and DB bootstrap
 
-`elitea-migrate` runs as a pre-install hook; the database may start empty. The `dbInit` Job (hook weight -20) handles `CREATE DATABASE` and `CREATE EXTENSION vector` before migrations run.
+`elitea-migrate` runs as a pre-install hook; the database may start empty. The `dbInit` Job (hook weight -20) handles `CREATE DATABASE` for the agent-state database before migrations run. It creates no extension.
 
 ## First-admin bootstrap
 
@@ -125,12 +116,9 @@ A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no passw
 
 An entry is `oidc:<sub>`, `saml:<nameid>`, or `email:<verified address>` (matches only when the id_token asserts `email_verified: true`). The grant is one-shot: an account that already holds any administration role is left as is; one with none receives the grant on its next sign-in.
 
-```bash
-curl -s -H "Cookie: elitea_session=<your session>" \
-  https://elitea.example.com/api/v2/social/author | jq .provider_refs
-```
+For OIDC with a verified e-mail address, use `email:<your address>`. You know this value before the first sign-in, so you can set it at install time.
 
-`provider_refs` is the exact value the list accepts — read it after signing in once, instead of querying the database. See [Install Elitea](/getting-started/install#first-login-and-setup) for the browser-side walkthrough of this same step.
+For other cases, sign in once and open **Settings › Profile**. Each **Sign-in reference** row shows one exact value that the list accepts, for example `oidc:<sub>` or `saml:<nameid>`. Click a row to copy it. Add the value to the list, upgrade the release, and sign in again. You do not need to query the database. See [Install Elitea](/getting-started/install#first-login-and-setup) for the browser-side walkthrough of this same step.
 
 ## Capability flags this install serves
 
@@ -146,7 +134,7 @@ curl -s -H "Cookie: elitea_session=<your session>" \
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | on | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | on | production authentication |
-| `ELITEA_RUNTIME_ENABLED` (`main.runtime.enabled`) | off | on | production authentication **and** runtime material |
+| `ELITEA_RUNTIME_ENABLED` (`main.runtime.enabled`) | on | on | production authentication **and** runtime material |
 
 <Warning>
 `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` stays off in every shipped values file. It composes a second, asynchronous write route that would win the path from the compatibility route every install currently serves — and the compatibility route already writes `status_ok` inline from the same admission decision, which is what makes a saved credential usable. Turning it on is a separate cutover with its own client-side work, not a fix for an invisible credential.
@@ -165,7 +153,7 @@ curl -si https://elitea.example.com/healthz   # 200 {"status":"ok"} with "vary: 
 `/admin/app` — sign in as the account you named above.
 </Step>
 <Step title="Docs and API reference">
-`/docs/` (this site) and `/api/docs` (the OpenAPI UI) should both resolve once `main.ingress` (or your own edge rules) route them.
+`/docs/` (this site) and `/api/docs` (the OpenAPI UI) should both resolve once `main.ingress` (or a route of your own to elitea-main) publishes the platform: elitea-main relays `/app` and `/docs` to elitea-web itself.
 </Step>
 </Steps>
 
@@ -174,23 +162,23 @@ See [Troubleshooting](/support/troubleshooting#operator-checks) for what each en
 ## What a Kubernetes install does NOT give you
 
 <AccordionGroup>
-<Accordion title="No PostgreSQL and no NATS">
-The platform chart provisions neither. NATS comes from its own chart (`deploy/helm/nats`, above); elitea-main's live updates — the project SSE stream and canvas presence — need it with JetStream (`ELITEA_EVENTS_NATS_URL`, derived from the top-level `nats` block), and so does the runtime plane: its command bus is JetStream in the NATS chart's RUNTIME account (`ELITEA_RUNTIME_NATS_URL`, as the `elitea-main-runtime` identity), consumed by the workers from their own WORKER account. The chart refuses `main.runtime.enabled` with no NATS to publish to. The migration hook fails against a cluster where PostgreSQL does not already exist or where the Secret/host settings have not been pointed at it.
+<Accordion title="No PostgreSQL">
+The chart provisions no database. The migration hook fails against a cluster where PostgreSQL does not already exist or where the Secret/host settings have not been pointed at it. NATS, by contrast, is part of the release: elitea-main's live updates — the project SSE stream and canvas presence — need it with JetStream (`ELITEA_EVENTS_NATS_URL`, derived from the `natsClient` block), and so does the runtime plane: its command bus is JetStream in the RUNTIME account (`ELITEA_RUNTIME_NATS_URL`, as the `elitea-main-runtime` identity), consumed by the workers from their own WORKER account. The chart refuses `main.runtime.enabled` with no NATS to publish to.
 </Accordion>
-<Accordion title="No ingress by default">
-No Ingress renders until `main.ingress.enabled: true`. A cluster serving the web app needs per-route rules to avoid the SPA backend swallowing them.
+<Accordion title="No edge by default">
+No Ingress or HTTPRoute renders until `main.ingress.enabled: true`. Then it is one `/` rule to elitea-main, which is the whole edge: elitea-main redirects `/` to `/app/`, relays `/app` and `/docs` to elitea-web, and serves its MCP endpoint under `/app` itself. On GKE, `main.ingress.gke` adds the BackendConfig and FrontendConfig the Google load balancer needs.
 </Accordion>
-<Accordion title="NATS in another namespace">
-The reference install puts NATS in the platform's namespace. To run it elsewhere, back a cert-manager `ClusterIssuer` with a CA used for NATS only, point the NATS chart (`security.ca.create=false`, `security.issuerRef`), the bootstrap (`tls.certificate.issuerRef`) and the platform (`nats.tls.issuerRef`, `nats.namespace`) at it, and add the platform's namespace to the NATS chart's `networkPolicy.clients` — and, where cert-manager's approver-policy is installed, to `security.approverPolicy.clientNamespaces`, or the platform's certificates are never approved. The platform chart renders fully qualified `tls://` URLs from `nats.namespace`.
+<Accordion title="Bring your own NATS">
+The bundled server lives in the release's namespace, signed by the chart's namespaced `elitea-nats-ca` Issuer. To use a NATS you run elsewhere, set `nats.enabled: false`, back a cert-manager `ClusterIssuer` with a CA used for NATS only, and point `natsClient.service`, `natsClient.namespace` and `natsClient.tls.issuerRef` at it; the bootstrap's identities follow `natsClient` (`natsBootstrap.tls.certificate.issuerRef`). The bootstrap Job still runs against your server unless `natsBootstrap.enabled: false`. Your server must run JetStream and map the same client identities, or elitea-main refuses to start. `deploy/helm/elitea/NATS.md` has the contract.
 </Accordion>
 <Accordion title="Who can mint a NATS identity">
-Anyone who may create a cert-manager `Certificate` in the NATS namespace, or read its Secrets (the CA key is one), can obtain any NATS client identity. Restrict both with RBAC; the NATS chart's optional approver-policy limits what its issuers sign. See `deploy/helm/nats/README.md`.
+Anyone who may create a cert-manager `Certificate` in the NATS namespace, or read its Secrets (the CA key is one), can obtain any NATS client identity. Restrict both with RBAC; the optional approver-policy (`nats.security.approverPolicy`) limits what the NATS issuers sign. See `deploy/helm/elitea/NATS.md`.
 </Accordion>
 <Accordion title="No secrets">
-Every sensitive value is a Kubernetes Secret you provision out of band — see "Secrets to create beforehand" above.
+Every sensitive value is a Kubernetes Secret — see "Secrets to create beforehand" above. In production, turn on `externalSecrets` and the chart renders an ExternalSecret for each one from your secret manager's store; [Deploy on GKE with Argo CD](/deployment/gke-argocd) shows it with Google Secret Manager.
 </Accordion>
 </AccordionGroup>
 
 Continue to [GitOps with ArgoCD](/deployment/argocd) to run this same install declaratively, or [Configuration](/deployment/configuration) for the operator-facing settings after the pods are Ready. To run desktop threads sent to the cloud, add [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes).
 
-{/* source: deploy/README.md:232-341 (values table, first admin), deploy/README.md:389-431 (distribution), deploy/README.md:433-605 (capability flags), deploy/README.md:607-730 (runtime + auth material), deploy/README.md:859-918 (what K8s does not give you); deploy/helm/elitea/values-standalone.yaml:1-30, 105-260; deploy/helm/elitea/values-auth-minimal.yaml:1-70; deploy/helm/elitea/values-staging.yaml:1-25; deploy/helm/elitea/values.yaml:344-360, 2306-2358 (secrets); deploy/argocd/applications/elitea.yaml:11-18 (hook ordering); deploy/helm/elitea/templates/main/migrate-job.yaml, templates/worker/runtime-session-job.yaml, templates/dbInit/job.yaml (hook weights) */}
+{/* source: deploy/README.md:232-341 (values table, first admin), deploy/README.md:389-431 (distribution), deploy/README.md:433-605 (capability flags), deploy/README.md:607-730 (runtime + auth material), deploy/README.md:859-918 (what K8s does not give you); deploy/helm/elitea/values-standalone.yaml:1-30, 105-260; deploy/helm/elitea/values-auth-minimal.yaml:1-70; deploy/helm/elitea/values-staging.yaml:1-25; deploy/helm/elitea/values.yaml:344-360, 2306-2358 (secrets); deploy/argocd/applications/elitea.yaml (hook and wave ordering); docs/UPGRADING.md ("One chart: NATS bundled", "One edge route", "Helm 4"); deploy/helm/elitea/NATS.md; deploy/helm/elitea/templates/main/migrate-job.yaml, templates/worker/runtime-session-job.yaml, templates/dbInit/job.yaml (hook weights) */}

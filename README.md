@@ -12,16 +12,16 @@ elitea-platform/
 │   ├── elitea-scheduler/    # Background workers: price sync, budget write-back, retention sweeps (Go)
 │   └── elitea-worker-python/# Python worker runtime and SDK
 ├── apps/
-│   ├── elitea-ui/           # React SPA (git submodule)
-│   └── elitea-web/          # React SPA rewrite; also builds the admin console
+│   ├── elitea-desktop/      # Desktop app (Tauri 2 host around the elitea-web desktop build)
+│   ├── elitea-mobile/       # Mobile app "Elitea AI" (Expo / React Native, iOS + Android)
+│   └── elitea-web/          # React SPA (the UI); also builds the admin console
 │                            #   (src/entries/admin) served by elitea-main
-├── proto/                   # Protobuf contracts (buf v2) → gen/go, gen/python
-├── gen/                     # Generated protobuf stubs (Go + Python)
+├── libs/proto/              # Protobuf contracts (buf v2) and their generated Go/Python stubs
 ├── libs/go/                 # Shared Go libraries
 ├── deploy/
-│   ├── docker/              # Containerfiles for UI and helper images
+│   ├── docker/              # Helper scripts and configs for container images
 │   ├── docker-compose.yml   # Local dev environment (legacy shape, Go services)
-│   ├── docker-compose.standalone-full.yml  # Target-architecture stack (Go + Bifrost, no pylon)
+│   ├── docker-compose.standalone-full.yml  # Target-architecture stack (Go + Bifrost, no legacy runtime)
 │   └── helm/                # Kubernetes Helm charts
 └── .github/workflows/       # CI/CD pipelines
 ```
@@ -32,40 +32,72 @@ elitea-platform/
 - [Podman](https://podman.io/docs/installation) with podman-compose
 - [Task](https://taskfile.dev/installation/) (task runner)
 - [Node.js 24+](https://nodejs.org/) (for UI development)
-- [Helm 3.16+](https://helm.sh/docs/intro/install/) (for chart linting)
+- [Helm 4.3+](https://helm.sh/docs/intro/install/) (for chart linting; Helm 3.8+ still renders the chart, as Argo CD does)
 
 ## Quick Start
 
 ```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/EliteaAI/elitea-platform.git
+git clone https://github.com/elitea-ng/elitea-platform.git
 cd elitea-platform
 
-# Start everything (postgres, nats, rustfs, traefik, elitea-main, elitea-ui)
+# Start everything (postgres, nats, rustfs, elitea-main, elitea-web)
 task up
 
 # Or manually:
 podman compose -f deploy/docker-compose.yml up --build
 ```
 
-The local compose stack is fronted by Traefik on host port `8080`.
+elitea-main is the browser edge of the local compose stack, on host port `8080`:
+it serves the API itself, relays `/app` and `/docs` to the SPA container and
+redirects `/` to `/app/` (`ELITEA_WEB_UPSTREAM`). The Helm chart
+uses the same edge: its Ingress or HTTPRoute is one `/` route to elitea-main.
 
 Services will be available at:
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| Gateway | http://localhost:8080 | Traefik routing to API + UI |
+| Browser origin | http://localhost:8080 | elitea-main: API, plus the SPA relayed |
 | API | http://localhost:8080/api/ | elitea-main API endpoints |
-| UI | http://localhost:8080/app/ | elitea-ui React SPA |
-| postgres | localhost:5432 | PostgreSQL 18 |
+| UI | http://localhost:8080/app/ | elitea-web React SPA |
+| postgres | localhost:5432 | PostgreSQL 18 (no extensions needed) |
+
+### DeepWiki on the dev stack (`deepwiki` profile)
+
+DeepWiki is off by default. Turn it on with one command:
+
+```bash
+bash deploy/scripts/gen-deepwiki-certs.sh           # provider CA, host and client certs
+bash deploy/scripts/gen-platform-listener-certs.sh  # :9446 listener, callback identity, elitea-vector certs
+ELITEA_DEEPWIKI_ENABLED=true \
+ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki:9443 \
+ELITEA_RUNTIME_PLATFORM_ADDRESS=:9446 \
+podman compose -f deploy/docker-compose.yml --profile deepwiki up -d
+```
+
+`ELITEA_RUNTIME_PLATFORM_ADDRESS` opens elitea-main's platform gRPC listener
+(mTLS, compose network only). The DeepWiki host stores its artifacts there,
+and the engine makes its model calls there. The profile also brings up
+`qdrant` and `elitea-vector`, where the engine keeps its dense vectors;
+elitea-vector verifies the engine's tokens on that listener. This stack has **no LLM gateway**,
+so a model call still fails at elitea-main. Artifacts work, and
+`DEEPWIKI_NATIVE_RUNNER=fixture` gives a canned wiki. To generate a wiki with
+a real model, use `deploy/docker-compose.standalone-full.yml`, below.
+A model call on this stack fails with `llm_gateway_not_configured` ("LLM_GATEWAY_URL
+is empty"), which the engine reports on the invocation.
+
+This stack also does not migrate the platform database. elitea-main runs with
+`SKIP_MIGRATIONS=1`, and the schema comes from a loaded dump
+(`deploy/docker-compose.staging.yml`). On an empty database elitea-main starts,
+but projects and toolkits, DeepWiki's included, have no tables behind them.
+`elitea-deepwiki-migrate` applies DeepWiki's own schema either way.
 
 ## Standalone full stack
 
 `deploy/docker-compose.yml` above is the older local shape and keeps the
 legacy database and routing conventions. `deploy/docker-compose.standalone-full.yml`
 is a separate, self-contained recipe for the **target** architecture: Go `elitea-main` +
-`elitea-web` + the Bifrost `elitea-llm-gateway` + postgres/nats/rustfs/traefik
-+ a mock OIDC provider — no pylon, no centry, no LiteLLM.
+`elitea-web` + the Bifrost `elitea-llm-gateway` + postgres/nats/rustfs
++ a mock OIDC provider — no legacy runtime, no centry, no LiteLLM.
 
 ```bash
 deploy/scripts/standalone-stack.sh certs   # once — local mTLS material (deploy/certs/, gitignored)
@@ -92,7 +124,7 @@ alone.
 
 Or via Task: `task standalone:up` / `task standalone:down`.
 
-Compose project `elitea-standalone`. Ports: `8084` entry (Traefik), `8085`
+Compose project `elitea-standalone`. Ports: `8084` entry (elitea-main, the browser edge), `8085`
 gateway (direct, debug), `15433` postgres, `9400` oidc-mock
 (**fixed** — the mock's issuer is derived from its Host header, so the port
 cannot be remapped). Because of that fixed port, this stack and the E2E stack
@@ -130,14 +162,13 @@ task test            # Run all Go tests
 task lint            # Run golangci-lint
 task vet             # Run go vet
 
-task ui:build        # Build EliteaUI SPA
-task ui:lint         # Lint EliteaUI
+task ui:build        # Build the elitea-web SPA
+task ui:lint         # Lint elitea-web
 
 task images          # Build all container images
 task images:go       # Build elitea-main image only
 task images:scheduler # Build elitea-scheduler image only
 task images:gateway  # Build elitea-llm-gateway image only
-task images:ui       # Build elitea-ui image only
 task images:web      # Build elitea-web image only
 
 task helm:lint       # Lint all Helm charts
@@ -173,8 +204,8 @@ prints only fixed generic failures and never prints the file path or contents.
 
 ### The index plane, and the service that used to serve it
 
-`pylon-indexer` was the transitional Pylon runtime: it cloned its plugins at
-container start and served index ingest, provider descriptors and agent
+The legacy indexer was the transitional legacy-runtime service: it cloned its
+plugins at container start and served index ingest, provider descriptors and agent
 execution. It is **deleted** (issue #339). The Go runtime plane dispatches index
 ingest to `elitea-worker-python` on the same command stream and consumer group
 as agent execution, so one worker serves both capabilities and no plugin is
@@ -187,12 +218,13 @@ billing. The LLM data plane is `elitea-llm-gateway`, reached through
 
 `deploy/INDEX_V2_CUTOVER.md` holds the cutover procedure and the rollback.
 
-### elitea-ui (React)
+### elitea-web (React)
 
-React SPA served by nginx. Connected as a git submodule from [EliteaUI](https://github.com/EliteaAI/EliteaUI).
+React SPA served by nginx (`apps/elitea-web/Containerfile`); the same app also
+builds the admin console, the maintenance page and the embedded docs.
 
 ```bash
-cd apps/elitea-ui
+cd apps/elitea-web
 npm ci
 npm run dev          # Local dev server
 npm run build        # Production build
@@ -205,7 +237,7 @@ All workflows are in `.github/workflows/`:
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci-go.yml` | PR/push to Go paths | Lint, test, build validation |
-| `ci-ui.yml` | PR/push to UI paths | Lint, build SPA |
+| `ci-web.yml` | PR/push to UI paths | Typecheck, lint, unit tests, static gates, build SPA |
 | `helm-lint.yml` | PR/push to helm paths | Lint charts, template dry-run |
 | `publish.yml` | Push to main/next | Semantic release → build → publish-image (scan, manifest, sign) → chart |
 
@@ -220,7 +252,7 @@ commit → next     → semantic-release → v1.3.0-rc.1 → build RC images
 - **Images:** Multi-arch (amd64 + arm64), native builds on platform-specific runners (Docker in CI, Podman locally)
 - **Signing:** Keyless cosign via Sigstore OIDC
 - **Rollback:** On any build/sign failure, the release, tag, and images are automatically deleted
-- **Registry:** `ghcr.io/eliteaai`
+- **Registry:** `ghcr.io/elitea-ng`
 
 ### Commit Convention
 
@@ -252,12 +284,24 @@ go test ./...        # Test everything
 
 ### Helm Deployment
 
-```bash
-helm template my-release deploy/helm/elitea-main/ \
-  -f deploy/helm/elitea-main/values-staging.yaml
+One chart installs everything, NATS JetStream and its bootstrap included
+(`deploy/helm/elitea`, published as `oci://ghcr.io/elitea-ng/charts/elitea`).
+The embedded docs walk a full install (Deployment › Deploy from scratch, and
+Deploy on GKE with Argo CD for Google Cloud):
 
-helm upgrade --install elitea-main deploy/helm/elitea-main/ \
-  -f deploy/helm/elitea-main/values-staging.yaml \
+```bash
+# The three settings the chart refuses to guess.
+REQUIRED=(--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1
+  --set-string llmGateway.egressPosture=public-unrestricted
+  --set networkPolicies.main.noExternalIngress=true)
+
+deploy/helm/elitea/build-deps.sh   # the chart's dependencies, from Chart.lock
+helm template elitea deploy/helm/elitea -n elitea \
+  -f deploy/helm/elitea/values-staging.yaml "${REQUIRED[@]}"
+
+# No --wait on a first install: the NATS bootstrap is a post-install hook.
+helm upgrade --install elitea deploy/helm/elitea \
+  -f deploy/helm/elitea/values-staging.yaml "${REQUIRED[@]}" \
   -n elitea --create-namespace
 ```
 

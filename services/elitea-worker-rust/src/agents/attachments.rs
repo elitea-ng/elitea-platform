@@ -19,9 +19,9 @@
 //! A `document` chunk carries a namespaced `elitea_attachment` marker naming the
 //! bucket, the object key (`name`), the filepath and the row `item_id`, with
 //! `needs_content_extraction: true` (attachments.go, `attachmentContentScaffold`
-//! and `attachmentExtractionMarkerKey`). Pylon reads each such file through the
-//! SDK artifact toolkit's `read_multiple_files` and APPENDS the text as a second
-//! `{"type":"text"}` chunk; the Python worker does the same
+//! and `attachmentExtractionMarkerKey`). The legacy runtime reads each such file
+//! through the SDK artifact toolkit's `read_multiple_files` and APPENDS the text
+//! as a second `{"type":"text"}` chunk; the Python worker does the same
 //! (`sdk_adapter.py:529-624`, `_read_attachment_documents`).
 //!
 //! THIS RUNTIME NOW PERFORMS THAT READ, through the one channel it holds. It
@@ -34,8 +34,9 @@
 //! [`pending_attachment_reads`] names what has to be read,
 //! [`read_attachment_documents`] reads it, and [`resolved_attachment_chunks`]
 //! splices each document in as a SECOND text chunk after its own header —
-//! exactly the shape pylon's extraction step leaves behind, and exactly what the
-//! Python worker builds (`sdk_adapter.py:529-624`, `_read_attachment_documents`).
+//! exactly the shape the legacy runtime's extraction step leaves behind, and
+//! exactly what the Python worker builds (`sdk_adapter.py:529-624`,
+//! `_read_attachment_documents`).
 //!
 //! WHAT MAIN SERVES, AND WHAT HAPPENS WHEN IT CANNOT. Main extracts the file
 //! (PDF, DOCX, PPTX, XLSX or text) and serves its text with a page, slide,
@@ -46,14 +47,14 @@
 //! `Rejected` — never to the retryable `dependency_unavailable` — and the
 //! model gets a note that says the file could not be read and why. A
 //! transport failure gets the same kind of note. The TURN IS NEVER REFUSED:
-//! that is pylon's own rule for a file the platform cannot read
+//! that is the legacy runtime's own rule for a file the platform cannot read
 //! (`rpc/chat_all.py:384-386`), because the question may not even be about
 //! the file.
 //!
 //! A header chunk IMMEDIATELY FOLLOWED by a plain text chunk (one with no marker
 //! of its own) is already extracted and is NOT read again. That is the storage
-//! shape pylon leaves behind, and it is also the shape this module produces, so
-//! a replayed turn does not pay for the read twice.
+//! shape the legacy runtime leaves behind, and it is also the shape this module
+//! produces, so a replayed turn does not pay for the read twice.
 //!
 //! Reporting extracted text back onto the stored row (#607) is a separate,
 //! unowned platform boundary; `agents/result.rs` returns no
@@ -71,12 +72,13 @@
 //! because a `type` decides what the MODEL is shown: forwarding one this runtime
 //! does not understand would silently change the prompt, and a chunk that fails
 //! INSIDE the provider call fails after the turn was admitted and billed. The
-//! admitted set is the two chunk shapes pylon's own processors produce, `text`
-//! and `image_url` — matching the Python worker's `_ADMITTED_CHUNK_TYPES` so the
-//! two ends stay deploy-compatible. A marker FIELD, by contrast, decides nothing
-//! the model sees, so an unknown field is ignored rather than refused: that
-//! asymmetry is deliberate and lets elitea-main add a marker field (as it did
-//! `item_id` for #607) without making the two services undeployable apart.
+//! admitted set is the two chunk shapes the legacy runtime's own processors
+//! produce, `text` and `image_url` — matching the Python worker's
+//! `_ADMITTED_CHUNK_TYPES` so the two ends stay deploy-compatible. A marker
+//! FIELD, by contrast, decides nothing the model sees, so an unknown field is
+//! ignored rather than refused: that asymmetry is deliberate and lets
+//! elitea-main add a marker field (as it did `item_id` for #607) without making
+//! the two services undeployable apart.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -708,8 +710,8 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
 /// Project the admitted chunks with this turn's reads spliced in.
 ///
 /// Each successfully read document is inserted as a SECOND `{"type":"text"}`
-/// chunk directly after its own header, which is what pylon's extraction step
-/// does (`rpc/chat_all.py:366-374`) and what the Python worker's
+/// chunk directly after its own header, which is what the legacy runtime's
+/// extraction step does (`rpc/chat_all.py:366-374`) and what the Python worker's
 /// `attachment_message_chunks` produces. Two properties follow from that
 /// placement and both are load-bearing:
 ///
@@ -795,8 +797,8 @@ fn needs_unavailable_read(
 }
 
 /// Whether the header at `index` is already followed by its own extracted text —
-/// a plain `text` chunk with no marker of its own, the shape pylon leaves behind
-/// after its extraction step ran.
+/// a plain `text` chunk with no marker of its own, the shape the legacy runtime
+/// leaves behind after its extraction step ran.
 fn carries_extracted_text(input_attachments: &[Value], index: usize) -> bool {
     input_attachments
         .get(index + 1)
@@ -825,17 +827,14 @@ mod tests {
     use super::*;
     use crate::agents::runtime::NativeAgentAssemblyErrorCode;
     use crate::protocol::control::test_runtime_context_authority;
-    use crate::transport::runtime_context::{
-        RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
+    use crate::transport::input_content::content_fake::{
+        ContextAnswer, ContextCall, ContextRoutes, Routes,
     };
+    use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
     use adk_rust::Part;
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use http::{Request, Response, StatusCode, Version};
-    use http_body_util::Full;
     use serde_json::json;
     use std::sync::Arc;
-    use tonic::body::Body;
+    use tonic::Status;
 
     fn text_parts(content: &Content) -> Vec<String> {
         content
@@ -911,9 +910,9 @@ mod tests {
 
     #[test]
     fn an_already_extracted_header_renders_both_chunks() {
-        // A header immediately followed by a plain text chunk is the shape pylon
-        // leaves after extraction ran. Both are plain text here, so both reach
-        // the model verbatim with no read required.
+        // A header immediately followed by a plain text chunk is the shape the
+        // legacy runtime leaves after extraction ran. Both are plain text here,
+        // so both reach the model verbatim with no read required.
         let attachments = vec![
             json!({
                 "type": "text",
@@ -1219,52 +1218,53 @@ mod tests {
         assert_eq!(resolved, attachments);
     }
 
+    type Reply = Result<ContextAnswer, Status>;
+
     struct FixedRpc {
-        responses: Mutex<Vec<Response<Body>>>,
-        targets: Arc<Mutex<Vec<String>>>,
+        replies: Mutex<Vec<Reply>>,
+        routes: Arc<Mutex<Vec<String>>>,
     }
 
-    #[async_trait]
-    impl RuntimeContextRpc for FixedRpc {
-        async fn post(
-            &self,
-            request: Request<Body>,
-        ) -> Result<Response<Body>, RuntimeContextTransportError> {
-            // The raw request target, NOT `uri().path()`: what main routes on
-            // is the escaped form, and the escaping is the thing under test.
-            self.targets
+    #[tonic::async_trait]
+    impl ContextRoutes for FixedRpc {
+        async fn answer(&self, call: ContextCall) -> Reply {
+            self.routes
                 .lock()
-                .map_err(|_| RuntimeContextTransportError::Unavailable)?
-                .push(request.uri().to_string());
-            self.responses
+                .map_err(|_| Status::unavailable("routes"))?
+                .push(call.route);
+            self.replies
                 .lock()
-                .map_err(|_| RuntimeContextTransportError::Unavailable)?
+                .map_err(|_| Status::unavailable("replies"))?
                 .pop()
-                .ok_or(RuntimeContextTransportError::Unavailable)
+                .unwrap_or_else(|| Err(Status::unavailable("no reply")))
         }
     }
 
-    fn attachment_response(status: StatusCode, body: &str) -> Response<Body> {
-        Response::builder()
-            .status(status)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", body.len())
-            .body(Body::new(Full::new(Bytes::from(body.to_owned()))))
-            .expect("attachment fixture response")
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "a fixture reply is the Result the fake service answers with"
+    )]
+    fn document(body: &str) -> Reply {
+        Ok(ContextAnswer::Json(body.as_bytes().to_vec()))
     }
 
-    fn platform_with(responses: Vec<Response<Body>>) -> (PlatformClient, Arc<Mutex<Vec<String>>>) {
-        let targets = Arc::new(Mutex::new(Vec::new()));
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "a fixture reply is the Result the fake service answers with"
+    )]
+    fn unreadable(reason: &str) -> Reply {
+        Ok(ContextAnswer::Unreadable(reason.to_owned()))
+    }
+
+    fn platform_with(replies: Vec<Reply>) -> (PlatformClient, Arc<Mutex<Vec<String>>>) {
+        let routes = Arc::new(Mutex::new(Vec::new()));
         let rpc = FixedRpc {
             // popped from the back, so the fixture reads naturally in order.
-            responses: Mutex::new(responses.into_iter().rev().collect()),
-            targets: Arc::clone(&targets),
+            replies: Mutex::new(replies.into_iter().rev().collect()),
+            routes: Arc::clone(&routes),
         };
         let client = RuntimeContextClient::with_rpc(
-            rpc,
+            Routes(rpc),
             RuntimeContextConfig {
                 origin: "https://content.internal".to_owned(),
                 deadline: Duration::from_secs(1),
@@ -1275,7 +1275,7 @@ mod tests {
             },
         )
         .expect("attachment fixture client");
-        (PlatformClient::new(Arc::new(client)), targets)
+        (PlatformClient::new(Arc::new(client)), routes)
     }
 
     /// Read and render exactly as `resolve_attachment_contents` does, with a
@@ -1320,10 +1320,7 @@ mod tests {
         // The v2 document main serves for a PDF: the text and its page map.
         let attachments = vec![header("conv/report.pdf")];
         let content = "first page 1\n\nsecond SPLICEDOK page";
-        let (platform, _) = platform_with(vec![attachment_response(
-            StatusCode::OK,
-            &v2_document(content).to_string(),
-        )]);
+        let (platform, _) = platform_with(vec![document(&v2_document(content).to_string())]);
         let resolved = read_and_render(&platform, &attachments).await;
         let parts = text_parts(&append_attachment_parts(user_message(), &resolved));
         assert_eq!(parts.len(), 3);
@@ -1343,8 +1340,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_v1_document_from_an_older_main_still_reads() {
         let attachments = vec![header("conv/report.txt")];
-        let (platform, _) = platform_with(vec![attachment_response(
-            StatusCode::OK,
+        let (platform, _) = platform_with(vec![document(
             &json!({
                 "schema_version": "elitea.runtime.attachment-object.v1",
                 "project_id": 17,
@@ -1363,16 +1359,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn a_422_is_a_terminal_rejection_with_its_reason_not_an_outage() {
-        let body = json!({
-            "schema_version": "elitea.runtime.attachment-unreadable.v1",
-            "reason": "encrypted"
-        })
-        .to_string();
-        let (platform, _) = platform_with(vec![attachment_response(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &body,
-        )]);
+    async fn an_unreadable_outcome_is_a_terminal_rejection_with_its_reason_not_an_outage() {
+        let (platform, _) = platform_with(vec![unreadable("encrypted")]);
         let Err(error) = platform
             .read_attachment_object(
                 &test_runtime_context_authority(),
@@ -1381,22 +1369,23 @@ mod tests {
             )
             .await
         else {
-            panic!("a 422 must not read as success");
+            panic!("an unreadable outcome must not read as success");
         };
         assert_eq!(error.code(), "runtime_context.rejected");
         assert_eq!(error.rejection_reason(), Some("encrypted"));
         assert!(!error.retryable(), "a file with no text is not retried");
 
-        // A 422 with an odd body is still a rejection, never an outage.
-        for odd in [
-            "{}",
-            "not json",
-            r#"{"schema_version":"elitea.runtime.attachment-unreadable.v1","reason":"made-up"}"#,
+        // An unknown reason, or a bare FailedPrecondition, is still a
+        // rejection, never an outage.
+        for (odd, reply) in [
+            ("made-up", unreadable("made-up")),
+            ("", unreadable("")),
+            (
+                "failed precondition",
+                Err(Status::failed_precondition("unreadable")),
+            ),
         ] {
-            let (platform, _) = platform_with(vec![attachment_response(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                odd,
-            )]);
+            let (platform, _) = platform_with(vec![reply]);
             let Err(error) = platform
                 .read_attachment_object(
                     &test_runtime_context_authority(),
@@ -1405,9 +1394,9 @@ mod tests {
                 )
                 .await
             else {
-                panic!("a 422 must not read as success");
+                panic!("an unreadable outcome must not read as success");
             };
-            assert_eq!(error.rejection_reason(), Some("unreadable"), "body {odd}");
+            assert_eq!(error.rejection_reason(), Some("unreadable"), "{odd}");
             assert!(!error.retryable());
         }
     }
@@ -1417,66 +1406,30 @@ mod tests {
         // Every refusal main can answer, plus a transport failure. Each must
         // produce NO document text, NO error, and a turn that renders the
         // header AND a note that says the file was not read and why.
-        let unreadable = |reason: &str| {
-            json!({"schema_version": "elitea.runtime.attachment-unreadable.v1", "reason": reason})
-                .to_string()
-        };
         for (response, phrase) in [
             (
-                Some(attachment_response(StatusCode::FORBIDDEN, "{}")),
+                Some(Err(Status::permission_denied("refused"))),
                 "not available to this conversation",
             ),
-            // Main's 404 for a missing OBJECT carries the reason document.
+            // Main's NotFound is a missing OBJECT.
+            (Some(Err(Status::not_found("gone"))), "no longer exists"),
+            // Unimplemented is the RPC: a deployment with no Go object store
+            // serves no attachments. The file exists.
             (
-                Some(attachment_response(
-                    StatusCode::NOT_FOUND,
-                    &unreadable("not_found"),
-                )),
-                "no longer exists",
-            ),
-            // A 404 without it is the ROUTE: a deployment with no Go object
-            // store has no attachment route. The file exists.
-            (
-                Some(attachment_response(StatusCode::NOT_FOUND, "{}")),
-                "cannot read attached files",
-            ),
-            (
-                Some(attachment_response(
-                    StatusCode::NOT_FOUND,
-                    "404 page not found\n",
-                )),
+                Some(Err(Status::unimplemented("no object store"))),
                 "cannot read attached files",
             ),
             // An empty upload is "empty", never "too large".
+            (Some(unreadable("empty")), "the file is empty"),
+            (Some(unreadable("encrypted")), "password-protected"),
+            (Some(unreadable("no_text")), "no text layer"),
             (
-                Some(attachment_response(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    &unreadable("empty"),
-                )),
-                "the file is empty",
-            ),
-            (
-                Some(attachment_response(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    &unreadable("encrypted"),
-                )),
-                "password-protected",
-            ),
-            (
-                Some(attachment_response(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    &unreadable("no_text"),
-                )),
-                "no text layer",
-            ),
-            (
-                Some(attachment_response(StatusCode::SERVICE_UNAVAILABLE, "{}")),
+                Some(Err(Status::unavailable("overloaded"))),
                 "could not read it",
             ),
-            // A 200 whose document names a project the claim did not bind.
+            // A served document that names a project the claim did not bind.
             (
-                Some(attachment_response(
-                    StatusCode::OK,
+                Some(document(
                     &json!({
                         "schema_version": "elitea.runtime.attachment-object.v1",
                         "project_id": 999,
@@ -1490,10 +1443,9 @@ mod tests {
                 )),
                 "not available to this conversation",
             ),
-            // A 200 answering about a DIFFERENT object than was asked for.
+            // A document answering about a DIFFERENT object than was asked for.
             (
-                Some(attachment_response(
-                    StatusCode::OK,
+                Some(document(
                     &json!({
                         "schema_version": "elitea.runtime.attachment-object.v1",
                         "project_id": 17,
@@ -1525,13 +1477,10 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_unit_map_that_does_not_fit_the_text_is_refused() {
         let content = "first page 1\n\nsecond page";
-        let mut document = v2_document(content);
+        let mut past_the_text = v2_document(content);
         // A unit that ends past the text.
-        document["units"][1]["end"] = json!(content.len() + 5);
-        let (platform, _) = platform_with(vec![attachment_response(
-            StatusCode::OK,
-            &document.to_string(),
-        )]);
+        past_the_text["units"][1]["end"] = json!(content.len() + 5);
+        let (platform, _) = platform_with(vec![document(&past_the_text.to_string())]);
         let Err(error) = platform
             .read_attachment_object(
                 &test_runtime_context_authority(),
@@ -1546,12 +1495,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn the_object_key_travels_as_one_percent_encoded_path_segment() {
-        // The key contains slashes and main routes on `r.URL.RawPath`, so the
-        // request target must keep them ESCAPED. An unescaped `/` here would
-        // address a route that does not exist and every read would 404 — a
-        // failure that looks exactly like a stale attachment.
-        let (platform, targets) = platform_with(Vec::new());
+    async fn the_object_key_travels_whole_as_one_typed_field() {
+        // The key contains slashes and a space. Main used to route on the
+        // escaped path, where an unescaped `/` addressed a route that did not
+        // exist; the key is now a request field, so it must arrive verbatim.
+        let (platform, routes) = platform_with(Vec::new());
         let _ = platform
             .read_attachment_object(
                 &test_runtime_context_authority(),
@@ -1559,13 +1507,10 @@ mod tests {
                 "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/report file.txt",
             )
             .await;
-        let targets = targets.lock().expect("captured targets");
-        assert_eq!(targets.len(), 1);
+        let routes = routes.lock().expect("captured routes");
         assert_eq!(
-            targets[0],
-            "/executions/execution-one/generations/2/runtime-context/attachments/\
-             chat-attachments/5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1%2Freport%20file.txt"
-                .replace(char::is_whitespace, ""),
+            *routes,
+            ["attachments/chat-attachments/5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/report file.txt"]
         );
     }
 }

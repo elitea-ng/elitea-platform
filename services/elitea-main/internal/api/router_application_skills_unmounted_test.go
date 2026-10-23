@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
@@ -51,8 +52,8 @@ func TestAttachedSkillsReadIsServedWhenTheRouteIsComposed(t *testing.T) {
 	route, err := applicationskillsapi.NewCurrentApplicationSkillsRoute(
 		&productionApplicationSkillsReader{},
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionApplicationSkillsPermissionResolver{},
 	)

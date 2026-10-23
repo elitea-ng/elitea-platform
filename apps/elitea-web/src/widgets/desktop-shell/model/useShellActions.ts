@@ -45,7 +45,7 @@ export function useShellActions(): (action: ShellAction) => void {
       const handlers: { [K in ShellAction['type']]: (a: Extract<ShellAction, { type: K }>) => void } = {
         command_palette: () => layout.setPaletteOpen(!layout.paletteOpen),
         toggle_sidebar: () => layout.setSidebarOpen(!layout.sidebarOpen),
-        toggle_changes: () => layout.setChangesOpen(!layout.changesOpen),
+        toggle_changes: () => layout.toggleInspector(),
         toggle_plan: () => layout.session?.togglePlanMode(),
         send_to_cloud: () => layout.session?.sendToCloud?.(),
         open_in_chat: () => layout.session?.openInChat?.(),

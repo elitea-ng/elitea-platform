@@ -4,7 +4,7 @@ package api_test
 // gates (#302, #313). Neither is observable from a running router, and each one
 // failing produces a defect nothing else in this suite would notice.
 //
-//  1. EVERY permission string the gates name has to be one pylon actually
+//  1. EVERY permission string the gates name has to be one legacy actually
 //     declares. The names were transcribed by hand from
 //     testdata/legacy/legacy-rbac-static-catalog.json, and a typo — or a name
 //     invented because a route had no obvious counterpart — produces a gate
@@ -59,7 +59,7 @@ var reviewedRoutePermissions = []string{
 	// /elitea_core string 0068 left out — the route was deleted by #126 when
 	// 0068 was written, so the name gated nothing and was not seeded. It is
 	// listed here so both invariants above cover it: the catalogue check proves
-	// pylon declares it, and the grant check proves shared/0120 seeds it.
+	// the legacy runtime declares it, and the grant check proves shared/0120 seeds it.
 	agentexecutionapi.CurrentApplicationTaskStatusPermission,
 	// Client contract 1.3 removed the conversations group's stub regenerate
 	// from router.go; the reviewed agent-execution regeneration is the only
@@ -119,9 +119,9 @@ func gatedPermissions(t *testing.T) []string {
 
 // TestEliteaCoreGatesNameOnlyRealLegacyPermissions is invariant 1.
 //
-// The catalogue is machine-generated from the pylon `check_api` declarations by
-// scripts/security/export_legacy_rbac_catalog.py, so "appears in
-// literal_permissions" means "some pylon handler declares this exact string".
+// The catalogue is a frozen, machine-generated snapshot of the legacy
+// `check_api` declarations, so "appears in literal_permissions" means "some
+// legacy handler declares this exact string".
 // A name that does not is either a typo or an invention, and both ship as a
 // permanent 403.
 func TestEliteaCoreGatesNameOnlyRealLegacyPermissions(t *testing.T) {
@@ -130,7 +130,7 @@ func TestEliteaCoreGatesNameOnlyRealLegacyPermissions(t *testing.T) {
 	declared := legacyDeclaredPermissions(t)
 	for _, permission := range gatedPermissions(t) {
 		if _, ok := declared[permission]; !ok {
-			t.Errorf("router.go gates an /elitea_core route on %q, which no pylon handler declares.\n"+
+			t.Errorf("router.go gates an /elitea_core route on %q, which no legacy handler declares.\n"+
 				"  testdata/legacy/legacy-rbac-static-catalog.json is generated from the `check_api`\n"+
 				"  calls themselves, so a string missing from it is a name this platform has never had.\n"+
 				"  Nothing grants it, so the route answers 403 to every caller including the operator.",
@@ -190,13 +190,12 @@ func TestEliteaCoreSeedingMigrationGrantsNothingUngated(t *testing.T) {
 /* ── sources ───────────────────────────────────────────────────────────── */
 
 // legacyDeclaredPermissions reads the machine-generated catalogue's
-// literal_permissions list — every string a pylon `check_api` names.
+// literal_permissions list — every string a legacy `check_api` names.
 func legacyDeclaredPermissions(t *testing.T) map[string]struct{} {
 	t.Helper()
 
-	// The catalogue lives at the REPOSITORY root, not the service root: it is
-	// generated for the whole pylon plugin corpus and is read by
-	// scripts/security/check_legacy_rbac_drift.py too.
+	// The catalogue lives at the REPOSITORY root, not the service root: it was
+	// generated once for the whole legacy plugin corpus and is frozen.
 	path := filepath.Join(repoRootFrom(t), "../..", "testdata/legacy/legacy-rbac-static-catalog.json")
 	raw, err := os.ReadFile(path) //nolint:gosec // fixed, test-local path
 	if err != nil {

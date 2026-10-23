@@ -291,6 +291,10 @@ impl LocalFolderSource {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "synchronous file I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
+)]
 impl ContentSource for LocalFolderSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
         self.list_now()

@@ -14,19 +14,21 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
-// projectUserNamePrefix mirrors pylon's projects.constants.PROJECT_USER_NAME_PREFIX.
-// System project-user tokens carry a name of the form ":system:project:<id>:".
+// projectUserNamePrefix mirrors the legacy
+// projects.constants.PROJECT_USER_NAME_PREFIX. System project-user tokens carry a
+// name of the form ":system:project:<id>:".
 const projectUserNamePrefix = ":system:project:"
 
-// defaultPublicProjectID mirrors pylon's elitea_config "ai_project_id" default (1).
+// defaultPublicProjectID mirrors the legacy elitea_config "ai_project_id" default
+// (1).
 const defaultPublicProjectID = publicproject.Default
 
 // projectLookupTimeout bounds the personal-project DB lookup so a slow store
-// cannot stall the request. Mirrors the intent of pylon's rpc timeout(30) but
-// is much tighter for the streaming edge path.
+// cannot stall the request. Mirrors the intent of the legacy rpc timeout(30)
+// but is much tighter for the streaming edge path.
 const projectLookupTimeout = 2 * time.Second
 
-// systemUserEmailRe matches pylon's PROJECT_USER_EMAIL_TEMPLATE
+// systemUserEmailRe matches the legacy PROJECT_USER_EMAIL_TEMPLATE
 // ("system_user_{}@centry.user") used as a fallback source of the project id.
 var systemUserEmailRe = regexp.MustCompile(`^system_user_(\d+)@centry\.user$`)
 
@@ -137,7 +139,7 @@ func ContextWithProject(ctx context.Context, pc ProjectContext) context.Context 
 }
 
 // PersonalProjectResolver looks up the personal project id for a user, mirroring
-// pylon's projects_get_personal_project_id RPC. It returns (0, nil) when no
+// the legacy projects_get_personal_project_id RPC. It returns (0, nil) when no
 // personal project can be determined (not an error — the caller decides).
 type PersonalProjectResolver interface {
 	PersonalProjectID(ctx context.Context, userID string) (int, error)
@@ -179,7 +181,7 @@ type ProjectConfig struct {
 // When no authenticated user is present the request passes through unchanged
 // (the Auth middleware is responsible for rejecting unauthenticated callers).
 // When a user is present but no project can be resolved, the request is rejected
-// with HTTP 400, matching pylon's behaviour.
+// with HTTP 400, matching the legacy behaviour.
 //
 // Row 3 is the only selector refusal here. Every other inadmissible selector is
 // ignored in silence. See admitProjectSelector for why. requireRuntimePrincipal
@@ -460,9 +462,8 @@ func isEntitledToProject(
 //
 // A selector that does not name a project is reported as absent (spec §6.2):
 // a blank value, a value that is not a positive int32, or a header that appears
-// more than once. The repeated-header rule follows uniqueForwardedIdentityHeader
-// in auth.go, the posture this service already applies to an identity-bearing
-// header: when two copies disagree, no rule can say which copy the caller meant.
+// more than once: when two copies disagree, no rule can say which copy the
+// caller meant.
 //
 // A present header that names no project does not fall through to the next
 // header. §6.1 picks the selector by the first header present, and §6.2 then
@@ -514,7 +515,7 @@ func positiveProjectID(value string) (int, bool) {
 	return id, true
 }
 
-// resolveProjectID derives the caller's project id, mirroring pylon's
+// resolveProjectID derives the caller's project id, mirroring the legacy
 // prepare_request token branch:
 //   - system project-user name (":system:project:<id>:") → parse the id from the
 //     name, and admit it only after the membership check
@@ -532,11 +533,10 @@ func positiveProjectID(value string) (int, bool) {
 // credentials. So the branch was an unchecked claim on another project. Any
 // writer of auth.User.Name could make that claim.
 //
-// The branch was latent and not reachable: authsvc.New has no non-test caller,
-// RouterConfig.AuthClient is never assigned, and the Pylon Redis RPC client is
-// the one non-test writer of the field. Latent is not safe. deploy/centry-hybrid
-// composes a Pylon auth plane, and a hybrid deployment that composes that client
-// makes the branch live at once.
+// The branch was latent when it was found: the one writer of a name-shaped
+// field was the legacy Redis RPC client, which no deployment composed and which
+// has since been deleted (legacy_bridge_absence_test.go). Latent is not safe:
+// any later writer of auth.User.Name would make the branch live at once.
 //
 // The check is the same predicate the selector header passes, through the same
 // function. A name-derived project therefore has exactly the power an
@@ -558,7 +558,7 @@ func resolveProjectID(ctx context.Context, cfg ProjectConfig, user auth.User) (i
 		}
 		// The name asked for a project the caller may not use. Fall through to
 		// the caller's own project. The refusal is silent, for the same reason the
-		// selector refusal is silent (spec §5 row 5): a real Pylon system
+		// selector refusal is silent (spec §5 row 5): a real legacy system
 		// project-user resolves to the same project through the
 		// system_user_(\d+)@centry.user email fallback inside the resolver, so
 		// the fallback is the parity path and not a failure.
@@ -572,7 +572,8 @@ func resolveProjectID(ctx context.Context, cfg ProjectConfig, user auth.User) (i
 
 // projectIDFromUserName parses the project id from a system project-user name of
 // the form ":system:project:<id>:". The trailing colon means the id is the
-// second-to-last colon-separated field, matching pylon's name.split(":")[-2].
+// second-to-last colon-separated field, matching the legacy
+// name.split(":")[-2].
 func projectIDFromUserName(name string) (int, bool) {
 	if !strings.HasPrefix(name, projectUserNamePrefix) {
 		return 0, false

@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -850,6 +851,27 @@ export const getExecuteRemoteToolkitToolUrl = (
  * the worker refuses (the Rust worker runs only read-only, non-sensitive
  * tools in this path) answers `reason: worker_refused`. A deployment
  * with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+ *
+ * PLATFORM MCP SERVERS (client contract 1.16). `toolkit_id` 0 with a
+ * `platform_mcp` tool's `toolkit_ref` runs one tool of that internal
+ * builder (`mcp_elitea_internal_*`). The same checks apply: the ref must
+ * name a server of this version (`toolkit_ref_mismatch`), the frozen
+ * version must select it (`tool_not_in_agent`), the guardrails' blocks
+ * (`tool_blocked`), the sensitive-tool confirmation, the rate and the
+ * audit. Main runs it in process through the dispatch its internal MCP
+ * endpoint serves a cloud turn, AS THE CALLER: each operation re-checks
+ * its own permission (an operation's refusal is 200 `ok: false`,
+ * `status: tool_error`). No worker runs, so there is no `task_id`;
+ * `mcp_authorization_reference` is refused (400); an unknown tool
+ * answers 422 `reason: unknown_tool` naming the server's tools, and MCP
+ * exposure switched off answers 422 `reason: unsupported_toolkit`. A
+ * retry with the same Idempotency-Key and body answers the first call's
+ * result on any server replica (claimed in a shared JetStream KV store
+ * before the tool runs and kept 15 minutes; a retry that finds it still
+ * running waits up to 10 s, then answers 409
+ * `remote_toolkit_in_progress`). Without that store the call never
+ * runs (503 `remote_toolkit_unavailable_now`; 501
+ * `remote_toolkit_unavailable` where the server started without it).
  * @summary Run one tool of one saved toolkit on a cloud worker
  */
 export const executeRemoteToolkitTool = async (
@@ -3231,8 +3253,8 @@ export const getDiscoverToolkitToolsUrl = (
  * internal/api/router.go:1913-1914.
  *
  * POST WITH NO BODY. The handler reads both arguments from the URL and
- * never opens the request body. pylon declares the verb, so the route
- * keeps it. Send no payload; the handler discards one.
+ * never opens the request body. The legacy runtime declares the verb, so
+ * the route keeps it. Send no payload; the handler discards one.
  *
  * A BLOCKED TYPE IS REFUSED, NOT EMPTIED. The type sits in the URL, so
  * `refuseBlockedToolkitType`
@@ -3824,7 +3846,7 @@ export const getTestToolkitToolUrl = (projectId: string, toolId: number) => {
  * the shared body at :737-781, which maps the outcome through
  * internal/api/v2/toolkitrun/response.go. Registered at
  * internal/api/router.go:2445-2446, gated on
- * `models.applications.tool.patch` — pylon declares only
+ * `models.applications.tool.patch` — the legacy runtime declares only
  * `test_toolkit_tool.py`, so both verbs that run a tool take the string
  * that module declares.
  *
@@ -4140,10 +4162,11 @@ export const getListRegisteredMcpServersUrl = (projectId: string) => {
  * own project therefore follows them into every project they work in
  * (internal/api/v2/mcp/registry.go:116-129).
  *
- * The body is a bare array, which is pylon's shape. An empty array is now
- * an honest read of the rows: it means the project has no registered
- * server. A read failure answers 503 instead, because reporting an empty
- * toolset would make an agent answer without its tools.
+ * The body is a bare array, the shape the legacy runtime returns and
+ * existing clients read. An empty array is now an honest read of the rows:
+ * it means the project has no registered server. A read failure answers
+ * 503 instead, because reporting an empty toolset would make an agent
+ * answer without its tools.
  * @summary List MCP servers registered into the project by an MCP client
  */
 export const listRegisteredMcpServers = async (

@@ -1,7 +1,7 @@
 /**
  * Two DEFECT-CHECK issues about a conversation FAILING TO LOAD, re-judged
  * against this platform's Go handler and React page rather than the legacy
- * Pylon/EliteaUI stack both were originally filed against.
+ * runtime and app stack both were originally filed against.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * elitea_issues #6523 — "Conversation becomes permanently inaccessible after

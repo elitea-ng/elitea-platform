@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -162,36 +161,31 @@ func TestExpansionBoundaryCasesSitExactlyOnTheLimit(t *testing.T) {
 	}
 }
 
-// The refusal costs the parse of the written document plus at most the budget
-// in visits, whatever the definition would expand to: the audit's shape
-// (about 3x10^9 nodes from a document inside the byte bound) is refused
-// without being built.
+// The audit's shape (about 3x10^9 nodes from a document inside the byte
+// bound) is refused through Check, the save-time entry point. That the refusal
+// costs at most the budget in visits, never the expansion, is asserted by
+// counting the visits in TestExpansionMeterStopsAtTheBudget
+// (expansion_internal_test.go). The wall-clock bound this test used to carry
+// measured the host, not the meter: under race instrumentation on a loaded
+// machine the 330 KB parse alone took over two seconds.
 func TestExpansionRefusesALargeBombWithinTheBudget(t *testing.T) {
-	var b strings.Builder
-	b.WriteString("a: &x [")
-	b.WriteString(strings.Repeat("0,", 50_000))
-	b.WriteString("0]\nb: [")
-	b.WriteString(strings.Repeat("*x,", 60_000))
-	b.WriteString("*x]\n")
-	doc := b.String()
+	doc := expansionBomb()
 	if len(doc) > pipelinelimits.MaxInstructionsBytes {
 		t.Fatalf("bomb is %d bytes, over the byte bound; the test would not reach the expansion check", len(doc))
 	}
-	started := time.Now()
-	err := pipelinelimits.Check(doc)
-	elapsed := time.Since(started)
-	if !errors.Is(err, pipelinelimits.ErrExpansionTooLarge) {
+	if err := pipelinelimits.Check(doc); !errors.Is(err, pipelinelimits.ErrExpansionTooLarge) {
 		t.Fatalf("Check = %v, want ErrExpansionTooLarge", err)
 	}
-	// Generous for a loaded CI runner; locally it is tens of milliseconds.
-	if elapsed > 2*time.Second {
-		t.Fatalf("refusal took %s", elapsed)
-	}
-	t.Logf("%d-byte bomb refused in %s", len(doc), elapsed)
+}
+
+// expansionBomb is 50,001 scalars replayed by 60,001 aliases: about 3x10^9
+// nodes once expanded, from roughly 330 KB of text.
+func expansionBomb() string {
+	return "a: &x [" + strings.Repeat("0,", 50_000) + "0]\nb: [" + strings.Repeat("*x,", 60_000) + "*x]\n"
 }
 
 func BenchmarkCheckRefusesBomb(b *testing.B) {
-	doc := "a: &x [" + strings.Repeat("0,", 50_000) + "0]\nb: [" + strings.Repeat("*x,", 60_000) + "*x]\n"
+	doc := expansionBomb()
 	b.ReportAllocs()
 	for b.Loop() {
 		if !errors.Is(pipelinelimits.Check(doc), pipelinelimits.ErrExpansionTooLarge) {

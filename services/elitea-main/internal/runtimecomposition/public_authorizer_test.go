@@ -133,7 +133,7 @@ func TestPublicAuthorizerAcceptsVerifiedForwardedMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := auth.ContextWithAuthenticatedUser(context.Background(), auth.User{ID: "17"}, auth.AuthenticationSourceForwarded)
+	ctx := auth.ContextWithAuthenticatedUser(context.Background(), auth.User{ID: "17"}, auth.AuthenticationSourceSession)
 	identity, err := authorizer.AuthorizeValidation(ctx, "42", "revision-1")
 	if err != nil {
 		t.Fatal(err)

@@ -414,7 +414,7 @@ mod tests {
         // Binary content is not scanned.
         let mut binary = b"AKIAABCDEFGHIJKLMNOP".to_vec();
         binary.insert(0, 0);
-        assert!(scan_bytes(&binary).is_empty());
+        assert_eq!(scan_bytes(&binary), [] as [(usize, &str); 0]);
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
             &std::collections::BTreeSet::from([std::path::PathBuf::from("src/leak.env")]),
         )
         .expect("scan");
-        assert!(skipped.is_empty());
+        assert_eq!(skipped, []);
         assert_eq!(findings[0].path, std::path::Path::new("src/leak.env"));
         assert_eq!(findings[0].line, 3);
         assert!(

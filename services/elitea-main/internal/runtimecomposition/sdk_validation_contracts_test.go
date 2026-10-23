@@ -41,8 +41,8 @@ func TestCurrentSDKValidationContractCatalogJoinsAllCurrentSDKTypes(t *testing.T
 		}
 		resolved++
 	}
-	if resolved != 32 {
-		t.Fatalf("resolved = %d, want 32", resolved)
+	if resolved != 31 {
+		t.Fatalf("resolved = %d, want 31", resolved)
 	}
 }
 

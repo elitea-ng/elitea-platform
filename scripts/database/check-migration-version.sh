@@ -128,6 +128,16 @@ EOF
     if grep -Fxq -- "${path}" <<<"${base_paths}"; then
       continue
     fi
+    # A RENAME keeps its version: the base file at this number is gone from
+    # the branch, so nothing else claims it. migrate/released.go is what lets
+    # a deployed ledger accept the new name (PR #1405 renamed 0091 and 0124).
+    version="${file%%_*}"
+    holder="$(grep -E "/${version}_[^/]*\.sql$" <<<"${base_paths}" | head -1 || true)"
+    if [ -n "${holder}" ] && [ ! -e "${holder}" ]; then
+      printf '  %s: %s renames %s and keeps version %s\n' \
+        "${scope}" "${file}" "${holder##*/}" "${version}"
+      continue
+    fi
     new_paths="${new_paths}${path}
 "
   done <<EOF

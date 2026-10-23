@@ -166,7 +166,7 @@ fn the_fast_path_lands_the_cloud_tree_as_uncommitted_changes_and_undo_restores()
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
     assert_eq!(preflight.outcome, Outcome::FastPath);
     assert_eq!(preflight.cloud_turns(), 2);
-    assert!(preflight.conflict_paths.is_empty());
+    assert_eq!(preflight.conflict_paths, [] as [String; 0]);
     assert!(
         preflight.skipped_paths.contains(&".env".to_owned()),
         "{:?}",
@@ -400,7 +400,7 @@ fn a_thread_with_no_cloud_turn_takes_back_as_a_no_op() {
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
     assert_eq!(preflight.outcome, Outcome::FastPath);
     assert_eq!(preflight.cloud_turns(), 0);
-    assert!(preflight.changed_paths.is_empty());
+    assert_eq!(preflight.changed_paths, [] as [String; 0]);
 }
 
 #[test]

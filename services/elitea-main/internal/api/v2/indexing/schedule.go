@@ -30,8 +30,8 @@ const (
 var ErrInvalidCurrentIndexScheduleRoute = errors.New("invalid current index schedule route dependencies")
 
 // CurrentIndexScheduleUpdater is the application boundary for the current
-// schedule PATCH. It does not discover or execute schedules; Pylon remains the
-// sole scheduler during this source-only stage.
+// schedule PATCH. It does not discover or execute schedules; the legacy runtime
+// remains the sole scheduler during this source-only stage.
 type CurrentIndexScheduleUpdater interface {
 	Update(context.Context, indexscheduleapp.Update) (indexscheduleapp.MutationResult, error)
 }
@@ -50,8 +50,7 @@ func NewCurrentIndexScheduleRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexScheduleRoute, error) {
-	if updater == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if updater == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexScheduleRoute
 	}
 

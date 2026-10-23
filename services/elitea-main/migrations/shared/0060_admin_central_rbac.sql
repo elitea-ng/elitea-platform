@@ -2,26 +2,27 @@
 --
 -- Why this is needed at all
 -- ------------------------
--- internal/api/router.go now gates the admin panel's READS on the same pylon
--- permissions their Python counterparts declare — `GET /admin/auth_users/{mode}`
--- on `admin.auth.users`, and the rest of the block on `runtime.plugins`,
--- `projects.projects.projects.view`, `configuration.roles.permissions.view` and
--- `admin.moderation`. Unit A14 gated only the writes precisely because that
--- change was unsafe without this one: `legacyrbac.PostgresResolver` resolves
--- those permissions out of auth_core__role/…__role_permission/…__user_role, and
--- a database bootstrapped by the pre-A14 internal/infra/db/migrations/
--- 001_initial.sql had NO administration-mode role and NO role_permission row of
--- any kind. Every central permission resolved to the empty set, so a gated read
--- would answer 403 to every user including the operator.
+-- internal/api/router.go now gates the admin panel's READS on the same legacy
+-- runtime permissions their Python counterparts declare — `GET
+-- /admin/auth_users/{mode}` on `admin.auth.users`, and the rest of the block on
+-- `runtime.plugins`, `projects.projects.projects.view`,
+-- `configuration.roles.permissions.view` and `admin.moderation`. Unit A14 gated
+-- only the writes precisely because that change was unsafe without this one:
+-- `legacyrbac.PostgresResolver` resolves those permissions out of
+-- auth_core__role/…__role_permission/…__user_role, and a database bootstrapped
+-- by the pre-A14 internal/infra/db/migrations/001_initial.sql had NO
+-- administration-mode role and NO role_permission row of any kind. Every
+-- central permission resolved to the empty set, so a gated read would answer
+-- 403 to every user including the operator.
 --
 -- Who this actually affects
 -- -------------------------
---   * pylon-backed deployments (dev.elitea.ai, deploy/centry-hybrid's
+--   * legacy-backed deployments (dev.elitea.ai, deploy/centry-hybrid's
 --     pov-compose, any legacy dump) already have the roles and the grants:
---     auth_core/db/migrations/202202021633_core.py seeds the roles, and pylon's
---     `check_api` decorator inserts the role_permission rows from
---     `recommended_roles` at import time. Nothing here should apply to them,
---     and the guard below makes sure of it.
+--     auth_core/db/migrations/202202021633_core.py seeds the roles, and the
+--     legacy runtime's `check_api` decorator inserts the role_permission rows
+--     from `recommended_roles` at import time. Nothing here should apply to
+--     them, and the guard below makes sure of it.
 --   * fresh Go databases get everything from 001_initial.sql, which now seeds
 --     the same rows. This migration finds them already present and no-ops.
 --   * databases created by the OLD 001_initial.sql — existing developer and CI
@@ -67,9 +68,9 @@ BEGIN
         ('viewer', 'administration')
     ON CONFLICT (name, mode) DO NOTHING;
 
-    -- Grants, transcribed from the `recommended_roles` each pylon handler
-    -- declares in legacy/plugins/admin/api/v2/. See 001_initial.sql for the two
-    -- transcription traps (a bare permission list still defaults
+    -- Grants, transcribed from the `recommended_roles` each legacy runtime
+    -- handler declares in legacy/plugins/admin/api/v2/. See 001_initial.sql for
+    -- the two transcription traps (a bare permission list still defaults
     -- system/super_admin/admin to True; a partial dict still leaves
     -- super_admin True). editor and viewer are granted nothing.
     INSERT INTO public.auth_core__role_permission (role_id, permission)

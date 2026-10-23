@@ -1358,10 +1358,10 @@ async fn asking_for_pictures_never_changes_the_text_and_not_asking_reads_none() 
     // A format without pictures answers an ask with none, not an error.
     let sheet = xlsx(&["Refund window", "thirty days"]);
     let text = extracted(&served, "s.xlsx", XLSX, sheet, Some(asking(0, 0, 0))).await;
-    assert!(text.images.is_empty());
+    assert_eq!(text.images, []);
     let none = docx(&["No pictures here."]);
     let text = extracted(&served, "n.docx", DOCX, none, Some(asking(0, 0, 0))).await;
-    assert!(text.images.is_empty());
+    assert_eq!(text.images, []);
     assert_eq!(text.images_skipped.unwrap_or_default().too_many, 0);
 }
 
@@ -1456,14 +1456,14 @@ async fn a_package_whose_media_outweigh_the_work_bound_gives_its_text_and_no_pic
         Some(asking(0, 0, small_len)),
     )
     .await;
-    assert!(text.images.is_empty());
+    assert_eq!(text.images, []);
     assert_eq!(text.images_skipped.unwrap_or_default().too_large, 5);
 
     // PPTX: media under `ppt/media` are counted the same way.
     let slides: Vec<(&str, bool)> = (0..9).map(|_| ("Slide", true)).collect();
     let deck = pptx_with(&slides, &vec![small.clone(); 9]);
     let text = extracted(&served, "deck.pptx", PPTX, deck, Some(asking(2, 0, 0))).await;
-    assert!(text.images.is_empty());
+    assert_eq!(text.images, []);
     assert_eq!(text.images_skipped.unwrap_or_default().too_many, 9);
     assert!(text.text.contains("Slide"));
 }
@@ -1510,7 +1510,7 @@ async fn a_pdf_over_the_page_bound_gives_its_text_and_no_picture_counted() {
         Some(asking(0, 0, 0)),
     )
     .await;
-    assert!(text.images.is_empty());
+    assert_eq!(text.images, []);
     assert_eq!(text.images_skipped.unwrap_or_default().too_many, 1);
     assert_eq!(text.text, plain.text, "the text is the plain pass's");
 }
@@ -1599,6 +1599,6 @@ async fn a_request_is_lowered_to_the_extractors_picture_caps_which_capabilities_
     // when the request would take it.
     let big = three_pictures(&[big_png([1, 2, 3], 6000)]);
     let text = extracted(&served, "d.docx", DOCX, big, Some(asking(0, 1 << 30, 0))).await;
-    assert!(text.images.is_empty());
+    assert_eq!(text.images, []);
     assert_eq!(text.images_skipped.unwrap_or_default().too_large, 1);
 }

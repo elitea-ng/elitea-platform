@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { createHttpClient } from './http';
+import { sendRaw, type BrowserFetch } from './httpNative';
 import { setNativeTransport, type NativeTransport } from './nativeTransport';
 
 const BASE = 'https://elitea.example.com/api/v2';
@@ -225,5 +226,50 @@ describe('native transport — bearer scope', () => {
 
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has('Authorization')).toBe(false);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Authorization')).toBe('Bearer tok-1');
+  });
+});
+
+describe('native transport — raw-fetch modules (artifacts, downloads)', () => {
+  it('without a transport, sends with the browser fetch exactly as given', async () => {
+    const browser = vi.fn<BrowserFetch>().mockResolvedValue(json(200, {}));
+    const init: RequestInit = { credentials: 'same-origin' };
+    await sendRaw(browser, '/api/v2/artifacts/buckets/7', init);
+    expect(browser).toHaveBeenCalledWith('/api/v2/artifacts/buckets/7', init);
+  });
+
+  it('resolves the relative artifact URL against the deployment, with the bearer and no cookies', async () => {
+    // The desktop's Artifacts page said "Failed to load buckets": the raw
+    // fetch went to `/api/v2/...` on the bundled page's origin, cookie-only.
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json(200, { buckets: [] }));
+    const browser = vi.fn<BrowserFetch>();
+    transport({ fetch: fetchMock, origin: 'https://elitea.example.com' });
+
+    const response = await sendRaw(browser, '/api/v2/artifacts/buckets/7', { credentials: 'same-origin' });
+
+    expect(response.status).toBe(200);
+    expect(browser).not.toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('https://elitea.example.com/api/v2/artifacts/buckets/7');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer tok-1');
+    expect(init?.credentials).toBe('omit');
+    expect(init?.redirect).toBe('error');
+  });
+
+  it('keeps a multipart body and refreshes once on a 401', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(json(201, {}));
+    const mocks = transport({ fetch: fetchMock, origin: 'https://elitea.example.com' });
+    mocks.accessToken.mockResolvedValueOnce('tok-1').mockResolvedValueOnce('tok-2');
+    const body = new FormData();
+    body.append('file', new Blob(['x']), 'folder/a.txt');
+
+    const response = await sendRaw(vi.fn<BrowserFetch>(), '/api/v2/artifacts/objects/7/b', { method: 'POST', body });
+
+    expect(response.status).toBe(201);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(body);
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Authorization')).toBe('Bearer tok-2');
   });
 });

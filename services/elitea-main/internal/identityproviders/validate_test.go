@@ -100,9 +100,9 @@ func TestARedirectURIWithAFragmentIsRefused(t *testing.T) {
 
 /* ── the corrections with exactly one possible intent ───────────────────── */
 
-// pylon's field is `metadata_endpoint` and holds the discovery URL. An operator
-// moving a definition across has that URL in hand. Storing it as the issuer
-// would make every id_token fail verification against `iss`.
+// The legacy field is `metadata_endpoint` and holds the discovery URL. An
+// operator moving a definition across has that URL in hand. Storing it as the
+// issuer would make every id_token fail verification against `iss`.
 func TestADiscoveryURLIsReducedToItsIssuer(t *testing.T) {
 	provider := validOIDC()
 	provider.OIDC.Issuer = "https://idp.example.com/.well-known/openid-configuration"

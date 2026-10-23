@@ -5,12 +5,14 @@
 
 use std::path::Path;
 
-use grep_regex::RegexMatcherBuilder;
-use grep_searcher::sinks::UTF8;
-use grep_searcher::{BinaryDetection, SearcherBuilder};
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::apply_patch::{self, Hunk, Pass};
+use crate::budget::{self, SpillStore};
+use crate::edit::{self, EditMatch, EditSpec, Span, Unplaced, locate, snippet, splice};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
 use crate::patch;
@@ -18,7 +20,8 @@ use crate::workspace::{EntryKind, Intent, ReadFile, Workspace, WsPath, is_protec
 
 /// The largest file the text tools read or write.
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
-/// The most text one read returns.
+/// The most text one read returns, whatever its token budget
+/// ([`crate::budget::Budgets::read_file`]) says.
 pub const MAX_READ_OUTPUT: usize = 256 * 1024;
 /// Lines one read returns by default.
 pub const DEFAULT_READ_LINES: usize = 2000;
@@ -69,12 +72,22 @@ pub(crate) struct ReadArgs {
     /// First line, 1-based.
     #[serde(default)]
     pub offset: Option<usize>,
+    /// Byte offset inside the first line (a cut line's `next_column`).
+    #[serde(default)]
+    pub column: Option<usize>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
 
-/// `read_file`.
-pub(crate) fn read(workspace: &Workspace, ledger: &ReadLedger, args: Value) -> ToolResult<Value> {
+/// `read_file`: at most `max_bytes` of numbered lines (the token budget,
+/// never more than [`MAX_READ_OUTPUT`]), stopping at the last whole line;
+/// a line longer than a page is cut and continues at `next_column`.
+pub(crate) fn read(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    args: Value,
+    max_bytes: usize,
+) -> ToolResult<Value> {
     let args: ReadArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_FILE_BYTES)?;
@@ -97,29 +110,19 @@ pub(crate) fn read(workspace: &Workspace, ledger: &ReadLedger, args: Value) -> T
         })?
     };
     ledger.record(&file.path, file.stamp.clone());
-    let lines: Vec<&str> = text.lines().collect();
-    let start = args.offset.unwrap_or(1).max(1);
-    let limit = args.limit.unwrap_or(DEFAULT_READ_LINES).max(1);
-    let mut content = String::new();
-    let mut end = start.saturating_sub(1);
-    for (index, line) in lines.iter().enumerate().skip(start - 1).take(limit) {
-        let numbered = format!("{:>6}\t{line}\n", index + 1);
-        if content.len() + numbered.len() > MAX_READ_OUTPUT {
-            break;
-        }
-        content.push_str(&numbered);
-        end = index + 1;
+    let mut page = budget::page(
+        &text,
+        budget::PageRequest {
+            offset: args.offset,
+            column: args.column,
+            limit: Some(args.limit.unwrap_or(DEFAULT_READ_LINES)),
+        },
+        max_bytes.min(MAX_READ_OUTPUT),
+    );
+    if let Value::Object(map) = &mut page {
+        map.insert("path".to_owned(), Value::String(file.path.display_string()));
     }
-    let truncated = end < lines.len();
-    Ok(json!({
-        "path": file.path.display_string(),
-        "content": content,
-        "start_line": start,
-        "end_line": end,
-        "total_lines": lines.len(),
-        "truncated": truncated,
-        "next_offset": truncated.then_some(end + 1),
-    }))
+    Ok(page)
 }
 
 #[derive(Deserialize)]
@@ -185,42 +188,180 @@ pub(crate) struct EditArgs {
     pub replace_all: bool,
 }
 
-/// `edit_file`, after approval: exact string replacement.
+#[derive(Deserialize)]
+pub(crate) struct MultiEditArgs {
+    pub path: String,
+    pub edits: Vec<EditSpec>,
+}
+
+/// Each edit's spans (with its index), and how each edit matched.
+type Placed = (Vec<(usize, Span)>, Vec<EditMatch>);
+
+/// The written path, the replacement count, how each edit matched, and
+/// the snippet (with whether it was cut).
+type Edited = (WsPath, usize, Vec<EditMatch>, (String, bool));
+
+/// The edits' places in `text`, every one against the original, refused
+/// when one is missing, ambiguous or overlaps another. `label(i)` names
+/// edit `i` in a message.
+fn place_edits(
+    text: &str,
+    path: &WsPath,
+    edits: &[EditSpec],
+    label: &dyn Fn(usize) -> String,
+) -> ToolResult<Placed> {
+    let mut spans: Vec<(usize, Span)> = Vec::new();
+    let mut matches = Vec::new();
+    for (index, edit) in edits.iter().enumerate() {
+        if edit.old_string.is_empty() {
+            return Err(ToolError::invalid(format!(
+                "{}old_string is empty; use write_file to create a file",
+                label(index)
+            )));
+        }
+        if edit.old_string == edit.new_string {
+            return Err(ToolError::invalid(format!(
+                "{}old_string and new_string are the same",
+                label(index)
+            )));
+        }
+        let (found, how) = locate(text, edit).map_err(|unplaced| match unplaced {
+            Unplaced::Absent => ToolError::new(
+                ErrorCode::Conflict,
+                format!("{}old_string does not occur in `{path}`", label(index)),
+            ),
+            Unplaced::Unshiftable => ToolError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "{}old_string matches `{path}` only with less indentation, and new_string has lines indented less than that difference; resend old_string and new_string with the file's indentation",
+                    label(index)
+                ),
+            ),
+            Unplaced::Ambiguous(count, how) => ToolError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "{}old_string occurs {count} times in `{path}`{}; add context to make it unique, or set replace_all",
+                    label(index),
+                    if how == EditMatch::Normalised {
+                        " (whitespace-normalised)"
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+        })?;
+        spans.extend(found.into_iter().map(|span| (index, span)));
+        matches.push(how);
+    }
+    spans.sort_by_key(|(_, span)| span.start);
+    for pair in spans.windows(2) {
+        let ((first, before), (second, after)) = (&pair[0], &pair[1]);
+        if after.start < before.end {
+            let (low, high) = if first < second {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                format!("edits[{low}] and edits[{high}] overlap in `{path}`; nothing was changed"),
+            ));
+        }
+    }
+    Ok((spans, matches))
+}
+
+/// Run `edits` on `path` as one atomic write after one freshness check;
+/// the written path, the replacement count, how each edit matched, and the
+/// snippet.
+fn run_edits(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    path: &str,
+    edits: &[EditSpec],
+    label: &dyn Fn(usize) -> String,
+) -> ToolResult<Edited> {
+    let path = workspace.resolve(path, Intent::Write)?;
+    let now = check_fresh(workspace, ledger, &path)?
+        .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("`{path}` does not exist")))?;
+    let text = text_of(&now)?;
+    let (spans, matches) = place_edits(text, &now.path, edits, label)?;
+    let spans: Vec<Span> = spans.into_iter().map(|(_, span)| span).collect();
+    let (updated, changed) = splice(text, &spans);
+    if updated.len() as u64 > MAX_FILE_BYTES {
+        return Err(ToolError::new(
+            ErrorCode::TooLarge,
+            "the result is too large",
+        ));
+    }
+    let written = write_and_record(workspace, ledger, &now.path, updated.as_bytes())?;
+    let mut budget = edit::MAX_SNIPPET_BYTES;
+    let shown = snippet(&updated, &changed, &mut budget);
+    Ok((written, spans.len(), matches, shown))
+}
+
+/// Put a snippet into a result: `snippet`, and `snippet_truncated` when
+/// the 4 KiB cap left lines out.
+fn with_snippet(mut result: Value, (shown, cut): (String, bool)) -> Value {
+    if let Value::Object(map) = &mut result {
+        map.insert("snippet".to_owned(), Value::String(shown));
+        if cut {
+            map.insert("snippet_truncated".to_owned(), Value::Bool(true));
+        }
+    }
+    result
+}
+
+/// `edit_file`, after approval: one replacement, exact or (reported)
+/// whitespace-normalised.
 pub(crate) fn edit(
     workspace: &Workspace,
     ledger: &ReadLedger,
     args: &EditArgs,
 ) -> ToolResult<Value> {
-    if args.old_string.is_empty() {
-        return Err(ToolError::invalid(
-            "old_string is empty; use write_file to create a file",
-        ));
+    let edits = [EditSpec {
+        old_string: args.old_string.clone(),
+        new_string: args.new_string.clone(),
+        replace_all: args.replace_all,
+    }];
+    let (written, count, matches, snippet) =
+        run_edits(workspace, ledger, &args.path, &edits, &|_| String::new())?;
+    Ok(with_snippet(
+        json!({
+            "path": written.display_string(),
+            "replacements": count,
+            "match": matches.first().map_or("exact", |how| how.as_str()),
+        }),
+        snippet,
+    ))
+}
+
+/// `multi_edit`, after approval: an ordered list of replacements, each
+/// matched against the original, applied together or not at all.
+pub(crate) fn multi_edit(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    args: &MultiEditArgs,
+) -> ToolResult<Value> {
+    if args.edits.is_empty() || args.edits.len() > edit::MAX_EDITS {
+        return Err(ToolError::invalid(format!(
+            "edits takes 1 to {} replacements",
+            edit::MAX_EDITS
+        )));
     }
-    if args.old_string == args.new_string {
-        return Err(ToolError::invalid("old_string and new_string are the same"));
-    }
-    let path = workspace.resolve(&args.path, Intent::Write)?;
-    let now = check_fresh(workspace, ledger, &path)?
-        .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("`{path}` does not exist")))?;
-    let text = text_of(&now)?;
-    let count = text.matches(args.old_string.as_str()).count();
-    if count == 0 {
-        return Err(ToolError::new(
-            ErrorCode::Conflict,
-            format!("old_string does not occur in `{path}`"),
-        ));
-    }
-    if count > 1 && !args.replace_all {
-        return Err(ToolError::new(
-            ErrorCode::Conflict,
-            format!(
-                "old_string occurs {count} times in `{path}`; add context to make it unique, or set replace_all"
-            ),
-        ));
-    }
-    let updated = text.replace(args.old_string.as_str(), &args.new_string);
-    let written = write_and_record(workspace, ledger, &now.path, updated.as_bytes())?;
-    Ok(json!({ "path": written.display_string(), "replacements": count }))
+    let (written, count, matches, snippet) =
+        run_edits(workspace, ledger, &args.path, &args.edits, &|index| {
+            format!("edits[{index}]: ")
+        })?;
+    Ok(with_snippet(
+        json!({
+            "path": written.display_string(),
+            "edits": args.edits.len(),
+            "replacements": count,
+            "matches": matches.iter().map(|how| how.as_str()).collect::<Vec<_>>(),
+        }),
+        snippet,
+    ))
 }
 
 /// One file of a checked patch, ready to write.
@@ -234,6 +375,11 @@ pub(crate) struct PlannedChange {
     /// Permission bits to write with (a renamed file keeps its own, a
     /// created file may name them); `None`: keep the existing or default.
     pub mode: Option<u32>,
+    /// How each hunk was located; empty for a create or delete.
+    pub matches: Vec<Pass>,
+    /// The new text's changed lines (`[start, end)`, 0-based), for the
+    /// snippet; empty for a create or delete.
+    pub changed: Vec<(usize, usize)>,
 }
 
 /// Parse a patch, resolve its paths and compute every result, before
@@ -245,17 +391,10 @@ pub(crate) fn plan_patch(
     ledger: &ReadLedger,
     text: &str,
 ) -> ToolResult<Vec<PlannedChange>> {
+    if apply_patch::is_envelope(text) {
+        return plan_envelope(workspace, ledger, text);
+    }
     let mut planned: Vec<PlannedChange> = Vec::new();
-    let push = |planned: &mut Vec<PlannedChange>, change: PlannedChange| {
-        if planned.iter().any(|done| done.path == change.path) {
-            return Err(ToolError::invalid(format!(
-                "the patch changes `{}` more than once; put all of its hunks in one section",
-                change.path
-            )));
-        }
-        planned.push(change);
-        Ok(())
-    };
     for file in patch::parse(text)? {
         if file.is_rename() {
             let (Some(old), Some(new)) = (&file.old_path, &file.new_path) else {
@@ -263,7 +402,8 @@ pub(crate) fn plan_patch(
             };
             let (old_typed, old_target, original) = existing(workspace, ledger, old)?;
             let (new_typed, new_target) = absent(workspace, ledger, new)?;
-            let content = patch::apply(text_of(&original)?, &file)?.ok_or_else(|| {
+            let applied = patch::apply_reported(text_of(&original)?, &file)?;
+            let content = applied.content.ok_or_else(|| {
                 ToolError::invalid(format!("the rename of `{old_typed}` deletes it"))
             })?;
             push(
@@ -273,6 +413,8 @@ pub(crate) fn plan_patch(
                     typed: new_typed,
                     content: Some(content),
                     mode: Some(original.mode),
+                    matches: applied.matches,
+                    changed: applied.changed,
                 },
             )?;
             push(
@@ -282,6 +424,8 @@ pub(crate) fn plan_patch(
                     typed: old_typed,
                     content: None,
                     mode: None,
+                    matches: Vec::new(),
+                    changed: Vec::new(),
                 },
             )?;
             continue;
@@ -294,12 +438,24 @@ pub(crate) fn plan_patch(
                 "a section names two different paths; a rename needs git's `rename from` / `rename to` lines",
             ));
         }
-        let (typed, target, content) = if file.is_create() {
+        let (typed, target, content, matches, changed) = if file.is_create() {
             let (typed, target) = absent(workspace, ledger, file.target())?;
-            (typed, target, patch::apply("", &file)?)
+            (
+                typed,
+                target,
+                patch::apply("", &file)?,
+                Vec::new(),
+                Vec::new(),
+            )
         } else {
             let (typed, target, read) = existing(workspace, ledger, file.target())?;
-            (typed, target, patch::apply(text_of(&read)?, &file)?)
+            let applied = patch::apply_reported(text_of(&read)?, &file)?;
+            let (matches, changed) = if applied.content.is_some() {
+                (applied.matches, applied.changed)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            (typed, target, applied.content, matches, changed)
         };
         push(
             &mut planned,
@@ -308,8 +464,149 @@ pub(crate) fn plan_patch(
                 typed,
                 content,
                 mode: file.created_mode(),
+                matches,
+                changed,
             },
         )?;
+    }
+    Ok(planned)
+}
+
+/// Add a file's change to a plan: one change per path (a second section
+/// for a path would silently overwrite the first).
+fn push(planned: &mut Vec<PlannedChange>, change: PlannedChange) -> ToolResult<()> {
+    if planned.iter().any(|done| done.path == change.path) {
+        return Err(ToolError::invalid(format!(
+            "the patch changes `{}` more than once; put all of its hunks in one section",
+            change.path
+        )));
+    }
+    planned.push(change);
+    Ok(())
+}
+
+/// A path a Codex envelope names: workspace-relative only, with no `..`
+/// step.
+fn envelope_path(argument: &str) -> ToolResult<&str> {
+    let trimmed = argument.trim();
+    if Path::new(trimmed).is_absolute() || trimmed == "~" || trimmed.starts_with("~/") {
+        return Err(ToolError::new(
+            ErrorCode::OutsideWorkspace,
+            format!("`{trimmed}`: patch paths are relative to the workspace root"),
+        ));
+    }
+    // Either separator, whatever the host: a `..` step is refused even
+    // where it would resolve back inside the workspace.
+    if trimmed
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+    {
+        return Err(ToolError::new(
+            ErrorCode::OutsideWorkspace,
+            format!("`{trimmed}`: patch paths may not contain `..`"),
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// A Codex envelope's plan: the same rules as a unified diff's (paths
+/// confined and deny-checked, the read guard, one change per path), every
+/// file computed before anything is written.
+fn plan_envelope(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    text: &str,
+) -> ToolResult<Vec<PlannedChange>> {
+    let mut planned: Vec<PlannedChange> = Vec::new();
+    for hunk in apply_patch::parse_patch(text)? {
+        match hunk {
+            Hunk::AddFile { path, contents } => {
+                let typed = workspace.resolve(envelope_path(&path)?, Intent::Write)?;
+                let target = workspace.final_target(&typed)?;
+                workspace.check(&target, Intent::Write)?;
+                // Replacing a file needs it read first, as write_file does.
+                check_fresh(workspace, ledger, &target)?;
+                push(
+                    &mut planned,
+                    PlannedChange {
+                        path: target,
+                        typed,
+                        content: Some(contents),
+                        mode: None,
+                        matches: Vec::new(),
+                        changed: Vec::new(),
+                    },
+                )?;
+            }
+            Hunk::DeleteFile { path } => {
+                let (typed, target, _) = existing(workspace, ledger, envelope_path(&path)?)?;
+                push(
+                    &mut planned,
+                    PlannedChange {
+                        path: target,
+                        typed,
+                        content: None,
+                        mode: None,
+                        matches: Vec::new(),
+                        changed: Vec::new(),
+                    },
+                )?;
+            }
+            Hunk::UpdateFile {
+                path,
+                move_path,
+                chunks,
+            } => {
+                let (typed, target, read) = existing(workspace, ledger, envelope_path(&path)?)?;
+                let derived = apply_patch::derive_new_contents(
+                    text_of(&read)?,
+                    &typed.display_string(),
+                    &chunks,
+                )?;
+                match move_path {
+                    None => push(
+                        &mut planned,
+                        PlannedChange {
+                            path: target,
+                            typed,
+                            content: Some(derived.content),
+                            mode: None,
+                            matches: derived.matches,
+                            changed: derived.changed,
+                        },
+                    )?,
+                    Some(to) => {
+                        let (new_typed, new_target) =
+                            absent(workspace, ledger, envelope_path(&to)?)?;
+                        push(
+                            &mut planned,
+                            PlannedChange {
+                                path: new_target,
+                                typed: new_typed,
+                                content: Some(derived.content),
+                                mode: Some(read.mode),
+                                matches: derived.matches,
+                                changed: derived.changed,
+                            },
+                        )?;
+                        push(
+                            &mut planned,
+                            PlannedChange {
+                                path: target,
+                                typed,
+                                content: None,
+                                mode: None,
+                                matches: Vec::new(),
+                                changed: Vec::new(),
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    if planned.is_empty() {
+        return Err(ToolError::invalid("the patch changes no file"));
     }
     Ok(planned)
 }
@@ -402,7 +699,74 @@ pub(crate) fn apply_patch(
         }
         changed.push(change.path.display_string());
     }
-    Ok(json!({ "changed": changed }))
+    let result = json!({ "changed": changed });
+    // How each file's hunks matched: a fuzzy location is never silent.
+    let files: Vec<Value> = planned
+        .iter()
+        .filter(|change| !change.matches.is_empty())
+        .map(|change| {
+            json!({
+                "path": change.path.display_string(),
+                "matches": change.matches.iter().map(|pass| pass.as_str()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let fuzzy = planned
+        .iter()
+        .flat_map(|change| &change.matches)
+        .filter(|pass| **pass != Pass::Exact)
+        .count();
+    // What the changed files now hold around each hunk, within one 4 KiB
+    // budget for the call.
+    let mut budget = edit::MAX_SNIPPET_BYTES;
+    let mut shown = String::new();
+    let mut cut = false;
+    for change in planned.iter().filter(|change| !change.changed.is_empty()) {
+        let Some(content) = &change.content else {
+            continue;
+        };
+        let header = format!("{}:\n", change.path.display_string());
+        if header.len() >= budget {
+            cut = true;
+            break;
+        }
+        budget -= header.len();
+        shown.push_str(&header);
+        let (text, file_cut) = snippet(content, &change.changed, &mut budget);
+        shown.push_str(&text);
+        if file_cut {
+            cut = true;
+            break;
+        }
+    }
+    let mut result = with_snippet(result, (shown, cut));
+    if let Value::Object(map) = &mut result {
+        if !files.is_empty() {
+            map.insert("files".to_owned(), Value::Array(files));
+        }
+        if fuzzy > 0 {
+            map.insert(
+                "note".to_owned(),
+                Value::String(format!(
+                    "{fuzzy} hunk(s) matched only after ignoring whitespace or typographic punctuation; check the result"
+                )),
+            );
+        }
+    }
+    Ok(result)
+}
+
+/// What `search_files` answers with.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OutputMode {
+    /// Matching lines (and context lines).
+    #[default]
+    Content,
+    /// The paths of matching files only.
+    Files,
+    /// Matches per file.
+    Count,
 }
 
 #[derive(Deserialize)]
@@ -419,7 +783,29 @@ pub(crate) struct SearchArgs {
     pub case_insensitive: bool,
     #[serde(default)]
     pub max_results: Option<usize>,
+    #[serde(default)]
+    pub output_mode: OutputMode,
+    /// Lines before each match (`-B`).
+    #[serde(default)]
+    pub context_before: Option<usize>,
+    /// Lines after each match (`-A`).
+    #[serde(default)]
+    pub context_after: Option<usize>,
+    /// Lines before and after (`-C`); the two above win over it.
+    #[serde(default)]
+    pub context: Option<usize>,
+    /// Let the pattern span lines (`rg -U`).
+    #[serde(default)]
+    pub multiline: bool,
+    /// The most matches one file contributes (`-m`).
+    #[serde(default)]
+    pub max_per_file: Option<usize>,
 }
+
+/// The most context lines on either side of a match.
+const MAX_CONTEXT: usize = 20;
+/// Matches `search_files` answers by default.
+const DEFAULT_SEARCH_RESULTS: usize = 200;
 
 fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     let base = match path {
@@ -436,11 +822,88 @@ fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     }
 }
 
+/// `find_files`' glob: one with a `/` matches the path under the call's
+/// `path` (or, failing that, from the workspace root), one without matches
+/// the file name at any depth; a leading `./` or `/` is dropped, and a
+/// leading `!` keeps the files that do *not* match. It filters what the
+/// walk yields, so `.gitignore` always applies (unlike `search_files`'
+/// glob, an override as `rg -g` takes it, see [`walker`]).
+struct FileGlob {
+    matcher: globset::GlobMatcher,
+    whole_path: bool,
+    negated: bool,
+}
+
+impl FileGlob {
+    fn new(glob: &str) -> ToolResult<Self> {
+        let trimmed = glob.trim();
+        let (negated, trimmed) = trimmed
+            .strip_prefix('!')
+            .map_or((false, trimmed), |rest| (true, rest.trim_start()));
+        let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
+        let trimmed = trimmed.trim_start_matches('/');
+        if trimmed.is_empty() {
+            return Err(ToolError::invalid("the glob is empty"));
+        }
+        if trimmed.starts_with('!') {
+            return Err(ToolError::invalid(format!(
+                "`{glob}`: one leading `!` negates the glob; `!!` is not a glob"
+            )));
+        }
+        let matcher = globset::GlobBuilder::new(trimmed)
+            .literal_separator(true)
+            .build()
+            .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?
+            .compile_matcher();
+        Ok(Self {
+            matcher,
+            whole_path: trimmed.contains('/'),
+            negated,
+        })
+    }
+
+    /// Whether the file `path` (under `base`) is kept.
+    fn keeps(&self, path: &WsPath, base: &WsPath) -> bool {
+        let shown = path.display_string();
+        let matched = if self.whole_path {
+            let under = path
+                .components()
+                .strip_prefix(base.components())
+                .map(|rest| rest.join("/"));
+            under.is_some_and(|under| self.matcher.is_match(under)) || self.matcher.is_match(&shown)
+        } else {
+            path.file_name()
+                .is_some_and(|name| self.matcher.is_match(name))
+        };
+        matched != self.negated
+    }
+}
+
+/// The walk every listing tool shares (see [`walker`]), without a glob.
+fn walk_builder(workspace: &Workspace, base: &WsPath, depth: Option<usize>) -> ignore::WalkBuilder {
+    let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
+    let denied = workspace.read_denied_filter();
+    builder
+        .hidden(false)
+        .require_git(false)
+        .follow_links(false)
+        .max_depth(depth)
+        // `.git`, `path_deny` and the session's deny list are pruned here,
+        // never filtered after: a denied tree is never descended into, so
+        // it cannot use up a walk's limit.
+        .filter_entry(move |entry| {
+            !entry.file_name().to_str().is_some_and(is_protected_name) && !denied(entry.path())
+        });
+    builder
+}
+
 /// A walk of the workspace from `base` the way every listing tool walks it:
 /// `.gitignore` honoured (with or without a git repository), hidden files
 /// included, `.git` and `path_deny` matches pruned (never descended into),
 /// symlinks yielded as entries but never followed, names in byte order.
-/// `glob` narrows it to matching paths; `depth` limits it.
+/// `glob` narrows it to matching paths as an override (`rg -g`): rooted at
+/// the workspace root, `!` excludes, and a matching file is listed even
+/// when `.gitignore` ignores it; `depth` limits it.
 ///
 /// Public for the desktop's local index (ADR-0029 decision 7), which lists
 /// a workspace exactly as the agent's tools see it. A caller that wants
@@ -455,19 +918,8 @@ pub fn walker(
     glob: Option<&str>,
     depth: Option<usize>,
 ) -> ToolResult<ignore::Walk> {
-    let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
-    let denied = workspace.read_denied_filter();
-    builder
-        .hidden(false)
-        .require_git(false)
-        .follow_links(false)
-        .max_depth(depth)
-        .sort_by_file_name(Ord::cmp)
-        // `path_deny` matches are pruned here, not filtered after: a denied
-        // tree is never descended into, so it cannot use up a walk's limit.
-        .filter_entry(move |entry| {
-            !entry.file_name().to_str().is_some_and(is_protected_name) && !denied(entry.path())
-        });
+    let mut builder = walk_builder(workspace, base, depth);
+    builder.sort_by_file_name(Ord::cmp);
     if let Some(glob) = glob {
         let mut overrides = ignore::overrides::OverrideBuilder::new(workspace.root());
         overrides
@@ -489,57 +941,421 @@ pub fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
     WsPath::from_relative(path.strip_prefix(workspace.root()).ok()?).ok()
 }
 
-/// `search_files`: a regex (or literal) over the workspace's text files,
-/// `.gitignore` honoured, denied paths skipped.
-pub(crate) fn search(workspace: &Workspace, args: Value) -> ToolResult<Value> {
-    let args: SearchArgs = parse(args)?;
-    let max = args.max_results.unwrap_or(200).clamp(1, 1000);
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(args.case_insensitive)
-        .fixed_strings(args.fixed_strings)
-        .build(&args.pattern)
-        .map_err(|error| ToolError::invalid(format!("bad pattern: {error}")))?;
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .binary_detection(BinaryDetection::quit(0))
-        .build();
-    let base = base_dir(workspace, args.path.as_deref())?;
-    let mut found = Vec::new();
-    let mut files = 0usize;
-    for entry in walker(workspace, &base, args.glob.as_deref(), None)?.flatten() {
-        if found.len() >= max {
+/// One line a search shows.
+struct Hit {
+    line: u64,
+    text: String,
+    matched: bool,
+}
+
+/// One searched file: its matches, and the lines to show when they are kept.
+struct FileHits {
+    path: WsPath,
+    matches: u64,
+    hits: Vec<Hit>,
+    /// The search stopped at the result limit with more matches left.
+    cut: bool,
+}
+
+fn shown_line(bytes: &[u8]) -> String {
+    let line = String::from_utf8_lossy(bytes);
+    line.trim_end_matches(['\n', '\r'])
+        .chars()
+        .take(MAX_MATCH_LINE)
+        .collect()
+}
+
+/// A sink keeping one file's matches (each line of a multiline match) and
+/// context lines, in file order; it stops the file's search once it holds
+/// `limit` matching lines (the whole search's result limit: one file
+/// never collects more than a search shows).
+struct Collect {
+    keep_lines: bool,
+    limit: u64,
+    matched_lines: u64,
+    matches: u64,
+    hits: Vec<Hit>,
+    cut: bool,
+}
+
+impl Sink for Collect {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _: &Searcher, found: &SinkMatch<'_>) -> Result<bool, std::io::Error> {
+        if self.keep_lines && self.matched_lines >= self.limit {
+            // One more match than the search shows: stop here. The
+            // previous match's after-context has been kept already.
+            self.cut = true;
+            return Ok(false);
+        }
+        self.matches += 1;
+        if self.keep_lines {
+            let first = found.line_number().unwrap_or(0);
+            for (line, text) in (first..).zip(found.lines()) {
+                self.matched_lines += 1;
+                self.hits.push(Hit {
+                    line,
+                    text: shown_line(text),
+                    matched: true,
+                });
+            }
+        }
+        Ok(true)
+    }
+
+    fn context(&mut self, _: &Searcher, context: &SinkContext<'_>) -> Result<bool, std::io::Error> {
+        if self.keep_lines {
+            self.hits.push(Hit {
+                line: context.line_number().unwrap_or(0),
+                text: shown_line(context.bytes()),
+                matched: false,
+            });
+        }
+        Ok(true)
+    }
+}
+
+/// What one search runs with, shared by every searching thread.
+struct SearchPlan {
+    matcher: RegexMatcher,
+    /// Each thread builds its own searcher (a searcher is not `Sync`).
+    searcher: SearcherBuilder,
+    keep_lines: bool,
+    /// The search stops once this many results are collected.
+    stop_after: u64,
+    mode: OutputMode,
+}
+
+impl SearchPlan {
+    fn new(args: &SearchArgs, max: usize) -> ToolResult<Self> {
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(args.case_insensitive)
+            .fixed_strings(args.fixed_strings)
+            .multi_line(args.multiline)
+            .build(&args.pattern)
+            .map_err(|error| ToolError::invalid(format!("bad pattern: {error}")))?;
+        let keep_lines = args.output_mode == OutputMode::Content;
+        let context = |side: Option<usize>| {
+            if keep_lines {
+                side.or(args.context).unwrap_or(0).min(MAX_CONTEXT)
+            } else {
+                0
+            }
+        };
+        let per_file = match args.output_mode {
+            OutputMode::Files => Some(1),
+            _ => args.max_per_file.map(|max| max.clamp(1, 1000) as u64),
+        };
+        let mut searcher = SearcherBuilder::new();
+        searcher
+            .line_number(true)
+            .binary_detection(BinaryDetection::quit(0))
+            .multi_line(args.multiline)
+            .before_context(context(args.context_before))
+            .after_context(context(args.context_after))
+            .max_matches(per_file);
+        Ok(Self {
+            matcher,
+            searcher,
+            keep_lines,
+            stop_after: max as u64,
+            mode: args.output_mode,
+        })
+    }
+
+    /// What one file adds toward [`Self::stop_after`].
+    fn weight(&self, file: &FileHits) -> u64 {
+        match self.mode {
+            OutputMode::Content => file.hits.iter().filter(|hit| hit.matched).count() as u64,
+            OutputMode::Files | OutputMode::Count => u64::from(file.matches > 0),
+        }
+    }
+
+    /// Search one walked file: `None` when it is not a regular file, is
+    /// denied or cannot be opened (confined, `O_NOFOLLOW`). What it finds
+    /// depends on the file only (never on other files or timing), so a
+    /// search over several threads finds what a serial one does.
+    fn search_file(
+        &self,
+        workspace: &Workspace,
+        searcher: &mut Searcher,
+        entry: &ignore::DirEntry,
+    ) -> Option<FileHits> {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            return None;
+        }
+        let path = relative(workspace, entry.path())?;
+        if workspace.denied_by(&path, Intent::Read).is_some() {
+            return None;
+        }
+        let (file, _) = workspace.open_file(&path).ok()?;
+        let mut sink = Collect {
+            keep_lines: self.keep_lines,
+            limit: self.stop_after,
+            matched_lines: 0,
+            matches: 0,
+            hits: Vec::new(),
+            cut: false,
+        };
+        let _ = searcher.search_file(&self.matcher, &file, &mut sink);
+        Some(FileHits {
+            path,
+            matches: sink.matches,
+            hits: sink.hits,
+            cut: sink.cut,
+        })
+    }
+}
+
+/// What a walk collected: the files with matches, how many were searched,
+/// and whether it stopped early.
+struct Collected {
+    files: Vec<FileHits>,
+    searched: usize,
+    stopped: bool,
+}
+
+impl Collected {
+    const fn new() -> Self {
+        Self {
+            files: Vec::new(),
+            searched: 0,
+            stopped: false,
+        }
+    }
+
+    /// Take one searched file, in walk order: `false` once the limit is
+    /// reached (this file is then not taken, and the search stopped).
+    fn take(&mut self, plan: &SearchPlan, weight: &mut u64, file: Option<FileHits>) -> bool {
+        if *weight >= plan.stop_after {
+            self.stopped = true;
+            return false;
+        }
+        if let Some(file) = file {
+            self.searched += 1;
+            *weight += plan.weight(&file);
+            self.stopped |= file.cut;
+            if file.matches > 0 {
+                self.files.push(file);
+            }
+        }
+        true
+    }
+}
+
+/// Files searched per batch of [`collect`].
+const SEARCH_BATCH: usize = 256;
+
+/// Search `batch` on up to `threads` threads; the results in `batch`'s
+/// order.
+fn search_batch(
+    workspace: &Workspace,
+    plan: &SearchPlan,
+    batch: &[ignore::DirEntry],
+    threads: usize,
+) -> Vec<Option<FileHits>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if threads <= 1 || batch.len() <= 1 {
+        let mut searcher = plan.searcher.build();
+        return batch
+            .iter()
+            .map(|entry| plan.search_file(workspace, &mut searcher, entry))
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let mut results: Vec<Option<FileHits>> =
+        std::iter::repeat_with(|| None).take(batch.len()).collect();
+    let found: Vec<Vec<(usize, Option<FileHits>)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.min(batch.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut searcher = plan.searcher.build();
+                    let mut found = Vec::new();
+                    loop {
+                        let at = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(entry) = batch.get(at) else {
+                            return found;
+                        };
+                        found.push((at, plan.search_file(workspace, &mut searcher, entry)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap_or_default())
+            .collect()
+    });
+    for (at, file) in found.into_iter().flatten() {
+        results[at] = file;
+    }
+    results
+}
+
+/// Search the walk's files in walk (path) order, a batch at a time, each
+/// batch on several threads: the files are taken in that order up to the
+/// plan's limit, so the answer, a truncated one included, is the serial
+/// search's ([`collect_serial`]) whatever the threads do.
+fn collect(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    plan: &SearchPlan,
+) -> ToolResult<Collected> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    let mut files = walker(workspace, base, glob, None)?
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()));
+    let mut collected = Collected::new();
+    let mut weight = 0u64;
+    loop {
+        let batch: Vec<ignore::DirEntry> = files.by_ref().take(SEARCH_BATCH).collect();
+        if batch.is_empty() {
             break;
         }
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
+        if weight >= plan.stop_after {
+            collected.stopped = true;
+            break;
         }
-        let Some(path) = relative(workspace, entry.path()) else {
-            continue;
-        };
-        if workspace.denied_by(&path, Intent::Read).is_some() {
-            continue;
+        let mut stopped = false;
+        for file in search_batch(workspace, plan, &batch, threads) {
+            if !collected.take(plan, &mut weight, file) {
+                stopped = true;
+                break;
+            }
         }
-        let Ok((file, _)) = workspace.open_file(&path) else {
-            continue;
-        };
-        files += 1;
-        let shown = path.display_string();
-        let _ = searcher.search_file(
-            &matcher,
-            &file,
-            UTF8(|line_number, line| {
-                let line = line.trim_end_matches(['\n', '\r']);
-                let line: String = line.chars().take(MAX_MATCH_LINE).collect();
-                found.push(json!({ "path": shown, "line": line_number, "text": line }));
-                Ok(found.len() < max)
-            }),
-        );
+        if stopped {
+            break;
+        }
     }
-    Ok(json!({
-        "matches": found,
-        "files_searched": files,
-        "truncated": found.len() >= max,
-    }))
+    Ok(collected)
+}
+
+/// [`collect`] on one thread, file by file (the reference the batched
+/// search is checked against).
+#[cfg(test)]
+fn collect_serial(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    plan: &SearchPlan,
+) -> ToolResult<Collected> {
+    let mut searcher = plan.searcher.build();
+    let mut collected = Collected::new();
+    let mut weight = 0;
+    for entry in walker(workspace, base, glob, None)?
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+    {
+        let file = plan.search_file(workspace, &mut searcher, &entry);
+        if !collected.take(plan, &mut weight, file) {
+            break;
+        }
+    }
+    Ok(collected)
+}
+
+/// The answer, from what a walk collected: files in path order (the
+/// serial walker's order), then lines in file order, at most `max`
+/// entries and about `max_bytes` of them (the token budget).
+fn search_answer(
+    mut collected: Collected,
+    mode: OutputMode,
+    max: usize,
+    max_bytes: usize,
+) -> Value {
+    collected
+        .files
+        .sort_by(|a, b| a.path.components().cmp(b.path.components()));
+    let mut truncated = collected.stopped;
+    let files = collected.files;
+    let mut used = 0usize;
+    // Whether `entry` still fits the budget (counted when it does).
+    let mut fits = |entry: &Value| {
+        let size = entry.to_string().len() + 1;
+        if used + size > max_bytes {
+            return false;
+        }
+        used += size;
+        true
+    };
+    let mut answer = match mode {
+        OutputMode::Content => {
+            let mut matches = Vec::new();
+            let mut shown = 0usize;
+            'files: for file in &files {
+                let path = file.path.display_string();
+                for hit in &file.hits {
+                    if hit.matched {
+                        if shown == max {
+                            truncated = true;
+                            break 'files;
+                        }
+                        shown += 1;
+                    }
+                    let entry = json!({
+                        "path": path,
+                        "line": hit.line,
+                        "text": hit.text,
+                        "kind": if hit.matched { "match" } else { "context" },
+                    });
+                    if !fits(&entry) {
+                        truncated = true;
+                        break 'files;
+                    }
+                    matches.push(entry);
+                }
+            }
+            json!({ "matches": matches })
+        }
+        OutputMode::Files => {
+            let mut paths = Vec::new();
+            for file in &files {
+                let entry = Value::String(file.path.display_string());
+                if paths.len() == max || !fits(&entry) {
+                    truncated = true;
+                    break;
+                }
+                paths.push(entry);
+            }
+            json!({ "files": paths })
+        }
+        OutputMode::Count => {
+            let total: u64 = files.iter().map(|file| file.matches).sum();
+            let mut counts = Vec::new();
+            for file in &files {
+                let entry = json!({ "path": file.path.display_string(), "count": file.matches });
+                if counts.len() == max || !fits(&entry) {
+                    truncated = true;
+                    break;
+                }
+                counts.push(entry);
+            }
+            json!({ "counts": counts, "total": total })
+        }
+    };
+    if let Value::Object(map) = &mut answer {
+        map.insert("files_searched".to_owned(), json!(collected.searched));
+        map.insert("truncated".to_owned(), json!(truncated));
+    }
+    answer
+}
+
+/// `search_files`: a regex (or literal) over the workspace's text files,
+/// `.gitignore` honoured, denied paths pruned; matching lines with
+/// optional context, the matching files, or counts per file. Files are
+/// searched on several threads but taken in path order, so the answer (a
+/// truncated one too) does not depend on them.
+pub(crate) fn search(workspace: &Workspace, args: Value, max_bytes: usize) -> ToolResult<Value> {
+    let args: SearchArgs = parse(args)?;
+    let max = args
+        .max_results
+        .unwrap_or(DEFAULT_SEARCH_RESULTS)
+        .clamp(1, 1000);
+    let plan = SearchPlan::new(&args, max)?;
+    let base = base_dir(workspace, args.path.as_deref())?;
+    let collected = collect(workspace, &base, args.glob.as_deref(), &plan)?;
+    Ok(search_answer(collected, plan.mode, max, max_bytes))
 }
 
 #[derive(Deserialize)]
@@ -586,13 +1402,174 @@ pub(crate) fn tree(workspace: &Workspace, args: Value) -> ToolResult<Value> {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct FindArgs {
+    pub pattern: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub fuzzy: bool,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
+/// Files `find_files` answers by default.
+const DEFAULT_FIND_RESULTS: usize = 100;
+/// The most files one `find_files` call looks at: a huge folder answers
+/// from its first part rather than stalling the turn.
+pub const MAX_FIND_VISITED: usize = 200_000;
+
+/// The regular files [`walker`] yields under `base` (those `glob` keeps),
+/// as workspace paths, with their modification time; at most `limit`
+/// entries looked at. `true` when the limit cut the walk short.
+fn walked_files(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&FileGlob>,
+    limit: usize,
+) -> ToolResult<(Vec<(WsPath, std::time::SystemTime)>, bool)> {
+    let mut files = Vec::new();
+    let mut visited = 0usize;
+    for entry in walker(workspace, base, None, None)?.flatten() {
+        visited += 1;
+        if visited > limit {
+            return Ok((files, true));
+        }
+        // Regular files only: a symlink is neither listed nor followed.
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Some(path) = relative(workspace, entry.path()) else {
+            continue;
+        };
+        if workspace.denied_by(&path, Intent::Read).is_some()
+            || glob.is_some_and(|glob| !glob.keeps(&path, base))
+        {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        files.push((path, modified));
+    }
+    Ok((files, false))
+}
+
+/// `find_files`: workspace files by glob, newest first, or by a fuzzy name
+/// fragment, best first. The same view as `list_tree` (`.gitignore`
+/// honoured, `.git`, `path_deny` and the session's deny list pruned,
+/// symlinks never followed); names only, nothing is opened.
+pub(crate) fn find_files(
+    workspace: &Workspace,
+    args: Value,
+    max_bytes: usize,
+) -> ToolResult<Value> {
+    let args: FindArgs = parse(args)?;
+    let pattern = args.pattern.trim();
+    if pattern.is_empty() {
+        return Err(ToolError::invalid("pattern is empty"));
+    }
+    let max = args
+        .max_results
+        .unwrap_or(DEFAULT_FIND_RESULTS)
+        .clamp(1, 1000);
+    let base = base_dir(workspace, args.path.as_deref())?;
+    if args.fuzzy {
+        let (files, cut) = walked_files(workspace, &base, None, MAX_FIND_VISITED)?;
+        let ranked = fuzzy_rank(pattern, files.into_iter().map(|(path, _)| path));
+        let total = ranked.len();
+        let shown = within_budget(
+            ranked
+                .into_iter()
+                .take(max)
+                .map(|(path, score)| json!({ "path": path.display_string(), "score": score })),
+            max_bytes,
+        );
+        return Ok(json!({
+            "truncated": total > shown.len() || cut,
+            "files": shown,
+            "matched": total,
+        }));
+    }
+    let glob = FileGlob::new(pattern)?;
+    let (mut files, cut) = walked_files(workspace, &base, Some(&glob), MAX_FIND_VISITED)?;
+    // Newest first; equal times in path order, so the answer is stable.
+    files.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.components().cmp(b.0.components()))
+    });
+    let total = files.len();
+    let shown = within_budget(
+        files
+            .into_iter()
+            .take(max)
+            .map(|(path, _)| Value::String(path.display_string())),
+        max_bytes,
+    );
+    Ok(json!({
+        "truncated": total > shown.len() || cut,
+        "files": shown,
+        "matched": total,
+    }))
+}
+
+/// The leading `entries` whose JSON fits in `max_bytes`.
+fn within_budget(entries: impl Iterator<Item = Value>, max_bytes: usize) -> Vec<Value> {
+    let mut used = 0usize;
+    entries
+        .take_while(|entry| {
+            used += entry.to_string().len() + 1;
+            used <= max_bytes
+        })
+        .collect()
+}
+
+/// `paths` that fuzzily match `pattern` (nucleo's path scoring, smart
+/// case), best first; equal scores shorter, then in path order.
+fn fuzzy_rank(pattern: &str, paths: impl Iterator<Item = WsPath>) -> Vec<(WsPath, u32)> {
+    use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+    use nucleo_matcher::{Config, Matcher, Utf32Str};
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let pattern = Pattern::new(
+        pattern,
+        CaseMatching::Smart,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    );
+    let mut buffer = Vec::new();
+    let mut ranked: Vec<(WsPath, String, u32)> = paths
+        .filter_map(|path| {
+            let shown = path.display_string();
+            let score = pattern.score(Utf32Str::new(&shown, &mut buffer), &mut matcher)?;
+            Some((path, shown, score))
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| a.1.len().cmp(&b.1.len()))
+            .then_with(|| a.0.components().cmp(b.0.components()))
+    });
+    ranked
+        .into_iter()
+        .map(|(path, _, score)| (path, score))
+        .collect()
+}
+
+#[derive(Deserialize)]
 pub(crate) struct DocumentArgs {
     pub path: String,
 }
 
 /// `read_document`: text from PDF, Office, e-mail and HTML (with the
-/// `documents` feature), or text files.
-pub(crate) fn document(workspace: &Workspace, args: Value) -> ToolResult<Value> {
+/// `documents` feature), or text files; past `max_bytes` the head is shown
+/// and the whole text (up to [`MAX_DOCUMENT_OUTPUT`]) spilled.
+pub(crate) fn document(
+    workspace: &Workspace,
+    args: Value,
+    spill: &SpillStore,
+    max_bytes: usize,
+) -> ToolResult<Value> {
     let args: DocumentArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_DOCUMENT_BYTES)?;
@@ -600,18 +1577,20 @@ pub(crate) fn document(workspace: &Workspace, args: Value) -> ToolResult<Value> 
     let mime = elitea_content_source::mime_of(name);
     match elitea_doc_extract::extract(mime, &file.bytes) {
         elitea_doc_extract::Extracted::Text { text, extractor } => {
-            let truncated = text.len() > MAX_DOCUMENT_OUTPUT;
-            let mut end = text.len().min(MAX_DOCUMENT_OUTPUT);
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            Ok(json!({
+            let capped = budget::head(&text, MAX_DOCUMENT_OUTPUT);
+            let (shown, output_id, cut) = budget::spill_over(spill, capped, max_bytes);
+            let mut answer = json!({
                 "path": file.path.display_string(),
                 "mime_type": mime,
                 "extractor": extractor,
-                "text": &text[..end],
-                "truncated": truncated,
-            }))
+                "text": shown,
+                "truncated": cut || capped.len() < text.len(),
+                "bytes": text.len(),
+            });
+            if let (Some(id), Value::Object(map)) = (output_id, &mut answer) {
+                map.insert("output_id".to_owned(), Value::String(id));
+            }
+            Ok(answer)
         }
         elitea_doc_extract::Extracted::Unsupported => Err(ToolError::new(
             ErrorCode::Unsupported,
@@ -629,11 +1608,46 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        EditArgs, WriteArgs, apply_patch, document, edit, plan_patch, read, search, tree, write,
+        EditArgs, MultiEditArgs, WriteArgs, apply_patch, edit, multi_edit, plan_patch, tree, write,
     };
+    use crate::budget::SpillStore;
+    use crate::edit::EditSpec;
     use crate::error::ErrorCode;
     use crate::ledger::ReadLedger;
     use crate::workspace::Workspace;
+
+    /// The tools with a budget no fixture reaches.
+    const ROOMY: usize = 1 << 20;
+
+    fn read(
+        ws: &Workspace,
+        ledger: &ReadLedger,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        super::read(ws, ledger, args, ROOMY)
+    }
+
+    fn search(
+        ws: &Workspace,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        super::search(ws, args, ROOMY)
+    }
+
+    fn find_files(
+        ws: &Workspace,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        super::find_files(ws, args, ROOMY)
+    }
+
+    fn document(
+        ws: &Workspace,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        let spill = SpillStore::new(&ws.root().join("..").join("spill"), "t");
+        super::document(ws, args, &spill, ROOMY)
+    }
 
     fn setup(deny: &[&str]) -> (tempfile::TempDir, Workspace, ReadLedger) {
         let dir = tempfile::tempdir().expect("dir");
@@ -787,6 +1801,191 @@ mod tests {
         );
     }
 
+    fn numbered_lines(count: usize, line: impl Fn(usize) -> String) -> String {
+        (1..=count).fold(String::new(), |mut text, n| {
+            text.push_str(&line(n));
+            text.push('\n');
+            text
+        })
+    }
+
+    fn edits(path: &str, pairs: &[(&str, &str)]) -> MultiEditArgs {
+        MultiEditArgs {
+            path: path.to_owned(),
+            edits: pairs
+                .iter()
+                .map(|(old, new)| EditSpec {
+                    old_string: (*old).to_owned(),
+                    new_string: (*new).to_owned(),
+                    replace_all: false,
+                })
+                .collect(),
+        }
+    }
+
+    /// Every `old_string` is matched against the original (an edit's output
+    /// is not the next one's input), and the file is written once.
+    #[test]
+    fn multi_edit_applies_against_original() {
+        use std::os::unix::fs::MetadataExt;
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.rs", "fn a() {}\nfn b() {}\nfn c() {}\n");
+        read(&ws, &ledger, json!({ "path": "a.rs" })).expect("read");
+        let before = std::fs::metadata(dir.path().join("a.rs")).expect("meta");
+        let args = edits(
+            "a.rs",
+            &[
+                ("fn c() {}", "fn c() { 3 }"),
+                ("fn a() {}", "fn b() {}"),
+                ("fn b() {}", "fn bb() {}"),
+            ],
+        );
+        let result = multi_edit(&ws, &ledger, &args).expect("multi_edit");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).expect("a"),
+            "fn b() {}\nfn bb() {}\nfn c() { 3 }\n",
+            "edits[2] replaced the original `fn b`, not the one edits[1] wrote"
+        );
+        assert_eq!(result["edits"], 3);
+        assert_eq!(result["replacements"], 3);
+        assert_eq!(result["matches"], json!(["exact", "exact", "exact"]));
+        assert_eq!(
+            result["snippet"],
+            "     1\tfn b() {}\n     2\tfn bb() {}\n     3\tfn c() { 3 }\n"
+        );
+        // One atomic write: a new inode (temp file + rename), once.
+        let after = std::fs::metadata(dir.path().join("a.rs")).expect("meta");
+        assert_ne!(before.ino(), after.ino());
+        // Its own write keeps the ledger current.
+        multi_edit(&ws, &ledger, &edits("a.rs", &[("bb", "b2")])).expect("again");
+        // A whitespace-normalised match is reported.
+        seed(&dir, "w.rs", "fn f() {   \r\n    x();\r\n}\r\n");
+        read(&ws, &ledger, json!({ "path": "w.rs" })).expect("read");
+        let result = multi_edit(
+            &ws,
+            &ledger,
+            &edits(
+                "w.rs",
+                &[("  fn f() {\n      x();\n  }", "  fn f() {\n      y();\n  }")],
+            ),
+        )
+        .expect("normalised");
+        assert_eq!(result["matches"], json!(["normalised"]));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("w.rs")).expect("w"),
+            "fn f() {\r\n    y();\r\n}\r\n"
+        );
+    }
+
+    #[test]
+    fn multi_edit_refuses_overlap() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "alpha beta gamma\nbeta\n");
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        let refused = |args: &MultiEditArgs| {
+            let error = multi_edit(&ws, &ledger, args).expect_err("refused");
+            (error.code(), error.message().to_owned())
+        };
+        let (code, message) = refused(&edits(
+            "a.txt",
+            &[("gamma", "G"), ("alpha beta", "AB"), ("beta gamma", "BG")],
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(
+            message.contains("edits[1] and edits[2] overlap"),
+            "{message}"
+        );
+        let (code, message) = refused(&edits("a.txt", &[("alpha", "A"), ("beta", "B")]));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(
+            message.contains("edits[1]: old_string occurs 2 times"),
+            "{message}"
+        );
+        let (code, message) = refused(&edits("a.txt", &[("alpha", "A"), ("zeta", "Z")]));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(
+            message.starts_with("edits[1]: old_string does not occur"),
+            "{message}"
+        );
+        let (code, message) = refused(&edits("a.txt", &[("alpha", "A"), ("", "Z")]));
+        assert_eq!(code, ErrorCode::InvalidArgument);
+        assert!(message.starts_with("edits[1]:"), "{message}");
+        assert_eq!(refused(&edits("a.txt", &[])).0, ErrorCode::InvalidArgument);
+        let too_many: Vec<(&str, &str)> = vec![("alpha", "A"); 51];
+        assert_eq!(
+            refused(&edits("a.txt", &too_many)).0,
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "alpha beta gamma\nbeta\n",
+            "nothing was written"
+        );
+        // replace_all lifts the uniqueness rule.
+        let mut all = edits("a.txt", &[("beta", "B")]);
+        all.edits[0].replace_all = true;
+        assert_eq!(
+            multi_edit(&ws, &ledger, &all).expect("all")["replacements"],
+            2
+        );
+    }
+
+    #[test]
+    fn multi_edit_stale_file_refused() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "one two\n");
+        let args = edits("a.txt", &[("one", "1"), ("two", "2")]);
+        assert_eq!(
+            multi_edit(&ws, &ledger, &args).expect_err("unread").code(),
+            ErrorCode::StaleRead
+        );
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        std::fs::write(dir.path().join("a.txt"), "one two three\n").expect("external");
+        assert_eq!(
+            multi_edit(&ws, &ledger, &args).expect_err("stale").code(),
+            ErrorCode::StaleRead
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "one two three\n"
+        );
+    }
+
+    /// `edit_file` and `apply_patch` results show the changed lines.
+    #[test]
+    fn edit_results_carry_a_snippet() {
+        let (dir, ws, ledger) = setup(&[]);
+        let text = numbered_lines(30, |n| format!("line {n}"));
+        seed(&dir, "a.txt", &text);
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        let result =
+            edit(&ws, &ledger, &edit_args("a.txt", "line 15\n", "fifteen\n")).expect("edit");
+        assert_eq!(result["match"], "exact");
+        assert_eq!(
+            result["snippet"],
+            "    12\tline 12\n    13\tline 13\n    14\tline 14\n    15\tfifteen\n    16\tline 16\n    17\tline 17\n    18\tline 18\n"
+        );
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -2,1 +2,1 @@\n-line 2\n+two\n@@ -28,1 +28,1 @@\n-line 28\n+twenty-eight\n";
+        let planned = plan_patch(&ws, &ledger, diff).expect("plan");
+        let result = apply_patch(&ws, &ledger, &planned).expect("apply");
+        let snippet = result["snippet"].as_str().expect("snippet");
+        assert!(
+            snippet.starts_with("a.txt:\n     1\tline 1\n     2\ttwo\n"),
+            "{snippet}"
+        );
+        assert!(snippet.contains("...\n    25\tline 25\n"), "{snippet}");
+        assert!(snippet.contains("    28\ttwenty-eight\n"), "{snippet}");
+        // The snippet is capped at 4 KiB per call.
+        let long = numbered_lines(400, |n| format!("{n:0>60}"));
+        seed(&dir, "long.txt", &long);
+        read(&ws, &ledger, json!({ "path": "long.txt" })).expect("read");
+        let mut all = edit_args("long.txt", "0\n", "X\n");
+        all.replace_all = true;
+        let result = edit(&ws, &ledger, &all).expect("all");
+        assert!(result["snippet"].as_str().expect("snippet").len() <= 4096);
+        assert_eq!(result["snippet_truncated"], true);
+    }
+
     #[test]
     fn patches_apply_atomically_with_the_read_guard() {
         let (dir, ws, ledger) = setup(&[]);
@@ -831,6 +2030,26 @@ mod tests {
                 .err()
                 .map(|error| error.code()),
             Some(ErrorCode::OutsideWorkspace)
+        );
+    }
+
+    /// A unified hunk located by a fuzzy pass says so in the result.
+    #[test]
+    fn a_fuzzy_unified_hunk_is_reported_in_the_result() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "one  \ntwo\n");
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+        let planned = plan_patch(&ws, &ledger, diff).expect("plan");
+        let result = apply_patch(&ws, &ledger, &planned).expect("apply");
+        assert_eq!(
+            result["files"],
+            json!([{ "path": "a.txt", "matches": ["trim_end"] }])
+        );
+        assert!(result["note"].is_string());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "one  \nTWO\n"
         );
     }
 
@@ -993,6 +2212,502 @@ mod tests {
                 .code(),
             ErrorCode::InvalidArgument
         );
+    }
+
+    fn found(result: &serde_json::Value) -> Vec<String> {
+        result["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .map(|file| {
+                file.as_str()
+                    .or_else(|| file["path"].as_str())
+                    .expect("path")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn touch(dir: &tempfile::TempDir, name: &str, seconds_ago: u64) {
+        let time = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds_ago);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.path().join(name))
+            .expect("open")
+            .set_modified(time)
+            .expect("mtime");
+    }
+
+    #[test]
+    fn find_files_glob_newest_first() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "src/old.rs", "");
+        seed(&dir, "src/new.rs", "");
+        seed(&dir, "src/deep/mid.rs", "");
+        seed(&dir, "src/notes.md", "");
+        seed(&dir, "other.rs", "");
+        touch(&dir, "src/old.rs", 3000);
+        touch(&dir, "src/deep/mid.rs", 2000);
+        touch(&dir, "src/new.rs", 1000);
+        let result = find_files(&ws, json!({ "pattern": "src/**/*.rs" })).expect("find");
+        assert_eq!(
+            found(&result),
+            ["src/new.rs", "src/deep/mid.rs", "src/old.rs"]
+        );
+        assert_eq!(result["truncated"], false);
+        // A name glob matches at any depth; max_results caps.
+        let capped = find_files(&ws, json!({ "pattern": "*.rs", "max_results": 2 })).expect("find");
+        assert_eq!(found(&capped).len(), 2);
+        assert_eq!(capped["matched"], 4);
+        assert_eq!(capped["truncated"], true);
+        // Under a directory only.
+        let sub = find_files(&ws, json!({ "pattern": "*.rs", "path": "src/deep" })).expect("find");
+        assert_eq!(found(&sub), ["src/deep/mid.rs"]);
+        assert_eq!(
+            find_files(&ws, json!({ "pattern": "[" }))
+                .expect_err("bad glob")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn find_files_fuzzy_ranks_best_first() {
+        let (dir, ws, _ledger) = setup(&[]);
+        for name in [
+            "app/user_controller.rs",
+            "app/user_service.rs",
+            "app/controller.rs",
+            "app/session_ctrl.rs",
+            "README.md",
+        ] {
+            seed(&dir, name, "");
+        }
+        let result = find_files(&ws, json!({ "pattern": "usrctrl", "fuzzy": true })).expect("find");
+        let files = found(&result);
+        assert_eq!(
+            files.first().map(String::as_str),
+            Some("app/user_controller.rs")
+        );
+        assert!(!files.contains(&"README.md".to_owned()), "{files:?}");
+        assert!(
+            result["files"][0]["score"]
+                .as_u64()
+                .is_some_and(|score| score > 0)
+        );
+    }
+
+    #[test]
+    fn find_files_prunes_denied_and_git() {
+        let (dir, ws, _ledger) = setup(&["secrets/**", "*.pem"]);
+        seed(&dir, ".gitignore", "target/\n");
+        seed(&dir, ".git/config.rs", "");
+        seed(&dir, "target/gen.rs", "");
+        seed(&dir, "secrets/key.rs", "");
+        seed(&dir, "src/key.pem", "");
+        seed(&dir, "src/lib.rs", "");
+        for args in [
+            json!({ "pattern": "**/*" }),
+            json!({ "pattern": "key", "fuzzy": true }),
+            json!({ "pattern": "rs", "fuzzy": true }),
+        ] {
+            let files = found(&find_files(&ws, args).expect("find"));
+            assert!(
+                files
+                    .iter()
+                    .all(|path| path == "src/lib.rs" || path == ".gitignore"),
+                "{files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_files_does_not_follow_symlinks() {
+        let outside = tempfile::tempdir().expect("outside");
+        seed(&outside, "passwords.rs", "");
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "src/lib.rs", "");
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).expect("link");
+        std::os::unix::fs::symlink(
+            outside.path().join("passwords.rs"),
+            dir.path().join("src/link.rs"),
+        )
+        .expect("link");
+        let glob = found(&find_files(&ws, json!({ "pattern": "**/*.rs" })).expect("find"));
+        assert_eq!(glob, ["src/lib.rs"]);
+        let fuzzy =
+            found(&find_files(&ws, json!({ "pattern": "pass", "fuzzy": true })).expect("find"));
+        assert!(fuzzy.is_empty(), "{fuzzy:?}");
+    }
+
+    /// Security regression: a workspace bound at a home directory holds
+    /// `~/.ssh` and the app's own credentials; the session's deny list
+    /// keeps both out of every search and listing.
+    #[test]
+    fn search_never_reads_deny_list_paths() {
+        let dir = tempfile::tempdir().expect("dir");
+        let home = std::fs::canonicalize(dir.path()).expect("canonical");
+        let plant = |path: &str, content: &str| {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(path, content).expect("plant");
+        };
+        plant(".ssh/id_rsa", "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+        plant(".ssh/id_rsa.pub", "ssh-rsa AAAA PRIVATE KEY comment\n");
+        plant(
+            "Library/Application Support/ai.elitea.desktop/credentials.json",
+            "{\"refresh\": \"PRIVATE KEY\"}\n",
+        );
+        plant("notes/id_card.txt", "nothing secret\n");
+        let list = crate::deny::DenyList::for_session(
+            Some(&home),
+            Some("ai.elitea.desktop"),
+            true,
+            Vec::new(),
+        );
+        let ws = Workspace::open(&home, &[])
+            .expect("workspace")
+            .with_deny_list(std::sync::Arc::new(list));
+        let searched = search(
+            &ws,
+            json!({ "pattern": "PRIVATE KEY", "fixed_strings": true }),
+        )
+        .expect("search");
+        assert_eq!(searched["matches"], json!([]), "{searched}");
+        let ids = found(&find_files(&ws, json!({ "pattern": "**/id_*" })).expect("find"));
+        assert_eq!(ids, ["notes/id_card.txt"]);
+        let creds = found(
+            &find_files(&ws, json!({ "pattern": "credentials", "fuzzy": true })).expect("find"),
+        );
+        assert!(creds.is_empty(), "{creds:?}");
+    }
+
+    fn lines(result: &serde_json::Value) -> Vec<(String, u64, String)> {
+        result["matches"]
+            .as_array()
+            .expect("matches")
+            .iter()
+            .map(|hit| {
+                (
+                    hit["kind"].as_str().expect("kind").to_owned(),
+                    hit["line"].as_u64().expect("line"),
+                    hit["text"].as_str().expect("text").to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn search_context_lines() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "a.txt", "1\n2\n3\nneedle\n5\n6\n7\n8\nneedle\n10\n");
+        let found = search(&ws, json!({ "pattern": "needle", "context": 2 })).expect("search");
+        let got: Vec<(String, u64)> = lines(&found)
+            .into_iter()
+            .map(|(kind, line, _)| (kind, line))
+            .collect();
+        let want: Vec<(String, u64)> = [
+            ("context", 2),
+            ("context", 3),
+            ("match", 4),
+            ("context", 5),
+            ("context", 6),
+            ("context", 7),
+            ("context", 8),
+            ("match", 9),
+            ("context", 10),
+        ]
+        .iter()
+        .map(|(kind, line)| ((*kind).to_owned(), *line))
+        .collect();
+        // Adjacent groups merge: line 6 to 8 appear once.
+        assert_eq!(got, want);
+        // -B / -A win over -C.
+        let after = search(
+            &ws,
+            json!({ "pattern": "needle", "context": 3, "context_before": 0, "context_after": 1 }),
+        )
+        .expect("search");
+        let got: Vec<u64> = lines(&after).iter().map(|(_, line, _)| *line).collect();
+        assert_eq!(got, [4, 5, 9, 10]);
+        // Old calls keep their shape: path, line, text.
+        let plain = search(&ws, json!({ "pattern": "needle" })).expect("search");
+        assert_eq!(plain["matches"][0]["path"], "a.txt");
+        assert_eq!(plain["matches"][0]["text"], "needle");
+        assert_eq!(plain["matches"].as_array().expect("array").len(), 2);
+    }
+
+    #[test]
+    fn search_files_and_count_modes() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "b.rs", "x\nx\nx\n");
+        seed(&dir, "a/one.rs", "x\n");
+        seed(&dir, "c.rs", "none\n");
+        let files = search(&ws, json!({ "pattern": "x", "output_mode": "files" })).expect("files");
+        assert_eq!(files["files"], json!(["a/one.rs", "b.rs"]));
+        assert_eq!(files["files_searched"], 3);
+        let counts = search(&ws, json!({ "pattern": "x", "output_mode": "count" })).expect("count");
+        assert_eq!(
+            counts["counts"],
+            json!([{ "path": "a/one.rs", "count": 1 }, { "path": "b.rs", "count": 3 }])
+        );
+        assert_eq!(counts["total"], 4);
+        // max_per_file caps every mode.
+        let capped = search(
+            &ws,
+            json!({ "pattern": "x", "output_mode": "count", "max_per_file": 2 }),
+        )
+        .expect("count");
+        assert_eq!(capped["total"], 3);
+        let content = search(&ws, json!({ "pattern": "x", "max_per_file": 1 })).expect("content");
+        assert_eq!(content["matches"].as_array().expect("array").len(), 2);
+        // max_results counts files in files mode.
+        let one = search(
+            &ws,
+            json!({ "pattern": "x", "output_mode": "files", "max_results": 1 }),
+        )
+        .expect("files");
+        assert_eq!(one["files"].as_array().expect("array").len(), 1);
+        assert_eq!(one["truncated"], true);
+        assert_eq!(
+            search(&ws, json!({ "pattern": "x", "output_mode": "lines" }))
+                .expect_err("bad mode")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn search_multiline() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "a.rs", "fn main() {\n    run();\n}\nfn other() {}\n");
+        let single = search(&ws, json!({ "pattern": r"\{\n\s+run" })).expect("search");
+        assert_eq!(single["matches"], json!([]));
+        let multi =
+            search(&ws, json!({ "pattern": r"\{\n\s+run", "multiline": true })).expect("search");
+        assert_eq!(
+            lines(&multi),
+            [
+                ("match".to_owned(), 1, "fn main() {".to_owned()),
+                ("match".to_owned(), 2, "    run();".to_owned()),
+            ]
+        );
+        let counted = search(
+            &ws,
+            json!({ "pattern": r"\{\n\s+run", "multiline": true, "output_mode": "count" }),
+        )
+        .expect("search");
+        assert_eq!(counted["total"], 1);
+    }
+
+    #[test]
+    fn search_parallel_matches_serial() {
+        let (dir, ws, _ledger) = setup(&["deny/**"]);
+        seed(&dir, ".gitignore", "ignored/\n");
+        for d in ["a", "a/b", "a/b/c", "a.d", "z", "ignored", "deny"] {
+            for f in 0..12 {
+                let body: String = (0..30)
+                    .map(|line| {
+                        if (line + f) % 7 == 0 {
+                            format!("hit {d} {f} {line}\n")
+                        } else {
+                            format!("plain {line}\n")
+                        }
+                    })
+                    .collect();
+                seed(&dir, &format!("{d}/f{f:02}.txt"), &body);
+            }
+        }
+        seed(&dir, "a.txt", "hit top\n");
+        for args in [
+            json!({ "pattern": "hit", "context": 1, "max_results": 1000 }),
+            json!({ "pattern": "hit", "output_mode": "files" }),
+            json!({ "pattern": "hit", "output_mode": "count", "max_per_file": 3 }),
+            json!({ "pattern": "hit", "glob": "a/**", "max_results": 1000 }),
+        ] {
+            let parsed: super::SearchArgs = serde_json::from_value(args.clone()).expect("args");
+            let max = parsed.max_results.unwrap_or(200);
+            let plan = super::SearchPlan::new(&parsed, max).expect("plan");
+            let base = crate::workspace::WsPath::root();
+            let glob = parsed.glob.as_deref();
+            let serial = super::search_answer(
+                super::collect_serial(&ws, &base, glob, &plan).expect("serial"),
+                plan.mode,
+                max,
+                ROOMY,
+            );
+            let serial_order: Vec<String> = serial
+                .get("matches")
+                .or_else(|| serial.get("files"))
+                .or_else(|| serial.get("counts"))
+                .and_then(serde_json::Value::as_array)
+                .expect("list")
+                .iter()
+                .map(|v| v.get("path").unwrap_or(v).to_string())
+                .collect();
+            // The serial walker's own order is the sorted order.
+            assert!(!serial_order.is_empty(), "{args}");
+            for _ in 0..5 {
+                assert_eq!(
+                    search(&ws, args.clone()).expect("parallel"),
+                    serial,
+                    "{args}"
+                );
+            }
+            assert!(!serial.to_string().contains("ignored/"), "{serial}");
+            assert!(!serial.to_string().contains("deny/"), "{serial}");
+        }
+    }
+
+    /// Regression: one file with thousands of matches stops at the
+    /// result limit instead of collecting every line.
+    #[test]
+    fn one_file_stops_at_the_result_limit() {
+        let (dir, ws, _ledger) = setup(&[]);
+        let body: String = (0..5_000)
+            .map(|n| "hit ".to_owned() + &n.to_string() + "\n")
+            .collect();
+        seed(&dir, "many.txt", &body);
+        let parsed: super::SearchArgs =
+            serde_json::from_value(json!({ "pattern": "hit", "max_results": 3, "context": 1 }))
+                .expect("args");
+        let plan = super::SearchPlan::new(&parsed, 3).expect("plan");
+        let collected =
+            super::collect(&ws, &crate::workspace::WsPath::root(), None, &plan).expect("collect");
+        let file = &collected.files[0];
+        assert_eq!(file.hits.iter().filter(|hit| hit.matched).count(), 3);
+        assert!(file.hits.len() <= 3 * 2 + 1, "{}", file.hits.len());
+        assert!(collected.stopped);
+        let answer = search(&ws, json!({ "pattern": "hit", "max_results": 3 })).expect("search");
+        assert_eq!(answer["matches"].as_array().expect("array").len(), 3);
+        assert_eq!(answer["truncated"], true);
+        // Count mode still counts every match of the file.
+        let count =
+            search(&ws, json!({ "pattern": "hit", "output_mode": "count" })).expect("count");
+        assert_eq!(count["total"], 5_000);
+    }
+
+    /// Regression: a search cut short by its limit answers the same files
+    /// and lines on every run, the serial search's, whatever the threads.
+    #[test]
+    fn a_truncated_search_is_deterministic() {
+        let (dir, ws, _ledger) = setup(&[]);
+        for d in 0..6 {
+            for f in 0..120 {
+                let body: String = (0..8)
+                    .map(|line| {
+                        if (line + f + d) % 3 == 0 {
+                            format!("hit {d} {f} {line}\n")
+                        } else {
+                            format!("plain {line}\n")
+                        }
+                    })
+                    .collect();
+                seed(&dir, &format!("d{d}/f{f:03}.txt"), &body);
+            }
+        }
+        for args in [
+            json!({ "pattern": "hit", "max_results": 700 }),
+            json!({ "pattern": "hit", "max_results": 37, "context": 1 }),
+            json!({ "pattern": "hit", "output_mode": "files", "max_results": 300 }),
+            json!({ "pattern": "hit", "output_mode": "count", "max_results": 450 }),
+        ] {
+            let parsed: super::SearchArgs = serde_json::from_value(args.clone()).expect("args");
+            let max = parsed.max_results.unwrap_or(200);
+            let plan = super::SearchPlan::new(&parsed, max).expect("plan");
+            let base = crate::workspace::WsPath::root();
+            let serial = super::search_answer(
+                super::collect_serial(&ws, &base, None, &plan).expect("serial"),
+                plan.mode,
+                max,
+                ROOMY,
+            );
+            assert_eq!(serial["truncated"], true, "{args}");
+            for _ in 0..5 {
+                assert_eq!(
+                    search(&ws, args.clone()).expect("batched"),
+                    serial,
+                    "{args}"
+                );
+            }
+        }
+    }
+
+    /// `search_files`' glob is an override, as before `find_files` (and as
+    /// `rg -g`): it can name a gitignored file the walk reaches, `!`
+    /// excludes, and a glob with `/` is rooted at the workspace root. The local index's walk
+    /// (no glob) is unchanged.
+    #[test]
+    fn search_globs_keep_their_override_semantics() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, ".gitignore", "gen/\n*.log\n");
+        seed(&dir, "src/a.rs", "needle\n");
+        seed(&dir, "src/b.md", "needle\n");
+        seed(&dir, "gen/out.rs", "needle\n");
+        seed(&dir, "debug.log", "needle\n");
+        let paths = |glob: &str, path: Option<&str>| {
+            let mut args = json!({ "pattern": "needle", "glob": glob, "output_mode": "files" });
+            if let Some(path) = path {
+                args["path"] = json!(path);
+            }
+            search(&ws, args).expect("search")["files"].clone()
+        };
+        assert_eq!(paths("*.log", None), json!(["debug.log"]));
+        // An ignored directory stays pruned (as before): only files the
+        // walk reaches are re-included.
+        assert_eq!(paths("gen/*.rs", None), json!([]));
+        assert_eq!(paths("!*.md", None), json!(["src/a.rs"]));
+        assert_eq!(paths("src/*.rs", Some("src")), json!(["src/a.rs"]));
+        let listed: Vec<String> = super::walker(&ws, &crate::workspace::WsPath::root(), None, None)
+            .expect("walk")
+            .flatten()
+            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+            .filter_map(|entry| super::relative(&ws, entry.path()))
+            .map(|path| path.display_string())
+            .collect();
+        assert_eq!(listed, [".gitignore", "src/a.rs", "src/b.md"]);
+    }
+
+    /// `find_files`' glob filters the walk: `.gitignore` always wins, `!`
+    /// keeps the files that do not match, and a glob with `/` matches
+    /// under `path` as well as from the root.
+    #[test]
+    fn find_files_globs_filter_negate_and_are_relative_to_path() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, ".gitignore", "gen/\n*.log\n");
+        seed(&dir, "src/deep/a.rs", "");
+        seed(&dir, "src/b.md", "");
+        seed(&dir, "gen/out.rs", "");
+        seed(&dir, "debug.log", "");
+        let files = |args: serde_json::Value| {
+            let mut found = found(&find_files(&ws, args).expect("find"));
+            found.sort();
+            found
+        };
+        assert_eq!(files(json!({ "pattern": "*.log" })), [] as [String; 0]);
+        assert_eq!(files(json!({ "pattern": "gen/*.rs" })), [] as [String; 0]);
+        assert_eq!(
+            files(json!({ "pattern": "!*.md" })),
+            [".gitignore", "src/deep/a.rs"]
+        );
+        assert_eq!(
+            files(json!({ "pattern": "deep/*.rs", "path": "src" })),
+            ["src/deep/a.rs"]
+        );
+        assert_eq!(
+            files(json!({ "pattern": "src/deep/*.rs", "path": "src" })),
+            ["src/deep/a.rs"]
+        );
+        assert_eq!(files(json!({ "pattern": "deep/*.rs" })), [] as [String; 0]);
+        for bad in ["!", "!!*.rs", "["] {
+            assert_eq!(
+                find_files(&ws, json!({ "pattern": bad }))
+                    .expect_err("bad glob")
+                    .code(),
+                ErrorCode::InvalidArgument,
+                "{bad}"
+            );
+        }
     }
 
     #[test]

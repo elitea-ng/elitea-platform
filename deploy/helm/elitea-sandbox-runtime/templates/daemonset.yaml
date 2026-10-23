@@ -16,8 +16,8 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ .Release.Name }}-installer
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "elitea-sandbox-runtime.fullname" . }}-installer
+  namespace: {{ include "elitea-sandbox-runtime.namespace" . }}
   labels:
     {{- include "elitea-sandbox-runtime.labels" . | nindent 4 }}
 spec:
@@ -105,4 +105,4 @@ spec:
             type: Directory
         - name: scripts
           configMap:
-            name: {{ .Release.Name }}-scripts
+            name: {{ include "elitea-sandbox-runtime.fullname" . }}-scripts

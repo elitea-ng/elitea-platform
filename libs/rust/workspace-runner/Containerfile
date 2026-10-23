@@ -14,7 +14,7 @@
 #
 #   podman build -f libs/rust/workspace-runner/Containerfile -t elitea-workspace-runner:dev .
 
-FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder
+FROM rust:1.99.1-trixie@sha256:767c71592f7d1f3f242292000f8efd4e67b6732363da176772f4d220332e264f AS builder
 # A transient GitHub/crates.io failure must not fail the build: cargo's
 # built-in libgit2 fetch gave up on one TLS error ("SSL error: unknown error",
 # then "revision ... not found") for a pinned tree-sitter git dependency in
@@ -24,6 +24,9 @@ ENV CARGO_NET_RETRY=10 \
     CARGO_NET_GIT_FETCH_WITH_CLI=true
 WORKDIR /src
 COPY libs/rust/ libs/rust/
+# The runner links the agent runtime, whose platform-rpc build.rs compiles
+# the elitea.runtime.v1 contracts at ../../proto (#1359).
+COPY libs/proto/elitea/ libs/proto/elitea/
 # /src/libs/rust/target is shared with every other build on the host, and
 # cargo judges a path crate fresh by mtime, so a context older than another
 # checkout's build would ship that build's binary. Touching /src under the

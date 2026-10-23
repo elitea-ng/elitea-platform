@@ -8,6 +8,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { applyActivityFrame, parseActivityFrame, resetConversationActivityOverlay } from '@/shared/lib/conversationActivity';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
@@ -71,6 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetGeneratedClient();
+  resetConversationActivityOverlay();
 });
 
 describe('ConversationItem', () => {
@@ -253,5 +255,35 @@ describe('ConversationItem', () => {
       </QueryClientProvider>,
     );
     expect(screen.getByText('My conversation').closest('[aria-roledescription="draggable"]')).not.toBeNull();
+  });
+
+  describe('activity status (client contract 1.12)', () => {
+    const now = new Date().toISOString();
+
+    it('shows an unread answer as a bold title with the filled check', () => {
+      renderItem({ conversation: baseConversation({ activity: { state: 'idle', since: now }, lastActivityAt: now, unread: true }) });
+      expect(screen.getByText('My conversation')).toHaveAttribute('data-unread', 'true');
+      expect(screen.getByTestId('conversation-activity-glyph')).toHaveAttribute('data-kind', 'unread');
+      expect(screen.getByTestId('conversation-activity-glyph')).toHaveTextContent('Finished, unread');
+    });
+
+    it('shows a read conversation in the normal weight, and a running turn with the spinner', () => {
+      renderItem({ conversation: baseConversation({ activity: { state: 'running', since: now }, lastActivityAt: now, unread: false }) });
+      expect(screen.getByText('My conversation')).not.toHaveAttribute('data-unread');
+      expect(screen.getByTestId('conversation-activity-glyph')).toHaveAttribute('data-kind', 'running');
+    });
+
+    it('follows a live frame for its row', async () => {
+      renderItem({ conversation: baseConversation({ id: '12', activity: { state: 'running', since: now }, lastActivityAt: now }) });
+      const later = new Date(Date.now() + 1000).toISOString();
+      applyActivityFrame(parseActivityFrame(JSON.stringify({ conversation_id: 12, state: 'needs_you', since: later, last_activity_at: later, unread_hint: true }))!);
+      expect(await screen.findByText('Needs your input')).toBeInTheDocument();
+      expect(screen.getByTestId('conversation-activity-glyph')).toHaveAttribute('data-kind', 'needs_you');
+    });
+
+    it('shows no glyph on a playback row', () => {
+      renderItem({ conversation: baseConversation({ isPlayback: true, activity: { state: 'running', since: now }, lastActivityAt: now }) });
+      expect(screen.queryByTestId('conversation-activity-glyph')).toBeNull();
+    });
   });
 });

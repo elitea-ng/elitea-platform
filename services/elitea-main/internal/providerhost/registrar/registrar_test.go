@@ -3,13 +3,14 @@ package registrar_test
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/registrar"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
 )
@@ -44,9 +45,9 @@ func (f *fakeStore) RecordHealth(_ context.Context, project int64, provider stri
 	return nil
 }
 
-// provider is a fake SPI host: a descriptor and a health answer, both
-// swappable, plus a switch that makes it unreachable (a 503 from a proxy in
-// front of a dead pod is the shape a facade sees).
+// provider is a fake provider service behind the real gRPC hop with mutual
+// TLS: a descriptor and a health answer, both swappable, plus a switch that
+// makes it fail.
 type provider struct {
 	mu         sync.Mutex
 	seen       []http.Header
@@ -54,13 +55,13 @@ type provider struct {
 	health     string
 	healthCode int
 	down       bool
-	server     *httptest.Server
+	cfg        facade.Config
 }
 
 func newProvider(t *testing.T) *provider {
 	t.Helper()
 	p := &provider{descriptor: `{"name": "deepwiki", "provided_toolkits": []}`, health: `{"status": "UP"}`, healthCode: 200}
-	p.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p.cfg = providertest.Config(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.seen = append(p.seen, r.Header.Clone())
@@ -78,15 +79,19 @@ func newProvider(t *testing.T) *provider {
 			http.NotFound(w, r)
 		}
 	}))
-	t.Cleanup(p.server.Close)
 	return p
 }
 
 func newRegistrar(t *testing.T, p *provider, store registrar.Store, interval time.Duration) *registrar.Registrar {
 	t.Helper()
-	plain := false
-	r, err := registrar.New(facade.Config{BaseURL: p.server.URL + "/", IdentitySecret: "shared-with-the-provider"}, "TEST_BASE_URL", store, registrar.Options{
-		ProjectID: 7, Actor: "facade:test", Interval: interval, Timeout: 2 * time.Second, Client: p.server.Client(), RequireTLS: &plain,
+	hop, err := proxy.New(p.cfg, "TEST_PLATFORM_GRPC_TARGET", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hop.Close() })
+	r, err := registrar.New(p.cfg, "TEST_PLATFORM_GRPC_TARGET", store, registrar.Options{
+		ProjectID: 7, Actor: "facade:test", Interval: interval, Timeout: 2 * time.Second,
+		Provider: hop.Client(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -108,9 +113,8 @@ func TestOnceRegistersTheDescriptorUnderThePublicProjectAndRecordsHealth(t *test
 	if reg.ProjectID != 7 || reg.ProviderID != "deepwiki" || reg.Actor != "facade:test" || string(reg.Manifest) != p.descriptor {
 		t.Fatalf("%+v", reg)
 	}
-	// The origin is scheme://host:port — no path, even though the configured
-	// base URL carried a trailing slash.
-	if reg.Origin != strings.TrimSuffix(p.server.URL, "/") || strings.HasSuffix(reg.Origin, "/") {
+	// The origin is the gRPC listener, grpcs://host:port.
+	if reg.Origin != "grpcs://"+p.cfg.Target {
 		t.Fatalf("origin %q", reg.Origin)
 	}
 	if r.ProviderID() != "deepwiki" {
@@ -119,8 +123,8 @@ func TestOnceRegistersTheDescriptorUnderThePublicProjectAndRecordsHealth(t *test
 	if len(store.health) != 1 || !store.health[0].healthy || store.health[0].provider != "deepwiki" || store.health[0].project != 7 || !strings.HasPrefix(store.health[0].detail, "health UP in ") {
 		t.Fatalf("health %+v", store.health)
 	}
-	// Both reads were signed as the facade, under the registration's
-	// project: the provider's identity gate admits only the probes unsigned.
+	// Both calls were signed as the facade, under the registration's
+	// project: the provider's identity gate admits only Health unsigned.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.seen) != 2 {
@@ -173,7 +177,7 @@ func TestAnUnhealthyOrUnreachableProviderIsRecordedNotHidden(t *testing.T) {
 	p.health, p.healthCode = `{"status": "UP"}`, 503
 	p.mu.Unlock()
 	_ = r.Once(context.Background())
-	if store.health[1].healthy || !strings.Contains(store.health[1].detail, "HTTP 503") {
+	if store.health[1].healthy || !strings.Contains(store.health[1].detail, "health probe failed (Unavailable)") {
 		t.Fatalf("%+v", store.health[1])
 	}
 	// Down entirely: the descriptor cannot be read, so nothing is registered
@@ -182,7 +186,7 @@ func TestAnUnhealthyOrUnreachableProviderIsRecordedNotHidden(t *testing.T) {
 	p.down = true
 	p.mu.Unlock()
 	err := r.Once(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "read the provider descriptor: HTTP 502") {
+	if err == nil || !strings.Contains(err.Error(), "read the provider descriptor") || !strings.Contains(err.Error(), "gateway down") {
 		t.Fatalf("%v", err)
 	}
 	if len(store.health) != 2 {
@@ -236,18 +240,18 @@ func TestRunRetriesAProviderThatIsDownAtBoot(t *testing.T) {
 }
 
 func TestNewRefusesWhatItCannotRegisterWith(t *testing.T) {
-	plain := false
-	if _, err := registrar.New(facade.Config{BaseURL: "http://p"}, "X", nil, registrar.Options{ProjectID: 1, RequireTLS: &plain}, nil); err == nil {
+	if _, err := registrar.New(facade.Config{Target: "p:9443"}, "X", nil, registrar.Options{ProjectID: 1}, nil); err == nil {
 		t.Fatal("no store accepted")
 	}
-	if _, err := registrar.New(facade.Config{BaseURL: "http://p"}, "X", &fakeStore{}, registrar.Options{ProjectID: 0, RequireTLS: &plain}, nil); err == nil {
+	if _, err := registrar.New(facade.Config{Target: "p:9443"}, "X", &fakeStore{}, registrar.Options{ProjectID: 0}, nil); err == nil {
 		t.Fatal("no project accepted")
 	}
-	if _, err := registrar.New(facade.Config{BaseURL: "http://p"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1, Client: http.DefaultClient}, nil); err == nil {
-		t.Fatal("a plain-http target accepted with TLS required")
+	if _, err := registrar.New(facade.Config{Target: "https://p:8080"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1}, nil); err == nil {
+		t.Fatal("a URL target (the retired BASE_URL) accepted")
 	}
-	if _, err := registrar.New(facade.Config{BaseURL: "not a url"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1, RequireTLS: &plain}, nil); err == nil {
-		t.Fatal("a bad target accepted")
+	// The registrar dials nothing of its own: it rides the facade's client.
+	if _, err := registrar.New(facade.Config{Target: "p:9443"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1}, nil); err == nil {
+		t.Fatal("no provider client accepted")
 	}
 }
 

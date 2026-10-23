@@ -113,7 +113,7 @@ func (r *IndexIngestJobsRepository) AdmitIndexIngest(ctx context.Context, admiss
 		return indexingapp.AdmissionOutcome{}, fmt.Errorf("lock index admission policy: %w", err)
 	}
 	if persistedMax != r.policy.MaxOutstanding {
-		return indexingapp.AdmissionOutcome{}, fmt.Errorf("%w: capability %q configured=%d persisted=%d", ErrAdmissionPolicyMismatch, executiondomain.IndexIngestCapability, r.policy.MaxOutstanding, persistedMax)
+		return indexingapp.AdmissionOutcome{}, admissionPolicyMismatchError(executiondomain.IndexIngestCapability, r.policy.MaxOutstanding, persistedMax)
 	}
 
 	existing, digest, err = loadIndexAdmission(ctx, txQueries, admission.Record.IdempotencyScope, admission.Record.IdempotencyKey)

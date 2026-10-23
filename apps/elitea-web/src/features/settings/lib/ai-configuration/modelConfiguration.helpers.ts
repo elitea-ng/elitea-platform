@@ -18,9 +18,9 @@ type ConfigOption = {
  * One row of `GET /configurations/models/{projectId}`.
  *
  * Every field is optional because the two backends do not send the same set.
- * Pylon sends `id` and a nested `capabilities` map. elitea-main sends neither:
- * its catalogue item carries `name`, `display_name`, `project_id`, `shared`,
- * `default` and one boolean per capability
+ * The legacy runtime sends `id` and a nested `capabilities` map. elitea-main
+ * sends neither: its catalogue item carries `name`, `display_name`,
+ * `project_id`, `shared`, `default` and one boolean per capability
  * (`services/elitea-main/internal/application/configurations/models.go`).
  */
 type CatalogueModel = {
@@ -49,12 +49,13 @@ export const removeDuplicateModels = <T extends { id?: string; name?: string; pr
 };
 
 /**
- * The capability flags of one catalogue row, in the pylon `capabilities` shape.
+ * The capability flags of one catalogue row, in the legacy `capabilities`
+ * shape.
  *
  * elitea-main DOES NOT SEND `capabilities`. It sends one boolean per capability
  * at the top level of the item. Reading only `capabilities` therefore gave every
  * model an empty flag set on this platform, so the chips were always absent.
- * Read the pylon map when it is present, and fall back to the booleans this
+ * Read the legacy map when it is present, and fall back to the booleans this
  * platform sends. A model with no capability set keeps an all-false map, which
  * the filters below drop, so the section stays hidden.
  */
@@ -271,7 +272,6 @@ export const buildConfigurationData = ({
     available_configurations: {
       llm_models: mapConfigToList(configurationsBySections.llm),
       embedding_models: mapConfigToList(configurationsBySections.embedding),
-      vector_storages: mapConfigToList(configurationsBySections.vectorstorage),
       ai_credentials: mapConfigToList(configurationsBySections.ai_credentials),
       image_generation_models: mapConfigToList(configurationsBySections.image_generation),
       asr_models: mapConfigToList(configurationsBySections.asr),

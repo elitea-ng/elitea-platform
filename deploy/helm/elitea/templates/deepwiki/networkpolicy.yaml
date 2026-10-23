@@ -8,5 +8,5 @@
       "title" "DeepWiki"
       "key" "deepwiki"
       "grpcPort" (.Values.deepwiki.platformGrpc | default dict).port
-      "platformGrpc" (include "elitea-deepwiki.platformGrpc" .)) }}
+      "adminPort" (.Values.deepwiki.admin | default dict).port) }}
 {{- end }}

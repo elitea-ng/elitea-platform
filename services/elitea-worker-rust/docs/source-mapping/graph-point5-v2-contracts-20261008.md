@@ -9,7 +9,7 @@ PR elitea-ng/elitea-platform#1084 until it merges and are not edited here.
 
 ## Business behaviour taken from the current platform, and what was not ported
 
-Taken (reference: EliteaUI `src/[fsd]`, Python SDK, Pylon plugins):
+Taken (reference: EliteaUI `src/[fsd]`, Python SDK, legacy plugins):
 - HITL cards look and behave as in EliteaUI: `AnswerApprovals` below the thinking view, one accordion per spawning
   instance bucketed by `parent_agent_call_id`, labels from `computeBreadcrumbs` (`Parent (1) ▸ Sub`). Fan-out members
   reuse this hierarchy contract; `fanout_v1` adds grouping metadata only (D2 §3.3–3.4).

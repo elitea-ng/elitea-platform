@@ -7,8 +7,10 @@ name: CI — DeepWiki native engine
 #
 #   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
 #   * the crate's tests, which run the sidecar on a REAL Unix socket and
-#     the index storage against a REAL PostgreSQL with pgvector (the
-#     `postgres` service): the retrieval parity gate over the P0 fixtures,
+#     the index storage against a REAL, plain PostgreSQL (the `postgres`
+#     service; no pgvector — the dense vectors are in elitea-vector, #1359,
+#     and the upgrade test stands in for the extension the released
+#     migrations created): the retrieval parity gate over the P0 fixtures,
 #     the publish transaction under concurrent readers, the reconciliation
 #     and the migration ledger, Phase 2's store over the build space, and
 #     the native runner end to end (tests/native_generate.rs: the worker
@@ -17,10 +19,10 @@ name: CI — DeepWiki native engine
 #     `loopback-git-http` feature, which --all-features turns on).
 #     DEEPWIKI_REQUIRE_POSTGRES=1 turns their "no database → skip" into a
 #     failure here;
-#   * the shared engine crates in libs/rust (ADR-0027) — fmt, Clippy,
-#     rustdoc and their own tests — in this job rather than one of their
-#     own, because the engine compiles the same crates and a separate job
-#     would spend a slot of the 20 on a duplicate dependency build;
+#   * NOT the libs/rust workspace's own fmt/Clippy/rustdoc/tests: those are
+#     ci-rust-shared.yml, which runs when libs/rust changes. Here they cost
+#     22 min cold on the engine's critical path and pushed the Go host tests
+#     past the 45-min timeout (job 118778015092, run on PR #1329);
 #   * the release binary, and then the Go sub-application host's own tests
 #     against it (internal/apps/deepwiki/run, native_engine_test.go): the
 #     host's sidecar client, composition and upload over the Rust engine.
@@ -36,6 +38,13 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
+      # The build.rs of the gRPC crates compile these contracts (#1359):
+      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
+      # the artifact and internal-tool services of elitea.runtime.v1.
+      - "libs/proto/elitea/engine/**"
+      - "libs/proto/elitea/llm/**"
+      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
+      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The agent runtime's SDK schema gate reads both
@@ -48,32 +57,17 @@ on:
       - "conformance/provider/fixtures/deepwiki/**"
       - ".github/workflows/ci-deepwiki-engine.yml"
       - "scripts/go/declared-skips.txt"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-deepwiki-engine/**"
-      - "libs/rust/**"
-      # The /llm caller contract both Rust callers assert (worker, engine model client).
-      - "conformance/llm-caller/**"
-      # The agent runtime's SDK schema gate reads both
-      # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
-      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
-      - "services/elitea-subapp-host/internal/engine/**"
-      - "services/elitea-subapp-host/internal/apps/deepwiki/**"
-      - "conformance/provider/fixtures/deepwiki/**"
-      - ".github/workflows/ci-deepwiki-engine.yml"
-      - "scripts/go/declared-skips.txt"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "27 0 * * *"
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -89,10 +83,12 @@ jobs:
     # About 23 minutes with a warm cache; a change to a shared crate or a
     # lockfile invalidates the cache and the cold build needs more than 30.
     timeout-minutes: 45
-    # The index storage tests' database (ADR-0026 decision 5).
+    # The index storage tests' database (ADR-0026 decision 5). Plain
+    # PostgreSQL, the major and Debian 13 base every deployment runs: a fresh
+    # install needs no extension (#1359).
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16
+        image: postgres:18
         env:
           POSTGRES_USER: deepwiki
           POSTGRES_PASSWORD: deepwiki
@@ -116,48 +112,18 @@ jobs:
 
       # Read everywhere, write on main only: a pull request's target
       # directory duplicated per branch would crowd the 10 GB Actions cache.
+      #
+      # `shared-key` because rust-cache otherwise keys on the JOB ID, and
+      # ci-inventory-engine.yml's job is also called `engine`: the two shared
+      # the restore prefix `v0-rust-engine-Linux-x64-<env>-`, so each restored
+      # the other's 2-3 GB target on a miss and re-saved it inflated (the
+      # entry measured 3.15 GB on 2026-10-20).
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: deepwiki-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: |
-            services/elitea-deepwiki-engine
-            libs/rust
-
-      - name: Shared crates — formatting, Clippy, rustdoc, tests
-        working-directory: libs/rust
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-          cargo doc --locked --workspace --no-deps --all-features
-          cargo test --locked --workspace --all-targets --all-features
-
-      # The workspace run above links serde_json `preserve_order` (other
-      # members enable it), which is how a desktop binary would link the
-      # agent runtime. Built alone with `toolkit-sql`, the runtime has it off
-      # and links sqlx, which is how the worker links it (the desktop build
-      # drops `toolkit-sql`). Its digest tests pin the same values both ways
-      # (ADR-0029 decision 2); the explicit feature run asserts the feature
-      # really reaches serde_json, with `toolkit-sql` so the SQL family's
-      # encodings are covered too.
-      - name: Agent runtime — digests with and without preserve_order
-        working-directory: libs/rust
-        run: |
-          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office
-          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office
-
-      # The workspace Clippy run above uses --all-features, which turns on
-      # `test-support`, and that switches off the crate's
-      # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the
-      # two production feature sets with the guard on: the worker's
-      # (`toolkit-sql`, `toolkit-office`) and the desktop host's (no features).
-      - name: Agent runtime — production feature sets (panic guard on)
-        working-directory: libs/rust
-        run: |
-          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office -- -D warnings
-          cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings
+          workspaces: services/elitea-deepwiki-engine
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -189,6 +155,21 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           cache-dependency-path: services/elitea-subapp-host/go.sum
+
+      # The module download on its own step, with a bounded retry: on run
+      # 39461870673 proxy.golang.org reset one stream ("stream error ...
+      # INTERNAL_ERROR; received from peer") and `go test` failed in setup,
+      # before any test ran. A transient proxy fault now costs a retry, and
+      # a real one still fails here, under a name that says it was the fetch.
+      - name: Download the Go host's modules (bounded retry)
+        working-directory: services/elitea-subapp-host
+        run: |
+          for attempt in 1 2 3 4; do
+            go mod download && exit 0
+            echo "::warning::go mod download failed (attempt ${attempt}/4); retrying"
+            sleep $(( attempt * 10 ))
+          done
+          exit 1
 
       - name: Run the Go host's sidecar tests against the binary
         working-directory: services/elitea-subapp-host

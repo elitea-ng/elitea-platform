@@ -8,6 +8,11 @@
  * `shared/api/socket/testing.ts` already uses.
  */
 export { useEventSource } from './useEventSource';
+/**
+ * One connection per URL for the whole tab, shared by every follower of a
+ * stream many components read at once (the project event stream).
+ */
+export { useSharedEventSource } from './useSharedEventSource';
 export type { ExecutionEventData } from './executionEvents';
 /**
  * `useExecutionEventStream` subscribes by the `events_url` the START

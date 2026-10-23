@@ -48,8 +48,8 @@ import (
 //   - internal/api/router_elitea_core_permission_map_test.go asserts that every
 //     literal handed to router.go's `projectPermission` helper appears in
 //     testdata/legacy/legacy-rbac-static-catalog.json. That assertion is
-//     correct for a PORTED pylon route, where an unknown name is a typo that
-//     ships as a permanent 403. Agent Evaluation is not in the pylon corpus
+//     correct for a PORTED legacy route, where an unknown name is a typo that
+//     ships as a permanent 403. Agent Evaluation is not in the legacy corpus
 //     this repository carries (`legacy/plugins/elitea_core/api/v2/` has no
 //     evaluation module), so these four names have no `check_api` to be
 //     transcribed from and would fail an assertion about provenance they never

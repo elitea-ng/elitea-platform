@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// This file is the Rust-runtime counterpart of index_meta.go. Under
-// ELITEA_INDEXING_RUNTIME=rust (ADR-0030 decision 6) index metadata lives in
-// elitea_runtime.index_registry instead of an `index_meta` row in the project's
-// pgvector database, and elitea-main is the only writer of it (ADR-0030
+// This file is the Rust-runtime counterpart of index_meta.go. Index metadata
+// lives in elitea_runtime.index_registry (ADR-0030 decision 6; it replaced the
+// `index_meta` row in the project's pgvector database, which #1359 removed with
+// the Python runtime), and elitea-main is the only writer of it (ADR-0030
 // decision 2). So:
 //
 //   - the admission initializer writes the registry row, and needs neither a
@@ -159,9 +159,9 @@ type RegistryTerminalWriter interface {
 }
 
 // RegistryIndexMetaTerminalizer is the rust-mode CurrentIndexMetaTerminalizer.
-// The Python one redeems the frozen toolkit configuration to find the pgvector
-// target; a registry row is addressed by the admission binding alone, so this
-// one does not.
+// The retired Python one redeemed the frozen toolkit configuration to find the
+// pgvector target; a registry row is addressed by the admission binding alone,
+// so this one does not.
 type RegistryIndexMetaTerminalizer struct {
 	bindings CurrentIndexMetaTerminalBindingRepository
 	writer   RegistryTerminalWriter
@@ -301,9 +301,9 @@ type RegistryManualStopWriter interface {
 // RegistryManualStopCleaner is the rust-mode counterpart of
 // CurrentManualStopCleaner, and it deletes nothing.
 //
-// The Python cleaner deletes the stopped run's partially written embeddings
-// from the project's pgvector table, because each embedding row is tagged with
-// the run that wrote it. The registry has no such tag: its vectors belong to
+// The retired Python cleaner deleted the stopped run's partially written
+// embeddings from the project's pgvector table, because each embedding row was
+// tagged with the run that wrote it. The registry has no such tag: its vectors belong to
 // the INDEX namespace, and a reindex is incremental (ADR-0030 decision 3). A
 // stopped reindex of a completed index would, if its namespace were deleted,
 // destroy every vector the index held before the run started and leave it

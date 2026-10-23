@@ -64,6 +64,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # connectors (ADR-0030 decision 3), over this crate's reqwest 0.12 (rustls on
 # ring): the connectors crate names no TLS stack of its own.
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012"] }
+# The platform's internal MCP tool categories: InternalToolService on
+# elitea-main's platform listener, over the host's channel (#1359 U5).
+elitea-platform-rpc = { path = "../platform-rpc" }
 # The one crate that names a zavora type (ADR-0032 decision 2). Optional:
 # only the `toolkit-office` build links the authoring libraries.
 elitea-office-core = { path = "../office-core", optional = true }
@@ -123,6 +126,8 @@ zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012", "test-support"] }
+# The fake internal tool service the internal MCP toolset is tested against.
+elitea-platform-rpc = { path = "../platform-rpc", features = ["testing"] }
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # The invocation suite captures the spans a toolkit call emits.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }

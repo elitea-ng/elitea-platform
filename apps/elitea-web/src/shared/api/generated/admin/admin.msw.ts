@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -489,6 +490,132 @@ export const getGetBrandingSettingsResponseMock = (
 });
 
 export const getSaveBrandingSettingsResponseMock = (
+  overrideResponse: Partial<Extract<BrandingSettings, object>> = {},
+): BrandingSettings => ({
+  values: {},
+  layers: {
+    file: faker.datatype.boolean(),
+    database: faker.datatype.boolean(),
+  },
+  effective: faker.helpers.arrayElement([
+    {
+      $schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      product: {
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        shortName: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        tagline: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        docsUrl: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        supportUrl: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        senderName: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        supportEmail: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      assets: {
+        logoFull: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        logoMark: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        favicon: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        loginArt: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        logoEmail: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      typography: {
+        fontFamily: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        fontFamilyMono: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        baseSize: faker.number.float({ fractionDigits: 2 }),
+        scale: faker.number.float({ fractionDigits: 2 }),
+        fontFaces: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            family: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            weight: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            style: faker.helpers.arrayElement([
+              faker.helpers.arrayElement(["normal", "italic"] as const),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
+      },
+      shape: {
+        radiusSm: faker.number.float({ fractionDigits: 2 }),
+        radiusMd: faker.number.float({ fractionDigits: 2 }),
+        radiusLg: faker.number.float({ fractionDigits: 2 }),
+        radiusPill: faker.number.float({ fractionDigits: 2 }),
+        density: faker.helpers.arrayElement([
+          "comfortable",
+          "compact",
+        ] as const),
+      },
+      locale: {
+        default: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        dateLocale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      brand: {
+        hue: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        onBrand: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      schemes: {
+        light: {
+          [faker.string.alphanumeric(5)]: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
+        },
+        dark: {
+          [faker.string.alphanumeric(5)]: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
+        },
+        hc: faker.helpers.arrayElement([
+          {
+            [faker.string.alphanumeric(5)]: faker.string.alpha({
+              length: { min: 10, max: 20 },
+            }),
+          },
+          undefined,
+        ]),
+      },
+    },
+    null,
+  ]),
+  etag: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  saved: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  ...overrideResponse,
+});
+
+export const getResetBrandingSettingsResponseMock = (
   overrideResponse: Partial<Extract<BrandingSettings, object>> = {},
 ): BrandingSettings => ({
   values: {},
@@ -1583,6 +1710,32 @@ export const getSaveBrandingSettingsMockHandler = (
   );
 };
 
+export const getResetBrandingSettingsMockHandler = (
+  overrideResponse?:
+    | BrandingSettings
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<BrandingSettings> | BrandingSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/branding/administration",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResetBrandingSettingsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getUploadBrandingAssetMockHandler = (
   overrideResponse?:
     | BrandingAsset
@@ -2055,6 +2208,7 @@ export const getAdminMock = () => [
   getCancelBackgroundJobMockHandler(),
   getGetBrandingSettingsMockHandler(),
   getSaveBrandingSettingsMockHandler(),
+  getResetBrandingSettingsMockHandler(),
   getUploadBrandingAssetMockHandler(),
   getSendBrandingTestEmailMockHandler(),
   getExportBrandingPackageMockHandler(),

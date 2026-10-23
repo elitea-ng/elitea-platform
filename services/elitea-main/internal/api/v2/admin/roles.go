@@ -18,11 +18,11 @@ package admin
 //
 // The PUT and the POST the page needs had no route at all.
 //
-// ## The contract is pylon's, not invented
+// ## The contract is the legacy one, not invented
 //
-// `legacy/plugins/admin/api/v2/permissions.py` — its `url_params` put the pylon
-// MODE in the first path segment and the target mode in the second, which is why
-// the segment this file calls `scope` selects a handler:
+// `legacy/plugins/admin/api/v2/permissions.py` — its `url_params` put the
+// legacy MODE in the first path segment and the target mode in the second,
+// which is why the segment this file calls `scope` selects a handler:
 //
 //	administration → AdminAPI          (central auth_core__role rows for a mode)
 //	public         → PublicProjectAPI  (per-project overrides, public project)
@@ -32,23 +32,24 @@ package admin
 // `frontends/admin_ui/frontend/src/api/usersApi.js`. Guessing at a shape here is
 // what #137 cost.
 //
-// ## Deliberate divergences from the pylon original
+// ## Deliberate divergences from the legacy original
 //
-//   - `local_permissions` is a pylon RUNTIME registry, accumulated as plugins
+//   - `local_permissions` is a legacy RUNTIME registry, accumulated as plugins
 //     declare permissions. Go has no plugin runtime, so the catalogue is the
 //     union of two sources: every permission any role — central or project —
 //     holds, plus every permission this service declares in code. The second
 //     source is what keeps a name grantable when no role holds it. On the
 //     reference deployment the two implementations agree (340 names).
-//   - Every write runs in ONE transaction. Pylon's PUT deletes every override
-//     and then re-inserts, statement by statement; a failure between the two
-//     leaves the project with no permissions at all.
+//   - Every write runs in ONE transaction. The legacy PUT deletes every
+//     override and then re-inserts, statement by statement; a failure between
+//     the two leaves the project with no permissions at all.
 //   - Unknown role names and unknown permission names are REJECTED with 400.
-//     Pylon silently drops them, which reports success for a save that did not
-//     save — the #130/#180 shape this unit exists to stop reproducing.
-//   - `system` is not writable. Pylon lets a caller PUT it if they forge the
-//     request; the admin UI has always rendered that column disabled, and the
-//     server is the gate.
+//     The legacy runtime silently drops them, which reports success for a save
+//     that did not save — the #130/#180 shape this unit exists to stop
+//     reproducing.
+//   - `system` is not writable. The legacy runtime lets a caller PUT it if they
+//     forge the request; the admin UI has always rendered that column disabled,
+//     and the server is the gate.
 
 import (
 	"context"
@@ -76,7 +77,7 @@ const (
 	scopeAdministration = "administration"
 	// scopePublic and scopeSupport edit ONE project's overrides in
 	// auth_core__project_role_permission. Their target-mode segment is ignored,
-	// exactly as pylon ignores it.
+	// exactly as the legacy runtime ignores it.
 	scopePublic  = "public"
 	scopeSupport = "support"
 )
@@ -87,8 +88,8 @@ const (
 const roleSystem = "system"
 
 // centralFallbackMode is the mode a project with no overrides of its own shows,
-// and the mode "Apply to Projects" pushes out. Pylon hardcodes 'default' in both
-// places.
+// and the mode "Apply to Projects" pushes out. The legacy runtime hardcodes
+// 'default' in both places.
 const centralFallbackMode = "default"
 
 // projectUserNameLikePattern matches the personal projects a sync must skip.
@@ -149,7 +150,7 @@ func (m permissionMatrix) response() map[string]any {
 		}
 		rows = append(rows, row)
 	}
-	// `total` counts the CATALOGUE, matching pylon's `len(all_permissions)`.
+	// `total` counts the CATALOGUE, matching the legacy `len(all_permissions)`.
 	// It is not a page count — this endpoint is never paginated.
 	return map[string]any{"total": len(rows), "rows": rows}
 }
@@ -193,7 +194,8 @@ func (h *Handler) readMatrix(ctx context.Context, scope, mode string) (permissio
 	}, nil
 }
 
-// permissionCatalogue is the Go stand-in for pylon's `auth.local_permissions`.
+// permissionCatalogue is the Go stand-in for the legacy
+// `auth.local_permissions`.
 //
 // It has two sources, and it needs both.
 //
@@ -210,7 +212,7 @@ func (h *Handler) readMatrix(ctx context.Context, scope, mode string) (permissio
 // becomes ungrantable the moment an operator unchecks its last holder.
 // `applyGrantChanges` deletes the row the catalogue was derived from.
 //
-// Pylon does not have this
+// The legacy runtime does not have this
 // failure: `auth.local_permissions` is a declaration registry, not a set read
 // back from the grants.
 //
@@ -239,11 +241,10 @@ ORDER BY 1`)
 // holds a grant for. It is the whole composition, so a test can build the
 // catalogue the handler builds without a database.
 //
-// A retired name is left out even when a row still carries it. pylon re-seeds
-// some of them on every start while it shares the database, so a row can come
-// back after shared migration 0136 removed it. Leaving the name out of the
-// catalogue keeps it off the Roles matrix, and parseMatrixBody then refuses a
-// save that names it.
+// A retired name is left out even when a row still carries it. Shared
+// migrations 0136 and 0172 delete those rows, and leaving the name out of the
+// catalogue keeps a save from writing one back: parseMatrixBody refuses a save
+// that names a string the catalogue does not hold.
 func catalogueFrom(granted []string) []string {
 	live := make([]string, 0, len(granted))
 	for _, name := range granted {
@@ -258,19 +259,15 @@ func catalogueFrom(granted []string) []string {
 // checks (#6874): no Go route, no elitea-web gate and no worker.
 //
 // The resolver matches exact strings and does no prefix matching, so each of
-// these rows grants nothing here. They are bare section nodes that pylon's
+// these rows grants nothing here. They are bare section nodes that the legacy
 // admin module registered, prefix nodes the legacy Roles matrix saved when an
-// operator clicked a group toggle, and strings a pylon migration seeded for
+// operator clicked a group toggle, and strings a legacy migration seeded for
 // features that never checked them.
 //
-// pylon's own admin UI still gates its sections on the bare nodes
-// (legacy/plugins/admin/module.py). Where it runs against this database, it
-// loses those sections after 0136 until it re-seeds its roles on restart.
-// The re-seeded rows are why this list also filters the catalogue.
-//
-// Shared migration 0136 deletes the rows. This list MUST equal the list in that
-// file; internal/api/router_permission_retired_gate_test.go checks both that,
-// and that no route gate checks any name here.
+// Shared migrations 0136 and 0172 delete the rows. This list MUST equal the
+// union of the lists in those files;
+// internal/api/router_permission_retired_gate_test.go checks both that, and
+// that no route gate checks any name here.
 var retiredPermissions = map[string]struct{}{
 	"projects":                              {},
 	"configuration":                         {},
@@ -287,10 +284,14 @@ var retiredPermissions = map[string]struct{}{
 	"models.promptlib_shared.public_collection.details": {},
 	"models.promptlib_shared.approve_collection.post":   {},
 	"models.promptlib_shared.reject_collection.delete":  {},
+	// 0172: the legacy admin module's Roles and Projects section names.
+	"configuration.roles": {},
+	"projects.projects":   {},
 }
 
 // RetiredPermissions returns the retired names, sorted. It exists for the
-// source gate in internal/api, which compares it with shared migration 0136.
+// source gate in internal/api, which compares it with the shared migrations
+// that retire names (0136, 0172).
 func RetiredPermissions() []string {
 	names := make([]string, 0, len(retiredPermissions))
 	for name := range retiredPermissions {
@@ -391,9 +392,9 @@ WHERE role.mode = $1 AND grant_row.permission IS NOT NULL`, mode)
 	return scanGrants(rows)
 }
 
-// projectGrants reads one project's overrides — and reproduces pylon's fallback
-// exactly: a project with NO override rows shows the CENTRAL `default` matrix
-// instead, because that is what its members effectively have.
+// projectGrants reads one project's overrides — and reproduces the legacy
+// fallback exactly: a project with NO override rows shows the CENTRAL `default`
+// matrix instead, because that is what its members effectively have.
 //
 // The second return value says which of the two happened. It matters: a save
 // against an inherited matrix must write the whole thing (see saveGrants).
@@ -517,9 +518,10 @@ type matrixSubmission struct {
 // parseMatrixBody turns the submitted rows into a matrixSubmission, rejecting
 // anything the current matrix does not contain.
 //
-// Rejecting is the point. Pylon ignores an unknown role or permission and still
-// answers `{"ok": true}`, so a client that misspells a role name is told its
-// save succeeded. Here the save fails and says which name was wrong.
+// Rejecting is the point. The legacy runtime ignores an unknown role or
+// permission and still answers `{"ok": true}`, so a client that misspells a
+// role name is told its save succeeded. Here the save fails and says which name
+// was wrong.
 func parseMatrixBody(body []map[string]json.RawMessage, current permissionMatrix) (matrixSubmission, error) {
 	knownRoles := make(map[string]bool, len(current.roles))
 	for _, role := range current.roles {
@@ -654,10 +656,10 @@ func sortGrants(cells []grant) {
 
 // applyGrantChanges writes both halves of the diff inside ONE transaction.
 //
-// Pylon does not: its PUT issues an unbounded series of individual add/remove
-// calls, and its public/support PUT deletes every override before inserting any.
-// A failure part-way through that leaves a project with a matrix nobody asked
-// for — including, in the delete-then-insert case, an empty one.
+// The legacy runtime does not: its PUT issues an unbounded series of individual
+// add/remove calls, and its public/support PUT deletes every override before
+// inserting any. A failure part-way through that leaves a project with a matrix
+// nobody asked for — including, in the delete-then-insert case, an empty one.
 func (h *Handler) applyGrantChanges(
 	ctx context.Context, scope, mode string, granted, revoked []grant,
 ) error {
@@ -730,11 +732,11 @@ WHERE role.id = override.role_id
 // override tables, skipping personal projects and the public project, exactly as
 // `permissions.py`'s `post` does.
 //
-// Where it differs is shape, not outcome: pylon walks every project over RPC and
-// issues one call per (role, permission) it adds or removes — on the reference
-// deployment that is 15k projects × ~1.7k cells. The three set-based statements
-// below reach the same end state in one transaction, so an interrupted sync
-// cannot leave half the estate on the old matrix.
+// Where it differs is shape, not outcome: the legacy runtime walks every
+// project over RPC and issues one call per (role, permission) it adds or
+// removes — on the reference deployment that is 15k projects × ~1.7k cells. The
+// three set-based statements below reach the same end state in one transaction,
+// so an interrupted sync cannot leave half the estate on the old matrix.
 func (h *Handler) AdminPermissionsSync(w http.ResponseWriter, r *http.Request) {
 	if chi.URLParam(r, "scope") != scopeAdministration {
 		writeJSON(w, http.StatusNotFound,
@@ -742,7 +744,7 @@ func (h *Handler) AdminPermissionsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if chi.URLParam(r, "mode") != centralFallbackMode {
-		// Pylon's own guard, kept verbatim in meaning: the central matrix for
+		// The legacy guard, kept verbatim in meaning: the central matrix for
 		// `administration`/`developer` has no per-project counterpart to sync to.
 		writeJSON(w, http.StatusBadRequest,
 			map[string]any{"error": "Sync is only supported for default mode"})
@@ -878,8 +880,8 @@ func writeMatrixError(w http.ResponseWriter, err error) {
 	apierr.WriteStatus(w, http.StatusInternalServerError, "the permission matrix could not be read or written")
 }
 
-// defaultPublicProjectID mirrors pylon's elitea_config "ai_project_id" default,
-// and the identically-named constant in internal/api/middleware.
+// defaultPublicProjectID mirrors the legacy elitea_config "ai_project_id"
+// default, and the identically-named constant in internal/api/middleware.
 const defaultPublicProjectID = 1
 
 // scopeProjectID resolves which project a project-scoped request edits.
@@ -887,9 +889,9 @@ const defaultPublicProjectID = 1
 // The PUBLIC project comes from the environment, in the same shape
 // `internal/api/middleware/project.go` already uses.
 //
-// The SUPPORT project does NOT, and the difference is not stylistic. Pylon read
-// it from the support_assistant module's `support_project_id`, and so does this
-// platform now: the admin Features page writes that key into
+// The SUPPORT project does NOT, and the difference is not stylistic. The legacy
+// runtime read it from the support_assistant module's `support_project_id`, and
+// so does this platform now: the admin Features page writes that key into
 // `centry.platform_config`, and `internal/api/v2/supportassistant` BOOTSTRAPS
 // the hidden project lazily — on the first support request after an operator
 // turns the assistant on — and writes the id it created back to the same key.
@@ -901,9 +903,9 @@ const defaultPublicProjectID = 1
 // assistant is not using. It stays supported as a fallback for a deployment
 // that pins the project by hand, but the stored value wins.
 //
-// The SUPPORT project has NO default. Pylon answers 404 "Support project not
-// configured" when its id is unset, and so does this; inventing a default would
-// point that tab at some unrelated project's permissions.
+// The SUPPORT project has NO default. The legacy runtime answers 404 "Support
+// project not configured" when its id is unset, and so does this; inventing a
+// default would point that tab at some unrelated project's permissions.
 func (h *Handler) scopeProjectID(ctx context.Context, scope string) (int, error) {
 	switch scope {
 	case scopePublic:
@@ -951,7 +953,8 @@ func (h *Handler) supportProjectID(ctx context.Context) (int, error) {
 		}
 	}
 	// Unset, not unreadable. The assistant has never been enabled, so its
-	// project has never been created — the same answer pylon gives.
+	// project has never been created — the same answer the legacy runtime
+	// gives.
 	return envProjectID("SUPPORT_PROJECT_ID", 0)
 }
 

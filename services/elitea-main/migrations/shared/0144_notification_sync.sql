@@ -7,12 +7,12 @@
 --
 -- WHY A `sync_at` COLUMN AND NOT `updated_at`. On a schema 001_initial.sql
 -- built, `updated_at` is NOT NULL DEFAULT now() and the sqlc queries stamp it.
--- On a pylon-built schema it is nullable (internal/db/schema/
--- notifications_baseline.sql was verified against one), and pylon, the
--- scheduler's producers and the moderation and eliteacore writers do not all
--- stamp it. A BEFORE INSERT/UPDATE trigger stamps `sync_at` for every writer,
--- the same rule the tenant chat tables follow (tenant 0144). No response
--- carries the column.
+-- On a legacy-built schema it is nullable (internal/db/schema/
+-- notifications_baseline.sql was verified against one), and the legacy runtime,
+-- the scheduler's producers and the moderation and eliteacore writers do not
+-- all stamp it. A BEFORE INSERT/UPDATE trigger stamps `sync_at` for every
+-- writer, the same rule the tenant chat tables follow (tenant 0144). No
+-- response carries the column.
 --
 -- TOMBSTONES. An AFTER DELETE trigger writes one row per deleted notification
 -- to centry.notification_tombstones, keyed by user. elitea-scheduler's
@@ -20,7 +20,7 @@
 -- cursor older than that answers 410.
 --
 -- Guarded on centry.notifications: several suites apply the shared corpus to a
--- bare database that has no pylon-era schema (memory admin-rbac-seeding-trap).
+-- bare database that has no legacy-era schema (memory admin-rbac-seeding-trap).
 --
 -- IDEMPOTENT. No BEGIN/COMMIT: the ledgered runner wraps each file.
 DO $$

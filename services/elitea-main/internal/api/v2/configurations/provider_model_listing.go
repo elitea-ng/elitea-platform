@@ -37,8 +37,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 // maxProviderModelIDs bounds how many ids this platform will accept from ONE
@@ -141,28 +139,20 @@ func (c *GatewayConnectionChecker) ListProviderModels(
 		// document is an escaped JSON string on one screen and a nested object
 		// on another, and the gateway accepts both.
 		VertexCredentials: data["vertex_credentials"],
+
+		AuthMode:      strVal(data, "auth_mode"),
+		TokenAudience: strVal(data, "token_audience"),
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return ProviderModelListing{}, fmt.Errorf("list provider models: encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/llm/v1/list_provider_models", strings.NewReader(string(raw)))
-	if err != nil {
-		return ProviderModelListing{}, fmt.Errorf("list provider models: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// No execution id: a connection check is authored by an operator in the
-	// admin UI, not made from a runtime execution. The empty value signs v1,
-	// byte for byte what this call signed before.
-	llmproxy.SignIdentityHeaders(req.Header, c.identitySecret, connectionCheckProjectIDFrom(ctx), "", "", "")
-
-	resp, err := c.httpClient.Do(req)
+	resp, done, err := c.call(ctx, c.timeout, c.gateway.ListProviderModels, raw, "")
 	if err != nil {
 		return ProviderModelListing{}, fmt.Errorf("list provider models: call gateway: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer done()
 
 	if resp.StatusCode != http.StatusOK {
 		// The route answers 200 for every provider verdict, so a non-200 is

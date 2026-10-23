@@ -14,6 +14,7 @@ use elitea_model_client::{
     ChatClient, ChatMessage, ChatRequest, ModelSettings, Transport, TransportSettings,
     refusal_code, retryable, valid_execution_id,
 };
+use elitea_model_rpc::testing::with_model_service;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -58,6 +59,7 @@ async fn serve(gateway: Gateway) -> String {
     let app = Router::new()
         .route("/llm/v1/chat/completions", axum::routing::post(answer))
         .with_state(gateway);
+    let app = with_model_service(app, "/llm/v1");
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });

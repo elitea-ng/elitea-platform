@@ -2,7 +2,6 @@ go 1.26.9
 
 use (
 	./conformance/nativeclient
-	./gen/go
 	./libs/go/authlib
 	./libs/go/egresslib
 	./libs/go/eventslib
@@ -14,5 +13,4 @@ use (
 	./services/elitea-main
 	./services/elitea-scheduler
 	./services/elitea-subapp-host
-	./tools/uictl
 )

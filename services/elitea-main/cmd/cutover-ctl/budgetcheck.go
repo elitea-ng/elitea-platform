@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -11,14 +10,15 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 // budget-check (spec §8.5 / §8.8, gate BFF.9e):
 //
 // The migration introduces a project budget enforcement layer (GovernanceStore)
-// that replaces the pylon platform's soft limits with hard int64 nano-USD counters
-// in NATS JetStream (design §8). Two properties MUST hold before the big-bang
-// cutover:
+// that replaces the previous platform's soft limits with hard int64 nano-USD
+// counters in NATS JetStream (design §8). Two properties MUST hold before the
+// big-bang cutover:
 //
 //  1. Hard block: a request to an over-budget project receives HTTP 402 with
 //     error.type=budget_exceeded and error.code=insufficient_quota. The LLM
@@ -168,7 +168,7 @@ func checkBudgetResult(r budgetCheckResult, alertLatencyS float64) budgetCheckOu
 // Flags:
 //
 //	--alert-latency-s   Max seconds from 80% crossing to alert (default 10).
-//	--gateway-url       Gateway base URL (default http://localhost:8083).
+//	--gateway-url       Gateway gRPC listener, https://<host>:<port> (default $LLM_GATEWAY_URL).
 //	--nats-url          NATS URL for the soft-alert subscription (default
 //	                    $ELITEA_EVENTS_NATS_URL, else nats://localhost:4222).
 //	--projects-file     JSON fixture: {over_budget, soft_alert, under_budget}
@@ -179,7 +179,7 @@ func checkBudgetResult(r budgetCheckResult, alertLatencyS float64) budgetCheckOu
 func cmdBudgetCheck(args []string) {
 	fs := flag.NewFlagSet("budget-check", flag.ExitOnError)
 	alertLatencyS := fs.Float64("alert-latency-s", 10, "maximum seconds from 80% spend crossing to soft-alert observation")
-	gatewayURL := fs.String("gateway-url", "http://localhost:8083", "gateway base URL")
+	gatewayURL := fs.String("gateway-url", os.Getenv("LLM_GATEWAY_URL"), "gateway gRPC listener, https://<host>:<port> (default $LLM_GATEWAY_URL)")
 	natsURL := fs.String("nats-url", defaultBudgetCheckNATSURL(os.LookupEnv), "NATS URL for the soft-alert subscription (default $ELITEA_EVENTS_NATS_URL, else nats://localhost:4222); on a secured cluster tls:// with elitea-main's identity, from a pod labelled app.kubernetes.io/name=elitea-main")
 	projectsFile := fs.String("projects-file", os.Getenv("LLM_BUDGET_PROJECTS_FILE"), "path to the seeded projects fixture (JSON)")
 	identitySecret := fs.String("identity-secret", os.Getenv("GATEWAY_IDENTITY_SECRET"), "edge identity HMAC secret (empty = unsigned headers)")
@@ -210,6 +210,19 @@ Hermetic equivalent (no live infra):
 		os.Exit(2)
 	}
 
+	gateway, err := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
+		Target:         *gatewayURL,
+		IdentitySecret: *identitySecret,
+		ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
+		ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
+		CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "budget-check: gateway client: %v\n", err)
+		os.Exit(2)
+	}
+	defer func() { _ = gateway.Close() }()
+
 	nc, err := connectBudgetCheckNATS(*natsURL, os.LookupEnv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "budget-check: NATS connect %q: %v\n\n%s", *natsURL, err, budgetCheckNATSHelp)
@@ -218,11 +231,9 @@ Hermetic equivalent (no live infra):
 	defer nc.Close()
 
 	result, err := runLiveBudgetCheck(liveBudgetCheckConfig{
-		gatewayURL:    *gatewayURL,
-		secret:        []byte(*identitySecret),
+		gateway:       gateway,
 		fixture:       fixture,
 		alertLatencyS: *alertLatencyS,
-		client:        &http.Client{Timeout: 30 * time.Second},
 		waiter:        &natsAlertWaiter{conn: nc},
 		logf: func(format string, a ...any) {
 			fmt.Printf(format+"\n", a...)
@@ -266,10 +277,12 @@ On a secured cluster (#1076) that takes BOTH:
     app.kubernetes.io/name=elitea-main in the NATS namespace. From anywhere
     else the dial times out.
 The elitea-main pods have both, and the binary is /cutover-ctl in the
-elitea-main image, so:
+elitea-main image. The pods also hold the gateway client certificate
+(LLM_GATEWAY_CLIENT_CERT, _KEY, LLM_GATEWAY_CA_FILE) and LLM_GATEWAY_URL, so:
   kubectl -n <namespace> exec deploy/elitea-main -- /cutover-ctl budget-check \
-    --gateway-url <gateway URL> --projects-file <fixture in the pod>
-(--nats-url defaults to the pod's $ELITEA_EVENTS_NATS_URL). For a one-off pod
+    --projects-file <fixture in the pod>
+(--nats-url defaults to $ELITEA_EVENTS_NATS_URL, --gateway-url to
+$LLM_GATEWAY_URL). For a one-off pod
 instead, run the elitea-main image labelled app.kubernetes.io/name=elitea-main
 WITHOUT app.kubernetes.io/instance (so the elitea-main Service does not route
 to it), with the Secret mounted and the three variables pointing into it.
@@ -289,7 +302,7 @@ func defaultBudgetCheckNATSURL(lookup func(string) (string, bool)) string {
 // budgetCheckNATSPrefix names the client identity budget-check presents on a
 // secured NATS: elitea-main's (ELITEA_EVENTS_NATS_TLS_{CA,CERT,KEY}_FILE).
 // budget-check only SUBSCRIBES to the project event subjects, which is
-// exactly what that identity may do (deploy/helm/nats/values.yaml), so an
+// exactly what that identity may do (deploy/helm/elitea/values.yaml), so an
 // operator runs it with the elitea-main client certificate instead of a new
 // identity widening the permission table. With none of the three set it
 // connects plaintext, for the compose posture.

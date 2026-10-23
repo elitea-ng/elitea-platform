@@ -124,7 +124,7 @@ impl ApplicationMaterializationPath {
             ));
         }
         self.hops
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 (value < MAX_APPLICATION_HOPS).then_some(value + 1)
             })
             .map_err(|_| resource_exhausted())?;
@@ -141,7 +141,7 @@ impl ApplicationMaterializationPath {
             .map_err(|_| invalid_configuration())?
             .len();
         self.version_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value
                     .checked_add(bytes)
                     .filter(|total| *total <= MAX_MATERIALIZATION_VERSION_BYTES)

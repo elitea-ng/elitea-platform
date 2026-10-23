@@ -1,7 +1,8 @@
 name: Cache (pull requests read, main writes)
 description: >-
-  actions/cache with the write side gated on a push to main. Every run restores
-  (exact key, then the restore-keys prefixes); only a push to main saves.
+  actions/cache with the write side gated on a run on main (the nightly schedule or a
+  dispatch; no workflow runs on a push). Every run restores (exact key, then
+  the restore-keys prefixes); only a run on main saves.
 #
 # ── Why (measured 2026-10-16) ───────────────────────────────────────────────
 #
@@ -20,13 +21,13 @@ description: >-
 # ── How ─────────────────────────────────────────────────────────────────────
 #
 # A composite action cannot declare a post step of its own, but the actions it
-# uses keep theirs. The writer therefore uses the full `actions/cache@v4`,
+# uses keep theirs. The writer therefore uses the full `actions/cache@v6`,
 # whose save runs as a post step after the job's own steps; the reader uses
-# `actions/cache/restore@v4`, which never saves. Exactly one of the two runs.
+# `actions/cache/restore@v6`, which never saves. Exactly one of the two runs.
 #
 # The write condition is spelled literally on the writer step, not passed in:
 # an input would let a caller turn writing on from a pull request, and
-# scripts/ci/check_workflow_cache_writes.py reads this literal.
+# scripts/ci/check-workflow-cache-writes.mjs reads this literal.
 #
 # An exact-key hit makes the writer's save a no-op (actions/cache never
 # overwrites a key). That is the same behaviour actions/setup-go and
@@ -53,18 +54,18 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Restore, and save at job end (push to main)
+    - name: Restore, and save at job end (run on main)
       id: writer
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      uses: actions/cache@v4
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: actions/cache@v6
       with:
         path: ${{ inputs.path }}
         key: ${{ inputs.key }}
         restore-keys: ${{ inputs.restore-keys }}
     - name: Restore only (pull requests and every other run)
       id: reader
-      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}
-      uses: actions/cache/restore@v4
+      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
+      uses: actions/cache/restore@v6
       with:
         path: ${{ inputs.path }}
         key: ${{ inputs.key }}
@@ -75,7 +76,7 @@ runs:
         HIT: ${{ steps.writer.outputs.cache-hit || steps.reader.outputs.cache-hit }}
         MATCHED: ${{ steps.writer.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
         KEY: ${{ inputs.key }}
-        WRITES: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+        WRITES: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       run: |
         if [ -n "$MATCHED" ]; then
           echo "cache: restored '$MATCHED' (exact hit: ${HIT:-false}) for key '$KEY'; this run writes: $WRITES"

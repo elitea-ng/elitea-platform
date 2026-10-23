@@ -110,9 +110,10 @@ func TestTheSSORoutesAreOnlyUnderAuth(t *testing.T) {
 			t.Errorf("route %q still names the old prefix", route)
 		}
 	}
-	// The edge auth check at /auth itself is unchanged.
-	if !routes["/auth"] {
-		t.Fatal("/auth is no longer registered")
+	// The edge's forward-auth check at /auth itself is gone (#1359): nothing
+	// may answer it with an X-Auth-* identity again.
+	if routes["/auth"] {
+		t.Fatal("/auth is registered again: the edge forward-auth check was removed in #1359")
 	}
 	router := ssoRouter(t, gitHubAndEntra())
 	for _, old := range []string{"/forward-" + "auth/login", "/forward-" + "auth/auth_oidc/callback"} {

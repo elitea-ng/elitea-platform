@@ -1,142 +1,180 @@
 package llmproxy
 
 import (
-	"bufio"
-	"net"
+	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
-// TestProxyCarriesAWebSocketUpgrade proves the edge can carry the gateway's
-// realtime route (issue #323).
-//
-// The realtime ASR surface is a WebSocket, and it reaches the gateway through
-// THIS proxy. Nothing else asserted that an upgrade survives it. Two properties
-// of the proxy could each end that silently, and this test owns both:
-//
-//   - Rewrite runs stripIdentityHeaders on the outbound header. It must remove
-//     the client's credentials and must NOT remove Connection or Upgrade. Both
-//     halves are asserted below, because a strip that took the upgrade headers
-//     with it would present as "the provider refused the handshake".
-//   - FlushInterval: -1 must not interfere with the hijacked connection, so the
-//     test writes and reads over the pipe after the 101.
-//
-// A THIRD property is load-bearing and is NOT tested here: httputil.ReverseProxy
-// switches to a raw byte pipe only when the round-tripper returns a 101 whose
-// Body is an io.ReadWriteCloser, and *http.Transport does that only over
-// HTTP/1.1. This test injects its own transport, so it cannot see that setting.
-// TestNewMTLSTransport in proxy_test.go owns it: it asserts
-// ForceAttemptHTTP2 == false and NextProtos == ["http/1.1"]. Keep that test.
-//
-// The test speaks raw HTTP/1.1 rather than using a WebSocket library on purpose:
-// the handshake and the byte pipe are the contract, not any framing.
-func TestProxyCarriesAWebSocketUpgrade(t *testing.T) {
-	var sawUpgrade, sawConnection, sawKey, sawAuth, sawProj string
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawUpgrade = r.Header.Get("Upgrade")
-		sawConnection = r.Header.Get("Connection")
-		sawKey = r.Header.Get("Sec-WebSocket-Key")
-		sawAuth = r.Header.Get("Authorization")
-		sawProj = r.Header.Get("X-Elitea-Project-Id")
-		if !strings.EqualFold(sawUpgrade, "websocket") {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			t.Error("backend ResponseWriter is not a Hijacker")
-			return
-		}
-		conn, buf, err := hj.Hijack()
-		if err != nil {
-			t.Errorf("backend hijack: %v", err)
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		_, _ = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: probe\r\n\r\n")
-		_ = buf.Flush()
-		// Echo one line so we can prove the byte pipe is live in both directions.
-		line, _ := buf.ReadString('\n')
-		_, _ = buf.WriteString("ECHO:" + line)
-		_ = buf.Flush()
+// realtimeGateway answers the realtime handshake as the gateway does: it
+// records what arrived, refuses a request with no model, and accepts the
+// rest with the "realtime" subprotocol.
+type realtimeGateway struct {
+	mu   sync.Mutex
+	seen http.Header
+	host string
+}
+
+func (g *realtimeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	g.seen = r.Header.Clone()
+	g.host = r.Host
+	g.mu.Unlock()
+	if r.URL.Query().Get("model") == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"`+"`model`"+` query parameter is required","type":"invalid_request_error"}}`)
+		return
+	}
+	w.Header().Set("Sec-WebSocket-Protocol", "realtime")
+	w.Header().Set("X-Request-Id", "rt-1")
+	w.WriteHeader(http.StatusSwitchingProtocols)
+}
+
+func (g *realtimeGateway) header() http.Header {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.seen
+}
+
+func realtimeEdge(t *testing.T) (*realtimeGateway, string) {
+	t.Helper()
+	g := &realtimeGateway{}
+	backend := llmproxytest.Start(t, g)
+	p := proxyTo(t, backend, "s3cr3t")
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.ServeHTTP(w, r.WithContext(fullCtx()))
 	}))
-	defer backend.Close()
+	t.Cleanup(edge.Close)
+	return g, "ws" + strings.TrimPrefix(edge.URL, "http")
+}
 
-	p, err := New(Config{TargetURL: backend.URL, Transport: backend.Client().Transport, IdentitySecret: "s3cr3t"})
+// TestProxyCarriesTheRealtimeSession proves the browser's WebSocket ends at
+// the edge and continues as a Realtime session (issue #323, #1359):
+//
+//   - the handshake headers reach the gateway, and the client's credentials
+//     do not; the identity arrives signed;
+//   - the gateway's subprotocol and headers reach the browser in the 101;
+//   - the gateway's keepalive ping becomes a browser ping, and its pong
+//     returns to the gateway;
+//   - messages cross in both directions, and a gateway close reaches the
+//     browser with its status and reason.
+func TestProxyCarriesTheRealtimeSession(t *testing.T) {
+	g, url := realtimeEdge(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	conn, resp, err := websocket.Dial(ctx, url+"/llm/v1/realtime?model=m&intent=transcription", &websocket.DialOptions{
+		Subprotocols: []string{"realtime"},
+		HTTPHeader:   http.Header{"Authorization": {"Bearer client-token"}},
+	})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("dial: %v", err)
 	}
-	edge := httptest.NewServer(p)
-	defer edge.Close()
-
-	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(edge.URL, "http://"), 3*time.Second)
-	if err != nil {
-		t.Fatalf("dial edge: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	req := "GET /llm/v1/realtime?model=m&intent=transcription HTTP/1.1\r\n" +
-		"Host: edge\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
-		"Sec-WebSocket-Version: 13\r\n" +
-		"Authorization: Bearer client-token\r\n" +
-		"\r\n"
-	if _, err := conn.Write([]byte(req)); err != nil {
-		t.Fatalf("write upgrade request: %v", err)
+	defer func() { _ = conn.CloseNow() }()
+	if conn.Subprotocol() != "realtime" || resp.Header.Get("X-Request-Id") != "rt-1" {
+		t.Fatalf("subprotocol %q, X-Request-Id %q: the gateway's 101 head did not reach the browser",
+			conn.Subprotocol(), resp.Header.Get("X-Request-Id"))
 	}
 
-	br := bufio.NewReader(conn)
-	status, err := br.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read status line: %v", err)
+	seen := g.header()
+	if !strings.EqualFold(seen.Get("Upgrade"), "websocket") || seen.Get("Sec-WebSocket-Key") == "" {
+		t.Fatalf("the gateway saw Upgrade=%q Sec-WebSocket-Key=%q; the handshake headers were dropped",
+			seen.Get("Upgrade"), seen.Get("Sec-WebSocket-Key"))
 	}
-	t.Logf("STATUS LINE: %q", strings.TrimSpace(status))
-	for {
-		line, err := br.ReadString('\n')
+	if seen.Get("Authorization") != "" {
+		t.Fatalf("the gateway saw Authorization=%q; the client credential crossed the trust boundary", seen.Get("Authorization"))
+	}
+	if !verifyIdentitySignature(seen, []byte("s3cr3t")) {
+		t.Fatal("the realtime identity is not signed")
+	}
+
+	// The gateway pinged first: the browser answers while it reads, and the
+	// pong comes back to the gateway, which reports it.
+	read := func() string {
+		t.Helper()
+		_, data, err := conn.Read(ctx)
 		if err != nil {
-			t.Fatalf("read header: %v", err)
+			t.Fatalf("read: %v", err)
 		}
-		if strings.TrimSpace(line) == "" {
-			break
-		}
-		t.Logf("RESP HEADER: %q", strings.TrimSpace(line))
+		return string(data)
 	}
-	if !strings.Contains(status, "101") {
-		t.Fatalf("edge did NOT switch protocols: %q", strings.TrimSpace(status))
+	if got := read(); got != "pong 7" {
+		t.Fatalf("first message = %q, want the gateway's pong report", got)
 	}
+	if err := conn.Write(ctx, websocket.MessageText, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != "hello" {
+		t.Fatalf("echo = %q", got)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, []byte(llmproxytest.CloseRequest)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = conn.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != websocket.StatusPolicyViolation || ce.Reason != "budget" {
+		t.Fatalf("read after the gateway close = %v, want close 1008 \"budget\"", err)
+	}
+}
 
-	if _, err := conn.Write([]byte("ping\n")); err != nil {
-		t.Fatalf("write over upgraded conn: %v", err)
-	}
-	echo, err := br.ReadString('\n')
+// TestProxyRealtimeBrowserClose: a browser close ends the gateway session.
+func TestProxyRealtimeBrowserClose(t *testing.T) {
+	_, url := realtimeEdge(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, url+"/llm/v1/realtime?model=m", &websocket.DialOptions{Subprotocols: []string{"realtime"}})
 	if err != nil {
-		t.Fatalf("read echo over upgraded conn: %v", err)
+		t.Fatalf("dial: %v", err)
 	}
-	t.Logf("ECHO BACK: %q", strings.TrimSpace(echo))
+	go func() {
+		for {
+			if _, _, err := conn.Read(ctx); err != nil {
+				return
+			}
+		}
+	}()
+	if err := conn.Close(websocket.StatusNormalClosure, "bye"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
 
-	if echo != "ECHO:ping\n" {
-		t.Fatalf("echo over the upgraded connection = %q, want %q", echo, "ECHO:ping\n")
+// TestProxyRealtimeRefusalIsHTTP: a gateway refusal before the upgrade is
+// the browser's HTTP answer, status and body.
+func TestProxyRealtimeRefusalIsHTTP(t *testing.T) {
+	_, url := realtimeEdge(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, resp, err := websocket.Dial(ctx, url+"/llm/v1/realtime", nil)
+	if err == nil {
+		t.Fatal("a refused handshake was accepted")
 	}
+	if resp == nil || resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("response = %+v, want 400", resp)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "query parameter is required") {
+		t.Fatalf("body = %q", body)
+	}
+}
 
-	// The handshake fields the backend needs must arrive intact.
-	if !strings.EqualFold(sawUpgrade, "websocket") || !strings.EqualFold(sawConnection, "Upgrade") {
-		t.Fatalf("backend saw Upgrade=%q Connection=%q; the proxy dropped the upgrade headers",
-			sawUpgrade, sawConnection)
+func TestTruncateCloseReason(t *testing.T) {
+	long := strings.Repeat("é", 100) // 200 bytes
+	got := truncateCloseReason(long)
+	if len(got) > maxCloseReason || !strings.HasPrefix(long, got) || len(got)%2 != 0 {
+		t.Fatalf("truncated to %d bytes, cut a character or kept too much", len(got))
 	}
-	if sawKey != "dGhlIHNhbXBsZSBub25jZQ==" {
-		t.Fatalf("backend saw Sec-WebSocket-Key=%q; the proxy dropped the handshake key", sawKey)
+	if truncateCloseReason("ok") != "ok" {
+		t.Fatal("a short reason changed")
 	}
-
-	// And the client's own credential must NOT. stripIdentityHeaders owns this;
-	// the gateway may only ever see the edge-signed identity.
-	if sawAuth != "" {
-		t.Fatalf("backend saw Authorization=%q; the client credential crossed the trust boundary", sawAuth)
-	}
-	_ = sawProj // populated from the request-scoped ProjectContext in production
 }

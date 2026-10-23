@@ -14,7 +14,7 @@ const (
 )
 
 // OIDCAuthorizationTransport is an explicit wire decision. The current
-// pylon_auth default is POST; GET remains a configured compatibility mode.
+// legacy auth default is POST; GET remains a configured compatibility mode.
 type OIDCAuthorizationTransport string
 
 // OIDCAuthorization is generated before server-side state is allocated. Nonce

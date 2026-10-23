@@ -3,7 +3,7 @@
  *
  * ## Why these are here
  *
- * `POST /configurations/configurations/{project}` is ONE route serving four
+ * `POST /configurations/configurations/{project}` is ONE route serving several
  * different kinds of row, and which kind a body makes is decided entirely by
  * its `type`. The route then files the row under a `section`, and the section
  * decides which screen shows it, which picker offers it and which reader
@@ -33,13 +33,13 @@ import type { APIRequestContext } from '@playwright/test';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from './api';
 
 /**
- * The four families of configuration row, named as the platform files them.
+ * The three families of configuration row, named as the platform files them.
  *
  * `models` and `embedding` are both LLM-provider rows; they differ in what the
  * row is FOR, which is why the platform keeps them apart and why a journey has
  * to say which one it wants.
  */
-export type ConfigurationSection = 'ai_credentials' | 'embedding' | 'vectorstorage' | 'credentials';
+export type ConfigurationSection = 'ai_credentials' | 'embedding' | 'credentials';
 
 /** What one section needs in its `data` before the route will store the row. */
 interface SectionShape {
@@ -75,13 +75,6 @@ const CONFIGURATION_SECTIONS: Readonly<Record<ConfigurationSection, SectionShape
   embedding: {
     defaultType: 'embedding_model',
     placeholderData: {},
-  },
-  // A vector store an index writes into.
-  vectorstorage: {
-    defaultType: 'pgvector',
-    placeholderData: {
-      connection_string: 'postgresql://autotest:autotest@autotest.invalid:5432/autotest',
-    },
   },
   // A toolkit's credential — the section `createGithubToolkit` writes into.
   credentials: {

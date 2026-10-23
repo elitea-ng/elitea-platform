@@ -32,9 +32,10 @@
 -- 0095 and 0096 all state. It is not a preference. `migrate.ApplyShared` runs
 -- this corpus against a database that may hold nothing else — every `dbtest`
 -- template does exactly that — and those tables belong to a DIFFERENT corpus
--- (internal/infra/db/migrations/001_initial.sql) or to pylon's own migrations.
--- 0096's header records the 42P01 that a `REFERENCES auth_core__user(id)`
--- caused, and the six unrelated suites it took down with it.
+-- (internal/infra/db/migrations/001_initial.sql) or to the legacy runtime's own
+-- migrations. 0096's header records the 42P01 that a `REFERENCES
+-- auth_core__user(id)` caused, and the six unrelated suites it took down with
+-- it.
 --
 -- The foreign key BETWEEN THE TWO TABLES BELOW is present, because both are
 -- created by this file. It carries the cascade that keeps the ledger from

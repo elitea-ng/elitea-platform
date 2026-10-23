@@ -15,8 +15,10 @@
 //! * the published edges carry no annotations (no `via` anchors) and
 //!   parallel edges are collapsed (`publish.py` did both).
 //!
-//! Every other call must be byte-identical. Needs PostgreSQL with pgvector
-//! (see `tests/storage_common`); CI runs it.
+//! Every other call must be byte-identical. Needs PostgreSQL (see
+//! `tests/storage_common`); CI runs it. The dense vectors go to the
+//! in-process `MemoryDense` (elitea-vector's stand-in), which ranks by
+//! cosine similarity as elitea-vector does.
 
 mod ask_common;
 mod storage_common;
@@ -76,7 +78,7 @@ const EXPECTED_DIFFERENCES: &[(&str, &str, &str)] = &[
 async fn published(name: &str) -> Option<PgIndex> {
     let pool = storage_common::fresh_database(name).await?;
     let (nodes, edges) = common::rows();
-    let space = BuildSpace::new(pool.clone(), "ask");
+    let (space, store) = storage_common::dense_space(&pool, "ask");
     let mut build = space
         .begin(&storage_common::key(WIKI))
         .await
@@ -135,17 +137,19 @@ async fn published(name: &str) -> Option<PgIndex> {
         })
         .collect();
     build
-        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .stage_embeddings(
+            storage_common::TEST_MODEL,
+            vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+        )
         .await
         .expect("stage embeddings");
     build
         .publish(&WikiRecord::default())
         .await
         .expect("publish");
-    Some(PgIndex::new(UnifiedDb::new(
-        pool,
-        storage_common::key(WIKI),
-    )))
+    Some(PgIndex::new(
+        UnifiedDb::new(pool, storage_common::key(WIKI)).with_dense(storage_common::dense(&store)),
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -379,7 +383,7 @@ async fn a_name_with_a_non_ascii_capital_is_found() {
     let wildcard = index.name_rows("Ä_ger", false, 5).await.expect("wildcard");
     assert_eq!(ids(&wildcard), ["n-arger"]);
     let backslash = index.name_rows("\\", false, 5).await.expect("backslash");
-    assert!(backslash.is_empty());
+    assert_eq!(backslash, []);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -399,7 +403,7 @@ async fn the_shortest_name_ties_break_on_node_id() {
     assert_eq!(shortest.map(|n| n.node_id).as_deref(), Some("a-box"));
 }
 
-/// An embedding of the wrong length: pgvector refuses the vector search.
+/// An embedding of the wrong length: the vector search is refused.
 fn wrong_length_embedding(_: &str) -> Vec<f64> {
     vec![1.0, 0.0, 0.0]
 }

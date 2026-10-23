@@ -14,7 +14,7 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { ApprovalCard, TurnTranscript } from '@/features/workspace';
+import { approval, TurnTranscript } from '@/features/workspace';
 import { t } from '@/shared/i18n';
 
 import type { Card } from './cloudPrompts';
@@ -26,7 +26,7 @@ function ApprovalPrompt({ chat, card }: { chat: CloudChat; card: Card | undefine
   const decide = (action: 'approve' | 'reject') => () => void chat.answerHitl({ action, toolCallId: card?.tool_call_id, interruptId: card?.interrupt_id });
   const args = card?.tool_args;
   return (
-    <ApprovalCard
+    <approval.Card
       title={card?.action_label ?? card?.tool_name ?? t('workspace.cloud.approvalTitle', 'The cloud copy asks to continue')}
       detail={card?.policy_message ?? card?.message}
       params={args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : undefined}
@@ -45,7 +45,7 @@ function PromptCard({ chat }: { chat: CloudChat }): React.JSX.Element | null {
   if (prompt.kind === 'approval') return <ApprovalPrompt chat={chat} card={prompt.cards[0]} />;
   if (prompt.kind === 'continue') {
     return (
-      <ApprovalCard
+      <approval.Card
         title={t('workspace.cloud.continueTitle', 'The cloud copy stopped at its output limit')}
         detail={prompt.message.requiresConfirmation?.message}
         approveLabel={t('workspace.cloud.continueButton', 'Continue')}
@@ -55,7 +55,7 @@ function PromptCard({ chat }: { chat: CloudChat }): React.JSX.Element | null {
     );
   }
   return (
-    <ApprovalCard
+    <approval.Card
       title={t('workspace.cloud.waiting', 'The cloud copy is waiting for an answer that only the chat can take.')}
       approveLabel={t('workspace.cloud.answerInChat', 'Answer in chat')}
       onApprove={chat.openInChat}

@@ -2,7 +2,7 @@
 name = "elitea-deepwiki-engine"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 description = "The Rust-native DeepWiki engine behind the sub-application host's engine sidecar socket (ADR-0026)."
 
@@ -12,12 +12,28 @@ description = "The Rust-native DeepWiki engine behind the sub-application host's
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
+# `testing::with_model_service`: the page gate's `StubModel`
+# (`wiki::parity`, the `deepwiki-parity` tool and the golden tests) answers
+# the model client over elitea.llm.v1.ModelService, as elitea-main does. The
+# engine binary never calls it, so the bridge is dead code there.
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
 # The agents' conversation and its summarisation (shared with Inventory).
 elitea-conversation = { path = "../../libs/rust/conversation" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
+# An artifact-folder source reads elitea.runtime.v1.ArtifactObjectService on
+# the platform listener (#1359 U5), over the model calls' channel.
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 elitea-graph-algos = { path = "../../libs/rust/graph-algos" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
+# Dense vectors live in Qdrant behind elitea-vector (ADR-0031 D1-D3,
+# #1359): the typed elitea.vector.v1 client, over mTLS with the callback
+# identity and the invocation's callback bearer (`storage::dense`). TLS
+# with aws-lc, the provider sqlx and reqwest already link here.
+elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc"] }
+# elitea-vector's status codes (`storage::dense`); the sidecar tests read
+# the refusals' codes too. Already in the tree through the gRPC clients.
+tonic = { version = "=0.14.6", default-features = false }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Mermaid sanitizer is ~150 transcribed Python regular expressions,
 # several with look-around, which `regex` lacks. A backtracking engine
@@ -26,10 +42,6 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "jso
 fancy-regex = "=0.19.2"
 globset = "=0.4.20"
 indexmap = "=2.14.2"
-# Dense vectors on the PostgreSQL index (ADR-0026 decision 5). Its `sqlx`
-# feature accepts sqlx 0.8 and 0.9 and resolves 0.9 by default; the exact
-# sqlx pin below keeps one sqlx (0.8.6) in the lock.
-pgvector = { version = "=0.4.2", features = ["sqlx"] }
 rayon = "=1.12.0"
 regex = "=1.13.1"
 # Substring search over the page index (`wiki::search`). Already in the
@@ -57,20 +69,27 @@ serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundt
 # ported in `storage::migrate`). TLS through rustls with aws-lc-rs, the
 # provider the tree already carries for gix/reqwest.
 sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
-thiserror = "=2.0.20"
+thiserror = "=2.0.21"
 tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["sync"] }
 tracing = "=0.1.44"
+# The DeepWiki namespace id: UUIDv5 of (project, wiki id)
+# (`storage::dense::namespace_id`). elitea-vector-index already links uuid.
+uuid = { version = "1", default-features = false, features = ["v5"] }
 # NFKD for the sanitizer's node-id slug (`unicodedata.normalize`). Already
 # in the tree through sqlx; pinned to the locked version.
 unicode-normalization = "=0.1.25"
 
 [dev-dependencies]
-# The sidecar tests' HTTP/1 client over the Unix socket.
-http-body-util = "=0.1.5"
-hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
-hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
+# The model fakes served as elitea.llm.v1.ModelService over real gRPC
+# (`testing::with_model_service`): the engine's model calls are gRPC.
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
+# The artifact store served beside it (tests/native_generate.rs).
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc", features = ["testing"] }
+# elitea-vector's in-process fake (`testing::FakeVector`): the remote dense
+# backend is exercised over real gRPC without Qdrant.
+elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc", "test-server"] }
 
 [features]
 # TEST ONLY. In a debug build, a `repo_config` base URL of

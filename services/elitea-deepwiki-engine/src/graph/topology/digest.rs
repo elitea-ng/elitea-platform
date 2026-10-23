@@ -112,10 +112,10 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
         0xeb86_d391,
     ];
     let mut state: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
-    for block in padded(data, false).chunks_exact(64) {
+    for block in padded(data, false).as_chunks::<64>().0 {
         let mut words = [0u32; 16];
-        for (word, bytes) in words.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        for (word, bytes) in words.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_le_bytes(*bytes);
         }
         let [mut a, mut b, mut c, mut d] = state;
         for i in 0..64 {
@@ -140,7 +140,7 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
         }
     }
     let mut out = [0u8; 16];
-    for (chunk, word) in out.chunks_exact_mut(4).zip(state) {
+    for (chunk, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
     out
@@ -226,10 +226,10 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         0x1f83_d9ab,
         0x5be0_cd19,
     ];
-    for block in padded(data, true).chunks_exact(64) {
+    for block in padded(data, true).as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        for (word, bytes) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*bytes);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
@@ -265,7 +265,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         }
     }
     let mut out = [0u8; 32];
-    for (chunk, word) in out.chunks_exact_mut(4).zip(state) {
+    for (chunk, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
         chunk.copy_from_slice(&word.to_be_bytes());
     }
     out

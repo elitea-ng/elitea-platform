@@ -761,7 +761,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylon.py"
+      "source": "admin/api/v2/runtime_node.py"
     },
     {
       "callable": "AdminAPI.get",
@@ -771,7 +771,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylons.py"
+      "source": "admin/api/v2/runtime_nodes.py"
     },
     {
       "callable": "AdminAPI.post",
@@ -781,7 +781,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylons.py"
+      "source": "admin/api/v2/runtime_nodes.py"
     },
     {
       "callable": "AdminAPI.get",
@@ -791,7 +791,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylons_config.py"
+      "source": "admin/api/v2/runtime_nodes_config.py"
     },
     {
       "callable": "AdminAPI.post",
@@ -801,7 +801,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylons_config.py"
+      "source": "admin/api/v2/runtime_nodes_config.py"
     },
     {
       "callable": "AdminAPI.get",
@@ -811,7 +811,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylons_splash.py"
+      "source": "admin/api/v2/runtime_nodes_splash.py"
     },
     {
       "callable": "AdminAPI.post",
@@ -821,7 +821,7 @@
       "permissions": [
         "runtime.plugins"
       ],
-      "source": "admin/api/v2/runtime_pylons_splash.py"
+      "source": "admin/api/v2/runtime_nodes_splash.py"
     },
     {
       "callable": "AdminAPI.get",
@@ -1291,7 +1291,7 @@
       "source": "admin/slots/runtime_remote.py"
     },
     {
-      "callable": "Slot._pylons_scripts",
+      "callable": "Slot._nodes_scripts",
       "kind": "slot",
       "line": 55,
       "literal": true,
@@ -4631,49 +4631,49 @@
       "guarded": true,
       "line": 43,
       "method": "DELETE",
-      "source": "admin/api/v2/runtime_pylon.py"
+      "source": "admin/api/v2/runtime_node.py"
     },
     {
       "callable": "AdminAPI.get",
       "guarded": true,
       "line": 37,
       "method": "GET",
-      "source": "admin/api/v2/runtime_pylons.py"
+      "source": "admin/api/v2/runtime_nodes.py"
     },
     {
       "callable": "AdminAPI.post",
       "guarded": true,
       "line": 60,
       "method": "POST",
-      "source": "admin/api/v2/runtime_pylons.py"
+      "source": "admin/api/v2/runtime_nodes.py"
     },
     {
       "callable": "AdminAPI.get",
       "guarded": true,
       "line": 43,
       "method": "GET",
-      "source": "admin/api/v2/runtime_pylons_config.py"
+      "source": "admin/api/v2/runtime_nodes_config.py"
     },
     {
       "callable": "AdminAPI.post",
       "guarded": true,
       "line": 70,
       "method": "POST",
-      "source": "admin/api/v2/runtime_pylons_config.py"
+      "source": "admin/api/v2/runtime_nodes_config.py"
     },
     {
       "callable": "AdminAPI.get",
       "guarded": true,
       "line": 42,
       "method": "GET",
-      "source": "admin/api/v2/runtime_pylons_splash.py"
+      "source": "admin/api/v2/runtime_nodes_splash.py"
     },
     {
       "callable": "AdminAPI.post",
       "guarded": true,
       "line": 58,
       "method": "POST",
-      "source": "admin/api/v2/runtime_pylons_splash.py"
+      "source": "admin/api/v2/runtime_nodes_splash.py"
     },
     {
       "callable": "AdminAPI.get",
@@ -6826,10 +6826,10 @@
     "admin/api/v2/roles.py": "a09d704a81d103f191c02dda5c8368797f295a2d9c701ff16394382cd0449488",
     "admin/api/v2/runtime_plugin.py": "78982069b71dea77c595cc84de9ec1e1166b1c428246eb9f619f934f099e894a",
     "admin/api/v2/runtime_plugins.py": "6cceaeb7907ee8715b5990c55b6915a9db80353ba5bf6d21247161ff85c1010a",
-    "admin/api/v2/runtime_pylon.py": "522b32fdf6281296fea0910d403c327ee2c3852fe7ac3164809435fe09620e7c",
-    "admin/api/v2/runtime_pylons.py": "fe6b30d79d9cdb4e80f84437d7c1deb6f4e89e5368e589d340d90432721e1a36",
-    "admin/api/v2/runtime_pylons_config.py": "41716f1595bf6cbb711de4e053516bfca1a8e205914f3ca18a6776d3d62bbd19",
-    "admin/api/v2/runtime_pylons_splash.py": "f06b9ec30f56c46feb54e2ada729fbb47ef09528e1633c234394f02c22bdbef2",
+    "admin/api/v2/runtime_node.py": "522b32fdf6281296fea0910d403c327ee2c3852fe7ac3164809435fe09620e7c",
+    "admin/api/v2/runtime_nodes.py": "fe6b30d79d9cdb4e80f84437d7c1deb6f4e89e5368e589d340d90432721e1a36",
+    "admin/api/v2/runtime_nodes_config.py": "41716f1595bf6cbb711de4e053516bfca1a8e205914f3ca18a6776d3d62bbd19",
+    "admin/api/v2/runtime_nodes_splash.py": "f06b9ec30f56c46feb54e2ada729fbb47ef09528e1633c234394f02c22bdbef2",
     "admin/api/v2/runtime_remote.py": "b39cb05cc43e5e3996f8f7016816d3c48ef818314c022fc3fa1fadf1e1476fb7",
     "admin/api/v2/runtime_remote_config.py": "202c1740c92baf683f2767fca080ea1acc2f6d1cfdb2ec55bdc26bae700823b8",
     "admin/api/v2/runtime_remote_heads.py": "a3549180827e64f9d6c8c290e893029688b5f3cc9e7ab7bce209d1a425a81ee4",
@@ -7015,7 +7015,7 @@
     "tracing/api/v2/otlp.py": "905bc417ef63b89980c344cb08f6592443253092b6d7fb0dadd7f09ff44bc382",
     "tracing/api/v2/status.py": "72336290a3911647b5c1eece731b34674beab795b211202931a3ba1f081da66b"
   },
-  "source_root": "pylon_main/plugins",
+  "source_root": "legacy_main/plugins",
   "summary": {
     "dynamic_guard_declarations": 0,
     "guard_declarations": 335,

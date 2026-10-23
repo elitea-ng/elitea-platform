@@ -28,7 +28,6 @@ const CREDENTIAL_SECTIONS: readonly string[] = ['credentials'];
 const MODEL_CONFIGURATION_SECTIONS: readonly string[] = [
   'llm',
   'embedding',
-  'vectorstorage',
   'ai_credentials',
   'image_generation',
   'asr',
@@ -62,8 +61,9 @@ const UNFILTERED: readonly string[] = [];
  * `<CredentialTypeSelector>`, so the Create Credential picker also listed the
  * 17 non-credential types — `llm_model`, `embedding_model`, `s3`, `pgvector`,
  * `service_prompt`, `environment_settings`, `project_icon`, `project_context`
- * and the six `ai_credentials` providers. None of them carries a `hidden`
- * flag, so nothing downstream filtered them out.
+ * and the six `ai_credentials` providers (`pgvector` has since been removed
+ * from the catalogue). None of them carries a `hidden` flag, so nothing
+ * downstream filtered them out.
  *
  * On edit the descriptor is found by `detail.data.type`, whose section can be
  * any of them. That path waits for the detail, then asks for that one

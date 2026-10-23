@@ -9,7 +9,7 @@
  *
  * The wire contract mirrors the Go handlers in
  * `services/elitea-main/internal/api/v2/eliteacore/audit.go`, which in turn
- * mirror the pylon originals (`legacy/plugins/elitea_core/api/v2/audit*.py`)
+ * mirror the legacy originals (`legacy/plugins/elitea_core/api/v2/audit*.py`)
  * the existing admin_ui client already speaks to — same paths, same query
  * parameters, same body keys.
  *
@@ -25,7 +25,7 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
-/** Only `administration` has a handler, server-side and in pylon before it. */
+/** Only `administration` has a handler, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
 
 /**

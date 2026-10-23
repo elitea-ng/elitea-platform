@@ -14,6 +14,18 @@
 # SCHEDULER_ALERTS_REQUIRE_PROMTOOL=1, so a missing promtool fails the job
 # instead of reading as a pass.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HELM="${HELM:-helm}"
 PROMTOOL="${PROMTOOL:-promtool}"

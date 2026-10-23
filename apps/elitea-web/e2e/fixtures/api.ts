@@ -627,7 +627,7 @@ export interface VersionVariableInput {
   readonly value: string;
 }
 
-/** One topical tag. `data` is the free-form blob pylon's tag model carries. */
+/** One topical tag. `data` is the free-form blob the legacy tag model carries. */
 export interface VersionTagInput {
   readonly name: string;
   readonly data?: Readonly<Record<string, unknown>>;
@@ -651,8 +651,8 @@ export interface VersionModelInput {
  * The tag every publishable fixture carries (#913).
  *
  * Publish validation raises a Critical for a version with NO tags, and the
- * publish route refuses a FAIL inline — pylon's own `TagsChecker` and publish
- * gate behave the same way (`legacy/plugins/elitea_core/utils/
+ * publish route refuses a FAIL inline — the legacy runtime's `TagsChecker` and
+ * publish gate behave the same way (`legacy/plugins/elitea_core/utils/
  * publish_utils.py:2824-2833`, `api/v2/publish.py:82-92`). Before that rule
  * was ported, every publish fixture here created an untagged agent and
  * published it, which is a state the product does not actually allow.
@@ -1028,8 +1028,8 @@ async function mintProjectSecretHeader(
  * The EXPANDED version details — the read the runtime and the SDK make.
  *
  * It is a PATCH on the version path, not a GET (the route is a read that
- * carries a header, and pylon shaped it that way), and it is gated on the
- * project's `X-SECRET`. Reading a version through it as well as through
+ * carries a header, and the legacy API shaped it that way), and it is gated on
+ * the project's `X-SECRET`. Reading a version through it as well as through
  * `readVersion` is what says a stored value reaches the RUNTIME, not only the
  * editor: they are two different projections of the same row.
  */
@@ -1062,8 +1062,9 @@ export async function readVersionExpanded(
  * case. The body's `application_id` and `version_id` are BOTH the parent's:
  * `internal/api/v2/eliteacore/application_relation.go` refuses a body whose
  * `application_id` does not own `version_id` (400 "the parent version does not
- * belong to application_id"), as pylon's `entity_id`/`entity_version_id` check
- * did, and the app's own association call sends the parent's ids.
+ * belong to application_id"), as the legacy runtime's
+ * `entity_id`/`entity_version_id` check did, and the app's own association call
+ * sends the parent's ids.
  *
  * The response is returned rather than asserted, because the refusal cases need
  * it: a published parent refuses the change, and a pair already linked refuses

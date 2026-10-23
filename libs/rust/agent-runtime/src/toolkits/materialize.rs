@@ -1918,7 +1918,10 @@ mod notice_helper_tests {
             omitted_selection(&catalog, &selected, true),
             [("nope".to_owned(), false)]
         );
-        assert!(omitted_selection(&catalog, &[], false).is_empty());
+        assert_eq!(
+            omitted_selection(&catalog, &[], false),
+            [] as [(String, bool); 0]
+        );
     }
 
     #[test]
@@ -1931,13 +1934,16 @@ mod notice_helper_tests {
                 .collect()
         };
         assert_eq!(needs("aha"), ["attach_file"]);
-        assert!(!needs("jira").is_empty());
+        assert_ne!(needs("jira"), [] as [&str; 0]);
         assert!(needs("confluence").contains(&"add_file_to_page"));
         for family in ["bigquery", "bitbucket", "figma", "github", "gitlab"] {
             assert!(needs(family).is_empty(), "{family}");
-            assert!(!family_tool_catalog(family).expect(family).is_empty());
+            assert_ne!(
+                family_tool_catalog(family).expect(family),
+                [] as [(&str, bool); 0]
+            );
         }
-        assert!(needs("slack").is_empty());
+        assert_eq!(needs("slack"), [] as [&str; 0]);
         // A type with no fixed tool list reports none.
         assert!(family_tool_catalog("openapi").is_none());
     }

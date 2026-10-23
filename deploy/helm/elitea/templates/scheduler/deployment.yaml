@@ -18,13 +18,23 @@ metadata:
   labels:
     {{- include "elitea-scheduler.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.scheduler.replicaCount }}
+  {{- /*
+    One or two replicas (S11). Every job is safe with two: singleton work takes
+    an advisory lock, the retention sweep uses SKIP LOCKED, the write-back
+    consumer deduplicates. More buys nothing but connections.
+  */}}
+  {{- $schedReplicas := include "elitea.integer" (dict "field" "scheduler.replicaCount" "value" .Values.scheduler.replicaCount "min" 1) | int }}
+  {{- if gt $schedReplicas 2 }}
+  {{- fail (printf "scheduler.replicaCount is %d; the scheduler runs one replica, or two for failover. Its jobs are lock- and dedup-safe, so a second replica takes over without double work, but the work is not CPU-bound and a third only adds env.ELITEA_DATABASE_MAX_CONNS more PostgreSQL connections." $schedReplicas) }}
+  {{- end }}
+  replicas: {{ $schedReplicas }}
   selector:
     matchLabels:
       {{- include "elitea-scheduler.selectorLabels" . | nindent 6 }}
   strategy:
-    # Recreate by default (values.yaml): overlapping generations would contend
-    # for the same durable NATS consumer.
+    # Recreate by default (values.yaml). A preference, not a correctness rule:
+    # two generations overlapping are as safe as two replicas (advisory lock,
+    # SKIP LOCKED, deduplicated write-back), and RollingUpdate works too.
     {{- toYaml .Values.scheduler.strategy | nindent 4 }}
   template:
     metadata:
@@ -48,6 +58,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "elitea-scheduler.serviceAccountName" . }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.scheduler "selector" (include "elitea-scheduler.selectorLabels" .)) | nindent 6 }}
       terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.scheduler.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
@@ -95,12 +106,12 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
-          {{- if .Values.nats.tls.enabled }}
+          {{- if .Values.natsClient.tls.enabled }}
           volumeMounts:
             # The scheduler's NATS client certificate (templates/natsClient.yaml).
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
           {{- end }}
-      {{- if .Values.nats.tls.enabled }}
+      {{- if .Values.natsClient.tls.enabled }}
       volumes:
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-scheduler.fullname" .))) | nindent 8 }}
       {{- end }}

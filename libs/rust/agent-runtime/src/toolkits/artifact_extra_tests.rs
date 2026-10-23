@@ -652,7 +652,7 @@ async fn edit_file_writes_nothing_when_nothing_applies() {
         .await,
         "Could not edit the file: no such file or bucket. Check the name with list_files; create_file makes a new file."
     );
-    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
 }
 
 #[tokio::test]
@@ -687,7 +687,7 @@ async fn edit_file_refuses_what_it_cannot_write_back_whole() {
         says.contains("over the 200000 characters this runtime reads at once"),
         "{says}"
     );
-    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
 }
 
 #[tokio::test]
@@ -709,7 +709,7 @@ async fn edit_file_failures_are_told_apart() {
             )
             .await;
         assert!(says.contains(expected), "{says}");
-        assert!(rig.bucket.writes().is_empty());
+        assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
     }
     for (code, expected) in [
         (
@@ -858,7 +858,7 @@ async fn append_data_refuses_what_it_cannot_do_whole() {
         )
         .await;
     assert!(says.contains("File type is not text-editable"), "{says}");
-    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
 }
 
 #[tokio::test]
@@ -1135,7 +1135,7 @@ async fn an_append_is_refused_when_the_file_changed_or_appeared_meanwhile() {
         )
         .await;
     assert!(says.contains("changed by someone else"), "{says}");
-    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
     assert_eq!(
         rig.bucket.get("docs", "log.txt").as_deref(),
         Some("first\nsecond (someone else)")
@@ -1153,7 +1153,7 @@ async fn an_append_is_refused_when_the_file_changed_or_appeared_meanwhile() {
         )
         .await;
     assert!(says.contains("changed by someone else"), "{says}");
-    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
     assert_eq!(rig.bucket.get("docs", "new.txt").as_deref(), Some("theirs"));
 }
 
@@ -1171,7 +1171,7 @@ async fn the_recheck_failing_refuses_the_write() {
         )
         .await;
     assert!(says.starts_with("Could not edit the file:"), "{says}");
-    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.writes(), [] as [(String, String, String); 0]);
 }
 
 /// The guard compares size and modified time from a small listing, so a

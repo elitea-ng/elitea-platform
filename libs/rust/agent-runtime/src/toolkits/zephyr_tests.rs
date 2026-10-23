@@ -393,7 +393,7 @@ async fn exact_get_and_post_wire_preserve_zapi_path_basic_auth_and_body() {
         requests[0].url,
         "https://jira.example.test:8443/rest/zapi/latest/teststep/10000?projectId=10100"
     );
-    assert!(requests[0].body.is_empty());
+    assert_eq!(requests[0].body, [] as [u8; 0]);
     assert_eq!(requests[1].method, Method::POST);
     assert_eq!(requests[1].url, requests[0].url);
     assert_eq!(
@@ -509,7 +509,7 @@ async fn invalid_batch_never_calls_provider_and_partial_batch_requires_reconcili
         .await
         .expect_err("incomplete batch must fail before dispatch");
     assert_eq!(invalid.code, "tool.execution.invalid_input");
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 
     let oversized = tools[0]
         .execute(
@@ -523,7 +523,7 @@ async fn invalid_batch_never_calls_provider_and_partial_batch_requires_reconcili
         .await
         .expect_err("a JSON-string payload above the shared limit must fail before dispatch");
     assert_eq!(oversized.code, "tool.arguments.resource_exhausted");
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 
     let partial_api = Arc::new(FixtureApi::new([
         Ok(json!({"created":true})),

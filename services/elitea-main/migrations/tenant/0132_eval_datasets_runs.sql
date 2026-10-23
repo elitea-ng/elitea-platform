@@ -20,11 +20,11 @@
 --
 -- WHY THE COLUMN NAMES ARE THE REFERENCE UI's AND NOT A LEGACY PLUGIN's.
 --
--- There is NO evaluation plugin in the pylon corpus this repository carries.
--- The whole of `legacy/plugins/*` was searched for `eval_dataset`, `eval_run`,
--- `eval_result`, `eval_suite` and `eval_dimension`: the only traces are three
--- vestiges of a feature that was planned and never built — a placeholder
--- `"eval_task_node"` string in elitea_core's bootstrap topology, a
+-- There is NO evaluation plugin in the legacy runtime corpus this repository
+-- carries. The whole of `legacy/plugins/*` was searched for `eval_dataset`,
+-- `eval_run`, `eval_result`, `eval_suite` and `eval_dimension`: the only traces
+-- are three vestiges of a feature that was planned and never built — a
+-- placeholder `"eval_task_node"` string in elitea_core's bootstrap topology, a
 -- `generate_eval_dimensions` prompt key in `configurations`, and a comment
 -- naming a function `build_eval_dimensions_system_prompt` that does not exist
 -- in the file it points at. So there is no schema to align with. The contract

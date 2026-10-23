@@ -12,13 +12,13 @@ import (
 // database. If the two sides ever derive different keys the lookup silently
 // finds nothing, and a pre-built toolkit quietly loses its credentials. These
 // cases are transcribed from `normalize_mcp_toolkit_name`'s own docstring.
-func TestNormalizeCatalogueKeyMatchesPylon(t *testing.T) {
+func TestNormalizeCatalogueKeyMatchesTheProducer(t *testing.T) {
 	for _, testCase := range []struct{ input, want string }{
 		{"mcp_epam_presales", "epam_presales"},
 		{"Epam Presales", "epam_presales"},
 		{"EPAM PRESALES", "epam_presales"},
 		{"GitHub Copilot", "github_copilot"},
-		// SURROUNDING SPACES SURVIVE AS UNDERSCORES, and that is pylon's
+		// SURROUNDING SPACES SURVIVE AS UNDERSCORES, and that is the legacy runtime's
 		// behaviour, not a defect here. Python runs
 		// `.lower().replace(" ", "_").strip()` in that order, so by the time
 		// `strip()` runs there is no whitespace left to strip — the spaces are
@@ -26,7 +26,7 @@ func TestNormalizeCatalogueKeyMatchesPylon(t *testing.T) {
 		// from the same padded name, which is the only property that matters:
 		// the producer (`indexer_mcp_prebuilt_config.py`) normalises the same
 		// way, so the two sides agree. "Correcting" this would make the Go key
-		// differ from every key pylon ever wrote.
+		// differ from every key the legacy runtime ever wrote.
 		{"  Epam Presales  ", "__epam_presales__"},
 		// The prefix is stripped AFTER lower-casing and space substitution, so
 		// a display name that spells the prefix with a space reduces the same
@@ -42,7 +42,7 @@ func TestNormalizeCatalogueKeyMatchesPylon(t *testing.T) {
 	}
 }
 
-// The gate is on the RAW toolkit type, which is pylon's
+// The gate is on the RAW toolkit type, which is the legacy
 // `toolkit_type.startswith('mcp_')`. A normalised key carries no prefix and
 // must NOT be treated as a pre-built toolkit, or every remote MCP toolkit would
 // start acquiring catalogue credentials it was never configured with.
@@ -107,10 +107,10 @@ func TestResolveFillsOnlyTheFieldsLeftEmpty(t *testing.T) {
 	require.Equal(t, map[string]any{"X-Catalogue": "yes"}, resolved["headers"])
 }
 
-// pylon's test is Python truthiness, so an EMPTY string counts as "not
-// supplied". The case that actually occurs is a form posting `"url": ""` for an
-// untouched field; treating that as supplied would leave the URL empty with the
-// catalogue entry sitting right there unused.
+// The legacy runtime's test is Python truthiness, so an EMPTY string counts as
+// "not supplied". The case that actually occurs is a form posting `"url": ""`
+// for an untouched field; treating that as supplied would leave the URL empty
+// with the catalogue entry sitting right there unused.
 func TestResolveTreatsEmptyValuesAsUnsupplied(t *testing.T) {
 	resolved := Resolve(
 		map[string]any{"url": "", "client_id": "   ", "timeout": 0, "headers": map[string]any{}},
@@ -122,10 +122,10 @@ func TestResolveTreatsEmptyValuesAsUnsupplied(t *testing.T) {
 	require.Equal(t, map[string]any{"X-Catalogue": "yes"}, resolved["headers"])
 }
 
-// `ssl_verify` is pylon's seventh fillable field and is deliberately NOT one
-// here: this service verifies TLS unconditionally, so a catalogue value for it
-// would be a setting nothing honours — a control that reads as working and is
-// not one.
+// `ssl_verify` is the legacy runtime's seventh fillable field and is
+// deliberately NOT one here: this service verifies TLS unconditionally, so a
+// catalogue value for it would be a setting nothing honours — a control that
+// reads as working and is not one.
 func TestResolveNeverFillsSSLVerify(t *testing.T) {
 	entry := catalogueEntry()
 	resolved := Resolve(map[string]any{}, "mcp_github_copilot", entry, constantSecret("s"))
@@ -170,9 +170,9 @@ func TestResolveLeavesClientSecretAbsentWithNoLookup(t *testing.T) {
 	require.False(t, present)
 }
 
-// pylon copies the dict (`result = dict(raw_data)`) and so does this. A stored
-// toolkit configuration must never be rewritten as a side effect of a
-// discovery.
+// The legacy runtime copies the dict (`result = dict(raw_data)`) and so does
+// this. A stored toolkit configuration must never be rewritten as a side effect
+// of a discovery.
 func TestResolveDoesNotMutateTheCallersSettings(t *testing.T) {
 	settings := map[string]any{"url": ""}
 	resolved := Resolve(settings, "mcp_github_copilot", catalogueEntry(), constantSecret("s"))

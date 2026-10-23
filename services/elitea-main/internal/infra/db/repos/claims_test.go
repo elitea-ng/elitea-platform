@@ -387,6 +387,7 @@ func TestRenewLeasePreservesEpochAndFullFence(t *testing.T) {
 		"RUNNING",
 		true,
 		observedAt,
+		"agent.execute.application.v1",
 	}}}}}
 	repository, err := newClaimsRepository(
 		store,
@@ -402,6 +403,9 @@ func TestRenewLeasePreservesEpochAndFullFence(t *testing.T) {
 	}
 	if lease.Fence != fence || lease.Fence.LeaseEpoch != 2 || gotObservedAt != observedAt || lease.ExpiresAt.Sub(gotObservedAt) != executionapp.MaxClaimLeaseTTLMillis.Duration() {
 		t.Fatalf("renewal changed the authority-bearing fence: %+v", lease.Fence)
+	}
+	if lease.CapabilityID != "agent.execute.application.v1" {
+		t.Fatalf("renewal capability = %q, want the job's", lease.CapabilityID)
 	}
 	sql := store.rowCalls[0].sql
 	if strings.Contains(sql, "lease_epoch = c.lease_epoch + 1") || !strings.Contains(sql, "SET lease_expires_at = authority_clock.observed_at + ($10::bigint * interval '1 millisecond')") || !strings.Contains(sql, "c.lease_epoch = $8") {

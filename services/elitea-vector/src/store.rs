@@ -14,7 +14,9 @@ use qdrant_client::qdrant::{
 };
 use tonic::{Code, Status};
 
-use crate::layout::{BM25_VECTOR, COLLECTION_PREFIX, DENSE_VECTOR, KEYWORD_INDEXES, Space, key};
+use crate::layout::{
+    BM25_VECTOR, DENSE_VECTOR, DenseDatatype, Family, KEYWORD_INDEXES, Space, key,
+};
 
 /// Collection settings that come from the deployment.
 #[derive(Clone, Copy, Debug)]
@@ -23,7 +25,8 @@ pub struct CollectionSettings {
     pub replication_factor: u32,
     /// Qdrant `shard_number` of a new collection.
     pub shard_number: u32,
-    /// A **soft** cap on `emb_*` collections. Creating one beyond it is
+    /// A **soft** cap on the collections this service owns (`emb_*` and
+    /// `inv_*` together). Creating one beyond it is
     /// `RESOURCE_EXHAUSTED`, but the count is read from Qdrant just before a
     /// create and nothing serializes creators, so concurrent creators (in one
     /// process or across replicas) can overshoot it by their number. It
@@ -50,10 +53,10 @@ impl Default for CollectionSettings {
 pub struct Store {
     client: Qdrant,
     settings: CollectionSettings,
-    /// Collections this process has fully verified (dimension and every
-    /// payload index), with their dimension. A collection enters only after
-    /// its indexes were confirmed, so a failed index creation is retried by
-    /// the next request.
+    /// Collections this process has fully verified (dimension, the family's
+    /// dense datatype and every payload index), with their dimension. A
+    /// collection enters only after its indexes were confirmed, so a failed
+    /// index creation is retried by the next request.
     known: Mutex<HashMap<String, u32>>,
 }
 
@@ -118,14 +121,15 @@ impl Store {
         }
     }
 
-    /// The collection of `space` when it exists, after checking that its
-    /// dense dimension is the space's.
+    /// The collection of `space` in `family` when it exists, after checking
+    /// that its dense dimension is the space's and its dense datatype the
+    /// family's.
     ///
     /// # Errors
-    /// `FAILED_PRECONDITION` for a collection with another dimension;
-    /// `UNAVAILABLE` when Qdrant fails.
-    pub async fn existing(&self, space: &Space) -> Result<Option<String>, Status> {
-        let collection = space.collection();
+    /// `FAILED_PRECONDITION` for a collection with another dimension or
+    /// datatype; `UNAVAILABLE` when Qdrant fails.
+    pub async fn existing(&self, family: Family, space: &Space) -> Result<Option<String>, Status> {
+        let collection = space.collection(family);
         if let Some(dimension) = self.remembered(&collection) {
             return check_dimension(space, dimension).map(|()| Some(collection));
         }
@@ -137,8 +141,9 @@ impl Store {
         if !exists {
             return Ok(None);
         }
-        let dimension = self.dense_dimension(&collection).await?;
+        let (dimension, datatype) = self.dense_params(&collection).await?;
         check_dimension(space, dimension)?;
+        check_datatype(&collection, family, datatype)?;
         // A collection made by an older build, or by a run that stopped
         // between creating it and indexing it, gets its indexes here. It is
         // remembered only once they are all there.
@@ -147,17 +152,17 @@ impl Store {
         Ok(Some(collection))
     }
 
-    /// The collection of `space`, created when missing, with every payload
-    /// index in place.
+    /// The collection of `space` in `family`, created when missing with the
+    /// family's layout, with every payload index in place.
     ///
     /// # Errors
     /// As [`Store::existing`]; `RESOURCE_EXHAUSTED` when creating the
     /// collection would pass [`CollectionSettings::max_collections`].
-    pub async fn ensure(&self, space: &Space) -> Result<String, Status> {
-        if let Some(collection) = self.existing(space).await? {
+    pub async fn ensure(&self, family: Family, space: &Space) -> Result<String, Status> {
+        if let Some(collection) = self.existing(family, space).await? {
             return Ok(collection);
         }
-        let collection = space.collection();
+        let collection = space.collection(family);
         let present = self.collections().await?.len();
         if present >= self.settings.max_collections {
             tracing::warn!(
@@ -172,7 +177,11 @@ impl Store {
                 self.settings.max_collections
             )));
         }
-        if let Err(error) = self.client.create_collection(self.definition(space)).await {
+        if let Err(error) = self
+            .client
+            .create_collection(self.definition(family, space))
+            .await
+        {
             // Another replica may have made it first.
             let exists = self
                 .client
@@ -184,7 +193,7 @@ impl Store {
             }
         }
         // Verifies the dimension and creates the indexes, whoever made it.
-        let ready = self.existing(space).await?.ok_or_else(|| {
+        let ready = self.existing(family, space).await?.ok_or_else(|| {
             tracing::error!(collection, "collection vanished after creation");
             Status::unavailable("the vector store is unavailable")
         })?;
@@ -192,33 +201,42 @@ impl Store {
         Ok(ready)
     }
 
-    fn definition(&self, space: &Space) -> CreateCollectionBuilder {
+    /// The collection of `space` in `family`, made with the family's
+    /// [`crate::layout::CollectionLayout`].
+    fn definition(&self, family: Family, space: &Space) -> CreateCollectionBuilder {
+        let layout = family.layout();
         let mut vectors = VectorsConfigBuilder::default();
         vectors.add_named_vector_params(
             DENSE_VECTOR,
             VectorParamsBuilder::new(u64::from(space.dimension()), Distance::Cosine)
-                .datatype(Datatype::Float16)
-                // The originals on disk; the quantized copy in RAM.
+                .datatype(qdrant_datatype(layout.datatype))
+                // The originals on disk; the quantized copy (when the
+                // family has one) in RAM.
                 .on_disk(true),
         );
-        let mut sparse = SparseVectorsConfigBuilder::default();
-        sparse.add_named_vector_params(
-            BM25_VECTOR,
-            SparseVectorParamsBuilder::default().modifier(Modifier::Idf),
-        );
-        CreateCollectionBuilder::new(space.collection())
+        let mut definition = CreateCollectionBuilder::new(space.collection(family))
             .vectors_config(vectors)
-            .sparse_vectors_config(sparse)
             // Every search is project-scoped: no global graph, one graph per
             // tenant (`payload_m`).
             .hnsw_config(HnswConfigDiffBuilder::default().m(0).payload_m(16))
-            .quantization_config(
+            .replication_factor(self.settings.replication_factor)
+            .shard_number(self.settings.shard_number);
+        if layout.bm25 {
+            let mut sparse = SparseVectorsConfigBuilder::default();
+            sparse.add_named_vector_params(
+                BM25_VECTOR,
+                SparseVectorParamsBuilder::default().modifier(Modifier::Idf),
+            );
+            definition = definition.sparse_vectors_config(sparse);
+        }
+        if layout.quantized {
+            definition = definition.quantization_config(
                 ScalarQuantizationBuilder::default()
                     .r#type(QuantizationType::Int8.into())
                     .always_ram(true),
-            )
-            .replication_factor(self.settings.replication_factor)
-            .shard_number(self.settings.shard_number)
+            );
+        }
+        definition
     }
 
     /// Creates the payload indexes the collection lacks. Creating one is
@@ -268,66 +286,93 @@ impl Store {
         Ok(())
     }
 
-    async fn dense_dimension(&self, collection: &str) -> Result<u32, Status> {
+    /// The dimension and the datatype of the collection's dense vector.
+    async fn dense_params(&self, collection: &str) -> Result<(u32, Option<Datatype>), Status> {
         let info = self
             .client
             .collection_info(collection)
             .await
             .map_err(|error| unavailable("collection_info", &error))?;
-        let size = info
+        let params = info
             .result
             .and_then(|info| info.config)
             .and_then(|config| config.params)
             .and_then(|params| params.vectors_config)
             .and_then(|vectors| vectors.config)
             .and_then(|config| match config {
-                VectorsConfigKind::ParamsMap(map) => map.map.get(DENSE_VECTOR).map(|p| p.size),
+                VectorsConfigKind::ParamsMap(map) => {
+                    map.map.get(DENSE_VECTOR).map(|p| (p.size, p.datatype))
+                }
                 VectorsConfigKind::Params(_) => None,
             });
-        size.and_then(|size| u32::try_from(size).ok())
+        params
+            .and_then(|(size, datatype)| {
+                let size = u32::try_from(size).ok()?;
+                Some((size, datatype.and_then(|raw| Datatype::try_from(raw).ok())))
+            })
             .ok_or_else(|| {
                 tracing::error!(collection, "collection has no dense vector of this layout");
                 Status::failed_precondition("the collection does not have this service's layout")
             })
     }
 
-    /// Every collection this service owns, with its space.
+    /// Every collection this service owns, of every family, with its family
+    /// and space, sorted by name.
     ///
     /// # Errors
     /// `UNAVAILABLE` when Qdrant fails.
-    pub async fn collections(&self) -> Result<Vec<(String, Space)>, Status> {
+    pub async fn collections(&self) -> Result<Vec<(String, Family, Space)>, Status> {
         let listed = self
             .client
             .list_collections()
             .await
             .map_err(|error| unavailable("list_collections", &error))?;
-        let mut collections: Vec<(String, Space)> = listed
+        let mut collections: Vec<(String, Family, Space)> = listed
             .collections
             .into_iter()
-            .filter(|description| description.name.starts_with(COLLECTION_PREFIX))
             .filter_map(|description| {
-                Space::from_collection(&description.name).map(|space| (description.name, space))
+                Space::from_collection(&description.name)
+                    .map(|(family, space)| (description.name, family, space))
             })
             .collect();
         collections.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(collections)
     }
 
-    /// The collections an operation applies to: the space's when given (and
-    /// existing), else every collection.
+    /// The collections of `family` an operation applies to: the space's when
+    /// given (and existing), else every collection of the family. A
+    /// collection of another family is never among them.
     ///
     /// # Errors
     /// As [`Store::existing`] and [`Store::collections`].
-    pub async fn targets(&self, space: Option<&Space>) -> Result<Vec<String>, Status> {
+    pub async fn targets(
+        &self,
+        family: Family,
+        space: Option<&Space>,
+    ) -> Result<Vec<String>, Status> {
         match space {
-            Some(space) => Ok(self.existing(space).await?.into_iter().collect()),
+            Some(space) => Ok(self.existing(family, space).await?.into_iter().collect()),
             None => Ok(self
                 .collections()
                 .await?
                 .into_iter()
-                .map(|(name, _)| name)
+                .filter(|(_, owner, _)| *owner == family)
+                .map(|(name, _, _)| name)
                 .collect()),
         }
+    }
+
+    /// Every collection of every family: what a whole-project drop spans.
+    ///
+    /// # Errors
+    /// As [`Store::collections`].
+    pub async fn every_target(&self) -> Result<Vec<String>, Status> {
+        Ok(self
+            .collections()
+            .await?
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect())
     }
 
     /// Whether Qdrant answers.
@@ -366,6 +411,42 @@ fn is_already_exists(error: &qdrant_client::QdrantError) -> bool {
             if status.code() == Code::AlreadyExists
                 || status.message().to_ascii_lowercase().contains("already exist")
     )
+}
+
+/// The Qdrant datatype of a layout's dense vectors.
+fn qdrant_datatype(datatype: DenseDatatype) -> Datatype {
+    match datatype {
+        DenseDatatype::Float16 => Datatype::Float16,
+        DenseDatatype::Float32 => Datatype::Float32,
+    }
+}
+
+/// Refuses a collection whose dense datatype is not its family's: an
+/// Inventory point must never land in a float16 collection, nor a shared
+/// point in a float32 one. Qdrant reports an unset (`Default`) datatype for
+/// float32.
+fn check_datatype(
+    collection: &str,
+    family: Family,
+    datatype: Option<Datatype>,
+) -> Result<(), Status> {
+    let actual = match datatype {
+        None | Some(Datatype::Default | Datatype::Float32) => Datatype::Float32,
+        Some(other) => other,
+    };
+    if actual == qdrant_datatype(family.layout().datatype) {
+        Ok(())
+    } else {
+        tracing::error!(
+            collection,
+            ?family,
+            ?actual,
+            "collection's dense datatype is not its family's"
+        );
+        Err(Status::failed_precondition(
+            "the collection does not have this service's layout",
+        ))
+    }
 }
 
 fn check_dimension(space: &Space, dimension: u32) -> Result<(), Status> {
@@ -439,6 +520,68 @@ mod tests {
             status: Status::new(Code::Unknown, "Index already exists"),
         }));
         assert!(!is_already_exists(&response(Code::Unavailable)));
+    }
+
+    #[test]
+    fn a_collection_must_have_its_familys_datatype() {
+        for (family, datatype, ok) in [
+            (Family::Shared, Some(Datatype::Float16), true),
+            (Family::Shared, Some(Datatype::Float32), false),
+            (Family::Shared, None, false),
+            (Family::Inventory, Some(Datatype::Float32), true),
+            (Family::Inventory, Some(Datatype::Default), true),
+            (Family::Inventory, None, true),
+            (Family::Inventory, Some(Datatype::Float16), false),
+            (Family::Inventory, Some(Datatype::Uint8), false),
+        ] {
+            assert_eq!(
+                check_datatype("c", family, datatype).is_ok(),
+                ok,
+                "{family:?} {datatype:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_family_is_defined_with_its_layout() {
+        let store = Store::new(
+            Qdrant::from_url("http://127.0.0.1:1")
+                .skip_compatibility_check()
+                .build()
+                .expect("client"),
+            CollectionSettings::default(),
+        );
+        let space = Space::new("m", 4).expect("space");
+        for family in Family::ALL {
+            let layout = family.layout();
+            let definition: qdrant_client::qdrant::CreateCollection =
+                store.definition(family, &space).into();
+            assert_eq!(definition.collection_name, space.collection(family));
+            let dense = match definition
+                .vectors_config
+                .and_then(|config| config.config)
+                .expect("vectors")
+            {
+                VectorsConfigKind::ParamsMap(map) => map.map[DENSE_VECTOR],
+                VectorsConfigKind::Params(_) => panic!("named vectors expected"),
+            };
+            assert_eq!(dense.size, 4);
+            assert_eq!(
+                dense.datatype,
+                Some(qdrant_datatype(layout.datatype) as i32),
+                "{family:?}"
+            );
+            assert_eq!(
+                definition.quantization_config.is_some(),
+                layout.quantized,
+                "{family:?}"
+            );
+            assert_eq!(
+                definition.sparse_vectors_config.is_some(),
+                layout.bm25,
+                "{family:?}"
+            );
+        }
     }
 
     #[test]

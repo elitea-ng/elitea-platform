@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -893,7 +894,7 @@ export const getCreateSecretInModeUrl = (
 };
 
 /**
- * NOTE(issue 151): internal/api/v2/secrets/handler.go registers this POST with an administration branch only (admin.go's AdminCreate). `default` answers 405, because pylon's project API defines only get/put/delete on this path. The name comes from the path and must match `^[A-Za-z0-9_]+$`. A duplicate name is a 400, never an overwrite.
+ * NOTE(issue 151): internal/api/v2/secrets/handler.go registers this POST with an administration branch only (admin.go's AdminCreate). `default` answers 405, because the legacy runtime's project API defines only get/put/delete on this path. The name comes from the path and must match `^[A-Za-z0-9_]+$`. A duplicate name is a 400, never an overwrite.
  * @summary Create one secret — administration mode only
  */
 export const createSecretInMode = async (
@@ -1736,8 +1737,8 @@ export const getHideSecretUrl = (
 };
 
 /**
- * `default` mode only. A hidden secret disappears from the list endpoint but is still readable by name through the single-secret GET, which reports `is_hidden: true`. BUG-FOR-BUG: a missing secret is a 400, not a 404 (handler.go's Hide) — matching pylon's hide.py.
- * `administration` mode ALWAYS answers 401. The global vault has no hidden section, so pylon refuses the call with that sentence and admin.go's AdminHide reproduces it. The admin page renders no hide control at all.
+ * `default` mode only. A hidden secret disappears from the list endpoint but is still readable by name through the single-secret GET, which reports `is_hidden: true`. BUG-FOR-BUG: a missing secret is a 400, not a 404 (handler.go's Hide) — matching the legacy runtime's hide.py.
+ * `administration` mode ALWAYS answers 401. The global vault has no hidden section, so the legacy runtime refuses the call with that sentence and admin.go's AdminHide reproduces it. The admin page renders no hide control at all.
  * @summary Move a secret into hidden_secrets
  */
 export const hideSecret = async (
@@ -1976,7 +1977,7 @@ export const getShowSecretWithoutModeUrl = (
 };
 
 /**
- * pylon's api_tools.with_modes registers the mode-less URL alongside the mode-ful one for every resource, and proxy_method defaults `mode` to "default", so this is the project handler under another URL. It is spelled out here because elitea-sdk is a live caller: elitea_sdk/runtime/clients/client.py:108 and sandbox_client.py:237 build {api_v2}/secrets/secret/{project_id} and append /{name}. pylon serves the mode-less form of the other five routes too; elitea-main does not, because nothing in the workspace calls them.
+ * The legacy runtime's api_tools.with_modes registers the mode-less URL alongside the mode-ful one for every resource, and proxy_method defaults `mode` to "default", so this is the project handler under another URL. It is spelled out here because elitea-sdk is a live caller: elitea_sdk/runtime/clients/client.py:108 and sandbox_client.py:237 build {api_v2}/secrets/secret/{project_id} and append /{name}. The legacy runtime serves the mode-less form of the other five routes too; elitea-main does not, because nothing in the workspace calls them.
  * @summary Read one secret — the mode-less legacy form
  */
 export const showSecretWithoutMode = async (

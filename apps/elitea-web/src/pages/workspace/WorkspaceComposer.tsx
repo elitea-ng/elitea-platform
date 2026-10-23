@@ -8,9 +8,13 @@
  *   picked paths still in the text go to the host as the turn's `mentions`.
  * - "/" as the first word lists the local commands (`/new`, `/plan`, …);
  *   picking one clears it from the input and hands it to the page. Below
- *   them, in their own section, the selected agent's skills: picking one
- *   inserts `/<skill name>`, and a message that still starts with it is
- *   sent with that skill (`skills`), which the host applies to the turn.
+ *   them, in sections of their own, the custom commands (the workspace's,
+ *   then the person's; `commands_list`) and the selected agent's skills:
+ *   picking one inserts `/<name> `, and a message that still starts with
+ *   it is sent as that command (`command`, which the host reads and
+ *   expands itself) or with that skill (`skills`, applied to the turn).
+ *   `/model <name>` sent as the whole message sets the turn model instead
+ *   (`onModelCommand`); `/model` alone opens the model chip's menu.
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
@@ -30,12 +34,13 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Segmented } from '@/widgets/desktop-shell';
 
 type ComposerHandle = ComponentRef<typeof NewChatInput>;
 type Token = ReturnType<typeof composer.activeToken>;
+type SlashEntry = ReturnType<typeof composer.slashMenu>[number];
 
 const FILE_LIMIT = 50;
 
@@ -64,13 +69,24 @@ export interface WorkspaceComposerProps {
   /** Act | Plan: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
+  /** The context meter (`ContextMeter`), after the run location. */
+  contextMeter?: ReactNode;
+  /** The model chip (`ModelChip`), after the agent picker. */
+  modelPicker?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
-  /** The selected agent's skills, offered after the commands in the "/" menu. */
+  /** The selected agent's skills, then the project's (`project`), offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
-  /** Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes. */
-  onSend: (prompt: string, mentions: string[], skills: string[]) => Promise<boolean>;
+  /** The custom commands (`commands_list`), offered after the host commands; none for a cloud thread. */
+  customCommands: readonly CustomCommand[];
+  /**
+   * Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes;
+   * `command`: the custom command it runs, if any (then no skill).
+   */
+  onSend: (prompt: string, mentions: string[], skills: TurnStartRequest['skills'], command?: TurnCommand) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
+  /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
+  onModelCommand?: ((name: string) => void) | undefined;
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
 }
@@ -99,6 +115,42 @@ function placeholderFor(readOnly: boolean): string {
     : t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands and skills');
 }
 
+/** One "/" menu row: host commands under the menu's title, then a section per source, then the skills. */
+function slashItem(entry: SlashEntry): SuggestionItem {
+  switch (entry.kind) {
+    case 'host':
+      return { key: entry.command.id, label: entry.command.name, description: entry.command.description };
+    case 'custom':
+      return {
+        key: `command:${entry.command.source}:${entry.command.name}`,
+        label: composer.customCommandToken(entry.command),
+        description: composer.customCommandDetail(entry.command),
+        section:
+          entry.command.source === 'workspace'
+            ? t('workspace.composer.workspaceCommands', 'Commands in this workspace')
+            : t('workspace.composer.userCommands', 'Your commands'),
+      };
+    case 'skill':
+      return {
+        key: `skill:${entry.skill.project === true ? 'project' : 'version'}:${entry.skill.id}`,
+        label: composer.skillToken(entry.skill),
+        section: entry.skill.project === true ? t('workspace.composer.projectSkills', 'Project skills') : t('workspace.composer.skills', 'Skills'),
+        ...(entry.skill.description !== undefined ? { description: entry.skill.description } : {}),
+      };
+  }
+}
+
+/** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
+function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
+  if (skill === null) return [];
+  return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
+}
+
+/** What picking a custom command or a skill inserts. */
+function insertedToken(entry: Exclude<SlashEntry, { kind: 'host' }>): string {
+  return entry.kind === 'custom' ? composer.customCommandToken(entry.command) : composer.skillToken(entry.skill);
+}
+
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
 interface FooterControlsProps {
@@ -106,11 +158,13 @@ interface FooterControlsProps {
   onPlanModeChange: (planMode: boolean) => void;
   showMode: boolean;
   agentPicker: ReactNode;
+  modelPicker: ReactNode;
   runLocation: ReactNode;
+  contextMeter: ReactNode;
 }
 
-/** The footer's left side: Act | Plan, the agent·version picker, where the thread runs. */
-function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, runLocation }: FooterControlsProps): React.JSX.Element {
+/** The footer's left side: Act | Plan, the agent·version picker, the model, where the thread runs, the context meter. */
+function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, modelPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
       {showMode && (
@@ -126,13 +180,15 @@ function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, run
         />
       )}
       {agentPicker}
+      {modelPicker}
       {runLocation}
+      {contextMeter}
     </Box>
   );
 }
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
-  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, onSend, onStop, onCommand } = props;
+  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, customCommands, onSend, onStop, onCommand } = props;
   // The thread runs in the cloud: the input is off, and `canSend` is false.
   const locked = props.readOnly === true;
   const inputRef = useRef<ComposerHandle>(null);
@@ -151,21 +207,9 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     placeholderData: (previous) => previous,
   });
 
-  const commands = useMemo(() => (open?.kind === 'command' ? composer.matchingCommands(open.query) : []), [open]);
-  const skillMatches = useMemo(() => (open?.kind === 'command' ? composer.matchingSkills(skills, open.query) : []), [open, skills]);
+  const slash = useMemo(() => (open?.kind === 'command' ? composer.slashMenu(open.query, customCommands, skills) : []), [open, customCommands, skills]);
   const items: SuggestionItem[] = useMemo(() => {
-    if (open?.kind === 'command') {
-      const section = t('workspace.composer.skills', 'Skills');
-      return [
-        ...commands.map((c) => ({ key: c.id, label: c.name, description: c.description })),
-        ...skillMatches.map((s) => ({
-          key: `skill:${s.id}`,
-          label: composer.skillToken(s),
-          section,
-          ...(s.description !== undefined ? { description: s.description } : {}),
-        })),
-      ];
-    }
+    if (open?.kind === 'command') return slash.map(slashItem);
     if (open?.kind === 'file') {
       return (files.data ?? []).map((f) => ({
         key: `${f.kind}:${f.path}`,
@@ -174,7 +218,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       }));
     }
     return [];
-  }, [open, commands, skillMatches, files.data]);
+  }, [open, slash, files.data]);
   const menuOpen = open !== null && items.length > 0;
   const highlighted = Math.min(activeIndex, Math.max(items.length - 1, 0));
 
@@ -189,12 +233,11 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     if (open === null) return;
     const handle = inputRef.current;
     if (open.kind === 'command') {
-      const command = commands[index];
-      if (command === undefined) {
-        // A skill: the message starts with it, and the caret goes on after it.
-        const skill = skillMatches[index - commands.length];
-        if (skill === undefined) return;
-        handle?.replaceRange(open.start, open.end, `${composer.skillToken(skill)} `);
+      const entry = slash[index];
+      if (entry === undefined) return;
+      if (entry.kind !== 'host') {
+        // A custom command or a skill: the message starts with it, and the caret goes on after it.
+        handle?.replaceRange(open.start, open.end, `${insertedToken(entry)} `);
         setToken(null);
         return;
       }
@@ -203,7 +246,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       const content = handle?.getInputContent() ?? '';
       handle?.setValue(content.slice(0, open.start) + content.slice(open.end));
       setToken(null);
-      onCommand(command.id);
+      onCommand(entry.command.id);
       return;
     }
     const file = files.data?.[index];
@@ -239,14 +282,25 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     }
   };
 
+  const clearInput = (): void => {
+    inputRef.current?.reset();
+    setPicked([]);
+    setToken(null);
+  };
+
   const send = (question: string): void => {
+    const named = props.onModelCommand === undefined ? null : composer.modelCommandName(question);
+    if (named !== null) {
+      props.onModelCommand?.(named);
+      clearInput();
+      return;
+    }
     const mentions = composer.referencedPaths(question, picked);
-    const skill = composer.invokedSkill(question, skills);
-    void onSend(question, mentions, skill === null ? [] : [skill.name]).then((sent) => {
-      if (!sent) return;
-      inputRef.current?.reset();
-      setPicked([]);
-      setToken(null);
+    // The longest name the message starts with; a custom command over a skill of its name.
+    const { command, skill } = composer.invokedPick(question, customCommands, skills);
+    const sending = command === null ? onSend(question, mentions, skillPicks(skill)) : onSend(question, mentions, [], command);
+    void sending.then((sent) => {
+      if (sent) clearInput();
     });
   };
 
@@ -274,7 +328,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           modelSelector: null,
-          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} runLocation={props.runLocation} />,
+          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton
               data-testid="workspace-send-button"

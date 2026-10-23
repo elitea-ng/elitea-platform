@@ -31,8 +31,8 @@ const CURRENT_PLATFORM_MODEL = {
   supports_vision: true,
 };
 
-/** One row in the pylon shape, which carries an id and a capability map. */
-const PYLON_MODEL = {
+/** One row in the legacy shape, which carries an id and a capability map. */
+const LEGACY_CAPABILITY_MAP_MODEL = {
   id: '7_gpt-4o',
   name: 'gpt-4o',
   project_id: '7',
@@ -70,8 +70,8 @@ describe('getModelCapabilities', () => {
     expect(getModelCapabilities(options, '7', 'gpt-4o')).toEqual(['Reasoning', 'Vision']);
   });
 
-  it('still reads a pylon capability map, and maps the known keys to labels', () => {
-    const options = getConfigurationOptions([PYLON_MODEL]);
+  it('still reads a legacy capability map, and maps the known keys to labels', () => {
+    const options = getConfigurationOptions([LEGACY_CAPABILITY_MAP_MODEL]);
     expect(getModelCapabilities(options, '7', 'gpt-4o')).toEqual(['Chat', 'Function Calling']);
   });
 

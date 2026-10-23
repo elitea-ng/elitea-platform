@@ -190,7 +190,7 @@ fn is_resuming_revision_of(
         .ok()
         .flatten()
         .is_some_and(|parent| parent == parent_checkpoint_id)
-        && read_receipts(checkpoint).ok().is_some_and(|receipts| {
+        && read_receipts(checkpoint).is_ok_and(|receipts| {
             receipts
                 .calls
                 .get(node)

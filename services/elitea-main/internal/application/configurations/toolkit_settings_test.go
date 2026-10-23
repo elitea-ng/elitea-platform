@@ -366,55 +366,66 @@ func TestCurrentToolkitSettingsResolverFreezesAnAbsentOpenApiCredentialAsAnEmpty
 	}
 }
 
-// A memory toolkit saved without pgvector_configuration (the Rust indexing
-// runtime serves the type without that field; worker unit M9) freezes: the
-// walker enforces no `required`, it freezes the absent configuration as `{}`
-// and expands nothing, so the claim reaches the worker.
-func TestCurrentToolkitSettingsResolverFreezesAMemoryToolkitWithoutAPgvectorConfiguration(t *testing.T) {
+// The pgvector_configuration setting is retired. A memory toolkit saved
+// without it freezes; one saved before the retirement still stores a
+// reference, and that is dropped rather than expanded, even when a schema
+// still names the field. Either way the claim reaches the worker.
+func TestCurrentToolkitSettingsResolverDropsTheRetiredPgvectorConfiguration(t *testing.T) {
 	for _, mode := range []CurrentToolkitSettingsMode{
 		CurrentToolkitSettingsReferenceMode,
 		CurrentToolkitSettingsClaimMode,
 	} {
-		t.Run(string(mode), func(t *testing.T) {
-			schemas := &currentToolkitSchemaCatalogStub{schemas: map[string]CurrentToolkitSchema{
-				// The pinned SDK snapshot's `memory` properties block.
-				"memory": {Properties: map[string]any{
-					"pgvector_configuration": map[string]any{
-						"configuration_types": []any{"pgvector"},
-					},
-				}},
-			}}
-			configurations := &currentConfigurationExpanderStub{fn: func(CurrentExpansionRequest) (map[string]any, error) {
-				return nil, errors.New("no configuration is referenced, so nothing may be expanded")
-			}}
-			resolver := newCurrentToolkitSettingsResolverForTest(
-				t, schemas, &currentNestedToolkitReaderStub{}, configurations,
-				&currentModelVisibilityStub{}, &currentToolkitUnsecreterStub{},
-			)
-			result, err := resolver.Resolve(context.Background(), CurrentToolkitSettingsRequest{
-				ToolkitType: "memory",
-				Settings: map[string]any{
-					"namespace":      "team-notes",
-					"selected_tools": []any{"manage_memory", "search_memory"},
-				},
-				ProjectID: 7,
-				UserID:    42,
-				Mode:      mode,
+		for name, stored := range map[string]map[string]any{
+			"absent": {
+				"namespace":      "team-notes",
+				"selected_tools": []any{"manage_memory", "search_memory"},
+			},
+			"stored before the retirement": {
+				"namespace":              "team-notes",
+				"selected_tools":         []any{"manage_memory", "search_memory"},
+				"pgvector_configuration": map[string]any{"elitea_title": "elitea-pgvector", "private": false},
+			},
+		} {
+			t.Run(string(mode)+"/"+name, func(t *testing.T) {
+				schemas := &currentToolkitSchemaCatalogStub{schemas: map[string]CurrentToolkitSchema{
+					// A schema that still names the field, as the SDK's did.
+					"memory": {Properties: map[string]any{
+						"pgvector_configuration": map[string]any{
+							"configuration_types": []any{"pgvector"},
+						},
+					}},
+				}}
+				configurations := &currentConfigurationExpanderStub{fn: func(CurrentExpansionRequest) (map[string]any, error) {
+					return nil, errors.New("the retired configuration must not be expanded")
+				}}
+				resolver := newCurrentToolkitSettingsResolverForTest(
+					t, schemas, &currentNestedToolkitReaderStub{}, configurations,
+					&currentModelVisibilityStub{}, &currentToolkitUnsecreterStub{},
+				)
+				result, err := resolver.Resolve(context.Background(), CurrentToolkitSettingsRequest{
+					ToolkitType: "memory",
+					Settings:    stored,
+					ProjectID:   7,
+					UserID:      42,
+					Mode:        mode,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(configurations.calls) != 0 {
+					t.Fatalf("the retired configuration was expanded: %#v", configurations.calls)
+				}
+				if _, present := result["pgvector_configuration"]; present {
+					t.Fatalf("pgvector_configuration = %#v, want it dropped", result["pgvector_configuration"])
+				}
+				if result["namespace"] != "team-notes" {
+					t.Fatalf("the namespace did not survive the freeze: %#v", result)
+				}
+				if _, still := stored["pgvector_configuration"]; name == "stored before the retirement" && !still {
+					t.Fatal("the caller's settings map was written to")
+				}
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(configurations.calls) != 0 {
-				t.Fatalf("an absent configuration must not be expanded: %#v", configurations.calls)
-			}
-			frozen, ok := result["pgvector_configuration"].(map[string]any)
-			if !ok || len(frozen) != 0 {
-				t.Fatalf("pgvector_configuration = %#v, want an empty object", result["pgvector_configuration"])
-			}
-			if result["namespace"] != "team-notes" {
-				t.Fatalf("the namespace did not survive the freeze: %#v", result)
-			}
-		})
+		}
 	}
 }
 

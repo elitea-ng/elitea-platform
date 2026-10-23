@@ -127,6 +127,11 @@ export interface PlatformModelList {
   /** The platform credentials a model may name. */
   readonly credential_names: readonly string[];
   /**
+   * Each credential's type, by title. Optional: an older server does not send
+   * it, and the dialog then neither shows nor rewrites the DIAL protocol.
+   */
+  readonly credential_types?: Readonly<Record<string, string>>;
+  /**
    * Why the credential list could not be read, when it could not. Without it an
    * empty list renders as "this platform has published no providers", which is
    * the reading that sends an operator to create a duplicate — and every model
@@ -224,8 +229,10 @@ function normalisePlatformModels(body: PlatformModelList | undefined): PlatformM
     model_types: body.model_types ?? [],
     credential_names: body.credential_names ?? [],
   };
-  if (body.credential_error === undefined) return base;
-  return { ...base, credential_error: body.credential_error };
+  const typed =
+    body.credential_types === undefined ? base : { ...base, credential_types: body.credential_types };
+  if (body.credential_error === undefined) return typed;
+  return { ...typed, credential_error: body.credential_error };
 }
 
 /** `GET /admin/gateway/platform_models`. */

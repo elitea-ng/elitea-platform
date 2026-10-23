@@ -1,6 +1,6 @@
 {{- if .Values.llmGateway.enabled }}
 {{- /*
-  Shared connection addresses, computed once from the top-level `nats` block and
+  Shared connection addresses, computed once from the `natsClient` block and
   namespace-relative by default. An explicit env entry still wins. The gateway
   and the scheduler MUST name the same NATS — budget counters are shared state,
   and two components on two clusters of one counter enforce nothing.
@@ -8,7 +8,15 @@
 {{- $env := .Values.llmGateway.env | default dict }}
 {{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (include "elitea.natsUrl" $)) }}{{- end }}
 {{- /* The chart owns GATEWAY_NATS_TLS_* when it mounts the certificate (env list below). */ -}}
-{{- if .Values.nats.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
+{{- if .Values.natsClient.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
+{{- /*
+  The chart owns GATEWAY_WORKLOAD_IDENTITY_ENABLED (env list below), because the
+  NetworkPolicy's metadata rule follows the same value. A second source in the
+  env map could switch the mode on with the metadata server closed, or off with
+  it open. The binary accepts only "true" or "false".
+*/ -}}
+{{- if hasKey $env "GATEWAY_WORKLOAD_IDENTITY_ENABLED" }}{{- fail "llmGateway.env.GATEWAY_WORKLOAD_IDENTITY_ENABLED is owned by the chart: set llmGateway.workloadIdentity.enabled instead" }}{{- end }}
+{{- if not (kindIs "bool" (dig "workloadIdentity" "enabled" false .Values.llmGateway)) }}{{- fail "llmGateway.workloadIdentity.enabled must be true or false" }}{{- end }}
 {{- /*
   The public project, from the ONE place an operator sets it — the same value
   elitea-main gets. Set on one side only, the picker offers shared models the
@@ -17,6 +25,26 @@
   Empty stays empty: it keeps the old project-local behaviour, and an id naming
   a schema that does not exist would fail every credential read.
 */ -}}
+{{- /*
+  LLM_BUDGET_EXPECTED_REPLICAS — how many replicas share the fleet-wide budget
+  counters, which the gateway's degraded-mode cap divides by. DERIVED (S11):
+  the most replicas that can be running, autoscaling.maxReplicas while the
+  autoscaler is on, else replicaCount. It used to be a separate "1" that HA
+  operators had to remember to raise with the replica count; a value below the
+  real fleet lets every replica spend a full share. An explicit value lower
+  than the derived one is refused; a higher one is kept.
+*/ -}}
+{{- include "elitea.scaling.validateRange" (dict "v" .Values.llmGateway "field" "llmGateway") }}
+{{- $expected := int (include "elitea.scaling.maxReplicas" .Values.llmGateway) }}
+{{- $explicitExpected := get $env "LLM_BUDGET_EXPECTED_REPLICAS" | toString | trim }}
+{{- if $explicitExpected }}
+{{- $n := include "elitea.integer" (dict "field" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS" "value" $explicitExpected "min" 1) | int }}
+{{- if lt $n $expected }}
+{{- fail (printf "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS is %d, but this gateway can run %d replicas (%s). The degraded-mode budget cap is divided by this number, so a value below the fleet lets every replica spend a full share and the fleet overshoots the ceiling. Leave it empty: the chart derives it." $n $expected (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.llmGateway) "true"))) }}
+{{- end }}
+{{- $expected = $n }}
+{{- end }}
+{{- $env = merge (dict "LLM_BUDGET_EXPECTED_REPLICAS" (toString $expected)) (omit $env "LLM_BUDGET_EXPECTED_REPLICAS") }}
 {{- $aiProjectId := include "elitea.aiProjectId" . }}
 {{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
 {{- /*
@@ -38,6 +66,14 @@
   and which Go source reads it.
 */}}
 {{- include "elitea-llm-gateway.validateGuards" . -}}
+{{- /*
+  #1359: the gateway serves /llm only on its mutual-TLS gRPC listener
+  (GATEWAY_GRPC_ADDR) and refuses to start without GATEWAY_TLS_*. The HTTP
+  listener serves health and metrics only, so nothing may route /llm to it.
+*/ -}}
+{{- if not .Values.llmGateway.mtls.enabled }}{{- fail "llmGateway.mtls.enabled must be true: the gateway serves /llm only on its mutual-TLS gRPC listener (#1359) and does not start without the material" }}{{- end }}
+{{- if dig "ingress" "enabled" false .Values.llmGateway }}{{- fail "llmGateway.ingress was removed (#1359): the gateway serves /llm only to elitea-main over mutual-TLS gRPC, and its HTTP listener serves health and metrics only" }}{{- end }}
+{{- if ne (get $env "GATEWAY_GRPC_ADDR" | default "" | toString) (printf ":%v" .Values.llmGateway.service.grpcPort) }}{{- fail (printf "llmGateway.env.GATEWAY_GRPC_ADDR must be \":%v\" (llmGateway.service.grpcPort), or the headless gRPC Service targets a port nothing listens on" .Values.llmGateway.service.grpcPort) }}{{- end }}
 {{- /*
   SECRETS_MASTER_KEY: the gateway refuses to start without it (see
   elitea-llm-gateway.masterKeyRef). The entry is replaced by the checked
@@ -77,7 +113,10 @@ metadata:
   labels:
     {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
 spec:
+  {{- if not (include "elitea.scaling.autoscaled" .Values.llmGateway) }}
   replicas: {{ .Values.llmGateway.replicaCount }}
+  {{- end }}
+  {{- /* No `replicas:` while an HPA or ScaledObject owns the Deployment: see elitea.scaling.autoscaled. */}}
   selector:
     matchLabels:
       {{- include "elitea-llm-gateway.selectorLabels" . | nindent 6 }}
@@ -90,6 +129,10 @@ spec:
     metadata:
       labels:
         {{- include "elitea-llm-gateway.selectorLabels" . | nindent 8 }}
+      {{- with (include "elitea.scaling.scrapeAnnotations" (dict "v" .Values.llmGateway "port" 8083 "path" "/metrics") | trim) }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.llmGateway.podSecurityContext }}
       securityContext:
@@ -99,7 +142,16 @@ spec:
       # §9.5: >=150s so in-flight LLM streams (up to ~120s) drain on rolling
       # deploys instead of being truncated. Rises together with the gateway's
       # srv.Shutdown() context (GATEWAY_SHUTDOWN_TIMEOUT).
-      terminationGracePeriodSeconds: {{ .Values.llmGateway.terminationGracePeriodSeconds }}
+      {{- /*
+        preStop sleep + GATEWAY_SHUTDOWN_TIMEOUT + 30s for the phases after the
+        HTTP drain (billing drain, governance persist, NATS close). Short of
+        it, SIGKILL lands mid billing drain and the spend it holds is lost.
+      */}}
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.llmGateway) }}
+      {{- $drain := include "elitea.durationSeconds" (dict "field" "llmGateway.env.GATEWAY_SHUTDOWN_TIMEOUT" "value" (get $env "GATEWAY_SHUTDOWN_TIMEOUT" | default "150s")) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "llmGateway" "grace" .Values.llmGateway.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "GATEWAY_SHUTDOWN_TIMEOUT" $drain) (list "billing/governance/NATS drain" 30))) }}
+      terminationGracePeriodSeconds: {{ int .Values.llmGateway.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.llmGateway "selector" (include "elitea-llm-gateway.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.llmGateway.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-llm-gateway
@@ -110,8 +162,13 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
+            # Plaintext: /healthz, /readyz and /metrics only (kubelet, Prometheus).
             - name: http
               containerPort: 8083
+              protocol: TCP
+            # Mutual TLS: elitea.gateway.v1.GatewayService, every /llm call.
+            - name: grpc
+              containerPort: {{ .Values.llmGateway.service.grpcPort }}
               protocol: TCP
           env:
             {{- range $key, $value := $env }}
@@ -123,11 +180,9 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.llmGateway.mtls.enabled }}
-            # FIX 1 (HIGH): inject TLS paths so the server calls ListenAndServeTLS
-            # (TLS) or ListenAndServeTLS+RequireAndVerifyClientCert (mTLS when
-            # GATEWAY_TLS_CA_FILE is set). Paths mirror the volumeMount below.
-            # Without these the binary sees empty vars and stays on plain HTTP
-            # even though the cert secret is mounted (design §9.1, FIX #10).
+            # The gRPC listener's server certificate and the CA it verifies
+            # elitea-main's client certificate against (#1359). Paths mirror
+            # the volumeMount below; the gateway refuses to start without them.
             - name: GATEWAY_TLS_CERT_FILE
               value: {{ .Values.llmGateway.mtls.mountPath }}/tls.crt
             - name: GATEWAY_TLS_KEY_FILE
@@ -135,7 +190,7 @@ spec:
             - name: GATEWAY_TLS_CA_FILE
               value: {{ .Values.llmGateway.mtls.mountPath }}/ca.crt
             {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # The gateway's NATS identity (#1076): the client certificate
             # templates/natsClient.yaml issues, mounted below. Re-read on every
             # TLS handshake, so a renewal needs no restart.
@@ -146,6 +201,10 @@ spec:
             - name: GATEWAY_NATS_TLS_KEY_FILE
               value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
             {{- end }}
+            # Keyless platform credentials (llmGateway.workloadIdentity). Always
+            # rendered, so the pod states the mode even when it is off.
+            - name: GATEWAY_WORKLOAD_IDENTITY_ENABLED
+              value: {{ ternary "true" "false" (dig "workloadIdentity" "enabled" false .Values.llmGateway) | quote }}
             {{- range $name, $ref := $secrets }}
             # Sensitive vars from Kubernetes Secrets (never plaintext in env map).
             - name: {{ $name }}
@@ -155,48 +214,16 @@ spec:
                   key: {{ $ref.key }}
                   optional: {{ $ref.optional | default false }}
             {{- end }}
-          {{- if .Values.llmGateway.preStop.enabled }}
-          lifecycle:
-            preStop:
-              # Quiet window so endpoints deregister before SIGTERM; keeps new
-              # connections off a draining pod (§9.5). The command must be
-              # runnable by the deployed image (distroless/static has no shell).
-              exec:
-                command:
-                  {{- toYaml .Values.llmGateway.preStop.command | nindent 18 }}
+          {{- if hasKey (.Values.llmGateway.preStop | default dict) "command" }}
+          {{- fail "llmGateway.preStop.command was removed (S11): the hook is the native sleep action now (the image is distroless, with no sleep binary). Set llmGateway.preStop.sleepSeconds, 0 for no hook." }}
           {{- end }}
-          {{- if .Values.llmGateway.mtls.enabled }}
-          # tcpSocket, not httpGet, and this is not a style preference.
-          #
-          # With mtls.enabled the server calls ListenAndServeTLS on THIS port
-          # and sets ClientAuth = RequireAndVerifyClientCert
-          # (internal/server/server.go). An httpGet probe speaks cleartext to
-          # that listener, so every probe fails with "client sent an HTTP
-          # request to an HTTPS server". Readiness never passes — and because
-          # the LIVENESS probe fails with it, the kubelet restarts a process
-          # that is working correctly. A default install of this chart
-          # CrashLoopBackOffs a healthy gateway; that is what it did on the
-          # first cluster that ran it.
-          #
-          # `scheme: HTTPS` is not the fix either: the kubelet presents no
-          # client certificate, and this server requires and verifies one.
-          #
-          # So the probe asserts what can be asserted without a credential —
-          # the listener accepts connections. /healthz and /readyz still exist
-          # and still answer; reaching them from a probe needs either a second,
-          # cleartext listener for them or a probe that can present a client
-          # certificate, and both are larger changes than this file.
-          livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.llmGateway.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.llmGateway.probes.liveness.failureThreshold }}
-          readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.llmGateway.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.llmGateway.probes.readiness.failureThreshold }}
-          {{- else }}
+          # Quiet window so the endpoints drop this pod before SIGTERM; keeps
+          # new streams off a draining pod (§9.5). The native sleep action:
+          # the image is distroless, with no shell or sleep binary.
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
+          # httpGet on the plaintext HTTP listener (#1359). It serves health and
+          # metrics only; /llm is on the mutual-TLS gRPC port, so a kubelet probe
+          # needs no client certificate here.
           livenessProbe:
             httpGet:
               path: {{ .Values.llmGateway.probes.liveness.path }}
@@ -209,7 +236,6 @@ spec:
               port: http
             periodSeconds: {{ .Values.llmGateway.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.llmGateway.probes.readiness.failureThreshold }}
-          {{- end }}
           resources:
             {{- toYaml .Values.llmGateway.resources | nindent 12 }}
           volumeMounts:
@@ -225,7 +251,7 @@ spec:
               mountPath: {{ .Values.llmGateway.mtls.mountPath }}
               readOnly: true
             {{- end }}
-            {{- if .Values.nats.tls.enabled }}
+            {{- if .Values.natsClient.tls.enabled }}
             # The gateway's NATS client certificate (templates/natsClient.yaml).
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
@@ -237,7 +263,7 @@ spec:
           secret:
             secretName: {{ .Values.llmGateway.mtls.serverSecretName }}
         {{- end }}
-        {{- if .Values.nats.tls.enabled }}
+        {{- if .Values.natsClient.tls.enabled }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-llm-gateway.fullname" .))) | nindent 8 }}
         {{- end }}
       {{- with .Values.llmGateway.nodeSelector }}

@@ -8,8 +8,8 @@
 // on first login and never removed, so a person who left the company keeps a
 // working account until somebody suspends it by hand.
 //
-// Nothing here is a port. `grep -ril scim legacy/plugins/` finds nothing: pylon
-// never had SCIM either.
+// Nothing here is a port. `grep -ril scim legacy/plugins/` finds nothing: the
+// legacy runtime never had SCIM either.
 //
 // # The base URL an operator configures
 //

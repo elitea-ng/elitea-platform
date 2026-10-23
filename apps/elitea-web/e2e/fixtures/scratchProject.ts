@@ -17,9 +17,9 @@
  *
  * The fix is to stop sharing. Provisioning is not expensive here — measured
  * against the e2e stack, `POST /projects/project/administration` answers 201 in
- * ~250 ms and `DELETE …/{id}` in ~100 ms, because the nine steps are SQL
- * (row, `p_<id>` schema and its migration chain, roles, system user and token,
- * vault, buckets, pgvector) against a warm database — so a project per TEST is
+ * ~250 ms and `DELETE …/{id}` in ~100 ms, because the steps are SQL (row,
+ * `p_<id>` schema and its migration chain, roles, system user and token,
+ * vault, buckets) against a warm database — so a project per TEST is
  * affordable, and a test that owns its project shares no row with anything.
  *
  * ## What a scratch project comes with

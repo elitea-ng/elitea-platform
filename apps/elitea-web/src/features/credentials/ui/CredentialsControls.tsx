@@ -10,9 +10,9 @@
  * slice is cross-domain and out of this unit's ownership fence (R-L1:
  * `features/credentials` may not import `widgets/pin-toggler`). Only
  * Delete is ported. Permission gating (`checkPermission(PERMISSIONS
- * .configuration.delete)`) and the "last remaining vectorstorage/embedding
- * config" guard are both caller-computed (`canDelete`/`deleteDisabledReason`)
- * rather than read from a `useCheckPermission()`/RTK-Query hook this slice
+ * .configuration.delete)`) and the "last remaining embedding config" guard
+ * are both caller-computed (`canDelete`/`deleteDisabledReason`) rather than
+ * read from a `useCheckPermission()`/RTK-Query hook this slice
  * has no access to yet — see `../lib` for the permission-string constants
  * (`@/shared/lib/permissions`) a caller wires this from.
  *

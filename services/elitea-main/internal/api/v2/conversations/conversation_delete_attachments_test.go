@@ -12,9 +12,9 @@ package conversations_test
 // all went in the same transaction.
 //
 // The ordering property these tests pin is the one Handler.DeleteMessage
-// already keeps, and the opposite of pylon's: the repository collects the refs
-// INSIDE its transaction and commits, and only then are the bytes touched. A
-// delete that refuses must destroy nothing.
+// already keeps, and the opposite of the legacy one: the repository collects
+// the refs INSIDE its transaction and commits, and only then are the bytes
+// touched. A delete that refuses must destroy nothing.
 //
 // The fakes come from delete_attachments_test.go, so this suite runs
 // unconditionally — no Postgres, no object-store infrastructure.
@@ -98,9 +98,9 @@ func TestDeleteConversation_DeletesAcrossSeveralBuckets(t *testing.T) {
 }
 
 // A MISSING elitea_storage.objects record is not an error. The row and the
-// bytes are independent — an upload from before the byte path, or a row pylon
-// wrote, has no record at all — so the bytes still go and the request still
-// succeeds.
+// bytes are independent — an upload from before the byte path, or a row the
+// legacy runtime wrote, has no record at all — so the bytes still go and the
+// request still succeeds.
 func TestDeleteConversation_MissingObjectRecordIsNotAnError(t *testing.T) {
 	att := newFakeAttachmentStore() // no bucket seeded: LookupAttachmentBucket answers ErrNotFound
 	obj := newDeleteFakeObjectStore(nil, "conv-abc/report.pdf")
@@ -135,7 +135,7 @@ func TestDeleteConversation_AttachmentByteFailureIs500(t *testing.T) {
 	assertStrings(t, "surviving metadata rows", att.recordedKeys(), []string{"conv-abc/report.pdf"})
 }
 
-// A REFUSED delete destroys nothing — pylon's ordering bug stated for the
+// A REFUSED delete destroys nothing — the legacy ordering bug stated for the
 // conversation route. The repository reports refs only after its own row
 // delete has committed, so a 404 leaves every byte in place.
 func TestDeleteConversation_RefusalLeavesTheBytes(t *testing.T) {

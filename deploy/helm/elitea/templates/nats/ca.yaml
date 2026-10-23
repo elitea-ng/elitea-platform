@@ -1,0 +1,107 @@
+{{- if .Values.nats.enabled }}
+{{- if .Values.nats.security.ca.create }}
+# The NATS CA (#1076). Separate from elitea-internal-ca, so a Certificate
+# against the platform's internal issuer is not a NATS identity — and that is
+# all the separation buys. This Issuer is NAMESPACED: anyone who may create a
+# Certificate or CertificateRequest in {{ include "elitea-nats.namespace" . }} can obtain any
+# NATS identity from it (a bootstrap's included), and anyone who may read
+# Secrets there can read the CA key (Secret {{ .Values.nats.security.ca.name }}) and mint
+# offline. A NATS identity carries publish rights on the budget counters.
+# Restrict create on certificates/certificaterequests and get/list on
+# secrets in this namespace; nats.security.approverPolicy pins what this issuer
+# signs (templates/nats/approver-policy.yaml); for a key outside the namespace,
+# set nats.security.ca.create: false and name a ClusterIssuer.
+#
+# The usual cert-manager bootstrap chain, namespaced:
+#   selfSigned Issuer -> CA Certificate (isCA) -> CA Issuer
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.nats.security.ca.name }}-selfsigned
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-nats.syncWave" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.nats.security.ca.name }}
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-nats.syncWave" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.nats.security.ca.name }}
+  isCA: true
+  commonName: {{ .Values.nats.security.ca.name }}
+  duration: {{ .Values.nats.security.ca.duration }}
+  renewBefore: {{ .Values.nats.security.ca.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.nats.security.ca.name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.nats.security.ca.name }}
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-nats.syncWave" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Values.nats.security.ca.name }}
+{{- if dig "config" "cluster" "enabled" false (.Values.nats | default dict) }}
+---
+# The ROUTE CA (#1076): signs only the route certificate the NATS servers
+# present to each other. Separate from the client CA above, so no client
+# identity can be presented as a cluster peer.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.nats.security.routeCA.name }}
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-nats.syncWave" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.nats.security.routeCA.name }}
+  isCA: true
+  commonName: {{ .Values.nats.security.routeCA.name }}
+  duration: {{ .Values.nats.security.ca.duration }}
+  renewBefore: {{ .Values.nats.security.ca.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.nats.security.ca.name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.nats.security.routeCA.name }}
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-nats.syncWave" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Values.nats.security.routeCA.name }}
+{{- end }}
+{{- end }}
+
+{{- end }}

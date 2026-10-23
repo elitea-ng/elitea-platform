@@ -1,23 +1,24 @@
 //! `investigate` over a REAL Unix socket: a scripted model that calls a
-//! graph tool, then a source toolkit's tool (through a mock of elitea-main's
-//! `test_tool` route, which must receive the invocation's bearer), then
-//! answers. Needs `INVENTORY_TEST_DSN`.
+//! graph tool, then a source toolkit's tool (through a fake of elitea-main's
+//! `InternalToolService/InvokeToolkit`, which must receive the invocation's
+//! bearer), then answers. Needs `INVENTORY_TEST_DSN`.
 
 mod common;
 
+use elitea_engine_sidecar::client::EngineClient;
 use elitea_engine_sidecar::server;
 use elitea_inventory_engine::config::Settings;
 use elitea_inventory_engine::graph::{Citation, Graph};
 use elitea_inventory_engine::native::NativeRunner;
 use elitea_inventory_engine::runner::Runner;
 use elitea_inventory_engine::store::{GraphKey, sources};
+use elitea_platform_rpc::pb::internal_tool_service_server::InternalToolServiceServer;
+use elitea_platform_rpc::testing::FakeInternalTools;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 type Seen = Arc<Mutex<Vec<Value>>>;
 
@@ -49,48 +50,15 @@ async fn completions(
     }))
 }
 
-/// elitea-main's `test_tool` route.
-async fn test_tool(
-    axum::extract::State(seen): axum::extract::State<Seen>,
-    axum::extract::Path((project, toolkit)): axum::extract::Path<(String, String)>,
-    headers: axum::http::HeaderMap,
-    axum::Json(body): axum::Json<Value>,
-) -> axum::Json<Value> {
-    let bearer = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-    seen.lock()
-        .map(|mut s| {
-            s.push(json!({"project": project, "toolkit": toolkit, "bearer": bearer, "body": body}));
-        })
-        .ok();
-    axum::Json(
-        json!({"ok": true, "task_id": "t", "tool_name": body["tool_name"],
-                      "result": "# Refund policy\nRefunds within 30 days."}),
+async fn invoke(socket: &Path, arguments: &Value) -> Vec<Value> {
+    let mut client = EngineClient::connect(socket).await.expect("connect");
+    tokio::time::timeout(
+        Duration::from_mins(1),
+        client.invoke("i", "investigate", arguments),
     )
-}
-
-async fn invoke(socket: &PathBuf, arguments: &Value) -> Vec<Value> {
-    let mut stream = UnixStream::connect(socket).await.expect("connect");
-    let payload =
-        json!({"invocation_id": "i", "tool": "investigate", "arguments": arguments}).to_string();
-    let request = format!(
-        "POST /engine/invoke HTTP/1.1\r\nhost: engine\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    stream.write_all(request.as_bytes()).await.expect("write");
-    let mut raw = Vec::new();
-    tokio::time::timeout(Duration::from_mins(1), stream.read_to_end(&mut raw))
-        .await
-        .expect("in time")
-        .expect("read");
-    String::from_utf8_lossy(&raw)
-        .lines()
-        .filter(|line| line.starts_with('{'))
-        .map(|line| serde_json::from_str(line).expect("NDJSON"))
-        .collect()
+    .await
+    .expect("an answer in time")
+    .expect("a stream")
 }
 
 #[tokio::test]
@@ -135,29 +103,38 @@ async fn investigate_asks_the_model_with_graph_and_source_tools() {
     .expect("graph");
 
     let model_seen: Seen = Arc::default();
-    let platform_seen: Seen = Arc::default();
+    // elitea-main's toolkit invocation: the `test_tool` route's answer.
+    let platform = FakeInternalTools::new("callback-bearer").with_invoke_result(
+        &["running"],
+        r##"{"ok": true, "task_id": "t", "tool_name": "read_file", "result": "# Refund policy\nRefunds within 30 days."}"##,
+    );
     let app = axum::Router::new()
         .route("/llm/v1/chat/completions", axum::routing::post(completions))
-        .with_state(Arc::clone(&model_seen))
-        .merge(
-            axum::Router::new()
-                .route(
-                    "/api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit}",
-                    axum::routing::post(test_tool),
-                )
-                .with_state(Arc::clone(&platform_seen)),
-        );
+        .with_state(Arc::clone(&model_seen));
+    // The engine's model calls are elitea.llm.v1.ModelService; the fake
+    // answers them through these handlers. The source tool is
+    // elitea.runtime.v1.InternalToolService on the same listener.
+    let app = elitea_model_rpc::testing::with_model_service(app, "/llm/v1").route_service(
+        "/elitea.runtime.v1.InternalToolService/{*method}",
+        InternalToolServiceServer::new(platform.clone()),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
 
+    let (_vectors, vector_url) = common::fake_vector(&[("callback-bearer", 7)]).await;
     let env: HashMap<String, String> = [
         ("ELITEA_INVENTORY_RUNNER", "native".to_owned()),
         (
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url("investigate"),
+        ),
+        ("ELITEA_INVENTORY_VECTOR_URL", vector_url),
+        (
+            "ELITEA_INVENTORY_MODEL_SERVICE_URL",
+            format!("http://127.0.0.1:{port}"),
         ),
     ]
     .into_iter()
@@ -206,29 +183,16 @@ async fn investigate_asks_the_model_with_graph_and_source_tools() {
         json!([{"source_toolkit": "repo", "file_path": "docs/refunds.md"}, {"entity_name": "RefundService"}])
     );
 
-    let platform = platform_seen.lock().map(|s| s.clone()).unwrap_or_default();
+    let platform = platform.calls();
     assert_eq!(platform.len(), 1);
-    assert_eq!(platform[0]["project"], json!("7"));
-    assert_eq!(platform[0]["toolkit"], json!("5"));
-    assert_eq!(platform[0]["bearer"], json!("Bearer callback-bearer"));
-    assert_eq!(platform[0]["body"]["tool_name"], json!("read_file"));
-    // Exactly the shape the platform's investigate grant admits
-    // (material.SourceToolGate): no llm_model, no settings.
-    let mut keys: Vec<&String> = platform[0]["body"]
-        .as_object()
-        .map(|body| body.keys().collect())
-        .unwrap_or_default();
-    keys.sort();
+    assert_eq!(platform[0].project_id, 7);
+    assert_eq!(platform[0].scope, "5", "the toolkit id");
+    assert_eq!(platform[0].bearer, "callback-bearer");
+    assert_eq!(platform[0].name, "read_file");
+    // Only the tool and its arguments travel (material.SourceToolGate):
+    // the request has no field for a model or settings.
     assert_eq!(
-        keys,
-        ["request_id", "tool_name", "tool_params", "toolkit_config"]
-    );
-    assert_eq!(
-        platform[0]["body"]["toolkit_config"],
-        json!({"toolkit_id": "5"})
-    );
-    assert_eq!(
-        platform[0]["body"]["tool_params"],
+        serde_json::from_slice::<Value>(&platform[0].arguments).expect("json"),
         json!({"file_path": "docs/refunds.md"})
     );
 

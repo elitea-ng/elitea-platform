@@ -7,6 +7,7 @@
 //! A failed command here rejects with [`IpcError`], `{code, message}`: the
 //! UI branches on the machine code and shows the message.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,8 +22,11 @@ use crate::d0::mentions::Located;
 use crate::auth::{AuthService, RefreshResult};
 use crate::d0::api::{ApiError, Bearer, Credentials};
 use crate::d0::approvals::UiDecision;
+use crate::d0::definition::ModelChoice;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
+use crate::d0::skills::SkillPick;
+use crate::d0::slash_commands::{CommandPick, ListedCommand};
 use crate::d0::turn::{
     AgentHost, PolicySource, PrewarmRequest, Prewarmed, RestorePreview, TurnError, TurnRequest,
     TurnStarted, TurnStatus,
@@ -75,6 +79,14 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
 
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
         crate::doctor::DoctorHooks::rebuild_index(self.agents.as_ref(), workspace_id)
+    }
+
+    fn index_watching(&self, workspace_id: &str) -> bool {
+        crate::doctor::DoctorHooks::index_watching(self.agents.as_ref(), workspace_id)
+    }
+
+    fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
+        crate::doctor::DoctorHooks::refresh_index(self.agents.as_ref(), workspace_id)
     }
 }
 
@@ -512,6 +524,15 @@ pub fn workspace_bind_project(
     Ok(state.agents.bind_project(&id, project_id)?)
 }
 
+/// `agent_turn_start`'s `model` (#1228): the model the person chose for
+/// the turn, and its reasoning effort (`none`, `low`, `medium`, `high`).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct TurnModel {
+    pub name: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list
 #[tauri::command(rename_all = "snake_case")]
 pub async fn agent_turn_start(
@@ -524,7 +545,10 @@ pub async fn agent_turn_start(
     prompt: String,
     plan_mode: bool,
     mentions: Option<Vec<String>>,
-    skills: Option<Vec<String>>,
+    skills: Option<Vec<SkillPick>>,
+    compact: Option<bool>,
+    model: Option<TurnModel>,
+    command: Option<CommandPick>,
 ) -> Result<TurnStarted, IpcError> {
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
@@ -536,6 +560,7 @@ pub async fn agent_turn_start(
             "This thread is running in the cloud. Take it back to continue here.",
         ));
     }
+    let (skills, project_skills) = crate::d0::skills::split(skills.unwrap_or_default());
     Ok(state
         .agents
         .start(TurnRequest {
@@ -547,7 +572,16 @@ pub async fn agent_turn_start(
             prompt,
             plan_mode,
             mentions: mentions.unwrap_or_default(),
-            skills: skills.unwrap_or_default(),
+            skills,
+            project_skills,
+            compact: compact.unwrap_or(false),
+            model: model
+                .map(|model| {
+                    ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
+                        .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
+                })
+                .transpose()?,
+            command,
         })
         .await?)
 }
@@ -604,6 +638,129 @@ pub async fn workspace_files(
     .map_err(IpcError::from)
 }
 
+/// The "/" menu's custom commands: the workspace's `.elitea/commands/` and
+/// `.claude/commands/` (confined reads, `path_deny` and the session's deny
+/// list honoured, symlinks never followed) and the person's own folder,
+/// by name. Reads off the main thread.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commands_list(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+) -> Result<Vec<ListedCommand>, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || agents.commands_list(&workspace_id))
+        .await
+        .map_err(|_| IpcError::new("internal", "the command lookup stopped unexpectedly"))?
+        .map_err(IpcError::from)
+}
+
+/// `rules_get`: the workspace's and the person's approval rules (each with
+/// the error that keeps it from loading, if any), and the rules the folder
+/// proposes in `.elitea/rules.json` (never loaded until imported).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_get(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+) -> Result<crate::rules::RulesView, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        let (root, path_deny) = agents.rules_folder(&workspace_id)?;
+        Ok(crate::rules::RulesView {
+            scopes: agents.rule_files().states(&workspace_id),
+            proposed: crate::rules::RuleFiles::proposed(&root, &path_deny),
+        })
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "reading the rules stopped unexpectedly"))?
+}
+
+/// `rules_put`: validate `file` and store it as the `scope`'s rules, when
+/// the file is still at `version` (from `rules_get`). A file that does not
+/// validate is not written: `{saved: false, error}`; one changed since:
+/// `{saved: false, conflict: true}`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_put(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    scope: elitea_local_tools::execpolicy::RuleScope,
+    file: Value,
+    version: String,
+) -> Result<crate::rules::PutOutcome, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        agents.rules_folder(&workspace_id)?;
+        Ok(crate::rules::PutOutcome::of(agents.rule_files().put(
+            scope,
+            &workspace_id,
+            &file,
+            &version,
+        ))?)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "saving the rules stopped unexpectedly"))?
+}
+
+/// `rules_import_proposed`: copy the folder's proposed rules, as
+/// `rules_get` showed them (`digest`), into the workspace's rules file
+/// (the person's explicit import). A proposal changed since:
+/// `{saved: false, conflict: true}`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_import_proposed(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    digest: String,
+) -> Result<crate::rules::PutOutcome, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        let (root, path_deny) = agents.rules_folder(&workspace_id)?;
+        Ok(crate::rules::PutOutcome::of(
+            agents
+                .rule_files()
+                .import_proposed(&workspace_id, &root, &path_deny, &digest),
+        )?)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "importing the rules stopped unexpectedly"))?
+}
+
+/// `rules_explain`'s answer: the verdict, the layer that decided it, and
+/// the rule (with its justification) when a rule did.
+#[derive(Serialize)]
+pub struct Explained {
+    verdict: elitea_local_tools::approvals::Verdict,
+    source: elitea_local_tools::approvals::Source,
+    reason: String,
+    rule: Option<elitea_local_tools::approvals::RuleMatch>,
+    justification: Option<String>,
+}
+
+/// `rules_explain`: which layer and rule would decide `command` here now.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_explain(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    command: String,
+) -> Result<Explained, IpcError> {
+    if command.trim().is_empty() || command.len() > 16 * 1024 {
+        return Err(IpcError::new("invalid_request", "Type a command to test."));
+    }
+    let agents = state.agents.clone();
+    let decision =
+        tokio::task::spawn_blocking(move || agents.explain_command(&workspace_id, &command))
+            .await
+            .map_err(|_| IpcError::new("internal", "the explanation stopped unexpectedly"))??;
+    Ok(Explained {
+        justification: decision
+            .rule
+            .as_ref()
+            .and_then(|rule| rule.justification.clone()),
+        verdict: decision.verdict,
+        source: decision.source,
+        reason: decision.reason,
+        rule: decision.rule,
+    })
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
     Ok(state.agents.cancel(&turn_id)?)
@@ -625,11 +782,12 @@ pub fn approval_respond(
     state: State<'_, LocalState>,
     request_id: String,
     decision: String,
+    feedback: Option<String>,
 ) -> Result<(), IpcError> {
-    let decision = UiDecision::parse(&decision).ok_or_else(|| {
+    let decision = UiDecision::parse(&decision, feedback.as_deref()).ok_or_else(|| {
         IpcError::new(
             "invalid_request",
-            "decision must be allow_once, allow_always or deny",
+            "decision must be allow_once, allow_always, deny, continue, cancel, accept or decline",
         )
     })?;
     if state.agents.respond(&request_id, decision) {
@@ -643,7 +801,7 @@ pub fn approval_respond(
     } else {
         Err(IpcError::new(
             "approval_closed",
-            "That question is no longer open (the turn ended or it was answered).",
+            "That question is no longer open (the turn ended, it was answered, or nobody answered it in time).",
         ))
     }
 }
@@ -696,6 +854,40 @@ pub async fn thread_history_delete(
         deleted: state
             .agents
             .delete_thread_history(&workspace_id, &conversation_id)
+            .await?,
+    })
+}
+
+#[derive(Serialize)]
+pub struct HistoryForked {
+    copied: usize,
+}
+
+/// Copy one thread's stored turns into the conversation a server fork
+/// made (`forkConversation`), in the same workspace: up to and including
+/// `up_to_turn_id`, or all of them. The signed-in account's rows only.
+/// `message_ids` is the fork's `forked_messages` (source message UUID to
+/// the copy's): the copied turns name the new conversation's messages.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_history_fork(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    source_conversation_id: String,
+    target_conversation_id: String,
+    target_conversation_uuid: String,
+    up_to_turn_id: Option<String>,
+    message_ids: Option<HashMap<String, String>>,
+) -> Result<HistoryForked, IpcError> {
+    Ok(HistoryForked {
+        copied: state
+            .agents
+            .fork_thread_history(
+                &workspace_id,
+                &source_conversation_id,
+                (&target_conversation_id, &target_conversation_uuid),
+                up_to_turn_id.as_deref(),
+                message_ids.unwrap_or_default(),
+            )
             .await?,
     })
 }

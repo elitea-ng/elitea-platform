@@ -5,10 +5,11 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.9"
+  x-elitea-client-contract: "1.17"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
-    Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+    Wire-compatible with the Elitea Python SDK and with the clients built for
+    the previous platform.
 
     ## Response shape conventions
     - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -16,15 +17,15 @@ info:
       and the handlers' inline `map[string]any{"error": ...}` writes). One
       documented shape deviates: the five social/handler.go 500 sites (Like
       :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
-      pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
-      the named `SocialActionErrorResponse` schema and referenced only on
-      those specific operations. Five more UNDOCUMENTED sites of the same
-      envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
-      scope that shape there when those domains are spec'd.
+      compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+      parse instead, modeled as the named `SocialActionErrorResponse` schema and
+      referenced only on those specific operations. Five more UNDOCUMENTED sites
+      of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+      362) — scope that shape there when those domains are spec'd.
     - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
       middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
       and no elitea-main code emits a 429 body — documenting one would be contract
-      fiction. Re-add per-operation 429 responses (pylon shape:
+      fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
       `{"error": {"message", "type": "rate_limit_error", "code":
       "rate_limit_exceeded"}}`) when rate limiting becomes real.
     - Field names are **snake_case** unless the Go handler observably marshals
@@ -1256,7 +1257,7 @@ components:
       description: |
         The cost view over gateway.llm_budget_accumulators. Its shape is the
         accumulator's own: money per (scope, scope_id, period). The per-model,
-        per-agent, per-user and per-day views the pylon original carried are
+        per-agent, per-user and per-day views the legacy runtime carried are
         absent here because nothing in this architecture records those
         dimensions — see the operation description.
       required: [kpis, periods, by_scope, periods_truncated, date_from, date_to]
@@ -2134,7 +2135,7 @@ components:
         for it (no per-conversation duration is computed server-side yet); a
         caller wanting a displayed duration derives one from
         created_at/updated_at instead of trusting this field.
-      required: [id, name, created_at, updated_at, duration, message_groups_count, is_pinned]
+      required: [id, name, created_at, updated_at, duration, message_groups_count, is_pinned, is_archived]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -2161,6 +2162,69 @@ components:
             row in the `changes_since` delta; it does not change
             `updated_at`. A server before 1.4 omits the field, which means
             not pinned.
+        is_archived:
+          type: boolean
+          description: >
+            Client contract 1.10. The conversation is archived in its project
+            (archiveConversation). The archive is shared by the project, as
+            the pin is: every member who can see the row sees the same value.
+            An archived row keeps its `is_pinned`; a client leaves archived
+            rows out of its pinned section. An archive or unarchive
+            re-delivers the row in the `changes_since` delta of every member
+            who can see it; it does not change `updated_at`. A server before
+            1.10 omits the field, which means not archived.
+        archived_by:
+          $ref: '#/components/schemas/ConversationArchivedBy'
+        archived_at:
+          type: string
+          format: date-time
+          description: >
+            Client contract 1.10. When the conversation was archived, in UTC.
+            Present only when `is_archived` is true.
+        uuid:
+          type: string
+          format: uuid
+          description: >
+            Client contract 1.11. The conversation's UUID, the id the chat
+            send and the attachment routes take.
+        source:
+          type: string
+          description: >
+            Client contract 1.11. The conversation's origin (`elitea` for a
+            chat, `local_work` for a Local work thread).
+        forked_from:
+          $ref: '#/components/schemas/ConversationForkedFrom'
+        forked_messages:
+          type: object
+          additionalProperties:
+            type: string
+            format: uuid
+          description: >
+            Client contract 1.11, forkConversation's answer only. Maps the
+            UUID of each message group the fork copied to the UUID of its copy
+            in the new conversation; empty when nothing was copied. A client
+            that recorded message ids of the source (the desktop's turn
+            history) rewrites them with it. No other read carries it.
+        activity:
+          $ref: '#/components/schemas/ConversationActivity'
+        last_activity_at:
+          type: string
+          format: date-time
+          description: >
+            Client contract 1.12. The last write of any message of the
+            conversation (a message, the start of a turn, or a change of its
+            state), in UTC. The creation time when the conversation has no
+            message.
+        unread:
+          type: boolean
+          description: >
+            Client contract 1.12. For the CALLER: an answer of the
+            conversation (a message that no user participant wrote, that does
+            not stream, including a pause for the user) changed after the
+            caller's read marker (markConversationRead). A message of a user
+            never makes the conversation unread. The value is personal: two
+            members can see different values on the same row. A server before
+            1.12 omits the field, which means read.
         meta:
           type: object
           additionalProperties: true
@@ -2178,6 +2242,139 @@ components:
             unrelated code paths (single_participant filters, is_hidden,
             steps_limit, internal_tools), so the object's key set is not
             fixed by this endpoint.
+
+    ConversationArchivedBy:
+      type: object
+      description: >
+        Client contract 1.10. The member who archived the conversation.
+        Present on a list row only when `is_archived` is true. `name` is the
+        user's display name, or an empty string when the server cannot
+        resolve one.
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: The user id.
+        name:
+          type: string
+
+    ConversationActivity:
+      type: object
+      description: >
+        Client contract 1.12. The activity status of a conversation. A turn
+        transition (a start, a pause, a finish, a failure or a cancel)
+        re-delivers the list row in the `changes_since` delta; a streamed
+        token does not. The project event stream (`conversation_activity`
+        events) also sends each transition to the members who can see the
+        conversation.
+      required: [state, since]
+      properties:
+        state:
+          type: string
+          description: >
+            `running` (a turn of the conversation is in flight), `needs_you`
+            (the newest message waits for the user: a tool approval, an
+            answer to a question, an authorization or other input) or `idle`
+            (anything else). A client shows an unknown value as `idle`.
+        since:
+          type: string
+          format: date-time
+          description: When the conversation entered `state`, in UTC.
+
+    MarkConversationReadRequest:
+      type: object
+      description: >
+        Client contract 1.12. The body of markConversationRead. An absent
+        body, or an absent `message_id`, reads the conversation up to now.
+      properties:
+        message_id:
+          type: string
+          description: >
+            The numeric id or the UUID of a message group of the
+            conversation: the caller read the conversation up to and
+            including that message. A number is also accepted.
+
+    ConversationReadState:
+      type: object
+      description: >
+        Client contract 1.12. The caller's read marker of a conversation
+        after markConversationRead.
+      required: [conversation_id, read_at, unread]
+      properties:
+        conversation_id:
+          type: integer
+          description: The conversation's numeric id.
+        read_at:
+          type: string
+          format: date-time
+          description: >
+            The read marker, in UTC. It never moves back: a read of an older
+            message keeps the newer marker.
+        last_read_message_id:
+          type: integer
+          description: >
+            The numeric id of the message group the marker points to. Absent
+            when the conversation has no message.
+        unread:
+          type: boolean
+          description: >
+            The row's `unread` for the caller after the read. It is true when
+            the caller read up to a message that is older than the newest
+            answer.
+
+    ConversationForkedFrom:
+      type: object
+      description: >
+        Client contract 1.11. The conversation this conversation was forked
+        from (forkConversation), and the fork point. Absent when the
+        conversation is not a fork. The source can be deleted, or become
+        invisible to the reader, later; then the ids stay and `name` is
+        absent.
+      required: [conversation_id]
+      properties:
+        conversation_id:
+          type: integer
+          description: The source conversation's numeric id.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: The source conversation's UUID.
+        message_id:
+          type: integer
+          description: >
+            The numeric id of the fork point message group. Absent when the
+            whole conversation was forked.
+        message_uuid:
+          type: string
+          format: uuid
+          description: The UUID of the fork point message group, when there is one.
+        name:
+          type: string
+          description: >
+            getConversation only. The source conversation's current name.
+            Present only when the source still exists and the reader can see
+            it; a client shows the "Forked from" link only then.
+
+    ForkConversationRequest:
+      type: object
+      description: >
+        Client contract 1.11. The body of forkConversation. An absent body
+        forks the whole conversation with the default name.
+      properties:
+        message_id:
+          type: string
+          description: >
+            The fork point: the numeric id or the UUID of a message group of
+            the source conversation, a user message or an assistant message.
+            Absent: the whole conversation.
+        name:
+          type: string
+          description: >
+            The new conversation's name. Absent: the source name with
+            " (fork)" added ("New conversation (fork)" when the source name is
+            blank). Trimmed; blank, longer than 256 characters or with a
+            control character answers 400.
 
     ConversationListing:
       type: object
@@ -2851,12 +3048,32 @@ components:
         meta:
           type: object
           additionalProperties: true
-          description: Replaces the whole settings document when present.
+          description: >-
+            Replaces the whole settings document when present, except
+            `internal_tools`: a document without that key keeps the stored
+            list (client contract 1.15). To change the list alone, use
+            updateConversationInternalTools.
           x-elitea-passthrough: >-
             NOTE(W2): the `chat_conversations.meta` jsonb column, written whole
             (internal/infra/db/repos/conversations.go:768). Several writers own
             keys in it (steps_limit, internal_tools, is_hidden,
             single_participant), so its key set is not fixed by this route.
+
+    UpdateConversationInternalToolsRequest:
+      type: object
+      description: >
+        The body of updateConversationInternalTools. NOTE(W2):
+        internal/api/v2/conversations/internal_tools.go:67 (the decoded
+        body; unknown keys are refused).
+      required: [internal_tools]
+      additionalProperties: false
+      properties:
+        internal_tools:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+          description: The whole new list of internal tool names; `[]` clears it.
 
     UpdatedConversation:
       type: object
@@ -2945,6 +3162,8 @@ components:
         is_private:
           type: boolean
           description: Always present; a row that cannot say reads as private.
+        forked_from:
+          $ref: "#/components/schemas/ConversationForkedFrom"
         meta:
           type: object
           additionalProperties: true
@@ -2964,7 +3183,9 @@ components:
           description: >
             Present only when `messages_limit` > 0. The legacy message-group projection (items and their details).
             Prefer the message list (listConversationMessages) for a transcript: it is the read that supports
-            `changes_since`.
+            `changes_since`. Each group carries `role` (`user` or `assistant`, from its author's participant row,
+            as the message list's `role` is): a fork copies another member's questions without making that member
+            a participant of the fork, so the participant list alone cannot tell such a question from an answer.
           items:
             type: object
             additionalProperties: true
@@ -3068,6 +3289,23 @@ components:
             what a turn produced (`is_error`, `finish_reason`, tool and HITL
             state) and the key set grows with the runtime, so it is not closed
             here.
+          properties:
+            mentioned_user_ids:
+              type: array
+              items: { type: integer, format: int64 }
+              description: >-
+                Client contract 1.14. On a user's message: the user ids the
+                sender tagged (the send's `user_ids`), deduplicated, in the
+                order sent, at most 64. Absent when the message tags nobody
+                and on messages sent before 1.14. These are who was TAGGED,
+                not who was notified: notification only reaches project
+                members other than the sender.
+            mentions_everyone:
+              type: boolean
+              description: >-
+                Client contract 1.14. On a user's message: true when it
+                tagged `@everyone` (the send's `sending_to_everyone`); absent
+                otherwise.
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -3122,12 +3360,15 @@ components:
       description: >
         One stored file. Send `filepath` back verbatim in the chat send's
         `payload.attachments`. NOTE(W2):
-        internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`).
+        internal/api/v2/conversations/attachments.go:234 (`attachmentCreated`).
       required: [filepath, file_size]
       properties:
         filepath:
           type: string
-          description: '`/{bucket}/{conversation_uuid}/{file name}`.'
+          description: >-
+            `/{bucket}/{conversation_uuid}/{file name}`. The file name is the
+            uploaded one, numbered (`name (1).ext`) when the conversation
+            already holds that name (client contract 1.13).
         file_size: { type: integer, format: int64 }
 
     ConversationAttachmentChunkReceived:
@@ -3135,7 +3376,7 @@ components:
       description: >
         A chunk of a chunked upload was stored; the file is assembled when the
         last chunk arrives, and that request answers 201. NOTE(W2):
-        internal/api/v2/conversations/attachments.go:409.
+        internal/api/v2/conversations/attachments.go:425.
       required: [status, file_id, chunk_index, total_chunks, message]
       properties:
         status:
@@ -3978,6 +4219,14 @@ components:
             error:
               type: string
               description: At most 4 KiB, only with `is_error`.
+            model_name:
+              type: string
+              maxLength: 256
+              description: >-
+                Client contract 1.17. The model the turn ran on: the agent's
+                own, or the chat model the person chose for the turn. Stored
+                as the answer's `meta.model_name`, as a cloud turn's answer
+                carries it; absent leaves it out.
         tool_calls:
           type: object
           description: >-
@@ -4139,14 +4388,15 @@ components:
               it (internal/infra/storage/client_application_version.go:335).
         server_name:
           type: string
-          description: A `platform_mcp` tool's server.
+          description: A `platform_mcp` tool's server (its internal builder type, `mcp_elitea_internal_*`).
         selected_tools:
           type: array
           items: { type: string }
           description: >-
-            A `remote_toolkit`'s tools the version may call, after the
-            guardrails removed blocked ones. Read it with `all_tools`: an empty
-            list means every tool only when `all_tools` is true.
+            A `remote_toolkit`'s (and, from client contract 1.16, a
+            `platform_mcp`'s) tools the version may call, after the guardrails
+            removed blocked ones. Read it with `all_tools`: an empty list means
+            every tool only when `all_tools` is true.
         all_tools:
           type: boolean
           description: >-
@@ -4154,9 +4404,33 @@ components:
             means every tool of the toolkit (as in chat; the guardrails still
             block theirs). False with an empty `selected_tools` means the
             guardrails blocked every selected tool: the agent may call none.
-            executeRemoteToolkitTool admits exactly this selection.
+            executeRemoteToolkitTool admits exactly this selection. A
+            `platform_mcp`'s (client contract 1.16) is true while the
+            guardrails block none of the server's tools (a cloud turn's
+            internal MCP has every tool of the server); once they block one,
+            it is false and `selected_tools` lists the remaining tools.
+        tools:
+          type: array
+          description: >-
+            A `platform_mcp`'s tools the version may call, with their
+            descriptions (at most 512 bytes each), as the server's internal
+            MCP endpoint lists them (client contract 1.16); a blocked tool is
+            never listed. Absent when the server cannot list them (no MCP
+            server is composed).
+          items:
+            $ref: '#/components/schemas/ResolvedPlatformTool'
         toolkit_ref:
           $ref: '#/components/schemas/ResolvedToolkitRef'
+    ResolvedPlatformTool:
+      type: object
+      description: >-
+        One tool of a platform MCP server. NOTE(W2):
+        internal/infra/storage/client_platform_tools.go:22
+        (`ClientPlatformTool`).
+      required: [name, description]
+      properties:
+        name: { type: string }
+        description: { type: string }
     ResolvedToolkitRef:
       type: object
       description: >-
@@ -4168,7 +4442,12 @@ components:
         (`ClientToolkitRef`).
       required: [toolkit_id, project_id, ref]
       properties:
-        toolkit_id: { type: integer, format: int64 }
+        toolkit_id:
+          type: integer
+          format: int64
+          description: >-
+            The saved toolkit, or 0 for a `platform_mcp` server (client
+            contract 1.16), whose `ref` is derived with the server's type.
         project_id: { type: integer, format: int64 }
         ref: { type: string, pattern: '^tkr1_[0-9a-f]{32}$' }
     RemoteToolkitCallConfirmation:
@@ -4643,10 +4922,10 @@ components:
       type: object
       required: [ok, error]
       description: >
-        NOTE(W2): the notification routes write the pylon `{"ok": false,
-        "error": ...}` envelope on every failure, including "Notification is
-        not found", which answers 400 rather than 404
-        (internal/api/v2/notifications/api.go:479-491).
+        NOTE(W2): the notification routes write the compatibility
+        `{"ok": false, "error": ...}` envelope that shipped clients parse on
+        every failure, including "Notification is not found", which answers 400
+        rather than 404 (internal/api/v2/notifications/api.go:479-491).
       properties:
         ok: { type: boolean }
         error: { type: string }
@@ -4970,7 +5249,7 @@ components:
         NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write
         encodes `{"error": message}`) and the handlers' inline
         `map[string]any{"error": ...}` writes. No operation documented in this
-        spec emits the pylon `ok` field via THIS schema; the five
+        spec emits the compatibility `ok` field via THIS schema; the five
         social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named
         `SocialActionErrorResponse` schema instead (see there), and five more
         UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350,
@@ -5168,8 +5447,8 @@ components:
         One row of the admin Tasks table. `task_id`, `status`, `started_at`
         and `user` carry the legacy listing's names verbatim
         (legacy/plugins/admin/api/v2/tasks.py:94-108); the rest are new,
-        because pylon had one kind of task, one project, no completion time,
-        and a stop button it always offered.
+        because the legacy runtime had one kind of task, one project, no
+        completion time, and a stop button it always offered.
       required: [task_id, kind, name, status, cancellable]
       properties:
         task_id:
@@ -5826,10 +6105,10 @@ components:
           type: string
           description: >
             NOTE(#898): the editor's free-text "Editor Notes". It has no column
-            of its own on `application_versions` and is not meant to: pylon
-            stores it inside this same jsonb (elitea_issues issue 5410 chose the
-            blob over a per-tenant schema migration), folding the top-level
-            `notes` write field in
+            of its own on `application_versions` and is not meant to: the legacy
+            runtime stores it inside this same jsonb (elitea_issues issue 5410
+            chose the blob over a per-tenant schema migration), folding the
+            top-level `notes` write field in
             (legacy/plugins/elitea_core/utils/application_utils.py:191-211)
             and lifting it back out on read (models/pd/version.py:297-307).
             This service does the same, and additionally leaves the key in
@@ -6005,9 +6284,9 @@ components:
         agent_type:
           type: string
           description: >
-            Kept although pylon's ApplicationVersionListModel excluded it:
-            apps/elitea-web reads it off the summary to shape the version
-            dropdown (pages/agents/lib/editApplicationMappers.ts
+            Kept although the legacy runtime's ApplicationVersionListModel
+            excluded it: apps/elitea-web reads it off the summary to shape the
+            version dropdown (pages/agents/lib/editApplicationMappers.ts
             toVersionSummaries, and its pipeline twin).
         created_at: { type: string, format: date-time }
         instructions:
@@ -6114,7 +6393,7 @@ components:
             (versionTags, internal/api/v2/applications/handler.go). The
             export and fork echoes project name and data only, so it is
             optional. A write ignores it: the handler matches a tag by name,
-            the same way pylon does
+            the same way the legacy runtime does
             (legacy/plugins/elitea_core/utils/application_utils.py:219-226).
         name:
           type: string
@@ -6131,7 +6410,7 @@ components:
         from unvalidated client maps: a fork payload tag without a name
         yields {"name": null, ...}. Hence name is nullable and not required.
         NOTE(#345): the same shape is now also the WRITE shape — `tags` on
-        VersionWriteRequest refs this schema, matching pylon's own
+        VersionWriteRequest refs this schema, matching the legacy runtime's own
         PromptTagUpdateModel (name, optional data, optional id).
 
     ApplicationVersionDetail:
@@ -6151,9 +6430,9 @@ components:
         notes:
           type: string
           description: >
-            NOTE(#898): `meta.notes`, surfaced beside `meta` as pylon's
-            `hydrate_notes_from_meta` surfaces it. Always a string on the
-            version-detail read and on the two write echoes ("" when the
+            NOTE(#898): `meta.notes`, surfaced beside `meta` as the legacy
+            runtime's `hydrate_notes_from_meta` surfaces it. Always a string on
+            the version-detail read and on the two write echoes ("" when the
             version carries no notes); absent from the other version maps
             (import, fork, the public catalogue detail), which do not build
             their response through these two helpers.
@@ -6215,7 +6494,8 @@ components:
       description: >
         NOTE(#336): one entry of the runtime skill registry the SDK binds
         `load_skill` against (elitea_sdk/runtime/tools/skill_tools.py:127-131).
-        It is the five-key projection pylon's `resolve_runtime_skills` produces
+        It is the five-key projection the legacy runtime's
+        `resolve_runtime_skills` produces
         (legacy/plugins/elitea_core/utils/skill_utils.py:1570-1607);
         `skill_version_id` and `version_name` are deliberately absent.
 
@@ -6232,7 +6512,7 @@ components:
                 jsonb under the `icon_meta` key, which
                 internal/api/v2/applications/handler.go:1314 copies without
                 inspecting it. An absent or falsy value becomes `{}`, which is
-                what pylon's set_icon_meta produces.
+                what the legacy runtime's set_icon_meta produces.
             attached_skills:
               type: array
               items: { $ref: '#/components/schemas/AttachedSkill' }
@@ -6387,13 +6667,14 @@ components:
           maxLength: 1000
           description: >
             NOTE(#898): the editor's free-text notes, accepted at the top level
-            the way pylon accepts them and folded into `meta.notes` by every
-            write path (create, create-version and the PUT). Omit the key to
-            leave the stored value alone; an explicit empty string clears it.
-            Longer than 1000 characters is REFUSED with a 400 — pylon's own
-            ceiling (models/pd/version.py:116). The agent editor sends the
-            value inside `meta` instead, which is the same store; both spellings
-            are accepted so a pylon-shaped client keeps working.
+            the way the legacy runtime accepts them and folded into `meta.notes`
+            by every write path (create, create-version and the PUT). Omit the
+            key to leave the stored value alone; an explicit empty string clears
+            it. Longer than 1000 characters is REFUSED with a 400 — the legacy
+            runtime's own ceiling (models/pd/version.py:116). The agent editor
+            sends the value inside `meta` instead, which is the same store; both
+            spellings are accepted so a client written against the legacy
+            runtime keeps working.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -6530,16 +6811,16 @@ components:
           type: string
           enum: [invited, already_member, invalid_email, failed]
           description: >
-            The machine-readable half of `msg`. pylon carried these four cases
-            only in free English prose, so the reference SPA could not tell
-            them apart and showed one toast for a whole batch. `status` keeps
-            its two pylon values, so this field is additive: an old client
-            reads the response exactly as before.
+            The machine-readable half of `msg`. The legacy runtime carried these
+            four cases only in free English prose, so the reference SPA could
+            not tell them apart and showed one toast for a whole batch. `status`
+            keeps its two original values, so this field is additive: an old
+            client reads the response exactly as before.
       description: >
-        One element of the per-address array pylon's invite returns. The
-        response carries one of these per requested address, and the whole
-        response is 400 when any of them failed. A 400 therefore still means
-        that the `ok` rows landed — each address is written in its own
+        One element of the per-address array the legacy runtime's invite
+        returns. The response carries one of these per requested address, and
+        the whole response is 400 when any of them failed. A 400 therefore still
+        means that the `ok` rows landed — each address is written in its own
         transaction, and one bad address does not roll back the others.
 
     UserRolesUpdateRequest:
@@ -6551,8 +6832,8 @@ components:
           description: >
             Target user id. A batch edit sends the selected ids COMMA-JOINED in
             this one string (entities/user/model/useEditUser.ts's
-            useBatchEditUsers). `id` and `ids` are pylon's own spellings and are
-            accepted too.
+            useBatchEditUsers). `id` and `ids` are the legacy runtime's own
+            spellings and are accepted too.
         id: { type: string }
         ids:
           type: array
@@ -6572,7 +6853,8 @@ components:
       properties:
         msg: { type: string }
       description: >
-        pylon's acknowledgement shape — a single `msg` string.
+        The compatibility acknowledgement shape existing clients read — a single
+        `msg` string, as the legacy runtime returns it.
 
     Role:
       type: object
@@ -7688,7 +7970,8 @@ components:
             sub-agent. It is not `items.length > 0` — `items` answers the
             opposite relation (what this version uses). A reference with no
             valid parent mapping is an orphan and does not count, matching
-            pylon (legacy/plugins/elitea_core/rpc/application.py:1861-1863).
+            the legacy runtime
+            (legacy/plugins/elitea_core/rpc/application.py:1861-1863).
         referencing_parents:
           type: array
           description: >
@@ -7829,12 +8112,11 @@ components:
         as a six-element hand-written list that no SDK, snapshot, database or
         configuration produced; that handler now refuses with 501 instead.
 
-        `document_types`, `image_types` and `code_types` are the pylon keys
-        apps/elitea-ui reads (src/slices/fileTypes.js). They were UNDESCRIBED
-        here, which is why this note exists: the reviewed route
-        (internal/api/v2/indextypes, currentIndexTypesResponse) has emitted all
-        five keys since issue 394, and a client generated from this document
-        could not see three of them.
+        `document_types`, `image_types` and `code_types` are compatibility keys
+        that existing clients read. They were UNDESCRIBED here, which is why
+        this note exists: the reviewed route (internal/api/v2/indextypes,
+        currentIndexTypesResponse) has emitted all five keys since issue 394,
+        and a client generated from this document could not see three of them.
 
         The two halves project the SAME rows and cannot disagree: every
         `supported_extensions` list is the sorted key set of the map named by
@@ -8220,8 +8502,9 @@ components:
               is_default: { type: boolean }
         total: { type: integer }
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:2960-2991 — nine
-        static defaults merged with publishing_guardrail extras.
+        NOTE(W2): internal/api/v2/eliteacore/handler.go:5415-5446 — nine
+        static defaults merged with the extras the admin Features page
+        authors globally (agent_publishing.agent_categories).
 
     RuntimeCapabilities:
       type: object
@@ -9806,8 +10089,8 @@ components:
         — the key set is the static map's keys plus nothing else; served
         verbatim by ListTypeSchemas (internal/api/v2/toolkits/handler.go:231-233).
       description: >
-        NOTE(W2): toolkit-type → settings-JSON-Schema map (pylon_indexer
-        /toolkits/ parity).
+        NOTE(W2): toolkit-type → settings-JSON-Schema map (the retired Python
+        indexer service's /toolkits/ parity).
 
     # ---- Icons ---------------------------------------------------------------
     IconUploadResponse:
@@ -9949,8 +10232,8 @@ components:
         NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:353-380
         (UpdateSkillIcon). The body is decoded as a free map and stored verbatim
         as meta.icon_meta, but `name` and `url` must both be strings or the
-        request is a 400 — pylon's model declares them required, and an
-        icon_meta without them is one the read path cannot render.
+        request is a 400 — the legacy runtime's model declares them required,
+        and an icon_meta without them is one the read path cannot render.
 
     SkillIconBindRefusal:
       type: object
@@ -9965,8 +10248,8 @@ components:
       description: >
         NOTE(W2): internal/api/v2/eliteacore/skill_icon.go:333-336 and :392-395
         — the 404 both binding routes answer. It is NOT the flat
-        `{"error": "..."}` shape; pylon answers `{ok, msg}` here and the port
-        keeps it.
+        `{"error": "..."}` shape; the legacy runtime answers `{ok, msg}` here
+        and the port keeps it.
 
     SkillIconDeleteRefusal:
       type: object
@@ -10563,10 +10846,10 @@ components:
             `agent` and the empty string are both STORED as `openai`. `agent`
             is accepted because the platform's own markdown export writes it
             for a stored `openai` agent (export_markdown.go,
-            markdownAgentType, mirroring pylon's _application_to_md), so
-            without the mapping an exported `.agent.md` file was not importable
-            through this API — only through a web client, which renames the
-            value in its own file parser (issue 845).
+            markdownAgentType, mirroring the legacy runtime's
+            _application_to_md), so without the mapping an exported `.agent.md`
+            file was not importable through this API — only through a web
+            client, which renames the value in its own file parser (issue 845).
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): entities are handled as map[string]any. The import reads
@@ -10827,8 +11110,8 @@ components:
         different answer from an explicit false or zero. Ranges are enforced on
         write (internal/domain/contextsettings); an out-of-range value is
         refused with {"error", "field"}. `enable_context_editing` is not in
-        pylon's ContextManagementModel but IS read out of the same dict by
-        set_context_strategy, and the Memory page has always sent it.
+        the legacy runtime's ContextManagementModel but IS read out of the same
+        dict by set_context_strategy, and the Memory page has always sent it.
 
     MemorySummarization:
       type: object
@@ -10851,8 +11134,8 @@ components:
       description: >
         The user's default summarization settings, stored in
         centry.social_users.default_summarization (jsonb) and edited by
-        Settings > Memory. pylon's SummarizationModel, field for field. Three
-        of these flatten into a conversation's
+        Settings > Memory. The legacy runtime's SummarizationModel, field for
+        field. Three of these flatten into a conversation's
         `context_strategy.summary_llm_settings` when one is resolved:
         summary_model_name -> model_name, summary_model_project_id ->
         model_project_id, target_summary_tokens -> max_tokens.
@@ -10893,8 +11176,8 @@ components:
           description: >
             The caller's own federated identity references, exactly as
             public.auth_core__user_provider.provider_ref stores them
-            (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject).
-            An operator copies one of these into the deployment's
+            (`oidc:<sub>`, `saml:<nameid>`, or a bare subject the legacy runtime
+            wrote). An operator copies one of these into the deployment's
             `identity.initial_global_admins` to make a global administrator,
             which previously needed a SELECT against the production database.
             Absent when the account holds none: a Form password login creates
@@ -11020,13 +11303,14 @@ components:
           enum: [false]
         error: { type: string }
       description: >
-        NOTE(W2): the pylon-era `{"ok": false, "error": "..."}` envelope,
-        DIFFERENT from this spec's normal ErrorResponse `{"error": "..."}`
-        shape (see ErrorResponse's own description). Written on exactly 5
-        failure paths in social/handler.go: Like (:268), Unlike (:301), Pin
-        (:321), Unpin (:341), CreateFeedback (:419). Referenced only on the
-        operations whose handler body actually returns it — every other
-        error path in this file keeps using ErrorResponse.
+        NOTE(W2): the compatibility `{"ok": false, "error": "..."}` envelope
+        that shipped clients parse, DIFFERENT from this spec's normal
+        ErrorResponse `{"error": "..."}` shape (see ErrorResponse's own
+        description). Written on exactly 5 failure paths in social/handler.go:
+        Like (:268), Unlike (:301), Pin (:321), Unpin (:341), CreateFeedback
+        (:419). Referenced only on the operations whose handler body actually
+        returns it — every other error path in this file keeps using
+        ErrorResponse.
 
     IndexConfigurationSaveRequest:
       type: object
@@ -11079,8 +11363,7 @@ components:
           type: string
           description: >
             A fixed, human-readable sentence. It never carries the driver
-            error: an unwrapped pgx failure names the PgVector user,
-            database, host and port.
+            error, which can name database credentials, hosts and ports.
       description: >
         NOTE(W2): the refusal half of the same `{"ok": ..., "error": ...}`
         envelope IndexWriteAck describes — the shape the index write paths
@@ -11334,11 +11617,11 @@ components:
       required: [tool_name]
       description: >
         NOTE(W2): the body `toolkitrun.DecodeRequest` reads
-        (internal/api/v2/toolkitrun/response.go:78-118). It is pylon's
-        `TestToolkitToolInputModel` minus the fields this platform refuses to
-        take from a caller.
+        (internal/api/v2/toolkitrun/response.go:78-118). It is the legacy
+        runtime's `TestToolkitToolInputModel` minus the fields this platform
+        refuses to take from a caller.
 
-        NO SETTINGS AND NO CREDENTIALS ARE ACCEPTED. pylon takes
+        NO SETTINGS AND NO CREDENTIALS ARE ACCEPTED. The legacy runtime takes
         `toolkit_config.settings` from the request and runs the tool against
         them, which is how its own UI tests unsaved form values. This operation
         names the toolkit in the URL and reads the SAVED row instead, because a
@@ -11405,8 +11688,8 @@ components:
 
         A TOOL THAT RAISED IS 200 ON PURPOSE. The run completed, and "it raised,
         and here is why" is the answer to "does this tool work against my saved
-        settings". pylon could not tell these conditions apart, because the SDK
-        handed it one dict.
+        settings". The legacy runtime could not tell these conditions apart,
+        because the SDK handed it one dict.
       properties:
         authorization_retry:
           type: object
@@ -11430,10 +11713,10 @@ components:
           type: string
           description: >
             The execution this run wrote. On 504 it is the handle to poll, which
-            is why that branch is 504 and not pylon's 400: the request gave up,
-            the run did not (response.go:205-215). Absent on a refusal that
-            happened before admission, because nothing was written and nothing
-            ran.
+            is why that branch is 504 and not the legacy runtime's 400: the
+            request gave up, the run did not (response.go:205-215). Absent on a
+            refusal that happened before admission, because nothing was written
+            and nothing ran.
         tool_name:
           type: string
           description: The tool the run resolved, echoed back.
@@ -11480,10 +11763,10 @@ components:
       required: [name, description, inputSchema]
       description: >
         NOTE(W2): internal/mcpregistry/registry.go:41-45 — the Tool struct, as
-        `tools_list` serialises it. `inputSchema` keeps pylon's camelCase
-        spelling. That spelling is the wire contract the Python SDK reads
-        (elitea_sdk toolkits/tools.py, _init_single_mcp_tool), so do not rename
-        it.
+        `tools_list` serialises it. `inputSchema` keeps the legacy runtime's
+        camelCase spelling. That spelling is the wire contract the Python SDK
+        reads (elitea_sdk toolkits/tools.py, _init_single_mcp_tool), so do not
+        rename it.
       properties:
         name: { type: string }
         description: { type: string }
@@ -11502,8 +11785,8 @@ components:
       required: [name, tools, project_id, sio_sid, timeout_tools_list, timeout_tools_call, group]
       description: >
         NOTE(W2): internal/mcpregistry/registry.go:59-67 — the Server struct,
-        which is pylon's `McpServer` shape. `tools_list` returns a bare array
-        of it, with no envelope.
+        which is the legacy runtime's `McpServer` shape. `tools_list` returns a
+        bare array of it, with no envelope.
       properties:
         name: { type: string }
         tools:
@@ -11519,7 +11802,8 @@ components:
           description: >
             Always null here. The field is the socket.io session id of the
             client that registered the server, and this service runs no
-            socket.io server. It stays in the body because pylon produces it.
+            socket.io server. It stays in the body because the legacy runtime
+            produces it.
         timeout_tools_list:
           type: integer
           description: Seconds. Defaults to 90 (mcpregistry.DefaultTimeoutSeconds).
@@ -11534,7 +11818,7 @@ components:
       type: object
       required: [server, tool_call_id, params]
       description: >
-        NOTE(W2): the body pylon's `McpToolCallPostBody` accepts
+        NOTE(W2): the body the legacy runtime's `McpToolCallPostBody` accepts
         (legacy/plugins/elitea_core/models/mcp.py). Documented for completeness;
         internal/api/v2/mcp/registry.go:96 does not read it, because the
         endpoint refuses unconditionally and a 400 for a malformed body would
@@ -11552,9 +11836,9 @@ components:
           x-elitea-passthrough: >-
             NOTE(W2): genuinely open. These are the arguments of a tool defined
             by whichever MCP server the calling client registered, so their
-            shape is not knowable to this service at all — pylon forwards the
-            dict unchanged down the socket. The endpoint does not read the body
-            (internal/api/v2/mcp/registry.go:96).
+            shape is not knowable to this service at all — the legacy runtime
+            forwards the dict unchanged down the socket. The endpoint does not
+            read the body (internal/api/v2/mcp/registry.go:96).
 
     InternalMcpPatStatus:
       type: object
@@ -11604,9 +11888,9 @@ components:
         mode:
           type: string
           description: >
-            The pylon mode the role belongs to — `administration`, `developer`,
-            `default`, … Reported for every mode that has roles; only non-default
-            modes are writable here.
+            The route mode (the URL mode segment) the role belongs to —
+            `administration`, `developer`, `default`, … Reported for every mode
+            that has roles; only non-default modes are writable here.
         role: { type: string }
 
     ModeRoleListing:
@@ -12622,9 +12906,9 @@ components:
             - personal_project
             - failed
           description: >
-            The machine-readable reason. pylon returned one English log blob
-            for the whole batch, so a console could not tell "added" from
-            "was already a member" without matching on prose.
+            The machine-readable reason. The legacy runtime returned one English
+            log blob for the whole batch, so a console could not tell "added"
+            from "was already a member" without matching on prose.
         msg:
           type: string
           description: The same outcome in English, for a log pane.
@@ -13075,8 +13359,8 @@ components:
     #
     # The administration handler is a SECOND handler over a different store
     # (internal/api/v2/secrets/admin.go, vault row id "admin"). It ignores the
-    # {projectID} segment, and its bodies are pylon's admin bodies, not the
-    # project ones above.
+    # {projectID} segment, and its bodies are the legacy runtime's admin bodies,
+    # not the project ones above.
     AdminSecretListItem:
       type: object
       description: >
@@ -13095,7 +13379,7 @@ components:
       description: >
         NOTE(issue 151): internal/api/v2/secrets/admin.go:190-209 — the
         administration single-secret GET. An unknown name is `{"secret": null}`
-        with 200, as in pylon.
+        with 200, as in the legacy runtime.
       properties:
         secret:
           type: string
@@ -13116,8 +13400,8 @@ components:
       type: object
       description: >
         NOTE(issue 151): internal/api/v2/secrets/admin.go:129-135 — the NESTED
-        body pylon's admin PUT takes. `old_name` selects the entry to replace
-        and the path `{name}` is what it becomes, so a rename is
+        body the legacy runtime's admin PUT takes. `old_name` selects the entry
+        to replace and the path `{name}` is what it becomes, so a rename is
         `old_name != name`. An empty `old_name` means the path name.
       properties:
         secret:
@@ -14568,9 +14852,9 @@ paths:
   # Users, which does no method branching — every verb returned the same
   # {rows,total} listing, so Invite / Edit role / Remove reported success and
   # wrote nothing. The three write verbs now reach real handlers
-  # (internal/api/v2/eliteacore/users_write.go) that speak pylon's contract
-  # (legacy/plugins/admin/api/v2/users.py) and are each gated on the matching
-  # `configuration.users.users.*` permission.
+  # (internal/api/v2/eliteacore/users_write.go) that speak the legacy runtime's
+  # contract (legacy/plugins/admin/api/v2/users.py) and are each gated on the
+  # matching `configuration.users.users.*` permission.
   #
   # This path template pins mode=default. `administration` mode addresses the
   # global scope, not a project membership, and answers 501.
@@ -14673,7 +14957,7 @@ paths:
         Clears the users' rows in auth_core__project_user_role for this project.
         The auth_core__user account survives — the person may be a member of
         other projects, and "remove from project" is not "delete the account"
-        (parity with pylon's remove_users_from_project).
+        (parity with the legacy runtime's remove_users_from_project).
       tags: [admin]
       parameters:
         - name: id[]
@@ -14710,18 +14994,20 @@ paths:
   # ADMIN & TENANCY PARITY (issue 255)
   #
   # `administration` is a STATIC segment on all three, not a {mode} parameter:
-  # each pylon original registers `mode_handlers = {'administration': AdminAPI}`
-  # and nothing else, so another mode has no handler to reach. A {mode} route
-  # would have to answer something plausible for a mode that does not exist.
+  # each legacy-runtime original registers
+  # `mode_handlers = {'administration': AdminAPI}` and nothing else, so another
+  # mode has no handler to reach. A {mode} route would have to answer something
+  # plausible for a mode that does not exist.
   # ==========================================================================
   /admin/modes/administration:
     get:
       operationId: listUserModeRoles
       summary: List every central role assignment, across all modes
       description: |
-        Which user holds which CENTRAL role in which pylon mode — the registry
-        behind the admin console's Modes table. Each row carries the composite
-        `<user_id>:<mode>:<role>` id the DELETE below consumes.
+        Which user holds which CENTRAL role in which route mode (URL mode
+        segment) — the registry behind the admin console's Modes table. Each row
+        carries the composite `<user_id>:<mode>:<role>` id the DELETE below
+        consumes.
 
         The reference walks its runtime mode registry and asks for every
         (user, mode) pair over RPC; this is one join over the assignment table,
@@ -14864,18 +15150,18 @@ paths:
         added to every listed project with the one named role, and every
         (user, project) pair reports its own outcome.
 
-        It replaces two pylon console pages —
+        It replaces two console pages of the legacy runtime —
         `legacy/plugins/admin/api/v2/invites_bulkusers.py` ("add every user to
         one project") and `invites_bulkprojects.py` ("add one user to many
         projects") — which are the same cross product with one side pinned.
         Both declare their own permission, and this route accepts either.
 
-        Four differences from pylon are deliberate and are recorded in
-        `internal/api/v2/admin/invites_bulk.go`:
+        Four differences from the legacy runtime are deliberate and are recorded
+        in `internal/api/v2/admin/invites_bulk.go`:
 
-        - The role set is ADDED to, never replaced. pylon's write replaces
-          every role the account holds in the project, which run over "all
-          users" demotes every existing project admin.
+        - The role set is ADDED to, never replaced. The legacy runtime's write
+          replaces every role the account holds in the project, which run over
+          "all users" demotes every existing project admin.
         - Per-pair outcomes, not one English log blob.
         - Ids and one typed role name, not comma-separated free text.
         - A personal project is refused: it is one account's own space and a
@@ -14913,8 +15199,7 @@ paths:
         The admin Tasks page. It unions the runtime plane
         (elitea_runtime.execution_jobs, whose capability_id gives the kind),
         the scheduler's due work (elitea_runtime.scheduled_occurrences) and
-        every project's evaluation runs. It is NOT the pylon Arbiter task node
-        that /admin/tasks/{mode} answers 501 for. The rows keep the legacy
+        every project's evaluation runs. The rows keep the legacy
         listing's task_id, status, started_at and user keys. `truncated`
         reports that the per-source scan window was full, so older rows exist
         that this page cannot reach.
@@ -15072,6 +15357,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/BrandingSettings'
         '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: resetBrandingSettings
+      summary: Reset the brand pack's database layer
+      description: |
+        Deletes every stored row of the `branding` section in one statement,
+        so every key, including ones the editor does not render, inherits
+        from the layer below again. Invalidates the resolver's cache, collects
+        unreferenced brand assets older than the upload grace period, and
+        answers with a fresh read of the same shape as GET with `saved: true`.
+      tags: [admin]
+      responses:
+        '200':
+          description: The branding state after the reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrandingSettings'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
@@ -16191,7 +16496,7 @@ paths:
         per call. A budget delta carries only {event_id, scope, scope_id,
         project_id, org_id, period_start, period_end, delta_nano_usd}, so no
         producer records those dimensions; an empty array would read as "this
-        project called no models", which is false. The pylon original answered
+        project called no models", which is false. The legacy runtime answered
         them from a per-call audit-event ledger that no longer exists.
 
         Amounts are exact decimals produced by PostgreSQL NUMERIC and are never
@@ -16911,6 +17216,354 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    put:
+      operationId: archiveConversation
+      summary: Archive a conversation in its project
+      description: |
+        Client contract 1.10. Archives the conversation in its project. The
+        archive is shared by the project, as the conversation pin is: one
+        archive per conversation, and every member's default conversation
+        list leaves it out. The list row names who archived it
+        (`archived_by`) and when (`archived_at`). The archive does not change
+        the conversation. It stays open by id, it keeps its project pin, and
+        new turns work as before.
+
+        Needs `models.chat.conversation.edit`, because an archive changes
+        every member's default list (a default-mode viewer does not hold
+        it), and access to the conversation itself (the chat authority's
+        detail rule, the same one the conversation pin passes). A
+        conversation the caller cannot see
+        answers 404 and archives nothing. A repeated request succeeds and
+        keeps the FIRST archive: its `archived_by` and `archived_at` do not
+        change, and nothing is re-delivered.
+
+        The archive re-delivers the conversation's list row, with
+        `is_archived: true`, in the `changes_since` delta of every member who
+        can see the conversation. It does not change `updated_at`. It writes
+        no tombstone: a tombstone means a deletion or a loss of access. Only
+        a delta call without `archived` (a client before contract 1.10) gets
+        the archived row as an `access_lost` tombstone; see listConversations.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      responses:
+        "200":
+          description: The conversation is archived in its project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+    delete:
+      operationId: unarchiveConversation
+      summary: Unarchive a conversation in its project
+      description: |
+        Client contract 1.10. Removes the project's archive of the
+        conversation, whichever member archived it, as unpinEntity removes a
+        pin. The conversation is in every member's default conversation list
+        again. Needs the same access as archiveConversation; a conversation
+        the caller cannot see answers 404. A repeated request succeeds,
+        removes nothing and re-delivers nothing.
+
+        An unarchive re-delivers the list row, with `is_archived: false`, in
+        the `changes_since` delta of every member who can see the
+        conversation.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      responses:
+        "200":
+          description: The archive is removed, or there was none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/conversation_read/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    put:
+      operationId: markConversationRead
+      summary: Mark a conversation read for the caller
+      description: |
+        Client contract 1.12. Moves the CALLER's read marker of the
+        conversation: up to `message_id`, or up to now without it. The list
+        rows' `unread` (listConversations and its `changes_since` delta)
+        compares the newest answer with this marker. A client calls it when
+        the user opens the conversation, and again when new messages arrive
+        while the conversation is on screen.
+
+        The marker is personal state, so read access is enough: the chat
+        authority's detail rule (the rule of getConversation) and
+        `models.chat.conversation.details`. A conversation the caller cannot
+        see answers 404 and writes nothing. A `message_id` that is not a
+        message of the conversation answers 404.
+
+        The request is idempotent, and the marker never moves back. The read
+        does not re-deliver the row in the `changes_since` delta of any
+        member and does not change `updated_at`. The project event stream
+        sends a `conversation_activity` event with `unread_hint: false` to the
+        caller's other devices only. A delete of the conversation deletes its
+        markers. A fork starts read for the member who forked it.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkConversationReadRequest"
+      responses:
+        "200":
+          description: The caller's read marker.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationReadState"
+        "400":
+          description: >
+            A body that is not a JSON object, a `message_id` that is not a
+            string or a number, or a native client version that does not
+            parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/conversation_internal_tools/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    patch:
+      operationId: updateConversationInternalTools
+      summary: Replace a conversation's internal tools and nothing else
+      description: |
+        Client contract 1.15. Sets the conversation's `meta.internal_tools`
+        (the built-in tools a turn may use, such as `attachments` or
+        `ask_user`) and no other key, in one statement, so it never loses or
+        undoes a concurrent write of other settings, from this client or
+        another. updateConversation replaces the whole settings document and
+        keeps the stored list only when its document has no
+        `internal_tools` key.
+
+        The body is `{"internal_tools": [names]}`, the whole new list (an
+        empty list clears it); repeated names are stored once. Every name
+        must be in the internal-tools catalogue the agent turn admits:
+        `ask_user`, `attachments`, `data_analysis`, `image_generation`,
+        `internal_mcp`, `lazy_tools_mode`, `planner`,
+        `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
+        name outside it, a missing or non-array `internal_tools`, or any
+        other key answers 400 and writes nothing. Whether the configured
+        worker runs a tool is a separate question (runtime capabilities).
+
+        Needs `models.chat.conversation.update` (the PUT's permission) and
+        access to the conversation (the chat authority's detail rule); a
+        conversation the caller cannot see answers 404. The answer is the
+        conversation as updateConversation answers it. NOTE(W2):
+        internal/api/v2/conversations/internal_tools.go:53
+        (`UpdateInternalTools`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConversationInternalToolsRequest"
+      responses:
+        "200":
+          description: The updated conversation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdatedConversation"
+        "400":
+          description: >
+            A body that is not `{"internal_tools": [names]}`, a name outside
+            the catalogue, or a native client version that does not parse
+            (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+        "501":
+          description: A composition without a conversation database.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The source conversation's numeric id or its UUID; both resolve.
+    post:
+      operationId: forkConversation
+      summary: Fork a conversation into a new conversation
+      description: |
+        Client contract 1.11. Creates a NEW conversation from the history of
+        the source conversation. With `message_id`, the new conversation holds
+        the messages up to and including that message (the fork point), and
+        every later message that belongs to one of them: the replies to a
+        copied message (its answer, a regenerated or swarm answer) and the
+        swarm children of a copied answer. Without it, it holds the whole
+        history.
+
+        The copy is one transaction. It copies the message groups, their items
+        (text, context, attachments, canvases with their versions) and their
+        trace steps, with new ids, in the same order and with the same
+        `created_at`; the answer's `forked_messages` maps each copied message
+        group's UUID to its copy's. It copies the participants with their
+        per-conversation settings, except the other members: the fork is the
+        caller's, so another member's questions are copied (still theirs, with
+        `role` `user`) but that member is not a participant of the fork and
+        cannot read it. It copies the instructions, `source` and the
+        conversation settings in `meta`. Attachment files are copied to the new conversation, so a
+        delete of either conversation leaves the other one readable. It does
+        NOT copy the pin, the archive, likes and dislikes, a selection, the
+        folder of another member, or a pending tool approval.
+
+        The new conversation belongs to the caller, in the same project, with
+        the privacy a new conversation of the caller gets. Its name is `name`,
+        or the source name with " (fork)" added. Its `meta.forked_from` and
+        the row's `forked_from` name the source conversation and the fork
+        point. A Local work thread (`source: local_work`) gives a Local work
+        thread with the same folder settings; the desktop copies its local
+        turn history itself.
+
+        Needs `models.chat.conversations.create` and
+        `models.chat.conversation.details`, and access to the source
+        conversation (the chat authority's detail rule). A source the caller
+        cannot see answers 404. A `message_id` that is not a message of the
+        source answers 404. A fork point that is still streaming or waits for
+        a tool approval answers 409 `fork_point_unsettled`, as does a later
+        reply of the copy that is; without
+        `message_id`, the newest message is the fork point. An editor Test
+        conversation answers 409 `fork_not_supported`.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkConversationRequest"
+      responses:
+        "201":
+          description: >
+            The new conversation, in the row shape of listConversations.
+            `uuid`, `source`, `forked_from` and `forked_messages` are always
+            present on this response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSummary"
+        "400":
+          description: >
+            A body that is not a JSON object, an invalid `name` (blank, longer
+            than 256 characters or with a control character), a `message_id`
+            that is not a string, or a native client version that does not
+            parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          $ref: "#/components/responses/409"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/conversation_export/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -17041,6 +17694,24 @@ paths:
           schema:
             type: string
           description: "`only` inverts the default hidden-conversation exclusion; any other value keeps the default."
+        - name: archived
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Client contract 1.10. The project's archived conversations (archiveConversation): `exclude` (the
+            default; absent or any other value means `exclude`) leaves them out, `only` lists only them, and
+            `include` lists both. In delta mode
+            (`changes_since`) the value narrows `total` and every page of a full sync (`changes_since` empty
+            or `0`, then the `next_cursor` of each page while `has_more`): the rows stamped before the full sync
+            started. A row that changed during the full sync, and the rows of every later delta, are NOT narrowed
+            by it: an archive or unarchive re-delivers the row with its new `is_archived`, and the client keeps
+            the rows that match its list and drops the others. A client at contract 1.10 or later sends
+            `archived` on every delta call, `exclude` included. A delta call without `archived` gets the shape a
+            client before 1.10 reads: an archived conversation is an `access_lost` tombstone (with the archive
+            time as `deleted_at`) and not a row, and an unarchived conversation is a row again. These tombstones
+            count against the rows' `limit`.
         - name: limit
           in: query
           required: false
@@ -17066,7 +17737,8 @@ paths:
           description: >
             Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged. Empty or `0`: a full sync from
             the beginning in delta shape. Otherwise the opaque `next_cursor` of a previous delta of THIS list —
-            the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine` and `hidden` values; a
+            the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine`, `hidden` and
+            `archived` values (an absent `archived` and `exclude` are the same list); a
             cursor from another list is a 400. Rows come oldest change first. Losing access to the whole project
             is not a tombstone: the client sees 403 and drops that project's cache.
       responses:
@@ -19120,7 +19792,10 @@ paths:
         run its tools with executeRemoteToolkitTool. `application`: a nested
         agent; resolve it with this operation and its
         `application_id`/`application_version_id`. `platform_mcp`: an internal
-        platform MCP server the version selects (`server_name`). No credential,
+        platform MCP server the version selects (`server_name`); from client
+        contract 1.16 it also carries `selected_tools`/`all_tools` and a
+        `toolkit_ref` whose `toolkit_id` is 0, so its tools run through
+        executeRemoteToolkitTool too (an older server sends no ref). No credential,
         vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
         the document; a secret reference outside the tools reads
         `[secret withheld]`, and `withheld_secrets` names each such string by
@@ -19227,8 +19902,11 @@ paths:
       - name: toolkit_id
         in: path
         required: true
-        schema: { type: integer, minimum: 1 }
-        description: The saved toolkit (a `remote_toolkit` tool's `toolkit_ref.toolkit_id`), or a project MCP server toolkit.
+        schema: { type: integer, minimum: 0 }
+        description: >-
+          The saved toolkit (a `remote_toolkit` tool's
+          `toolkit_ref.toolkit_id`), or a project MCP server toolkit; 0 for a
+          `platform_mcp` server (client contract 1.16).
     post:
       operationId: executeRemoteToolkitTool
       summary: Run one tool of one saved toolkit on a cloud worker
@@ -19294,6 +19972,27 @@ paths:
         the worker refuses (the Rust worker runs only read-only, non-sensitive
         tools in this path) answers `reason: worker_refused`. A deployment
         with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+
+        PLATFORM MCP SERVERS (client contract 1.16). `toolkit_id` 0 with a
+        `platform_mcp` tool's `toolkit_ref` runs one tool of that internal
+        builder (`mcp_elitea_internal_*`). The same checks apply: the ref must
+        name a server of this version (`toolkit_ref_mismatch`), the frozen
+        version must select it (`tool_not_in_agent`), the guardrails' blocks
+        (`tool_blocked`), the sensitive-tool confirmation, the rate and the
+        audit. Main runs it in process through the dispatch its internal MCP
+        endpoint serves a cloud turn, AS THE CALLER: each operation re-checks
+        its own permission (an operation's refusal is 200 `ok: false`,
+        `status: tool_error`). No worker runs, so there is no `task_id`;
+        `mcp_authorization_reference` is refused (400); an unknown tool
+        answers 422 `reason: unknown_tool` naming the server's tools, and MCP
+        exposure switched off answers 422 `reason: unsupported_toolkit`. A
+        retry with the same Idempotency-Key and body answers the first call's
+        result on any server replica (claimed in a shared JetStream KV store
+        before the tool runs and kept 15 minutes; a retry that finds it still
+        running waits up to 10 s, then answers 409
+        `remote_toolkit_in_progress`). Without that store the call never
+        runs (503 `remote_toolkit_unavailable_now`; 501
+        `remote_toolkit_unavailable` where the server started without it).
       tags: [toolkits, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -19454,7 +20153,9 @@ paths:
         NOT stop the run; it keeps spending the budget.
 
         What happens to the answer: a turn stopped before any output is
-        removed together with its question; a turn with partial output keeps
+        removed together with its question; a regeneration stopped before
+        any output keeps its question and its answer, settled empty (the
+        previous text is not restored); a turn with partial output keeps
         what was written. After a 204, close the stream and reload the
         transcript rather than waiting for a terminal frame.
 
@@ -19849,6 +20550,22 @@ paths:
         `payload.attachments`. Size limits are the project's storage policy
         (images and documents have separate ceilings); one chunk is at most a
         few MB.
+
+        Client contract 1.13: a name already stored in this conversation is
+        never overwritten. The file is stored under a numbered name instead:
+        the number after the highest one the conversation holds for that name
+        (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
+        before the extension), and two concurrent uploads of one name always
+        get two different names, the loser of a race possibly a random
+        suffix such as `photo (3f9c01ab).jpg`. However many files of one name
+        a conversation holds, the upload is never refused for it. Always send
+        the returned `filepath`, never one built from the local file name.
+
+        Client contract 1.14: a stored document's text is extracted in the
+        background as soon as it is uploaded, so the first turn that carries
+        it does not wait for the extraction. This never delays or fails the
+        upload. A file uploaded and never sent can be removed with
+        deleteConversationAttachment.
       tags: [chat, client]
       requestBody:
         required: true
@@ -19894,6 +20611,12 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The project's attachment bucket name is held by a bucket a person created; rename or delete that bucket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}:
@@ -19981,6 +20704,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition with no object store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteConversationAttachment
+      summary: Delete one file uploaded to a conversation that no message carries
+      description: |
+        Client contract 1.14. Removes one stored file: the one a user uploaded
+        in the composer and took back before sending. Needs
+        `models.chat.attachments.delete` (the permission of the
+        conversation-wide attachment delete) and access to the conversation;
+        a caller who cannot see the conversation gets 404, as for a file that
+        does not exist. Address it as for downloadConversationAttachment. The
+        bytes go first, then the file's record, so a 500 can be retried.
+
+        A file a message carries answers 409 with
+        `{"error": "attachment_in_use"}` and nothing is deleted: the
+        transcript, the download and every later turn read it from the
+        message. Delete the message with its attachments to remove such a
+        file. A file named by a message of another conversation (a fork
+        that shares it) counts too.
+        NOTE(W2): internal/api/v2/conversations/attachment_delete.go:47
+        (`DeleteAttachment`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204': { description: Deleted. }
+        '400':
+          description: >-
+            A numeric conversation id, an invalid file name, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
         '500': { $ref: '#/components/responses/500' }
         '501':
           description: A composition with no object store.
@@ -21290,8 +22058,8 @@ paths:
         parse gets the same status and the same `{error, error_description}`
         keys, with `error: invalid_client_version`.
 
-        Trending (`trend_start_period`/`trend_end_period`) is the one pylon
-        parameter still missing here.
+        Trending (`trend_start_period`/`trend_end_period`) is the one
+        legacy-runtime parameter still missing here.
       tags: [applications, client]
       parameters:
         - $ref: "#/components/parameters/XClientVersion"
@@ -21707,7 +22475,8 @@ paths:
   # runtime plane. GET polls the run bound to a response message and DELETE
   # stops it through the same use case
   # DELETE /task/prompt_lib/{projectID}/{responseMessageID} runs. The path
-  # parameter is the RESPONSE MESSAGE UUID, not a pylon arbiter task id.
+  # parameter is the RESPONSE MESSAGE UUID, not an Arbiter task id of the legacy
+  # runtime.
   #
   # Both operations are deliberately still absent from this document, for the
   # reason the chat_config note below gives and one more of their own: every
@@ -21784,10 +22553,11 @@ paths:
         body. The handler reads no body and writes nothing.
 
         The caller must send `X-SECRET`. The value must equal the project
-        vault's `secrets_header_value`, which is what pylon's
+        vault's `secrets_header_value`, which is what the legacy runtime's
         `check_secret_header` compares
         (legacy/plugins/elitea_core/utils/secrets.py:4-9). A mismatch answers
-        400 `{"error": "Invalid secret header"}`, the exact pylon body.
+        400 `{"error": "Invalid secret header"}`, the exact body the legacy
+        runtime returns.
 
         Implementation: internal/api/v2/applications/handler.go,
         GetVersionExpanded.
@@ -24093,7 +24863,7 @@ paths:
     # `/*` wildcard the object-plane download uses, for the same reason its
     # comment gives: a key may contain `/`.
     #
-    # `default` is the pylon MODE segment the SDK's client still sends
+    # `default` is the route MODE segment the SDK's client still sends
     # (elitea-sdk runtime/clients/client.py builds this URL and appends
     # `/{bucket}/{artifact_name}`). The router resolves PermissionModeDefault
     # unconditionally here, so the segment selects nothing — it is matched
@@ -24713,8 +25483,8 @@ paths:
   # was gated on RouterConfig.Predictor — the prototype indexer transport — and
   # 404'd in every deployment.
   #
-  # It is NOT coming back, and it was never a chat surface. The pylon module
-  # (legacy/plugins/elitea_core/api/v2/webchat.py) is an unauthenticated
+  # It is NOT coming back, and it was never a chat surface. The legacy runtime's
+  # module (legacy/plugins/elitea_core/api/v2/webchat.py) is an unauthenticated
   # Microsoft Bot Framework webhook stub: it echoes the caller's own text back
   # to a connector URL taken from the request body, carries the literal
   # placeholder strings 'MICROSOFT-APP-ID' and 'MICROSOFT-APP-PASSWORD' as its
@@ -24765,10 +25535,10 @@ paths:
   # and another a number, and a client comparing with `===` broke on exactly
   # one of them.
   #
-  # The `{mode}` twins of both paths are registered for pylon URL parity and
-  # are deliberately absent from this document: the mode segment is decoration
-  # on this surface, one handler serves both forms, and no client in the
-  # workspace calls the mode-ful URL.
+  # The `{mode}` twins of both paths are registered so the legacy runtime's URLs
+  # keep working, and are deliberately absent from this document: the mode
+  # segment is decoration on this surface, one handler serves both forms, and no
+  # client in the workspace calls the mode-ful URL.
   # ==========================================================================
   /configurations/configurations/{project_id}:
     parameters:
@@ -24969,8 +25739,8 @@ paths:
 
         THE ONLY CONFIG SECTION A NON-ADMINISTRATOR MAY READ, and it is
         restricted by being a ROUTE rather than a parameter: there is no section
-        id a caller could substitute. pylon restricts it the same way
-        (`_PUBLIC_SECTIONS = {"resources"}`).
+        id a caller could substitute. The legacy runtime restricts it the same
+        way (`_PUBLIC_SECTIONS = {"resources"}`).
 
         The answer merges the section's declared defaults with whatever an
         administrator saved on Admin › Configuration › Resources, so a key is
@@ -25003,13 +25773,14 @@ paths:
   # ADMIN — system info (issue 36, item 7; issue #892)
   #
   # internal/api/v2/admin/handler.go:SystemInfo used to answer 501
-  # unconditionally, in every deployment: in pylon this route reports the
-  # versions of six named plugins, collected from the pylons that announced
-  # themselves on the Arbiter bus in the last 60 seconds. This service loads
-  # no plugins and has no such bus, and AGENTS.md names both as things the
-  # target architecture does not preserve. The route used to invent a
-  # hardcoded elitea_core/auth version map instead (#219) — that fleet answer
-  # is gone for good, and this document must never describe one.
+  # unconditionally, in every deployment: in the legacy runtime this route
+  # reports the versions of six named plugins, collected from the runtime
+  # instances that announced themselves on the Arbiter bus in the last 60
+  # seconds. This service loads no plugins and has no such bus, and AGENTS.md
+  # names both as things the target architecture does not preserve. The route
+  # used to invent a hardcoded elitea_core/auth version map instead (#219) —
+  # that fleet answer is gone for good, and this document must never describe
+  # one.
   #
   # #892 closes the OTHER half of the old 501: this service always has at
   # least one real, local fact to report about itself (its own build
@@ -25018,8 +25789,8 @@ paths:
   # gateway version — this service still has no fleet telemetry for any of
   # those, and reporting one without a real source would be the #219 defect
   # again. `components` is deliberately the same `[{name, version}]` shape
-  # pylon's `plugins` used, so apps/elitea-web's Help Center tooltip
-  # (useResourcesConfig.ts) needed no reshaping, only a real source.
+  # the legacy runtime's `plugins` used, so apps/elitea-web's Help Center
+  # tooltip (useResourcesConfig.ts) needed no reshaping, only a real source.
   # ==========================================================================
   /admin/system_info/prompt_lib:
     get:
@@ -25328,11 +26099,11 @@ paths:
   # segment, so a key with a separator could not be addressed through it.
   #
   # WHAT THIS FAMILY DOES NOT DO, stated here because a client can observe it:
-  # pylon decodes the upload through Pillow, refuses an image smaller than the
-  # requested box, and re-encodes every icon to PNG at at most 64x64. There is
-  # no image codec in this service, so the bytes are stored as uploaded and
-  # `size` reports the box the CLIENT asked for. An icon may therefore be
-  # served at its original pixel size.
+  # the legacy runtime decodes the upload through Pillow, refuses an image
+  # smaller than the requested box, and re-encodes every icon to PNG at at most
+  # 64x64. There is no image codec in this service, so the bytes are stored as
+  # uploaded and `size` reports the box the CLIENT asked for. An icon may
+  # therefore be served at its original pixel size.
   # ==========================================================================
   /elitea_core/upload_skill_icon/prompt_lib/{project_id}:
     parameters:
@@ -25479,10 +26250,10 @@ paths:
         (UpdateSkillIcon).
 
         The body is the icon_meta object the upload answered. `name` and `url`
-        are REQUIRED strings — pylon parses the body through a model that
-        declares them so, and a payload missing either is a 400 here rather
-        than an icon_meta the read path cannot render. Empty strings in both
-        reset the version to the default icon.
+        are REQUIRED strings — the legacy runtime parses the body through a
+        model that declares them so, and a payload missing either is a 400 here
+        rather than an icon_meta the read path cannot render. Empty strings in
+        both reset the version to the default icon.
 
         A version id that matches no row is a 404. That refusal is the
         load-bearing half: a blind UPDATE matching no row would answer "saved"
@@ -25876,8 +26647,8 @@ paths:
                   type: string
                   default: agent
                   description: >-
-                    Only "agent" is accepted; pylon's SkillEntityTypes enum has
-                    no other member
+                    Only "agent" is accepted; the legacy runtime's
+                    SkillEntityTypes enum has no other member
                     (internal/api/v2/skillpublish/attach.go:66-72).
       responses:
         '200':
@@ -26713,7 +27484,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Like failed (pylon-era ok:false envelope)
+          description: Like failed (compatibility ok:false envelope)
           content:
             application/json:
               schema:
@@ -26739,7 +27510,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Unlike failed (pylon-era ok:false envelope)
+          description: Unlike failed (compatibility ok:false envelope)
           content:
             application/json:
               schema:
@@ -26778,7 +27549,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Like failed (pylon-era ok:false envelope)
+          description: Like failed (compatibility ok:false envelope)
           content:
             application/json:
               schema:
@@ -26803,7 +27574,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
-          description: Unlike failed (pylon-era ok:false envelope)
+          description: Unlike failed (compatibility ok:false envelope)
           content:
             application/json:
               schema:
@@ -27464,9 +28235,8 @@ paths:
               schema: { $ref: '#/components/schemas/IndexWriteAck' }
         '400':
           description: |
-            `index_configuration` is not a JSON object, the toolkit is not
-            visible to the caller, or it has no PgVector configuration to
-            write into.
+            `index_configuration` is not a JSON object, or the toolkit is
+            not visible to the caller.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
@@ -27478,7 +28248,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
         '502':
-          description: The project's PgVector store could not be written.
+          description: The index registry could not be written.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/IndexWriteRefusal' }
@@ -27696,8 +28466,8 @@ paths:
         internal/api/router.go:1913-1914.
 
         POST WITH NO BODY. The handler reads both arguments from the URL and
-        never opens the request body. pylon declares the verb, so the route
-        keeps it. Send no payload; the handler discards one.
+        never opens the request body. The legacy runtime declares the verb, so
+        the route keeps it. Send no payload; the handler discards one.
 
         A BLOCKED TYPE IS REFUSED, NOT EMPTIED. The type sits in the URL, so
         `refuseBlockedToolkitType`
@@ -27805,7 +28575,7 @@ paths:
         the shared body at :737-781, which maps the outcome through
         internal/api/v2/toolkitrun/response.go. Registered at
         internal/api/router.go:2445-2446, gated on
-        `models.applications.tool.patch` — pylon declares only
+        `models.applications.tool.patch` — the legacy runtime declares only
         `test_toolkit_tool.py`, so both verbs that run a tool take the string
         that module declares.
 
@@ -27927,9 +28697,10 @@ paths:
   # every MCP result. The protocol they speak is the Model Context Protocol
   # specification, and internal/api/v2/mcp/server.go is the implementation note.
   #
-  # `mode` is pylon's dispatch key, not decoration: tools_call registers
-  # `default` only and internal_mcp_pat_status registers `prompt_lib` only, so
-  # those are the literal segments here rather than a {mode} parameter.
+  # `mode` is a dispatch key, as in the legacy runtime, not decoration:
+  # tools_call registers `default` only and internal_mcp_pat_status registers
+  # `prompt_lib` only, so those are the literal segments here rather than a
+  # {mode} parameter.
   #
   # tools_list registers TWO paths on the same handler (router.go:2040-2041):
   # `/tools_list/{projectID}` and `/tools_list/default/{projectID}`. The
@@ -27956,10 +28727,11 @@ paths:
         own project therefore follows them into every project they work in
         (internal/api/v2/mcp/registry.go:116-129).
 
-        The body is a bare array, which is pylon's shape. An empty array is now
-        an honest read of the rows: it means the project has no registered
-        server. A read failure answers 503 instead, because reporting an empty
-        toolset would make an agent answer without its tools.
+        The body is a bare array, the shape the legacy runtime returns and
+        existing clients read. An empty array is now an honest read of the rows:
+        it means the project has no registered server. A read failure answers
+        503 instead, because reporting an empty toolset would make an agent
+        answer without its tools.
       tags: [toolkits]
       responses:
         '200':
@@ -28095,8 +28867,9 @@ paths:
   # ==========================================================================
   # SECRETS (issue 151)
   #
-  # pylon serves /api/v2/<plugin>/<resource-module>/<mode>/<params>. The
-  # plugin is `secrets`; its resource modules are
+  # The legacy runtime serves
+  # /api/v2/<plugin>/<resource-module>/<mode>/<params>. The plugin is `secrets`;
+  # its resource modules are
   # legacy/plugins/secrets/api/v2/{secrets,secret,hide}.py — hence the
   # doubled first segment, which is the REAL legacy shape and not the
   # double-mount bug issue 137 took it for. Every consumer agrees: the pinned
@@ -28108,7 +28881,7 @@ paths:
   # This domain was absent from this spec entirely until issue 151, which is why
   # nothing generated or contract-tested caught the divergence.
   #
-  # `mode` is a real dispatch key, not decoration: pylon's
+  # `mode` is a real dispatch key, not decoration: the legacy runtime's
   # APIBase.proxy_method looks it up in mode_handlers and abort(404)s on a
   # miss. Only two modes exist — `default` (project vault) and
   # `administration` (the GLOBAL vault). elitea-main implements BOTH, and any
@@ -28242,8 +29015,8 @@ paths:
       description: >
         NOTE(issue 151): internal/api/v2/secrets/handler.go registers this POST
         with an administration branch only (admin.go's AdminCreate). `default`
-        answers 405, because pylon's project API defines only get/put/delete on
-        this path. The name comes from the path and must match
+        answers 405, because the legacy runtime's project API defines only
+        get/put/delete on this path. The name comes from the path and must match
         `^[A-Za-z0-9_]+$`. A duplicate name is a 400, never an overwrite.
       tags: [secrets]
       requestBody:
@@ -28353,12 +29126,13 @@ paths:
         `default` mode only. A hidden secret disappears from the list
         endpoint but is still readable by name through the single-secret GET,
         which reports `is_hidden: true`. BUG-FOR-BUG: a missing secret is a
-        400, not a 404 (handler.go's Hide) — matching pylon's hide.py.
+        400, not a 404 (handler.go's Hide) — matching the legacy runtime's
+        hide.py.
 
         `administration` mode ALWAYS answers 401. The global vault has no
-        hidden section, so pylon refuses the call with that sentence and
-        admin.go's AdminHide reproduces it. The admin page renders no hide
-        control at all.
+        hidden section, so the legacy runtime refuses the call with that
+        sentence and admin.go's AdminHide reproduces it. The admin page renders
+        no hide control at all.
       tags: [secrets]
       responses:
         '200':
@@ -28398,14 +29172,14 @@ paths:
       operationId: showSecretWithoutMode
       summary: Read one secret — the mode-less legacy form
       description: >
-        pylon's api_tools.with_modes registers the mode-less URL alongside
-        the mode-ful one for every resource, and proxy_method defaults
+        The legacy runtime's api_tools.with_modes registers the mode-less URL
+        alongside the mode-ful one for every resource, and proxy_method defaults
         `mode` to "default", so this is the project handler under another
         URL. It is spelled out here because elitea-sdk is a live caller:
         elitea_sdk/runtime/clients/client.py:108 and sandbox_client.py:237
         build {api_v2}/secrets/secret/{project_id} and append /{name}.
-        pylon serves the mode-less form of the other five routes too;
-        elitea-main does not, because nothing in the workspace calls them.
+        The legacy runtime serves the mode-less form of the other five routes
+        too; elitea-main does not, because nothing in the workspace calls them.
       tags: [secrets]
       responses:
         '200':
@@ -28660,9 +29434,10 @@ paths:
   # the key back. See services/elitea-main/internal/api/v2/configurations/
   # stored_check.go.
   #
-  # Each also has a `{mode}` twin the router registers for pylon URL parity
-  # (`/check_stored_connection/{mode}/{project_id}/{config_id}`, and so on).
-  # The twins are deliberately absent from this document, as they are for every
+  # Each also has a `{mode}` twin the router registers so the legacy runtime's
+  # URLs keep working
+  # (`/check_stored_connection/{mode}/{project_id}/{config_id}`, and so on). The
+  # twins are deliberately absent from this document, as they are for every
   # other configurations route: the mode segment is decoration on this surface,
   # one handler serves both forms, and no client in the workspace calls the
   # mode-ful URL.

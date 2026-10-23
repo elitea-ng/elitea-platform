@@ -97,6 +97,10 @@ test('J19a: the AI-Configuration screen offers credential creation and routes to
  *     AI-Configuration screen actually reads.
  */
 test('J19b: create a credential, verify it persisted, then delete it', async ({ page }) => {
+  // test.slow(): create, two axe scans, edit, a fresh page and a delete. On a
+  // webkit CI leg with four workers it measured past 30 s with no single slow
+  // call, so the default budget cut it off at the delete modal.
+  test.slow();
   // `elitea_title` carries a UNIQUE index (scripts/e2e-stack.sh:252) and the
   // create path submits the typed name as both `label` and `elitea_title`
   // (useCredentialFormController.ts buildTitle), so the name must be unique
@@ -263,20 +267,22 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
 });
 
 /**
- * J19d: the four kinds of configuration appear on the credential list under
+ * J19d: the three kinds of configuration appear on the credential list under
  * their OWN section, carrying the fields they were stored with — and the
- * vector store one is usable by a toolkit.
+ * toolkit credential is usable by a toolkit.
  *
  * Ported by use case from the legacy API suite: its "…appear in the project's
  * credential list" cases, one per section, plus "the shared PgVector fixture
- * is usable by a toolkit".
+ * is usable by a toolkit" — re-aimed at the toolkit credential, because the
+ * PgVector configuration type has been removed (indexes live in the platform
+ * vector store and need no configuration).
  *
  * ─────────────────────────────────────────────────────────────────────────
  * WHY THIS IS AN API TEST IN A UI JOURNEY FILE
  * ─────────────────────────────────────────────────────────────────────────
  * J19b above proves the SCREEN renders what the list answers. This proves the
- * list answers the right rows, and it has to look at four sections at once —
- * which through the UI would be four navigations and four pickers, none of
+ * list answers the right rows, and it has to look at three sections at once —
+ * which through the UI would be three navigations and three pickers, none of
  * them the subject. The two together are the claim: the server files each row
  * under its own section, and the screen shows what it files.
  *
@@ -293,12 +299,11 @@ test('J19b: create a credential, verify it persisted, then delete it', async ({ 
  * `?section=` would satisfy every "my row is here" line and would put every
  * credential under every heading — which is exactly what it used to do.
  */
-test('J19d: each section lists its own rows, and a vector store can be linked by a toolkit', async ({
+test('J19d: each section lists its own rows, and a toolkit credential can be linked by a toolkit', async ({
   request,
 }) => {
   const tag = Math.random().toString(36).slice(2, 8);
   const azureTitle = `${AUTOTEST_PREFIX}list_azure_${tag}`;
-  const vectorTitle = `${AUTOTEST_PREFIX}list_pgvector_${tag}`;
   const githubTitle = `${AUTOTEST_PREFIX}list_github_${tag}`;
   const embeddingTitle = `${AUTOTEST_PREFIX}list_embed_${tag}`;
   const created: string[] = [];
@@ -310,8 +315,6 @@ test('J19d: each section lists its own rows, and a vector store can be linked by
       data: { api_base: 'https://autotest.invalid/openai' },
     });
     created.push(azure.id);
-    const vector = await createConfiguration(request, 'vectorstorage', { title: vectorTitle, shared: true });
-    created.push(vector.id);
     const github = await createConfiguration(request, 'credentials', { title: githubTitle });
     created.push(github.id);
     const embedding = await createEmbeddingModel(request, { title: embeddingTitle });
@@ -319,7 +322,6 @@ test('J19d: each section lists its own rows, and a vector store can be linked by
 
     const expectations = [
       { section: 'ai_credentials', title: azureTitle, type: 'azure_open_ai' },
-      { section: 'vectorstorage', title: vectorTitle, type: 'pgvector' },
       { section: 'credentials', title: githubTitle, type: 'github' },
       { section: 'embedding', title: embeddingTitle, type: 'embedding_model' },
     ];
@@ -358,8 +360,8 @@ test('J19d: each section lists its own rows, and a vector store can be linked by
       }
     }
 
-    // The vector store is not only listed, it is USABLE: a toolkit may link it
-    // by title, and the save-time gate resolves that reference before it
+    // The toolkit credential is not only listed, it is USABLE: a toolkit may
+    // link it by title, and the save-time gate resolves that reference before it
     // stores anything. A row the picker offers and the save rejects is the
     // failure this half exists to catch.
     const toolkit = await request.post(
@@ -371,7 +373,6 @@ test('J19d: each section lists its own rows, and a vector store can be linked by
           settings: {
             repository: `${AUTOTEST_PREFIX}org/${AUTOTEST_PREFIX}repo`,
             github_configuration: { elitea_title: githubTitle, private: false },
-            pgvector_configuration: { elitea_title: vectorTitle, private: false },
             selected_tools: [],
           },
         },

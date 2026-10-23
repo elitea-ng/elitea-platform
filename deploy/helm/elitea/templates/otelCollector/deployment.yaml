@@ -6,7 +6,10 @@ metadata:
   labels:
     {{- include "otel-collector.labels" . | nindent 4 }}
 spec:
+  {{- /* No replicas while the HPA owns the count (templates/otelCollector/hpa.yaml). */}}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.otelCollector) }}
   replicas: {{ .Values.otelCollector.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "otel-collector.selectorLabels" . | nindent 6 }}
@@ -25,6 +28,15 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "otel-collector.serviceAccountName" . }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.otelCollector "selector" (include "otel-collector.selectorLabels" .)) | nindent 6 }}
+      {{- /*
+        On SIGTERM the collector stops its receivers and flushes the batch
+        processor through the exporters; the preStop sleep first takes the pod
+        out of the Service so no new span lands on a receiver that closed.
+      */}}
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.otelCollector) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "otelCollector" "grace" .Values.otelCollector.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "batch flush" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.otelCollector.terminationGracePeriodSeconds }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.otelCollector.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: otel-collector
@@ -32,6 +44,7 @@ spec:
           imagePullPolicy: {{ .Values.otelCollector.image.pullPolicy }}
           args:
             - "--config=/etc/otel-collector-config.yaml"
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
           ports:
             - name: otlp-grpc
               containerPort: 4317

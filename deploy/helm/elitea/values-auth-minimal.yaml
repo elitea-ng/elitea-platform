@@ -42,7 +42,9 @@
 # shared migration 0153), so this shape needs only the database. It is the
 # cheapest one that composes the Configurations write path.
 #
-# It is ADDITIVE. values.yaml still ships every OTHER capability flag "false".
+# It is ADDITIVE, except for the runtime plane and the features on it, which
+# values.yaml turns on by default (S10) and this file turns off by name.
+# values.yaml still ships every OTHER capability flag "false".
 # ELITEA_CONFIGURATIONS_ENABLED is the exception: it ships EMPTY there, which
 # the chart reads as "follow this deployment". This file states "true"
 # explicitly below, so nothing here depends on that derivation.
@@ -105,17 +107,23 @@ main:
       document:
         schema_version: elitea.auth.form.v2
 
-        # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
-        # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
-        # equal this origin's scheme and host. Name the edge that makes the
-        # edge-auth call.
+        # The browser's origin: the address people open, the same origin as
+        # DEPLOYMENT_URL below. No edge authenticates for elitea-main any more
+        # (#1359), so nothing else is left for this to name; it scopes the
+        # Form session cookie (Secure, host-only).
         #
         # internal/authcomposition/config.go:365-377 also requires it to be
         # https, with NO path and NO query. A trailing "/" is a path and is
         # refused.
-        public_origin: https://elitea-platform-edge
+        public_origin: https://elitea.example.com
 
-        # The pod network. A non-empty list is mandatory.
+        # The proxies whose X-Forwarded-For is believed: the pod network the
+        # cluster Gateway or ingress controller forwards from. Narrow it to that
+        # range. Any peer inside it can name its own client address and so its
+        # own login attempt window, so it must never include an address a
+        # browser reaches elitea-main from directly (a NodePort or LoadBalancer
+        # Service). A peer outside it is keyed by its socket address. A
+        # non-empty list is mandatory.
         trusted_proxy_cidrs:
           - 10.0.0.0/8
           - 172.16.0.0/12
@@ -220,10 +228,27 @@ main:
     # public base URL of your deployment.
     DEPLOYMENT_URL: "https://elitea.example.com"
 
-# No agent worker. It would be refused anyway: guards.yaml requires
-# main.runtime.enabled=true beside it, and this file deliberately leaves the
-# runtime plane at the values.yaml default of false.
+  # No runtime plane: it is what this file leaves out (values.yaml turns it
+  # on by default since S10).
+  runtime:
+    enabled: false
+
+# And so none of what stands on it. values.yaml turns these on by default
+# (S10); this file turns them off EXPLICITLY, each with its own switch,
+# because each would be refused without the runtime plane (the agent worker,
+# elitea-vector (with its Qdrant), and the DeepWiki and Inventory providers all reach
+# elitea-main only through its listeners).
 worker:
+  enabled: false
+vector:
+  enabled: false
+# The bundled Qdrant is elitea-vector's store; with vector off it is a second
+# switch the render asks for by name.
+qdrant:
+  enabled: false
+deepwiki:
+  enabled: false
+inventory:
   enabled: false
 
 # This profile ships no edge in front of elitea-main, so nothing outside the

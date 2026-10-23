@@ -2,17 +2,20 @@
 {{- $env := .Values.inventory.env | default dict }}
 {{- /*
   Sensitive values, resolved in the shape every other component in this chart
-  uses. The HOST container gets inventory.secrets (the identity key) and never
-  the database URL; the ENGINE sidecar gets only the database URL (from
+  uses. The HOST container gets inventory.secrets (the identity key) and the
+  database URL; the ENGINE sidecar gets only the database URL (from
   inventory.secrets.ELITEA_INVENTORY_DATABASE_URL, else postgresql.
   existingSecret, the same resolution the migrate Job uses) and never the
   identity key. The database is the engine's own (ADR-0027): the graph lives in
   the inventory_graph schema, migrated by the engine image's `migrate`.
 
-  `urlKey` is not passed for the host: no database URL belongs there.
+  The host reads the same database for its invocation store
+  (inventory_graph.invocations, engine migration 0009): every replica shares
+  it, so a poll, a cancel or a deletion is served by any replica (scaling).
 */ -}}
 {{- $secrets := omit (.Values.inventory.secrets | default dict) "ELITEA_INVENTORY_DATABASE_URL" }}
 {{- $dbSecrets := fromJson (include "elitea-inventory.databaseSecrets" .) }}
+{{- $hostDbSecrets := fromJson (include "elitea-inventory.hostStoreSecrets" .) }}
 {{- include "elitea-inventory.validateGuards" . -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -21,7 +24,11 @@ metadata:
   labels:
     {{- include "elitea-inventory.labels" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.inventory "field" "inventory") }}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.inventory) }}
   replicas: {{ .Values.inventory.replicaCount }}
+  {{- end }}
+  {{- /* No `replicas:` while an HPA or ScaledObject owns the Deployment (autoscaling.yaml). */}}
   selector:
     matchLabels:
       {{- include "elitea-inventory.selectorLabels" . | nindent 6 }}
@@ -34,16 +41,31 @@ spec:
     metadata:
       labels:
         {{- include "elitea-inventory.selectorLabels" . | nindent 8 }}
+      {{- with (include "elitea.scaling.scrapeAnnotations" (dict "v" .Values.inventory "port" .Values.inventory.admin.port "path" "/metrics") | trim) }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.inventory.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-inventory.serviceAccountName" . }}
-      # Long enough for an in-flight invocation to be recorded as terminal
-      # before the process goes. It does not have to outlast an INGESTION:
-      # a lost run is redone, and draining forever would be the wrong trade.
-      terminationGracePeriodSeconds: {{ .Values.inventory.terminationGracePeriodSeconds }}
+      # Long enough for a running ingestion to FINISH on this replica
+      # (scaling). On SIGTERM the host leaves the Services, stops admitting
+      # new invocations, and waits up to
+      # ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS (default 3600) for its invocations;
+      # the engine sidecar keeps serving until it is idle too. A poll or a
+      # cancel for them reaches a sibling, which reads the shared store. What
+      # is left at the deadline is cancelled and recorded terminal.
+      #
+      # One clock: the preStop sleep, the gRPC listener's stop (up to 10s), the
+      # drain, then 10s for the store and NATS to close.
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.inventory) }}
+      {{- $drain := include "elitea.integer" (dict "field" "inventory.env.ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" "value" (get $env "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" | default "30" | toString) "min" 0) | int }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "inventory" "grace" .Values.inventory.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "gRPC stop" 10) (list "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.inventory.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.inventory "selector" (include "elitea-inventory.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.inventory.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-inventory
@@ -54,20 +76,24 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-            {{- if include "elitea-inventory.platformGrpc" . }}
+            # The one listener (#1359): the provider SPI
+            # (elitea.subapp.v1.ProviderService, elitea-main's facade) and the
+            # platform operations, both gRPC behind the mTLS terminus below.
             - name: platform-grpc
               containerPort: {{ .Values.inventory.platformGrpc.port }}
               protocol: TCP
-            {{- end }}
+            # The admin port: /healthz and /readyz, plain HTTP, for the probes.
+            - name: admin
+              containerPort: {{ .Values.inventory.admin.port }}
+              protocol: TCP
           env:
             {{- range $key, $value := $env }}
-            {{- if not (hasKey $secrets $key) }}
+            {{- if not (or (hasKey $secrets $key) (hasKey $dbSecrets $key) (eq $key "ELITEA_INVENTORY_DATABASE_URL")) }}
             # Skipped when the same name is secret-backed below: emitting both
             # puts one name twice in this list, and only ordering decides which
-            # wins.
+            # wins. The host's database URL comes only from hostStoreSecrets
+            # (a plain inventory.env value would reach a host whose tables no
+            # Job creates).
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
@@ -82,47 +108,70 @@ spec:
             - name: ELITEA_INVENTORY_TLS_CA_FILE
               value: {{ .Values.inventory.mtls.mountPath }}/ca.crt
             {{- end }}
-            {{- if include "elitea-inventory.platformGrpc" . }}
-            # The platform gRPC service: a second listener behind the TLS
-            # configuration above. Only the identities listed may call it, by
-            # their verified client certificate. Absent when the allowlist is
-            # empty, which keeps the service off.
+            # The listener's allowlist: only the identities listed may call
+            # it, by their verified client certificate (elitea-main's facade
+            # client certificate, by default).
             - name: ELITEA_INVENTORY_PLATFORM_CLIENTS
               value: {{ join "," .Values.inventory.platformGrpc.clients | quote }}
             - name: ELITEA_INVENTORY_PLATFORM_GRPC_ADDR
               value: {{ printf ":%d" (.Values.inventory.platformGrpc.port | int) | quote }}
+            - name: ELITEA_INVENTORY_ADMIN_ADDR
+              value: {{ printf ":%d" (.Values.inventory.admin.port | int) | quote }}
+            {{- if not (hasKey $env "ELITEA_INVENTORY_NATS_URL") }}
+            # The cancellation fan-out (#1359): a cancel that lands on one
+            # replica stops the run on the replica that holds it. Core NATS,
+            # the SUBAPP account, this application's subjects only.
+            - name: ELITEA_INVENTORY_NATS_URL
+              value: {{ include "elitea.natsUrl" . | quote }}
             {{- end }}
+            {{- if .Values.natsClient.tls.enabled }}
+            # Its NATS identity, elitea-inventory (templates/natsClient.yaml).
+            - name: ELITEA_INVENTORY_NATS_TLS_CA_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+            - name: ELITEA_INVENTORY_NATS_TLS_CERT_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+            - name: ELITEA_INVENTORY_NATS_TLS_KEY_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
+            {{- end }}
+            # The artifact hop (#1359 U5): graph uploads and reads go over
+            # elitea.runtime.v1.ArtifactObjectService on elitea-main's platform
+            # listener, trusting the runtime CA and presenting the callback
+            # client identity (dns:elitea-subapp-callback).
+            - name: ELITEA_INVENTORY_ARTIFACT_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
+            - name: ELITEA_INVENTORY_CALLBACK_CA_FILE
+              value: {{ include "elitea-inventory.runtimeCaPath" . }}/runtime-ca.crt
+            - name: ELITEA_INVENTORY_CALLBACK_CERT_FILE
+              value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_INVENTORY_CALLBACK_KEY_FILE
+              value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.key
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
-          # tcpSocket, not httpGet, for the reason DeepWiki's deployment spells
-          # out: with mTLS on, this listener requires and verifies a client
-          # certificate, and the kubelet presents none. An httpGet probe fails
-          # every time, readiness never passes, and the liveness probe restarts
-          # a process that is working correctly.
-          {{- if .Values.inventory.mtls.enabled }}
-          livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
-          readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
-          {{- else }}
+            # The invocation store (inventory_graph.invocations): the engine's
+            # database, from the same secret the engine and the migrate Job
+            # read, and only while that Job renders (it creates the tables).
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $hostDbSecrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          # The native sleep (Kubernetes 1.30+): DNS and the endpoints drop this
+          # replica before the host stops its listener, so elitea-main's
+          # round_robin sends no new call to a process that stopped taking them.
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
+          # httpGet on the admin port: the gRPC listener requires and verifies a
+          # client certificate, and the kubelet presents none. Liveness is
+          # /healthz (the process is up); readiness is /readyz, which fails
+          # while this replica does not hold its invocation-store owner claim
+          # (#1359), so a replica that refuses new invocations leaves the
+          # Service instead of receiving them.
           livenessProbe:
             httpGet:
-              path: {{ .Values.inventory.probes.liveness.path }}
-              port: http
+              path: /healthz
+              port: admin
             periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
           readinessProbe:
             httpGet:
-              path: {{ .Values.inventory.probes.readiness.path }}
-              port: http
+              path: /readyz
+              port: admin
             periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
-          {{- end }}
           resources:
             {{- toYaml .Values.inventory.resources | nindent 12 }}
           volumeMounts:
@@ -131,7 +180,25 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.inventory.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 12 }}{{- end }}
+            {{- if .Values.natsClient.tls.enabled }}
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
+            - name: runtime-ca
+              mountPath: {{ include "elitea-inventory.runtimeCaPath" . }}
+              readOnly: true
+            - name: callback-client
+              mountPath: {{ include "elitea-inventory.callbackClientPath" . }}
+              readOnly: true
         {{- if include "elitea-inventory.sidecar" . }}
+      # A NATIVE sidecar (an init container with restartPolicy Always,
+      # Kubernetes 1.29+; this chart needs 1.30). The kubelet starts it before
+      # the host, and on termination it stops it only AFTER the host container
+      # has exited. The host drains its invocations (up to
+      # ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS), and an invocation calls the
+      # engine many times; the engine serves every one of those calls, because
+      # it gets no SIGTERM while the host runs. Then the engine drains its own
+      # open streams (none by then) and exits.
+      initContainers:
         # The engine sidecar (ADR-0023 H2, ADR-0027): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
         # identity — the socket directory is the only way in. One distroless
@@ -142,6 +209,7 @@ spec:
         - name: engine
           image: "{{ .Values.inventory.engine.image.repository }}:{{ include "elitea-inventory.engineTag" . }}"
           imagePullPolicy: {{ .Values.inventory.engine.image.pullPolicy }}
+          restartPolicy: Always
           {{- with .Values.inventory.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -154,11 +222,31 @@ spec:
               value: {{ $value | quote }}
             {{- end }}
             {{- end }}
-            {{- with .Values.inventory.engine.callbackCa.secretName }}
-            # Model calls and artifact reads go to the callback origin; when
-            # that is TLS under a private CA, trust it.
+            {{- if include "elitea-inventory.modelCalls" . }}
+            # The engine reaches elitea-main only over gRPC on the platform
+            # listener: model calls (ModelService, #1359 U2), artifact-folder
+            # reads (ArtifactObjectService) and investigate source-tool calls
+            # (#1359 U5). llm_settings.api_base is a fixed route name and is
+            # never dialed. The runtime CA signs the listener's certificate,
+            # and the listener admits the callback client identity
+            # (dns:elitea-subapp-callback).
+            - name: ELITEA_INVENTORY_MODEL_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_INVENTORY_CALLBACK_CA_FILE
-              value: {{ $.Values.inventory.engine.callbackCa.mountPath }}/{{ $.Values.inventory.engine.callbackCa.key }}
+              value: {{ include "elitea-inventory.runtimeCaPath" . }}/runtime-ca.crt
+            - name: ELITEA_INVENTORY_CALLBACK_CERT_FILE
+              value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_INVENTORY_CALLBACK_KEY_FILE
+              value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.key
+            {{- if and .Values.vector.enabled (not (hasKey $engineEnv "ELITEA_INVENTORY_VECTOR_URL")) }}
+            # The native runner's entity vectors (ADR-0031): this chart's
+            # elitea-vector, with the invocation's callback token over the
+            # callback material above (runtime CA both ways). The native
+            # runner refuses to start without it
+            # (elitea-inventory.validateGuards refuses the render first).
+            - name: ELITEA_INVENTORY_VECTOR_URL
+              value: {{ include "elitea-vector.origin" . | quote }}
+            {{- end }}
             {{- end }}
             # ELITEA_INVENTORY_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).
@@ -188,9 +276,12 @@ spec:
               mountPath: {{ .Values.inventory.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.inventory.engine.socketDir }}
-            {{- if .Values.inventory.engine.callbackCa.secretName }}
-            - name: callback-ca
-              mountPath: {{ .Values.inventory.engine.callbackCa.mountPath }}
+            {{- if include "elitea-inventory.modelCalls" . }}
+            - name: runtime-ca
+              mountPath: {{ include "elitea-inventory.runtimeCaPath" . }}
+              readOnly: true
+            - name: callback-client
+              mountPath: {{ include "elitea-inventory.callbackClientPath" . }}
               readOnly: true
             {{- end }}
         {{- end }}
@@ -204,16 +295,32 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        {{- if and (include "elitea-inventory.sidecar" .) .Values.inventory.engine.callbackCa.secretName }}
-        # Only the CA key of the named Secret: nothing else in it is mounted.
-        - name: callback-ca
+        {{- if include "elitea-inventory.callbackMaterial" . }}
+        # ONLY the runtime CA from the worker's material Secret: the Secret
+        # also holds the worker's client key and signing keys, none of which
+        # this pod may read.
+        - name: runtime-ca
           secret:
-            secretName: {{ .Values.inventory.engine.callbackCa.secretName }}
+            secretName: {{ .Values.worker.materialSecretName }}
             items:
-              - key: {{ .Values.inventory.engine.callbackCa.key }}
-                path: {{ .Values.inventory.engine.callbackCa.key }}
+              - key: runtime-ca.crt
+                path: runtime-ca.crt
+        # The host's and the engine's client identity on the platform
+        # listener: a runtime-CA certificate that is NOT the worker's.
+        - name: callback-client
+          secret:
+            secretName: {{ .Values.inventory.callbackClient.secretName }}
+            defaultMode: {{ .Values.inventory.callbackClient.defaultMode }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 8 }}{{- end }}
+        {{- if .Values.natsClient.tls.enabled }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-inventory.fullname" .))) | nindent 8 }}
+        {{- end }}
       {{- with .Values.inventory.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

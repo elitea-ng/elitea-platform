@@ -371,12 +371,14 @@ func (r *AgentExecutionJobsRepository) reserveAgentAdmissionError(
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case "E9651":
-			return fmt.Errorf(
-				"%w: capability %q configured=%d",
-				ErrAdmissionPolicyMismatch,
-				capabilityID,
-				r.policy.MaxOutstanding,
-			)
+			// The guard trigger (shared/0126) names both values in its
+			// message; the persisted one is read back from it for the
+			// operator, and reported as unknown if the text ever changes.
+			var persisted, configured int64
+			if _, scanErr := fmt.Sscanf(pgErr.Message, "agent admission policy mismatch: persisted %d configured %d", &persisted, &configured); scanErr != nil {
+				persisted = 0
+			}
+			return admissionPolicyMismatchError(capabilityID, r.policy.MaxOutstanding, persisted)
 		case "E9652":
 			return &executionapp.AdmissionCapacityError{
 				CapabilityID:   capabilityID,
@@ -1121,9 +1123,9 @@ func insertCurrentAdhocTurn(
 // `attachment_message` items on the QUESTION group, in the SAME transaction
 // that just created that group (#606 part 2).
 //
-// WHY THE QUESTION GROUP, AND WHY HERE. Pylon attaches them to the user's
-// message (rpc/chat_all.py:285-320), which is what makes the transcript render
-// the file under the message the user sent it with; hanging them off the
+// WHY THE QUESTION GROUP, AND WHY HERE. The legacy runtime attaches them to the
+// user's message (rpc/chat_all.py:285-320), which is what makes the transcript
+// render the file under the message the user sent it with; hanging them off the
 // streaming response group instead would attribute the user's upload to the
 // agent. And the admission transaction is the only place in this service where
 // a message group is created at all — the worker writes no chat rows — so
@@ -1139,7 +1141,7 @@ func insertCurrentAdhocTurn(
 //
 // order_index starts at 1: the question's text item holds 0
 // (InsertCurrentApplicationTurn/InsertCurrentAdhocTurn write it there), and
-// pylon enumerates its attachments from 1 for exactly that reason
+// the legacy runtime enumerates its attachments from 1 for exactly that reason
 // (rpc/chat_all.py:303).
 func insertCurrentTurnAttachments(
 	ctx context.Context,

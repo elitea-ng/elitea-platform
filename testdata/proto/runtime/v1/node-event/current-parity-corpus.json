@@ -1,8 +1,8 @@
 {
   "contract_revision": "elitea.runtime.node-event.v1",
   "current_evidence": {
-    "producer": "centry/pylon_indexer/plugins/indexer_worker/utils/node_interface.py:NodeEvent",
-    "main_consumer": "centry/pylon_main/plugins/elitea_core/methods/stream.py:stream_response",
+    "producer": "centry/legacy_indexer/plugins/indexer_worker/utils/node_interface.py:NodeEvent",
+    "main_consumer": "centry/legacy_main/plugins/elitea_core/methods/stream.py:stream_response",
     "ui_consumer": "EliteaUI/src/[fsd]/features/toolkits/indexes/lib/helpers/indexChat.helpers.js:generateChatMessageBasedOnResponse"
   },
   "current_event_types": [

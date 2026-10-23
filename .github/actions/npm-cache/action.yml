@@ -2,17 +2,25 @@ name: npm download cache (pull requests read, main writes)
 description: >-
   Restores the npm download cache that `actions/setup-node` with `cache: npm`
   used to cache, under the SAME key setup-node wrote, and saves it only on a
-  push to main. Use it straight after `actions/setup-node` with
+  run on main (the nightly schedule or a dispatch). Use it straight after `actions/setup-node` with
   `package-manager-cache: false` and no `cache:` input.
 #
 # The key is setup-node's own spelling (`node-cache-<os>-<node arch>-npm-
 # <hashFiles(lockfile)>`), so the entry main already holds is restored as-is
 # on the first run after this change. See .github/actions/main-write-cache for
-# why only a push to main writes.
+# why only a run on main writes.
 inputs:
   cache-dependency-path:
     description: The package-lock.json the cache is keyed on.
     required: true
+  prefix-fallback:
+    description: >-
+      'false' restores the exact key only. On a miss the default falls back to
+      ANY npm cache on this OS and arch, usually the web app's much larger one; a
+      small lockfile (scripts/ci) would then restore it, and main would save
+      all of it again under its own key.
+    required: false
+    default: "true"
 outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
@@ -29,14 +37,21 @@ runs:
         set -euo pipefail
         [ -f "$GITHUB_WORKSPACE/$LOCKFILE" ] || { echo "::error::cache-dependency-path '$LOCKFILE' is not a file"; exit 1; }
         echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+        # A cold cache makes `npm ci` fetch every tarball from the registry,
+        # and one ECONNRESET with npm's default 2 retries fails the job. Every
+        # npm call later in this job inherits these through GITHUB_ENV.
+        {
+          echo "NPM_CONFIG_FETCH_RETRIES=6"
+          echo "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000"
+          echo "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000"
+        } >> "$GITHUB_ENV"
         # process.arch (x64, arm64), which is what setup-node put in the key;
         # runner.arch spells it X64.
         echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
-    - name: Restore the npm cache (save on a push to main)
+    - name: Restore the npm cache (save on a run on main)
       id: cache
       uses: ./.github/actions/main-write-cache
       with:
         path: ${{ steps.npm.outputs.dir }}
         key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles(inputs.cache-dependency-path) }}
-        restore-keys: |
-          node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-
+        restore-keys: ${{ inputs.prefix-fallback == 'true' && format('node-cache-{0}-{1}-npm-', runner.os, steps.npm.outputs.arch) || '' }}

@@ -34,7 +34,7 @@ export function sortProjectsByName(projects: readonly Project[]): Project[] {
 }
 
 /**
- * pylon's reserved storage name for a personal project
+ * The legacy runtime's reserved storage name for a personal project
  * (`PROJECT_PERSONAL_NAME_TEMPLATE`, `project_user_<uid>`) — the same rule the
  * admin projects listing uses to answer `is_personal`, and the same one
  * `personalproject.Name` writes on this backend.
@@ -45,10 +45,11 @@ const PERSONAL_STORAGE_NAME = /^project_user_\d+$/;
  * `true` when a project's STORED name marks it as somebody's personal project.
  *
  * WHY THE NAME AND NOT THE ID. `GET /social/author`'s `personal_project_id` is
- * the id the old app compares against, and behind pylon that field only ever
- * named a `project_user_<uid>` row. This backend used to resolve the same field
- * down a third branch pylon does not have — "the lowest-id project the user
- * actually holds a role in" (`resolvePersonalProjectID`, services/elitea-main/
+ * the id the old app compares against, and behind the legacy runtime that field
+ * only ever named a `project_user_<uid>` row. This backend used to resolve the
+ * same field down a third branch the legacy runtime does not have — "the
+ * lowest-id project the user actually holds a role in"
+ * (`resolvePersonalProjectID`, services/elitea-main/
  * internal/api/v2/social/handler.go) — so an account with no personal project
  * yet was handed an ORDINARY TEAM PROJECT, and every "is this my private
  * project?" test written as an id comparison alone answered yes for a shared

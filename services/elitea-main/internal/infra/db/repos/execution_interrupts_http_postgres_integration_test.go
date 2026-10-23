@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -26,24 +27,19 @@ func (interruptPrincipalValidator) ValidatePrincipal(_ context.Context, user aut
 	return user, nil
 }
 
-type interruptPeerVerifier struct{}
-
-func (interruptPeerVerifier) VerifyForwardedIdentityPeer(*http.Request) error { return nil }
-
 func TestExecutionInterruptHTTPAgainstPostgres(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
 	key := h.raise(response, "fanout-interrupt-card-v1.json")
 	route, err := agentexecutionapi.NewCurrentExecutionInterruptRoute(h.repo,
-		apimw.AuthConfig{PrincipalValidator: interruptPrincipalValidator{}, ForwardedIdentityVerifier: interruptPeerVerifier{}},
+		apimw.AuthConfig{PrincipalValidator: interruptPrincipalValidator{}, FormSessions: authtest.FormSessions{}},
 		legacyrbac.NewPostgresResolver(h.pool))
 	if err != nil {
 		t.Fatal(err)
 	}
 	call := func(actor int64, method, path string, body []byte) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
-		req.Header.Set("X-Auth-Type", "user")
-		req.Header.Set("X-Auth-ID", strconv.FormatInt(actor, 10))
+		authtest.SignIn(req, strconv.FormatInt(actor, 10))
 		w := httptest.NewRecorder()
 		route.ServeHTTP(w, req)
 		return w

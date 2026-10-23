@@ -14,7 +14,7 @@ while the default still says `.elitea.svc` silently points the new release at
 another environment's NATS — sharing its budget counters and rate
 limits — and nothing reports it as a misconfiguration.
 
-Usage: {{ include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .) }}
+Usage: {{ include "elitea.serviceHost" (dict "svc" .Values.natsClient "ctx" .) }}
 */}}
 {{- define "elitea.serviceHost" -}}
 {{- $svc := .svc -}}
@@ -32,13 +32,13 @@ elitea.eventsNatsUrl — the NATS URL elitea-main's live-update plane
 (ELITEA_EVENTS_NATS_URL) gets when main.env does not state one: the SAME
 effective NATS the LLM gateway uses, because the gateway publishes
 budget.soft_alert onto the subject the project SSE stream reads. Deriving it
-from the top-level `nats` block alone, while the gateway honours an explicit
+from the `natsClient` block alone, while the gateway honours an explicit
 llmGateway.env.GATEWAY_NATS_URL, sent main to a host that may not exist
 (CrashLoop: a configured but unreachable NATS stops elitea-main) and split
 soft alerts onto a broker nobody streams from.
 
 Order: llmGateway.env.GATEWAY_NATS_URL (gateway enabled), then
-scheduler.env.GATEWAY_NATS_URL (scheduler enabled), then the `nats` block.
+scheduler.env.GATEWAY_NATS_URL (scheduler enabled), then the `natsClient` block.
 Empty when none names a NATS — elitea-main then runs with no live-update plane.
 
 A GATEWAY_NATS_URL the gateway reads from a Secret (llmGateway.secrets) is not
@@ -52,18 +52,18 @@ names its own URL too.
 {{- get $gw "GATEWAY_NATS_URL" -}}
 {{- else if and .Values.scheduler.enabled (get $sched "GATEWAY_NATS_URL") -}}
 {{- get $sched "GATEWAY_NATS_URL" -}}
-{{- else if .Values.nats.service -}}
+{{- else if .Values.natsClient.service -}}
 {{- include "elitea.natsUrl" . -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-elitea.natsUrl — the URL every component gets from the top-level `nats` block:
-tls:// when nats.tls.enabled (the NATS chart requires TLS, #1076), nats://
+elitea.natsUrl — the URL every component gets from the `natsClient` block:
+tls:// when natsClient.tls.enabled (the NATS server requires TLS, #1076), nats://
 only in the acknowledged plaintext posture. Never a credential.
 */}}
 {{- define "elitea.natsUrl" -}}
-{{- printf "%s://%s" (ternary "tls" "nats" (.Values.nats.tls.enabled | default false)) (include "elitea.serviceAddr" (dict "svc" .Values.nats "ctx" .)) -}}
+{{- printf "%s://%s" (ternary "tls" "nats" (.Values.natsClient.tls.enabled | default false)) (include "elitea.serviceAddr" (dict "svc" .Values.natsClient "ctx" .)) -}}
 {{- end }}
 
 {{/*
@@ -77,7 +77,7 @@ deploy/helm/tests/render-nats-security.sh reads every prefix the code passes
 to natsconn and asserts the rendered chart sets all three names for it.
 */}}
 {{- define "elitea.natsClientFile" -}}
-{{- printf "%s/%s" (trimSuffix "/" .ctx.Values.nats.tls.mountPath) .file | quote -}}
+{{- printf "%s/%s" (trimSuffix "/" .ctx.Values.natsClient.tls.mountPath) .file | quote -}}
 {{- end }}
 
 {{/*
@@ -89,7 +89,7 @@ symlink swap on renewal is exactly what it should see.
 */}}
 {{- define "elitea.natsClientVolumeMount" -}}
 - name: nats-client-tls
-  mountPath: {{ .Values.nats.tls.mountPath }}
+  mountPath: {{ .Values.natsClient.tls.mountPath }}
   readOnly: true
 {{- end }}
 
@@ -101,7 +101,7 @@ symlink swap on renewal is exactly what it should see.
 
 {{/*
 elitea-main.usesNats — "true" when elitea-main dials NATS at all: a URL from
-its own env, from a Secret, or derived from the gateway / the `nats` block.
+its own env, from a Secret, or derived from the gateway / the `natsClient` block.
 */}}
 {{- define "elitea-main.usesNats" -}}
 {{- $env := .Values.main.env | default dict -}}

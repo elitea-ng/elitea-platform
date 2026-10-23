@@ -21,7 +21,7 @@ Cargo feature `graph-extensions-rehearsal`. The Web editor shows them only when 
 - n8n and JavaScript number coercion through floating point: integer operations use exact decimal arithmetic and
   reject `2.5`.
 - Expression or template evaluation inside field paths: paths are RFC 6901 pointers only.
-- The current platform has no shaping node. Nothing was taken from the Python SDK or the Pylon plugins.
+- The current platform has no shaping node. Nothing was taken from the Python SDK or the legacy plugins.
 
 ## 2. Changed paths
 

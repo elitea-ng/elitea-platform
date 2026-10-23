@@ -363,7 +363,7 @@ func TestScheduledRunDoesNotCountTowardAdoption(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	// The membership table is pylon-owned and the ledgered template does not
+	// The membership table is legacy-owned and the ledgered template does not
 	// create it, so the test declares the columns projectAdoption reads.
 	_, err := pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS public.auth_core__project_user_role (
@@ -477,7 +477,7 @@ func TestCostEstimateReportsEvaluationSpend(t *testing.T) {
 	router := costAttributionRouter(pool, now)
 
 	plantModelPrice(t, pool, "openai", "gpt-4o", "1.00000000", "1.00000000")
-	seedPylonApplicationsTable(t, pool)
+	seedApplicationsTable(t, pool)
 	_, err := pool.Exec(context.Background(),
 		`INSERT INTO p_1.applications (id, name, owner_id) VALUES (4001, 'Graded Agent', 1)`)
 	require.NoError(t, err)

@@ -2,10 +2,11 @@ package storage
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
 )
 
 func TestCodePlatformStepStrictBodyPins(t *testing.T) {
@@ -30,20 +31,13 @@ func TestCodePlatformStepStrictBodyPins(t *testing.T) {
 	}
 }
 func TestCodePlatformStepDefaultDisabledAndClaimBeforeOwner(t *testing.T) {
-	route := "/runtime/content/executions/0123456789abcdef0123456789abcdef/generations/1/code-platform/step"
-	s := &ContentServer{}
-	r := httptest.NewRequest(http.MethodPost, route, strings.NewReader(`{}`))
-	w := httptest.NewRecorder()
-	s.PostCodePlatformStep(w, r)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("disabled step status %d", w.Code)
-	}
+	scope := contentScope("0123456789abcdef0123456789abcdef", 1)
+	s := &ContentServer{requests: make(chan struct{}, 1)}
+	_, err := s.StepCodePlatform(context.Background(), &runtimev1.StepCodePlatformRequestV1{Scope: scope, RequestJson: []byte(`{}`)})
+	requireContentCode(t, err, codes.Unimplemented)
 	s.codePlatformPump = &CodePlatformPump{}
-	w = httptest.NewRecorder()
-	s.PostCodePlatformStep(w, httptest.NewRequest(http.MethodPost, route, strings.NewReader(strings.Repeat("x", 513))))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("missing claim reached body/owner: %d", w.Code)
-	}
+	_, err = s.StepCodePlatform(contentPeerContext(context.Background(), nil), &runtimev1.StepCodePlatformRequestV1{Scope: scope, RequestJson: []byte(strings.Repeat("x", 513))})
+	requireContentCode(t, err, codes.PermissionDenied)
 }
 func TestCodeBrokerNoEffectFactsRequireRegistrationAndNoObservation(t *testing.T) {
 	if (CodeBrokerEffectFacts{}).NoObservedEffect() {

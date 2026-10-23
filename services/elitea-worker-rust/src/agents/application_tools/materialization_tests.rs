@@ -5,16 +5,17 @@ use crate::agents::assembly_tests::ordinary_request;
 use crate::agents::model_scope::ModelScopeBackend;
 use crate::agents::request::AgentExecutionKind;
 use crate::protocol::control::test_runtime_context_authority;
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::openai_compatible_facade::{
     CapturedModelRequests, TestModelGatewayOutcome, test_model_gateway_client,
     test_model_gateway_config, test_model_gateway_response,
 };
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 use adk_rust::graph::Checkpointer as _;
 use bytes::Bytes;
-use http::{Request, Response, Version};
+use http::Response;
 use http_body_util::Full;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -31,14 +32,11 @@ struct FrozenVersions {
     fingerprints: BTreeMap<Identity, String>,
     reads: Arc<StdMutex<Vec<Identity>>>,
 }
-#[async_trait]
-impl RuntimeContextRpc for FrozenVersions {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        let path = request.uri().path();
-        let value = if path.ends_with("/elitea-client-token") {
+#[tonic::async_trait]
+impl ContextRoutes for FrozenVersions {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+        let path = call.route;
+        let value = if path == "elitea-client-token" {
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1", "project_id":17, "token":"fixture-materialization-token"})
         } else {
             let parts = path.split('/').collect::<Vec<_>>();
@@ -46,12 +44,12 @@ impl RuntimeContextRpc for FrozenVersions {
                 .get(parts.len() - 3)
                 .and_then(|v| v.parse::<u64>().ok())
                 .zip(parts.last().and_then(|v| v.parse::<u64>().ok()))
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture route"))?;
             self.reads.lock().unwrap().push(identity);
             let version = self
                 .versions
                 .get(&identity)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture version"))?;
             let mut value = json!({"schema_version":"elitea.runtime.application-version.v1", "project_id":17,
                 "application_id":identity.0,"version_id":identity.1,"version_details":version});
             if let Some(fingerprint) = self.fingerprints.get(&identity) {
@@ -59,16 +57,7 @@ impl RuntimeContextRpc for FrozenVersions {
             }
             value
         };
-        let body = value.to_string();
-        Response::builder()
-            .status(200)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", body.len())
-            .body(Body::new(Full::new(Bytes::from(body))))
-            .map_err(|_| RuntimeContextTransportError::Unavailable)
+        Ok(ContextAnswer::from(&value))
     }
 }
 fn reference(identity: Identity, kind: &str, alias: &str) -> Value {
@@ -112,11 +101,11 @@ impl Fixture {
     ) -> Self {
         let reads = Arc::new(StdMutex::new(Vec::new()));
         let rpc = RuntimeContextClient::with_rpc(
-            FrozenVersions {
+            Routes(FrozenVersions {
                 versions,
                 fingerprints,
                 reads: reads.clone(),
-            },
+            }),
             RuntimeContextConfig {
                 origin: "https://content.internal".to_owned(),
                 deadline: Duration::from_secs(1),
@@ -384,7 +373,7 @@ async fn saved_agent_materialization_retains_sealed_identity_and_definition_dige
         .build(reference((32, 42), "agent", "worker alias"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = materialized.unwrap();
     assert_eq!(runtime.tools.len(), 1);
     assert_eq!(runtime.tools[0].alias, "worker alias");
@@ -466,7 +455,7 @@ async fn saved_graph_entry_builds_descendant_catalog_and_real_nested_static_tool
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     let graph = runtime
         .presentations
@@ -502,7 +491,7 @@ async fn ordinary_agent_entry_materializes_its_frozen_pipeline_attachments() {
         .build(reference((32, 42), "agent", "worker"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     assert!(
         runtime
@@ -536,7 +525,7 @@ async fn saved_graph_entry_keeps_actual_descendant_presentations_across_graph_wr
         .build(reference((30, 40), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     let catalog = runtime
         .presentations
@@ -611,7 +600,7 @@ async fn second_ordinary_graph_scope_produces_bounded_exact_activation_chain() {
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     let (paused, events) = execute(&runtime).await;
     assert_eq!(nested_application_interrupt_ids(&paused).unwrap().len(), 1);
@@ -754,7 +743,7 @@ async fn a_conversation_an_older_worker_paused_keeps_its_plain_saved_graph_witho
         )
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     assert!(runtime.is_some());
     assert!(fixture.models.lock().unwrap().is_empty());
 }
@@ -774,7 +763,7 @@ async fn rebuilt_saved_graph_entry_consumes_real_static_family_without_replaying
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (paused, events) = execute(&runtime.unwrap()).await;
     let ids = nested_application_interrupt_ids(&paused).unwrap();
     let pause = events
@@ -796,7 +785,7 @@ async fn rebuilt_saved_graph_entry_consumes_real_static_family_without_replaying
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     install_static_application_resume(&events, decisions, &runtime.presentations, &runtime.resume)
         .await
@@ -846,7 +835,7 @@ async fn second_scope_fresh_builder_resumes_exact_static_leaf_and_reuses_complet
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (paused, events) = execute(&runtime.unwrap()).await;
     let ids = nested_application_interrupt_ids(&paused).unwrap();
     let pause = events
@@ -874,7 +863,7 @@ async fn second_scope_fresh_builder_resumes_exact_static_leaf_and_reuses_complet
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     install_static_application_resume(&events, decisions, &runtime.presentations, &runtime.resume)
         .await
@@ -934,7 +923,7 @@ async fn second_scope_proof_refuses_changed_start_child_edge_and_frame_order() {
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (_, events) = execute(&runtime.unwrap()).await;
     let before = serde_json::to_vec(&events).unwrap();
     let pause = events
@@ -1032,7 +1021,7 @@ async fn second_scope_resume_refuses_inner_frozen_graph_drift_before_leaf_execut
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (paused, events) = execute(&runtime.unwrap()).await;
     let ids = nested_application_interrupt_ids(&paused).unwrap();
     let pause = events
@@ -1071,7 +1060,7 @@ async fn second_scope_resume_refuses_inner_frozen_graph_drift_before_leaf_execut
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     install_static_application_resume(&events, decisions, &runtime.presentations, &runtime.resume)
         .await

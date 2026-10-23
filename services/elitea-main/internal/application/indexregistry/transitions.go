@@ -181,7 +181,7 @@ func createdMarker(row Row) map[string]any {
 }
 
 // boundHistory keeps the newest entries within both caps. It discards a
-// contiguous prefix, as the pgvector writer does.
+// contiguous prefix, as the retired pgvector writer did.
 func boundHistory(history []map[string]any) []map[string]any {
 	if len(history) > MaxHistoryEntries {
 		history = history[len(history)-MaxHistoryEntries:]
@@ -395,8 +395,8 @@ func fenceMatches(row Row, executionID string, generation, indexGeneration int64
 
 // finishRun rewrites the newest history entry for the run to the row's new
 // top level. When the run has no entry (the initializer never ran for it) one
-// is appended, which is what the pgvector writer does when "the SDK never
-// started".
+// is appended, which is what the retired pgvector writer did when "the SDK
+// never started".
 func finishRun(row *Row, record runRecord) {
 	entry := snapshot(*row, &record)
 	if len(row.History) > 0 && matchesRun(row.History[len(row.History)-1], row.ExecutionID, row.ExecutionGeneration) {

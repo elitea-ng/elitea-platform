@@ -154,7 +154,7 @@ func (s *StartService) submitResolved(
 
 func currentStartOutcome(outcome AdmissionOutcome) (StartOutcome, error) {
 	// Both public and scheduled callers observe success only after the initial
-	// project-PgVector metadata row is durable.
+	// index metadata (the index registry row) is durable.
 	if outcome.ExecutionID == "" || outcome.CommandID == "" ||
 		outcome.IndexMetaInitializedAt == nil ||
 		outcome.IndexMetaInitializedAt.IsZero() ||

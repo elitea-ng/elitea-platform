@@ -5,14 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -96,25 +94,15 @@ func TestPlatformClientsAreParsedFromACommaList(t *testing.T) {
 	if err != nil || len(s.PlatformClients) != 1 || s.PlatformGRPCAddr != ":9555" {
 		t.Fatalf("%+v %v", s, err)
 	}
+	// No allowlist by default (the host refuses to start without one), and
+	// the one listener on its default port.
 	s, _ = spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(nil))
-	if len(s.PlatformClients) != 0 || s.PlatformGRPCAddr != "" {
-		t.Fatalf("the service must be off by default: %+v", s)
+	if len(s.PlatformClients) != 0 || s.PlatformGRPCAddr != spi.DefaultPlatformGRPCAddr {
+		t.Fatalf("defaults: %+v", s)
 	}
-}
-
-// The platform operations are not an HTTP route any more: the SPI's
-// listener has nothing at the old path, for any caller.
-func TestTheHTTPPlatformRouteIsGone(t *testing.T) {
-	server, err := spi.NewServer(spi.Settings{}, echo.App(0), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, method := range []string{http.MethodPost, http.MethodGet} {
-		recorder := httptest.NewRecorder()
-		server.ServeHTTP(recorder, httptest.NewRequest(method, "/internal/v1/projects/delete", strings.NewReader(`{"project_id": 17}`)))
-		if recorder.Code != http.StatusNotFound && recorder.Code != http.StatusMethodNotAllowed {
-			t.Errorf("%s: %d", method, recorder.Code)
-		}
+	// The retired HTTP listener's address is refused, not ignored.
+	if _, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(map[string]string{"ELITEA_DEEPWIKI_LISTEN_ADDR": ":8080"})); !errors.Is(err, spi.ErrConfig) || !strings.Contains(err.Error(), "PLATFORM_GRPC_ADDR") {
+		t.Fatalf("LISTEN_ADDR was accepted: %v", err)
 	}
 }
 
@@ -158,8 +146,8 @@ func TestStopMatchingStopsOnlyTheMatchingRunsAndWaitsForThem(t *testing.T) {
 	_ = a
 	_ = b
 
-	match := func(project string) func(spi.RunningInvocation) bool {
-		return func(r spi.RunningInvocation) bool { return r.Labels["project"] == project }
+	match := func(project string) spi.StopFence {
+		return spi.StopFence{Tool: "tool", Labels: map[string]string{"project": project}}
 	}
 	// Project 2's run honours the stop and leaves; nothing else is touched.
 	if left := manager.StopMatching(t.Context(), match("2"), 2*time.Second); left != 0 {

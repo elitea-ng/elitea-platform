@@ -128,6 +128,11 @@ pub(crate) struct ProductionTransportBundle {
     /// The cloud executor's workspace runs (ADR-0034), when the deployment
     /// names the supervisor's `workspace` profile.
     pub(crate) workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    /// The mTLS channel to elitea-main's platform listener
+    /// (`platform_origin`) the model calls ride: the Office host's artifact
+    /// store and the internal MCP tool categories are served there too
+    /// (#1359 U5).
+    pub(crate) platform_channel: tonic::transport::Channel,
 }
 
 impl ProductionTransportBundle {
@@ -192,7 +197,8 @@ impl ProductionTransportBundle {
             ModelFacade::connect(profiles.model, trust.private_ca(), trust.client_identity());
         let agentstate = connect_agentstate(
             agentstate_options,
-            deployment.limits.delivery_max_concurrency,
+            deployment.limits.agentstate_max_connections(),
+            Duration::from_millis(deployment.limits.agentstate_acquire_timeout_millis),
             profiles.grpc_connect_timeout,
         );
         let (control, output, input, runtime_context, model_facade, agentstate, command_bus) = tokio::try_join!(
@@ -330,6 +336,9 @@ impl ProductionTransportBundle {
             }
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
+        let platform_channel = model_facade
+            .platform_channel()
+            .ok_or(ProductionBootstrapError::InvalidConfiguration)?;
         let model_facade = Arc::new(model_facade);
         // PDF and Office documents go to the extraction sidecar when the
         // deployment names its socket; the dial is lazy, so a sidecar that is
@@ -352,7 +361,7 @@ impl ProductionTransportBundle {
                     trust.ca_pem(),
                     trust.identity_pem(),
                     model_facade.embeddings(),
-                    deployment.platform_origin.clone(),
+                    platform_channel.clone(),
                     elitea_connectors::egress::HostAllowlist::parse(
                         deployment.index_egress_allowlist.as_deref(),
                     ),
@@ -383,6 +392,7 @@ impl ProductionTransportBundle {
             None => None,
         };
         Ok(Self {
+            platform_channel,
             command_authenticator: trust.command_authenticator(),
             spool_master_key: trust.spool_master_key(),
             deployment,
@@ -576,19 +586,32 @@ fn load_agentstate_options(
         .map_err(|_| ProductionBootstrapError::InvalidConfiguration)
 }
 
+/// Open the `agentstate` pool. Its size does not follow the delivery cap:
+/// each checkpoint, session or sandbox ledger statement holds a connection
+/// only for one short transaction. `acquire_timeout` is how long a statement
+/// waits for a free connection when the pool is smaller than the number of
+/// runs that write at the same time.
 async fn connect_agentstate(
     options: PgConnectOptions,
     max_connections: usize,
-    deadline: Duration,
+    acquire_timeout: Duration,
+    connect_deadline: Duration,
 ) -> Result<PgPool, ProductionBootstrapError> {
     let max_connections = u32::try_from(max_connections)
         .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
-    PgPoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(deadline)
-        .connect_with(options)
-        .await
-        .map_err(|_| ProductionBootstrapError::DependencyUnavailable)
+    // The first connection at boot keeps the short connect deadline, as the
+    // other dependencies do: `connect_with` would otherwise wait up to the
+    // (longer) acquire timeout before an unreachable database is reported.
+    tokio::time::timeout(
+        connect_deadline,
+        PgPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(acquire_timeout)
+            .connect_with(options),
+    )
+    .await
+    .map_err(|_| ProductionBootstrapError::DependencyUnavailable)?
+    .map_err(|_| ProductionBootstrapError::DependencyUnavailable)
 }
 
 const fn map_config_error(error: &RuntimeConfigError) -> ProductionBootstrapError {
@@ -781,6 +804,8 @@ mod tests {
                 dependency_retry_millis: 250,
                 delivery_max_concurrency: 128,
                 delivery_queue_capacity: 128,
+                agentstate_max_connections: None,
+                agentstate_acquire_timeout_millis: 30_000,
                 sync_max_workers: 8,
                 sync_max_in_flight: 16,
                 admission_timeout_millis: 1_000,

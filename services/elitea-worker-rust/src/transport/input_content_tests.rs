@@ -1,82 +1,85 @@
-use std::convert::Infallible;
-use std::future::pending;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use super::input_content::{
-    InputContentClient, InputContentConfig, InputContentError, InputContentRpc,
-    InputContentTransportError,
-};
-use async_trait::async_trait;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use bytes::Bytes;
-use http::{HeaderValue, Request, Response, StatusCode, Version};
-use http_body_util::{BodyExt as _, Full};
 use ring::digest;
-use tonic::body::Body;
+use tokio_stream::StreamExt as _;
+use tonic::{Code, Request, Response, Status};
 
+use super::input_content::content_fake::{ContentFake, Frames, claim_of, frames};
+use super::input_content::{
+    InputContentClient, InputContentConfig, InputContentError, InputContentTransportError,
+};
 use crate::protocol::control::{ClaimBoundInputAuthority, test_lease_monitored_input_execution};
+use crate::protocol::elitea::runtime::v1::{
+    GetInputRequestV1, GetInputResponseV1, InputContentHeaderV1, get_input_response_v1::Part,
+};
 
 const MEDIA_TYPE: &str = "application/vnd.elitea.agent-execution-input.v1+protobuf";
 const TOOLKIT_MEDIA_TYPE: &str = "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf";
 const SOURCE: &[u8] = b"source {{secret}}";
+const CHUNK_BYTES: usize = 64 * 1024;
 static SOURCE_SHA256: LazyLock<[u8; 32]> = LazyLock::new(|| sha256(SOURCE));
+
+/// What the fake content service answers one `GetInput` with.
+enum Reply {
+    Frames(Vec<Result<GetInputResponseV1, Status>>),
+    /// These frames, then a stream that never ends.
+    Stalled(Vec<Result<GetInputResponseV1, Status>>),
+    Refused(Status),
+    /// A call that is never answered.
+    Hang,
+}
 
 struct FakeRpc {
     captured: Arc<Mutex<Vec<CapturedRequest>>>,
-    response: Mutex<Option<Result<Response<Body>, InputContentTransportError>>>,
-    hangs: bool,
+    reply: Mutex<Option<Reply>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct CapturedRequest {
-    method: String,
-    path: String,
+    execution_id: String,
+    generation: u64,
+    content_id: String,
+    immutable_version: String,
     claim: String,
-    fence: String,
+    fence: Vec<u8>,
 }
 
-#[async_trait]
-impl InputContentRpc for FakeRpc {
-    async fn get(
+#[tonic::async_trait]
+impl ContentFake for FakeRpc {
+    async fn get_input(
         &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, InputContentTransportError> {
+        request: Request<GetInputRequestV1>,
+    ) -> Result<Response<Frames<GetInputResponseV1>>, Status> {
+        let (claim, fence) = claim_of(&request);
+        let request = request.into_inner();
+        let scope = request.scope.expect("scope");
         self.captured
             .lock()
             .expect("captured requests")
             .push(CapturedRequest {
-                method: request.method().as_str().to_owned(),
-                path: request.uri().path().to_owned(),
-                claim: request
-                    .headers()
-                    .get("x-elitea-claim-id")
-                    .expect("claim header")
-                    .to_str()
-                    .expect("claim header text")
-                    .to_owned(),
-                fence: request
-                    .headers()
-                    .get("x-elitea-fence")
-                    .expect("fence header")
-                    .to_str()
-                    .expect("fence header text")
-                    .to_owned(),
+                execution_id: scope.execution_id,
+                generation: scope.generation,
+                content_id: request.content_id,
+                immutable_version: request.immutable_version,
+                claim,
+                fence,
             });
-        if self.hangs {
-            return pending().await;
-        }
-        self.response
+        let reply = self
+            .reply
             .lock()
-            .expect("fake response")
+            .expect("fake reply")
             .take()
-            .expect("one fake response")
+            .expect("one fake reply");
+        match reply {
+            Reply::Frames(items) => Ok(Response::new(frames(items))),
+            Reply::Stalled(items) => Ok(Response::new(Box::pin(
+                tokio_stream::iter(items).chain(tokio_stream::pending()),
+            ))),
+            Reply::Refused(status) => Err(status),
+            Reply::Hang => std::future::pending().await,
+        }
     }
-}
-
-fn source() -> Vec<u8> {
-    SOURCE.to_vec()
 }
 
 fn materialized() -> Vec<u8> {
@@ -104,6 +107,19 @@ fn reference() -> ClaimBoundInputAuthority<'static> {
     }
 }
 
+/// The request the default reference produces, as the service receives it:
+/// identifiers raw, the claim and fence as metadata.
+fn expected_request() -> CapturedRequest {
+    CapturedRequest {
+        execution_id: "execution-one".to_owned(),
+        generation: 2,
+        content_id: "settings id".to_owned(),
+        immutable_version: "v/1".to_owned(),
+        claim: "claim-1".to_owned(),
+        fence: vec![b'f'; 32],
+    }
+}
+
 struct TestClient(InputContentClient);
 
 impl TestClient {
@@ -123,35 +139,51 @@ fn config(deadline: Duration, max_materialized_bytes: usize) -> InputContentConf
     }
 }
 
-fn response(
-    body: &[u8],
-    status: StatusCode,
-    version: Version,
-    source_version: &str,
-) -> Response<Body> {
-    let source = source();
-    Response::builder()
-        .status(status)
-        .version(version)
-        .header("content-length", body.len())
-        .header(
-            "content-digest",
-            format!("sha-256=:{}:", STANDARD.encode(sha256(body))),
-        )
-        .header(
-            "x-elitea-source-content-digest",
-            format!("sha-256=:{}:", STANDARD.encode(sha256(&source))),
-        )
-        .header("x-elitea-source-content-length", source.len())
-        .header("x-elitea-source-immutable-version", source_version)
-        .header("cache-control", "private, no-store")
-        .header("content-type", MEDIA_TYPE)
-        .body(Body::new(Full::new(Bytes::copy_from_slice(body))))
-        .expect("content response")
+/// The header Main sends for `body` materialized from `SOURCE`.
+fn header(body: &[u8]) -> InputContentHeaderV1 {
+    InputContentHeaderV1 {
+        media_type: MEDIA_TYPE.to_owned(),
+        length: body.len() as u64,
+        sha256: sha256(body).to_vec(),
+        source_sha256: SOURCE_SHA256.to_vec(),
+        source_length: SOURCE.len() as u64,
+        source_immutable_version: "v/1".to_owned(),
+    }
+}
+
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a fixture reply is the Result the fake service answers with"
+)]
+fn header_frame(header: InputContentHeaderV1) -> Result<GetInputResponseV1, Status> {
+    Ok(GetInputResponseV1 {
+        part: Some(Part::Header(header)),
+    })
+}
+
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a fixture reply is the Result the fake service answers with"
+)]
+fn chunk_frame(chunk: &[u8]) -> Result<GetInputResponseV1, Status> {
+    Ok(GetInputResponseV1 {
+        part: Some(Part::Chunk(chunk.to_vec())),
+    })
+}
+
+/// One stream: `header`, then `body` in chunks of at most `chunk_bytes`.
+fn stream(header: InputContentHeaderV1, body: &[u8], chunk_bytes: usize) -> Reply {
+    let mut items = vec![header_frame(header)];
+    items.extend(body.chunks(chunk_bytes).map(chunk_frame));
+    Reply::Frames(items)
+}
+
+fn served(body: &[u8]) -> Reply {
+    stream(header(body), body, CHUNK_BYTES)
 }
 
 fn fake_client(
-    response: Result<Response<Body>, InputContentTransportError>,
+    reply: Reply,
     deadline: Duration,
     max_materialized_bytes: usize,
 ) -> (TestClient, Arc<Mutex<Vec<CapturedRequest>>>) {
@@ -159,8 +191,7 @@ fn fake_client(
     let client = InputContentClient::with_rpc(
         FakeRpc {
             captured: Arc::clone(&captured),
-            response: Mutex::new(Some(response)),
-            hangs: false,
+            reply: Mutex::new(Some(reply)),
         },
         config(deadline, max_materialized_bytes),
     )
@@ -168,14 +199,18 @@ fn fake_client(
     (TestClient(client), captured)
 }
 
+async fn fetch(reply: Reply) -> Result<Vec<u8>, InputContentError> {
+    let (client, _) = fake_client(reply, Duration::from_secs(1), 1024);
+    client
+        .fetch_materialized(reference())
+        .await
+        .map(|input| input.as_bytes().to_vec())
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn claim_bound_materialization_matches_python_and_go_route() {
+async fn claim_bound_materialization_carries_scope_and_claim_metadata() {
     let body = materialized();
-    let (client, captured) = fake_client(
-        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
-        Duration::from_secs(1),
-        1024,
-    );
+    let (client, captured) = fake_client(served(&body), Duration::from_secs(1), 1024);
 
     let execution = test_lease_monitored_input_execution(SOURCE.len() as u64, *SOURCE_SHA256);
     let result = client
@@ -187,58 +222,51 @@ async fn claim_bound_materialization_matches_python_and_go_route() {
     assert_eq!(result.as_bytes(), body);
     assert_eq!(
         *captured.lock().expect("captured requests"),
-        [CapturedRequest {
-            method: "GET".to_owned(),
-            path: "/executions/execution-one/generations/2/inputs/settings%20id/versions/v%2F1"
-                .to_owned(),
-            claim: "claim-1".to_owned(),
-            fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
-        }]
+        [expected_request()]
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chunks_assemble_in_order_whatever_their_size() {
+    let body = materialized();
+    for chunk_bytes in [1, 3, body.len()] {
+        assert_eq!(
+            fetch(stream(header(&body), &body, chunk_bytes))
+                .await
+                .expect("assembled"),
+            body
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn source_identity_and_response_digest_are_both_required() {
     let body = materialized();
-    let wrong_source = response(&body, StatusCode::OK, Version::HTTP_2, "wrong");
-    let (client, _) = fake_client(Ok(wrong_source), Duration::from_secs(1), 1024);
+    let mut wrong_source = header(&body);
+    wrong_source.source_immutable_version = "wrong".to_owned();
     assert!(matches!(
-        client.fetch_materialized(reference()).await,
+        fetch(stream(wrong_source, &body, CHUNK_BYTES)).await,
         Err(InputContentError::AuthorizationFailed(_))
     ));
 
-    let mut wrong_body_digest = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    wrong_body_digest.headers_mut().insert(
-        "content-digest",
-        HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode([9_u8; 32])))
-            .expect("digest header"),
-    );
-    let (client, _) = fake_client(Ok(wrong_body_digest), Duration::from_secs(1), 1024);
+    let mut wrong_body_digest = header(&body);
+    wrong_body_digest.sha256 = vec![9; 32];
     assert!(matches!(
-        client.fetch_materialized(reference()).await,
+        fetch(stream(wrong_body_digest, &body, CHUNK_BYTES)).await,
         Err(InputContentError::InvalidInput(_))
     ));
 
-    let mut wrong_source_digest = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    wrong_source_digest.headers_mut().insert(
-        "x-elitea-source-content-digest",
-        HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode([7_u8; 32])))
-            .expect("digest header"),
-    );
-    let (client, _) = fake_client(Ok(wrong_source_digest), Duration::from_secs(1), 1024);
+    let mut wrong_source_digest = header(&body);
+    wrong_source_digest.source_sha256 = vec![7; 32];
     assert!(matches!(
-        client.fetch_materialized(reference()).await,
+        fetch(stream(wrong_source_digest, &body, CHUNK_BYTES)).await,
         Err(InputContentError::AuthorizationFailed(_))
     ));
 
-    let mut wrong_source_length = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    wrong_source_length.headers_mut().insert(
-        "x-elitea-source-content-length",
-        HeaderValue::from_static("999"),
-    );
-    let (client, _) = fake_client(Ok(wrong_source_length), Duration::from_secs(1), 1024);
+    let mut wrong_source_length = header(&body);
+    wrong_source_length.source_length = 999;
     assert!(matches!(
-        client.fetch_materialized(reference()).await,
+        fetch(stream(wrong_source_length, &body, CHUNK_BYTES)).await,
         Err(InputContentError::AuthorizationFailed(_))
     ));
 }
@@ -248,21 +276,19 @@ async fn admitted_long_history_materializes_without_the_old_256_kib_ceiling() {
     for length in [256 * 1024 + 1, 1024 * 1024] {
         let body = vec![b'x'; length];
         let digest = sha256(&body);
-        let mut response = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-        response.headers_mut().insert(
-            "x-elitea-source-content-length",
-            HeaderValue::from_str(&length.to_string()).unwrap(),
-        );
-        response.headers_mut().insert(
-            "x-elitea-source-content-digest",
-            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(digest))).unwrap(),
-        );
+        let mut header = header(&body);
+        header.source_length = length as u64;
+        header.source_sha256 = digest.to_vec();
         let authority = ClaimBoundInputAuthority {
             expected_source_length: length as u64,
             expected_source_sha256: &digest,
             ..reference()
         };
-        let (client, _) = fake_client(Ok(response), Duration::from_secs(1), 1024 * 1024);
+        let (client, _) = fake_client(
+            stream(header, &body, CHUNK_BYTES),
+            Duration::from_secs(1),
+            1024 * 1024,
+        );
         assert_eq!(
             client
                 .fetch_materialized(authority)
@@ -275,171 +301,120 @@ async fn admitted_long_history_materializes_without_the_old_256_kib_ceiling() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn protocol_status_metadata_and_body_bounds_fail_closed() {
-    let body = materialized();
-    for candidate in [
-        response(&body, StatusCode::OK, Version::HTTP_11, "v/1"),
-        response(&body, StatusCode::FOUND, Version::HTTP_2, "v/1"),
-        response(&body, StatusCode::UNAUTHORIZED, Version::HTTP_2, "v/1"),
+async fn refusals_map_to_the_variants_the_http_statuses_produced() {
+    for (code, expected) in [
+        (Code::Unauthenticated, "input_content.authorization_failed"),
+        (Code::PermissionDenied, "input_content.authorization_failed"),
+        (Code::NotFound, "input_content.invalid_response"),
+        (Code::Unimplemented, "input_content.invalid_response"),
+        (Code::InvalidArgument, "input_content.invalid_response"),
+        (Code::FailedPrecondition, "input_content.invalid_response"),
+        (Code::ResourceExhausted, "input_content.resource_exhausted"),
+        (Code::DeadlineExceeded, "input_content.timeout"),
+        (Code::Unavailable, "input_content.dependency_unavailable"),
+        (Code::Internal, "input_content.dependency_unavailable"),
+        (Code::Aborted, "input_content.dependency_unavailable"),
     ] {
-        let (client, _) = fake_client(Ok(candidate), Duration::from_secs(1), 1024);
-        assert!(client.fetch_materialized(reference()).await.is_err());
-    }
-
-    for (status, expected) in [
-        (StatusCode::NOT_FOUND, "input_content.invalid_response"),
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "input_content.invalid_response",
-        ),
-        (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "input_content.resource_exhausted",
-        ),
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "input_content.dependency_unavailable",
-        ),
-    ] {
-        let (client, _) = fake_client(
-            Ok(response(&body, status, Version::HTTP_2, "v/1")),
-            Duration::from_secs(1),
-            1024,
-        );
-        let Err(error) = client.fetch_materialized(reference()).await else {
-            panic!("non-success status must fail")
+        let Err(error) = fetch(Reply::Refused(Status::new(code, "refused"))).await else {
+            panic!("{code:?} must fail")
         };
-        assert_eq!(error.code(), expected);
+        assert_eq!(error.code(), expected, "{code:?}");
     }
-
-    let mut duplicate_digest = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    duplicate_digest.headers_mut().append(
-        "content-digest",
-        HeaderValue::from_static("sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:"),
-    );
-    let (client, _) = fake_client(Ok(duplicate_digest), Duration::from_secs(1), 1024);
+    // An overloaded or unreachable service is the channel's failure, kept
+    // with its status for operator diagnostics.
     assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
-    ));
-
-    let mut wrong_cache = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    wrong_cache.headers_mut().insert(
-        "cache-control",
-        HeaderValue::from_static("public, max-age=60"),
-    );
-    let (client, _) = fake_client(Ok(wrong_cache), Duration::from_secs(1), 1024);
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
-    ));
-
-    let mut wrong_media = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    wrong_media
-        .headers_mut()
-        .insert("content-type", HeaderValue::from_static("application/json"));
-    let (client, _) = fake_client(Ok(wrong_media), Duration::from_secs(1), 1024);
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
-    ));
-
-    let mut duplicate_source = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    duplicate_source.headers_mut().append(
-        "x-elitea-source-immutable-version",
-        HeaderValue::from_static("v/1"),
-    );
-    let (client, _) = fake_client(Ok(duplicate_source), Duration::from_secs(1), 1024);
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
+        fetch(Reply::Refused(Status::unavailable("overloaded"))).await,
+        Err(InputContentError::Transport(
+            InputContentTransportError::Status(_)
+        ))
     ));
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn streaming_length_trailers_and_required_metadata_fail_closed() {
+async fn the_stream_opens_with_exactly_one_well_formed_header() {
     let body = materialized();
-    let (client, _) = fake_client(
-        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
-        Duration::from_secs(1),
-        body.len() - 1,
-    );
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::ResourceExhausted(_))
-    ));
-
-    let oversized_stream = vec![b'x'; SOURCE.len() + 1];
-    let mut understated = response(&oversized_stream, StatusCode::OK, Version::HTTP_2, "v/1");
-    understated.headers_mut().insert(
-        "content-length",
-        HeaderValue::from_str(&SOURCE.len().to_string()).expect("content length"),
-    );
-    let (client, _) = fake_client(Ok(understated), Duration::from_secs(1), SOURCE.len());
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::ResourceExhausted(_))
-    ));
-
-    let mut wrong_length = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    wrong_length.headers_mut().insert(
-        "content-length",
-        HeaderValue::from_str(&(body.len() + 1).to_string()).expect("content length"),
-    );
-    let (client, _) = fake_client(Ok(wrong_length), Duration::from_secs(1), 1024);
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
-    ));
-
-    let mut trailers = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    *trailers.body_mut() = Body::new(Full::new(Bytes::copy_from_slice(&body)).with_trailers(
-        std::future::ready(Some(Ok::<_, Infallible>(http::HeaderMap::new()))),
-    ));
-    let (client, _) = fake_client(Ok(trailers), Duration::from_secs(1), 1024);
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
-    ));
-
-    let mut noncanonical_digest = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    noncanonical_digest.headers_mut().insert(
-        "content-digest",
-        HeaderValue::from_static("sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:"),
-    );
-    let (client, _) = fake_client(Ok(noncanonical_digest), Duration::from_secs(1), 1024);
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::InvalidInput(_))
-    ));
-
-    for required in [
-        "content-digest",
-        "x-elitea-source-content-digest",
-        "x-elitea-source-content-length",
-        "x-elitea-source-immutable-version",
-        "cache-control",
-        "content-type",
-        "content-length",
-    ] {
-        let mut missing = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-        missing.headers_mut().remove(required);
-        let (client, _) = fake_client(Ok(missing), Duration::from_secs(1), 1024);
+    let chunk_first = Reply::Frames(vec![chunk_frame(&body), header_frame(header(&body))]);
+    let repeated = Reply::Frames(vec![
+        header_frame(header(&body)),
+        header_frame(header(&body)),
+        chunk_frame(&body),
+    ]);
+    let empty_message = Reply::Frames(vec![
+        header_frame(header(&body)),
+        Ok(GetInputResponseV1 { part: None }),
+    ]);
+    let no_header = Reply::Frames(Vec::new());
+    for reply in [chunk_first, repeated, empty_message, no_header] {
         assert!(matches!(
-            client.fetch_materialized(reference()).await,
+            fetch(reply).await,
+            Err(InputContentError::InvalidInput(_))
+        ));
+    }
+
+    let mut short_digest = header(&body);
+    short_digest.sha256 = vec![1; 31];
+    let mut short_source_digest = header(&body);
+    short_source_digest.source_sha256 = vec![1; 33];
+    let mut wrong_media = header(&body);
+    wrong_media.media_type = "application/json".to_owned();
+    let mut no_length = header(&body);
+    no_length.length = 0;
+    let mut no_source_length = header(&body);
+    no_source_length.source_length = 0;
+    for header in [
+        short_digest,
+        short_source_digest,
+        wrong_media,
+        no_length,
+        no_source_length,
+    ] {
+        assert!(matches!(
+            fetch(stream(header, &body, CHUNK_BYTES)).await,
             Err(InputContentError::InvalidInput(_))
         ));
     }
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn exact_body_limit_is_accepted_and_transport_failures_are_typed() {
+async fn streaming_length_bounds_fail_closed() {
+    let body = materialized();
+    let (client, _) = fake_client(served(&body), Duration::from_secs(1), body.len() - 1);
+    assert!(matches!(
+        client.fetch_materialized(reference()).await,
+        Err(InputContentError::ResourceExhausted(_))
+    ));
+
+    // Bytes past the declared length are a protocol violation.
+    let oversized_stream = vec![b'x'; body.len() + 1];
+    assert!(matches!(
+        fetch(stream(header(&body), &oversized_stream, 4)).await,
+        Err(InputContentError::InvalidInput(_))
+    ));
+
+    let mut overstated = header(&body);
+    overstated.length = body.len() as u64 + 1;
+    assert!(matches!(
+        fetch(stream(overstated, &body, CHUNK_BYTES)).await,
+        Err(InputContentError::InvalidInput(_))
+    ));
+
+    // A stream the service ends with an error after the header is not an
+    // input: the bytes so far are dropped.
+    let interrupted = Reply::Frames(vec![
+        header_frame(header(&body)),
+        chunk_frame(&body[..4]),
+        Err(Status::unavailable("interrupted")),
+    ]);
+    assert!(matches!(
+        fetch(interrupted).await,
+        Err(InputContentError::Transport(_))
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_body_limit_and_media_type_parameters_are_accepted() {
     let body = vec![b'x'; 1024];
-    let (client, _) = fake_client(
-        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
-        Duration::from_secs(1),
-        body.len(),
-    );
+    let (client, _) = fake_client(served(&body), Duration::from_secs(1), body.len());
     let exact_limit = client
         .fetch_materialized(reference())
         .await
@@ -447,44 +422,27 @@ async fn exact_body_limit_is_accepted_and_transport_failures_are_typed() {
     assert_eq!(exact_limit.as_bytes(), body);
 
     let mixed_case_body = materialized();
-    let mut mixed_case_media = response(&mixed_case_body, StatusCode::OK, Version::HTTP_2, "v/1");
-    mixed_case_media.headers_mut().insert(
-        "content-type",
-        HeaderValue::from_static(
-            "Application/Vnd.Elitea.Agent-Execution-Input.V1+Protobuf; charset=binary",
-        ),
-    );
-    let (client, _) = fake_client(Ok(mixed_case_media), Duration::from_secs(1), 1024);
+    let mut mixed_case_media = header(&mixed_case_body);
+    mixed_case_media.media_type =
+        "Application/Vnd.Elitea.Agent-Execution-Input.V1+Protobuf; charset=binary".to_owned();
     assert_eq!(
-        client
-            .fetch_materialized(reference())
+        fetch(stream(mixed_case_media, &mixed_case_body, CHUNK_BYTES))
             .await
-            .expect("case-insensitive media type")
-            .as_bytes(),
+            .expect("case-insensitive media type"),
         mixed_case_body
     );
-
-    let (client, _) = fake_client(
-        Err(InputContentTransportError::Unavailable),
-        Duration::from_secs(1),
-        1024,
-    );
-    assert!(matches!(
-        client.fetch_materialized(reference()).await,
-        Err(InputContentError::Transport(
-            InputContentTransportError::Unavailable
-        ))
-    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn direct_toolkit_input_media_type_is_exactly_admitted() {
     let body = materialized();
-    let mut toolkit_response = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    toolkit_response
-        .headers_mut()
-        .insert("content-type", HeaderValue::from_static(TOOLKIT_MEDIA_TYPE));
-    let (client, captured) = fake_client(Ok(toolkit_response), Duration::from_secs(1), 1024);
+    let mut toolkit_header = header(&body);
+    toolkit_header.media_type = TOOLKIT_MEDIA_TYPE.to_owned();
+    let (client, captured) = fake_client(
+        stream(toolkit_header, &body, CHUNK_BYTES),
+        Duration::from_secs(1),
+        1024,
+    );
     let mut toolkit_reference = reference();
     toolkit_reference.media_type = TOOLKIT_MEDIA_TYPE;
 
@@ -496,11 +454,7 @@ async fn direct_toolkit_input_media_type_is_exactly_admitted() {
     assert_eq!(materialized.as_bytes(), body);
     assert_eq!(captured.lock().expect("captured requests").len(), 1);
 
-    let (client, captured) = fake_client(
-        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
-        Duration::from_secs(1),
-        1024,
-    );
+    let (client, captured) = fake_client(served(&body), Duration::from_secs(1), 1024);
     let mut lookalike = reference();
     lookalike.media_type = "application/vnd.elitea.toolkit-execute-read-input.v2+protobuf";
     assert!(matches!(
@@ -513,11 +467,7 @@ async fn direct_toolkit_input_media_type_is_exactly_admitted() {
 #[tokio::test(flavor = "current_thread")]
 async fn oversized_admitted_source_fails_before_request_emission() {
     let body = materialized();
-    let (client, captured) = fake_client(
-        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
-        Duration::from_secs(1),
-        source().len() - 1,
-    );
+    let (client, captured) = fake_client(served(&body), Duration::from_secs(1), SOURCE.len() - 1);
 
     assert!(matches!(
         client.fetch_materialized(reference()).await,
@@ -538,42 +488,30 @@ fn errors_expose_safe_actionable_codes_and_retry_classification() {
         "the materialized input source digest does not match the admitted descriptor"
     );
 
-    let unavailable = InputContentError::Transport(InputContentTransportError::Unavailable);
-    assert_eq!(unavailable.code(), "input_content.dependency_unavailable");
-    assert!(unavailable.retryable());
-    assert_eq!(
-        unavailable.to_string(),
-        "the input content service is unavailable"
-    );
+    for unavailable in [
+        InputContentError::Transport(InputContentTransportError::Unavailable),
+        InputContentError::transport(Status::unavailable("secret detail")),
+    ] {
+        assert_eq!(unavailable.code(), "input_content.dependency_unavailable");
+        assert!(unavailable.retryable());
+        assert_eq!(
+            unavailable.to_string(),
+            "the input content service is unavailable"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn whole_request_deadline_bounds_a_stalled_transport() {
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let client = TestClient(
-        InputContentClient::with_rpc(
-            FakeRpc {
-                captured,
-                response: Mutex::new(None),
-                hangs: true,
-            },
-            config(Duration::from_millis(1), 1024),
-        )
-        .expect("input content client"),
-    );
-
+async fn whole_request_deadline_bounds_a_stalled_service() {
+    let (client, _) = fake_client(Reply::Hang, Duration::from_millis(20), 1024);
     assert!(matches!(
         client.fetch_materialized(reference()).await,
         Err(InputContentError::Timeout(_))
     ));
 
     let body = materialized();
-    let mut stalled_body = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-    *stalled_body.body_mut() = Body::new(
-        Full::new(Bytes::copy_from_slice(&body))
-            .with_trailers(pending::<Option<Result<http::HeaderMap, Infallible>>>()),
-    );
-    let (client, _) = fake_client(Ok(stalled_body), Duration::from_millis(1), 1024);
+    let stalled = Reply::Stalled(vec![header_frame(header(&body)), chunk_frame(&body)]);
+    let (client, _) = fake_client(stalled, Duration::from_millis(20), 1024);
     assert!(matches!(
         client.fetch_materialized(reference()).await,
         Err(InputContentError::Timeout(_))
@@ -582,14 +520,13 @@ async fn whole_request_deadline_bounds_a_stalled_transport() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn configuration_and_reference_bounds_reject_unsafe_authority() {
-    let rpc = FakeRpc {
+    let rpc = || FakeRpc {
         captured: Arc::new(Mutex::new(Vec::new())),
-        response: Mutex::new(None),
-        hangs: false,
+        reply: Mutex::new(None),
     };
     assert!(matches!(
         InputContentClient::with_rpc(
-            rpc,
+            rpc(),
             InputContentConfig {
                 origin: "http://content.internal".to_owned(),
                 deadline: Duration::from_secs(1),
@@ -598,16 +535,7 @@ async fn configuration_and_reference_bounds_reject_unsafe_authority() {
         ),
         Err(InputContentError::InvalidConfiguration(_))
     ));
-    let (client, captured) = fake_client(
-        Ok(response(
-            &materialized(),
-            StatusCode::OK,
-            Version::HTTP_2,
-            "v/1",
-        )),
-        Duration::from_secs(1),
-        1024,
-    );
+    let (client, captured) = fake_client(served(&materialized()), Duration::from_secs(1), 1024);
     let malformed = ClaimBoundInputAuthority {
         claim_id: "claim\nforged",
         ..reference()
@@ -618,32 +546,14 @@ async fn configuration_and_reference_bounds_reject_unsafe_authority() {
     ));
     assert!(captured.lock().expect("captured requests").is_empty());
 
-    let accepted_rpc = FakeRpc {
-        captured: Arc::new(Mutex::new(Vec::new())),
-        response: Mutex::new(None),
-        hangs: false,
-    };
-    assert!(
-        InputContentClient::with_rpc(
-            accepted_rpc,
-            InputContentConfig {
-                origin: "https://CONTENT.internal:8443".to_owned(),
-                deadline: Duration::from_secs(1),
-                max_materialized_bytes: 1024,
-            },
-        )
-        .is_ok()
-    );
-
-    for origin in ["https://CONTENT.internal:443", "https://[::1]:8443"] {
-        let rpc = FakeRpc {
-            captured: Arc::new(Mutex::new(Vec::new())),
-            response: Mutex::new(None),
-            hangs: false,
-        };
+    for origin in [
+        "https://CONTENT.internal:8443",
+        "https://CONTENT.internal:443",
+        "https://[::1]:8443",
+    ] {
         assert!(
             InputContentClient::with_rpc(
-                rpc,
+                rpc(),
                 InputContentConfig {
                     origin: origin.to_owned(),
                     deadline: Duration::from_secs(1),
@@ -662,22 +572,18 @@ async fn checkpoint_request_preserves_claim_binding_and_rejects_changed_source()
         let (pending, _lease) = inspection.into_lease_supervision();
         let live = pending.into_live();
         let body = materialized();
-        let mut reply = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
-        reply.headers_mut().insert(
-            "x-elitea-source-content-length",
-            HeaderValue::from_static("1"),
-        );
-        let source_digest = if changed_source {
-            [0x62; 32]
+        let mut header = header(&body);
+        header.source_length = 1;
+        header.source_sha256 = if changed_source {
+            vec![0x62; 32]
         } else {
-            [0x61; 32]
+            vec![0x61; 32]
         };
-        reply.headers_mut().insert(
-            "x-elitea-source-content-digest",
-            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(source_digest)))
-                .expect("source digest"),
+        let (client, captured) = fake_client(
+            stream(header, &body, CHUNK_BYTES),
+            Duration::from_secs(1),
+            1024,
         );
-        let (client, captured) = fake_client(Ok(reply), Duration::from_secs(1), 1024);
         let result = client.0.fetch_checkpoint_request(&live).await;
         if changed_source {
             assert!(matches!(
@@ -689,13 +595,7 @@ async fn checkpoint_request_preserves_claim_binding_and_rejects_changed_source()
         }
         assert_eq!(
             *captured.lock().expect("captured requests"),
-            [CapturedRequest {
-                method: "GET".to_owned(),
-                path: "/executions/execution-one/generations/2/inputs/settings%20id/versions/v%2F1"
-                    .to_owned(),
-                claim: "claim-1".to_owned(),
-                fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
-            }]
+            [expected_request()]
         );
     }
 }

@@ -13,7 +13,7 @@
 //
 // This file is the contract every party shares: the stream, subject and
 // consumer names, the header names, and the stream and consumer settings the
-// bootstrap Job (deploy/helm/nats-bootstrap/files/bootstrap.sh) creates. The
+// bootstrap Job (deploy/helm/elitea/files/nats-bootstrap.sh) creates. The
 // Rust worker (src/transport/nats_jetstream.rs) and the Python worker
 // (elitea_worker/transport/nats_jetstream.py) restate the names; a test on
 // each side pins them to docs/runtime-command-bus.md.
@@ -35,7 +35,7 @@ const SubjectRoot = "elitea.rt.v1"
 // the route token, upper-case; the route's subjects use it lower-case.
 const StreamPrefix = "ELITEA_RT_V1_"
 
-// The three routes the permission table (deploy/helm/nats/values.yaml) and
+// The three routes the permission table (deploy/helm/elitea/values.yaml) and
 // the bootstrap know. A deployment may point two dispatch routes at one
 // stream (and one consumer); it cannot invent a fourth stream without a
 // permission row and a bootstrap block for it.
