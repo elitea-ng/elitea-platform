@@ -205,13 +205,15 @@ async function performAssociation({ queryClient, projectId, applicationId, versi
     return { ok: false, message: `"${candidate.name}" has no version to attach.` };
   }
 
-  await queryClient.query(
-    getUpdateApplicationRelationQueryOptions(projectId, Number(selectedApplication.id), Number(candidateVersion.id), {
+  // A write is never retried: a refused attach (400) went out four times.
+  await queryClient.query({
+    ...getUpdateApplicationRelationQueryOptions(projectId, Number(selectedApplication.id), Number(candidateVersion.id), {
       application_id: applicationId,
       version_id: versionId,
       has_relation: true,
     }),
-  );
+    retry: false,
+  });
 
   return { ok: true, message: `The "${candidate.name}" ${entityLabel} is successfully added.` };
 }
