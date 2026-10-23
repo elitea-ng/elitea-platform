@@ -643,6 +643,7 @@ fn a_skipped_list_of_multi_byte_names_still_fits_the_node_event() {
         .map(|index| super::application_tools::SkippedApplicationChild {
             agent_type: "pipeline".to_owned(),
             name: format!("{index:03}{}", "界".repeat(500)),
+            too_large: false,
         })
         .collect();
     let list = skipped_capabilities(

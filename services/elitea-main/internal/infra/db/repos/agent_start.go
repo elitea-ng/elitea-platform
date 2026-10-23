@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"time"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -431,14 +433,21 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					return agentexecutionapp.UnsupportedCurrentAgentStart(
 						"the resolved turn carries a malformed JSON projection")
 				}
-				if validationErr := validateCurrentApplicationNesting(
+				// FU-244, PLAN §8.8: the shared composition rule first (typed,
+				// readable), then the row checks of the nesting walk.
+				if err := checkStartComposition(ctx, tx, schema(strconv.FormatInt(request.ProjectID, 10)), row.ApplicationID, row.ApplicationVersionID); err != nil {
+					return err
+				}
+				if validationErr := validateCurrentApplicationRows(
 					ctx,
 					nesting,
 					row.ApplicationVersionID,
-					1,
 				); validationErr != nil {
 					if contextErr := ctx.Err(); contextErr != nil {
 						return contextErr
+					}
+					if errors.Is(validationErr, errCurrentApplicationCompositionBound) {
+						return applicationcomposition.ErrAtStart
 					}
 					if errors.Is(validationErr, errInvalidCurrentApplicationNesting) {
 						return agentexecutionapp.ErrUnsupportedCurrentAgentStart
@@ -606,14 +615,23 @@ func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationSource
 			if err := currentCatalogueVersionAdmissible(details); err != nil {
 				return err
 			}
-			if validationErr := validateCurrentApplicationNesting(
+			// FU-244: one composition rule for every start path; then the row
+			// checks of the nesting walk, as for a same-project start.
+			if err := checkStartComposition(ctx, tx,
+				schema(strconv.FormatInt(int64(repository.catalogueProjectID), 10)),
+				reference.applicationID, reference.versionID); err != nil {
+				return err
+			}
+			if validationErr := validateCurrentApplicationRows(
 				ctx,
 				nesting,
 				reference.versionID,
-				1,
 			); validationErr != nil {
 				if contextErr := ctx.Err(); contextErr != nil {
 					return contextErr
+				}
+				if errors.Is(validationErr, errCurrentApplicationCompositionBound) {
+					return applicationcomposition.ErrAtStart
 				}
 				if errors.Is(validationErr, errInvalidCurrentApplicationNesting) {
 					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
@@ -781,7 +799,11 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 					!json.Valid(conversationMeta) {
 					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
 				}
-				tools, queryErr = filterCurrentAdhocApplicationNesting(ctx, nesting, tools)
+				tools, queryErr = filterCurrentAdhocApplicationNesting(
+					ctx, nesting,
+					newCompositionSource(tx, schema(strconv.FormatInt(request.ProjectID, 10))),
+					tools,
+				)
 				if queryErr != nil {
 					if contextErr := ctx.Err(); contextErr != nil {
 						return contextErr

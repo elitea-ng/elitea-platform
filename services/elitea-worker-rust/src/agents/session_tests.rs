@@ -2683,10 +2683,12 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_c
         SkippedApplicationChild {
             agent_type: "predict".to_owned(),
             name: "classifier".to_owned(),
+            too_large: false,
         },
         SkippedApplicationChild {
             agent_type: "future_type".to_owned(),
             name: "something-new".to_owned(),
+            too_large: false,
         },
     ]);
     let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(

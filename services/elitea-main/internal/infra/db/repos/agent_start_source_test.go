@@ -49,6 +49,9 @@ func sourceVersionExecutor(t *testing.T) *rootSourceVersionExecutor {
 }
 func TestOriginalRootSourceResolverRetainsRawBeforeNestedSkills(t *testing.T) {
 	e := sourceVersionExecutor(t)
+	// The start's composition check (FU-244) reads the root version and its
+	// attachments in the same project transaction: a plain agent, no rows.
+	scriptRootComposition(e, 1)
 	store := &rootSourceProjectStore{rootSourceVersionExecutor: e}
 	repo, err := newCurrentAgentStartRepository(store, 1)
 	if err != nil {
@@ -72,6 +75,8 @@ func TestOriginalRootCatalogueSourceRetainsExactAdmittedReadAndOldWrapper(t *tes
 	e.nodes[41] = currentApplicationNestingTestNode(t, 41, 31, "agent")
 	e.version.ApplicationVersionDetailsJson = `{"id":41,"application_id":31,"agent_type":"agent","status":"published","instructions":"Authored catalogue source","meta":{},"tools":[]}`
 	catalogueRaw := []byte(e.version.ApplicationVersionDetailsJson)
+	// FU-244: the catalogue start runs the same composition check (two resolves).
+	scriptRootComposition(e, 2)
 	store := &rootSourceProjectStore{rootSourceVersionExecutor: e}
 	repo, err := newCurrentAgentStartRepository(store, 1)
 	if err != nil {
@@ -84,5 +89,17 @@ func TestOriginalRootCatalogueSourceRetainsExactAdmittedReadAndOldWrapper(t *tes
 	old, err := repo.resolveCatalogueApplicationVersion(t.Context(), currentCatalogueApplicationReference{applicationID: 31, versionID: 41})
 	if err != nil || !bytes.Equal(old, runtime) || len(store.projects) != 2 || store.projects[0] != 1 || store.projects[1] != 1 {
 		t.Fatal("runtime-only catalogue wrapper changed")
+	}
+}
+
+// scriptRootComposition scripts the composition check of `starts` starts of
+// root 31/41, a plain agent: the batched version read, the legacy-table probe
+// and the (empty) attachment read.
+func scriptRootComposition(e *rootSourceVersionExecutor, starts int) {
+	for range starts {
+		e.rowsResults = append(e.rowsResults,
+			&scriptedRows{rows: []scriptedRow{{values: []any{int64(31), int64(41), "Root", "agent", ""}}}},
+			&scriptedRows{})
+		e.rowResults = append(e.rowResults, scriptedRow{values: []any{nil}})
 	}
 }

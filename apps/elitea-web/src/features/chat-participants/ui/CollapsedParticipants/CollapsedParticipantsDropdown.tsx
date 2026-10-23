@@ -105,6 +105,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { t } from '@/shared/i18n';
 
 import { useParticipantDetailsContext } from '../../lib/context/ParticipantDetailsContext';
+import { isSkippedContainerParticipant } from '../../lib/helpers';
 import { ChatParticipantType } from '../../model/constants';
 
 import CollapsedParticipantsList from './CollapsedParticipantsList';
@@ -115,18 +116,17 @@ import CollapsedParticipantsList from './CollapsedParticipantsList';
 
 /**
  * Duplicated here rather than reused from `@/entities/participant` —
- * that module's `chatParticipantUniqueId`/`isSkippedContainerParticipant`
- * are typed against a **camelCase** `Participant` shape (`entityName`,
- * `entitySettings`, `entityMeta.projectId`, `meta.isContainer`), while every
+ * that module's `chatParticipantUniqueId` is typed against a **camelCase**
+ * `Participant` shape (`entityName`, `entitySettings`, `entityMeta.projectId`),
+ * while every
  * participant flowing through this feature (`TransformedParticipant`,
  * `../../model/types.ts`) is **snake_case** (`entity_name`,
- * `entity_settings`, `entity_meta.project_id`, `meta.is_container` — see
- * old-app `participants.helpers.js:60` for `is_container`). Calling the
+ * `entity_settings`, `entity_meta.project_id`). Calling the
  * camelCase-typed helpers on this feature's real snake_case objects would
  * silently read every field as `undefined` and always return a wrong
  * answer, so this is a plain, verbatim port of the old app's own
- * `participants.helpers.js` (`getChatParticipantUniqueId`/
- * `isSkippedContainerParticipant`) on the shape this feature actually uses.
+ * `participants.helpers.js` `getChatParticipantUniqueId` on the shape this
+ * feature actually uses.
  */
 function uniqueIdEntityKey(participant: Record<string, unknown>): string {
   const entitySettings = participant.entity_settings as Record<string, unknown> | undefined;
@@ -151,16 +151,6 @@ function getChatParticipantUniqueId(participant: Record<string, unknown> | undef
   const entityMeta = participant.entity_meta as Record<string, unknown> | undefined;
   const projectId = (entityMeta?.project_id as string | undefined) ?? '';
   return `${uniqueIdEntityKey(participant)}_${uniqueIdBody(participant)}_${projectId}`;
-}
-
-function isSkippedContainerParticipant(participant: Record<string, unknown> | undefined): boolean {
-  if (!participant) return false;
-  const meta = participant.meta as Record<string, unknown> | undefined;
-  if (meta?.is_container !== true) return false;
-  if (participant.entity_name !== ChatParticipantType.Applications) return false;
-  const entitySettings = participant.entity_settings as Record<string, unknown> | undefined;
-  const isPipeline = entitySettings?.agent_type === ChatParticipantType.Pipelines || participant.agent_type === ChatParticipantType.Pipelines;
-  return !isPipeline;
 }
 
 /** `mcp.helpers.js:7-14`'s `isMcpToolkitType`, duplicated per this feature's own established precedent (`Participants.tsx`'s identical local copy) — no shared home for it exists in this worktree. */
@@ -316,7 +306,7 @@ const CollapsedParticipantsDropdown = memo((props: CollapsedParticipantsDropdown
           const tooltipTitle = hasError
             ? t('chat-participants.collapsed.errorTooltip', 'Misconfiguration error in {{label}}', { label: label.toLowerCase() })
             : hasSkippedContainer
-              ? t('chat-participants.collapsed.skippedContainerTooltip', "Uses other agents — select it to run; it won't be used as a tool.")
+              ? t('chat-participants.collapsed.skippedContainerTooltip', 'Its sub-agent chain is at the nesting limit (3 tiers) — select it to run.')
               : t('chat-participants.collapsed.sectionTooltip', '{{label}} in this conversation', { label });
 
           return (

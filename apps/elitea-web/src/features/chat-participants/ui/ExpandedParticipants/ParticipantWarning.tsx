@@ -48,17 +48,15 @@ export interface ParticipantWarningProps {
 // ---------------------------------------------------------------------------
 
 /**
- * Old app (`ParticipantWarning.jsx:37-38`): "Uses other agents — runs only
- * as the active agent. Select it to run; it won't be used as a tool." — the
- * new-app port previously shipped different wording for this exact,
- * previously-deliberate copy (issue #5680) — wave-2 C5 adversarial-review
- * finding #8. `ParticipantItem.tsx`'s inline `containerInfoRow` copy carries
- * the same key/fallback so the two call sites can't drift apart again.
+ * Old app (`ParticipantWarning.jsx:44-45`, issue #5778): "Its sub-agent chain
+ * is at the nesting limit (3 tiers), so it runs only as the active agent here
+ * — select it to run." `ParticipantItem.tsx`'s inline `containerInfoRow` copy
+ * carries the same key/fallback so the two call sites can't drift apart again.
  */
 function resolveSkippedContainer(): ReactNode {
   return t(
     'chat-participants.warning.skippedContainer',
-    "Uses other agents — runs only as the active agent. Select it to run; it won't be used as a tool.",
+    'Its sub-agent chain is at the nesting limit (3 tiers), so it runs only as the active agent here — select it to run.',
   );
 }
 

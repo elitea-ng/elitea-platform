@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { isMcpToolkit } from '@/entities/toolkit';
@@ -226,22 +227,6 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
     onToolsChanged?.();
   }, [projectId, numericApplicationId, queryClient, onToolsChanged]);
 
-  const associateAsAgent = useCallback(
-    (candidate: AssociationCandidate) => {
-      void associateAgent(candidate, { isPipeline: false, currentTools }).then((outcome) => {
-        if (outcome.ok) void onAssociated();
-      });
-    },
-    [associateAgent, currentTools, onAssociated],
-  );
-  const associateAsPipeline = useCallback(
-    (candidate: AssociationCandidate) => {
-      void associateAgent(candidate, { isPipeline: true, currentTools }).then((outcome) => {
-        if (outcome.ok) void onAssociated();
-      });
-    },
-    [associateAgent, currentTools, onAssociated],
-  );
 
   // Performs the REAL toolkit/MCP attach (see this module's own doc comment, "REAL GAPS"
   // bullet) — `notify` is the caller-supplied `onAttachToolkit`/`onAttachMcp` observer, fired
@@ -305,6 +290,21 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
     setPipelineAnchor(null);
     setPipelineSearch('');
   }, []);
+
+  // A refused attach (a guard, or the server's composition check, FU-244) is SAID. The baseline
+  // toasted it; this app has no toasts, so the menu closes and an inline alert shows it.
+  const [associationFailure, setAssociationFailure] = useState<string>();
+  const reportAssociation = useCallback(
+    (outcome: { readonly ok: boolean; readonly message: string }) => {
+      setAssociationFailure(outcome.ok ? undefined : outcome.message);
+      if (outcome.ok) return void onAssociated();
+      closeAgentMenu();
+      closePipelineMenu();
+    },
+    [onAssociated, closeAgentMenu, closePipelineMenu],
+  );
+  const associateAsAgent = useCallback((candidate: AssociationCandidate) => void associateAgent(candidate, { isPipeline: false, currentTools }).then(reportAssociation), [associateAgent, currentTools, reportAssociation]);
+  const associateAsPipeline = useCallback((candidate: AssociationCandidate) => void associateAgent(candidate, { isPipeline: true, currentTools }).then(reportAssociation), [associateAgent, currentTools, reportAssociation]);
 
   const agentsQuery = useListApplications(projectId ?? '', { agents_type: 'classic', query: agentSearch }, { query: { enabled: projectId !== undefined } });
   const pipelinesQuery = useListApplications(projectId ?? '', { agents_type: 'pipeline', query: pipelineSearch }, { query: { enabled: projectId !== undefined } });
@@ -384,6 +384,14 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
         anchor={pipelineAnchor}
         onClose={closePipelineMenu}
       />
+      {associationFailure !== undefined && (
+        <Typography
+          role="alert"
+          variant="bodyMedium"
+        >
+          {associationFailure}
+        </Typography>
+      )}
     </Box>
   );
 }

@@ -606,6 +606,7 @@ WHERE conversation_id = 2 AND participant_id = 30;`); err != nil {
 	filtered, err := filterCurrentAdhocApplicationNesting(
 		t.Context(),
 		queries,
+		NewCompositionSource(tx, schema("1")),
 		json.RawMessage(adhoc.ToolsJson),
 	)
 	if err != nil {

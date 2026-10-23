@@ -75,7 +75,7 @@ describe('useAgentPipelineAssociation', () => {
     expect(outcome).toEqual({ ok: true, message: 'The "Helper Bot" agent is successfully added.' });
   });
 
-  it('blocks a container agent (has an application-type tool) from being nested as a non-pipeline', async () => {
+  it('attaches a sub-orchestrator (an agent that uses other agents): the 3-level rule is the server\'s (FU-244)', async () => {
     server.use(
       getGetApplicationMockHandler(
         detail({
@@ -91,15 +91,15 @@ describe('useAgentPipelineAssociation', () => {
         }),
       ),
     );
+    server.use(getUpdateApplicationRelationMockHandler({ application_id: '1', version_id: '2', has_relation: true }));
 
     const { result } = renderHook(() => useAgentPipelineAssociation({ projectId: 'proj-1', applicationId: 1, versionId: 2 }), { wrapper });
-    const outcome = await act(() => result.current.associateAgent({ id: 42, name: 'Container Bot' }));
+    const outcome = await act(() => result.current.associateAgent({ id: 42, name: 'Research Lead' }));
 
-    expect(outcome.ok).toBe(false);
-    expect(outcome.message).toContain('Tip: make a version of it without sub-agents its default');
+    expect(outcome).toEqual({ ok: true, message: 'The "Research Lead" agent is successfully added.' });
   });
 
-  it('allows a pipeline candidate to contain application-type tools (exempt from the container guard)', async () => {
+  it('allows a pipeline candidate to contain application-type tools', async () => {
     server.use(
       getGetApplicationMockHandler(
         detail({

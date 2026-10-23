@@ -539,7 +539,7 @@ async fn saved_graph_entry_keeps_actual_descendant_presentations_across_graph_wr
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
-async fn mixed_graph_agent_cycle_edge_is_dropped_before_provider_effects() {
+async fn mixed_graph_agent_cycle_is_refused_before_provider_effects() {
     let mut input = versions();
     input.insert(
         (32, 42),
@@ -550,35 +550,41 @@ async fn mixed_graph_agent_cycle_edge_is_dropped_before_provider_effects() {
         ),
     );
     let fixture = Fixture::new(input);
-    let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"))
-        .await
-        .unwrap();
-    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
+    assert_refused_as_composition_bound(
+        fixture
+            .build(reference((31, 41), "pipeline", "outer"))
+            .await,
+        super::bound::CYCLE,
+    );
     assert!(fixture.models.lock().unwrap().is_empty());
     assert_eq!(
         *fixture.reads.lock().unwrap(),
         vec![(31, 41), (32, 42), (31, 41)]
     );
 }
-/// A bound violation (cycle, graph depth, ordinary-scope budget) deep inside a
-/// saved pipeline is not built: the pipeline `agent` node whose Agent would reach
-/// it runs without that one edge (`bind_scoped_agent`), so the outer pipeline is
-/// still offered and nothing past the bound is read, built or called.
-fn assert_outer_offered_without_the_offending_edge(
-    runtime: Option<&MaterializedApplicationRuntime>,
-    skipped: &[SkippedApplicationChild],
+/// FU-244: a bound violation (cycle, graph depth, ordinary-scope budget) deep inside a saved
+/// pipeline is an authoring error of the composition. It is refused with the typed composition
+/// cause before any model call, never dropped as one edge or skipped as an unavailable tool.
+fn assert_refused_as_composition_bound(
+    result: Result<
+        (
+            Option<MaterializedApplicationRuntime>,
+            Vec<SkippedApplicationChild>,
+        ),
+        NativeAgentAssemblyError,
+    >,
+    detail: &str,
 ) {
-    let runtime = runtime.expect("the outer pipeline is offered");
+    let Err(error) = result else {
+        panic!("a composition bound violation must be refused");
+    };
+    assert!(super::is_composition_bound(&error), "{error:?}");
     assert_eq!(
-        runtime
-            .tools
-            .iter()
-            .map(|tool| tool.alias.as_str())
-            .collect::<Vec<_>>(),
-        ["outer"]
+        error
+            .cause()
+            .and_then(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::detail),
+        Some(detail)
     );
-    assert!(skipped.is_empty(), "{skipped:?}");
 }
 fn two_scope_versions() -> BTreeMap<Identity, Value> {
     let mut input = versions();
@@ -660,7 +666,7 @@ async fn second_ordinary_graph_scope_produces_bounded_exact_activation_chain() {
     assert_eq!(fixture.models.lock().unwrap().len(), 2);
 }
 #[tokio::test]
-async fn third_ordinary_graph_scope_is_dropped_before_provider_effects() {
+async fn third_ordinary_graph_scope_is_refused_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (35, 45),
@@ -672,16 +678,17 @@ async fn third_ordinary_graph_scope_is_dropped_before_provider_effects() {
     );
     input.insert((36, 46), version("agent", "Leaf", vec![]));
     let fixture = Fixture::new(input);
-    let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"))
-        .await
-        .unwrap();
-    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
+    assert_refused_as_composition_bound(
+        fixture
+            .build(reference((31, 41), "pipeline", "outer"))
+            .await,
+        super::bound::ORDINARY_GRAPH_SCOPES,
+    );
     assert!(fixture.models.lock().unwrap().is_empty());
     assert!(!fixture.reads.lock().unwrap().contains(&(36, 46)));
 }
 #[tokio::test]
-async fn second_scope_mixed_cycle_edge_is_dropped_before_provider_effects() {
+async fn second_scope_mixed_cycle_is_refused_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (34, 44),
@@ -692,16 +699,17 @@ async fn second_scope_mixed_cycle_edge_is_dropped_before_provider_effects() {
         ),
     );
     let fixture = Fixture::new(input);
-    let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"))
-        .await
-        .unwrap();
-    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
+    assert_refused_as_composition_bound(
+        fixture
+            .build(reference((31, 41), "pipeline", "outer"))
+            .await,
+        super::bound::CYCLE,
+    );
     assert!(fixture.models.lock().unwrap().is_empty());
     assert_eq!(fixture.reads.lock().unwrap().last(), Some(&(31, 41)));
 }
 #[tokio::test]
-async fn second_scope_mixed_graph_depth_is_dropped_before_provider_effects() {
+async fn second_scope_mixed_graph_depth_is_refused_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (30, 40),
@@ -720,11 +728,12 @@ async fn second_scope_mixed_graph_depth_is_dropped_before_provider_effects() {
         ),
     );
     let fixture = Fixture::new(input);
-    let (runtime, skipped) = fixture
-        .build(reference((29, 39), "pipeline", "outer"))
-        .await
-        .unwrap();
-    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
+    assert_refused_as_composition_bound(
+        fixture
+            .build(reference((29, 39), "pipeline", "outer"))
+            .await,
+        super::bound::PIPELINE_DEPTH,
+    );
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
@@ -1250,5 +1259,45 @@ fn assert_static_receipt_edges(
     assert!(
         validate_static_thread_for_saved_start(event, &format!("{thread}-foreign"), lineage)
             .is_err()
+    );
+}
+
+/// FU-244: the composition bounds and the registered refusal are the shared contract
+/// `libs/proto/contracts/application-composition-limits-v1.json`, which Main's save check
+/// asserts too, so the save never refuses what this Worker runs (or the other way round).
+#[test]
+fn composition_bounds_match_the_shared_contract() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../libs/proto/contracts/application-composition-limits-v1.json");
+    let text = std::fs::read_to_string(path).expect("the composition contract is readable");
+    let contract: Value = serde_json::from_str(&text).expect("the composition contract is JSON");
+    let limit = |key: &str| {
+        usize::try_from(contract[key].as_u64().expect("a numeric limit")).expect("a usize limit")
+    };
+    assert_eq!(limit("max_agent_tiers"), super::MAX_AGENT_TIERS);
+    assert_eq!(
+        limit("max_pipeline_depth"),
+        crate::agents::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH
+    );
+    assert_eq!(
+        limit("max_ordinary_graph_scopes"),
+        crate::agents::pipeline::scoped_applications::MAX_ORDINARY_GRAPH_SCOPES
+    );
+    assert_eq!(limit("max_application_hops"), super::MAX_APPLICATION_HOPS);
+    assert_eq!(
+        limit("max_checkpoint_paths"),
+        crate::agents::pipeline::composition::MAX_PIPELINE_CHECKPOINT_PATHS
+    );
+    assert_eq!(
+        limit("max_version_bytes"),
+        super::MAX_MATERIALIZATION_VERSION_BYTES
+    );
+    assert_eq!(
+        contract["runtime_message"],
+        crate::protocol::output::APPLICATION_COMPOSITION_INVALID_MESSAGE
+    );
+    assert_eq!(
+        contract["size_runtime_message"],
+        crate::protocol::output::APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE
     );
 }

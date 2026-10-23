@@ -81,6 +81,9 @@ use crate::transport::runtime_context::SavedAgentFingerprint;
 #[cfg(test)]
 pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
 pub(super) use materialization::{ApplicationContinuation, ApplicationMaterializationPath};
+pub(crate) use materialization::{
+    bound, composition_bound, composition_size, is_composition_bound, is_composition_size,
+};
 pub(crate) use static_resume::{
     install_static_application_resume, prepare_static_application_resume,
 };
@@ -2923,6 +2926,7 @@ pub(crate) async fn materialize_application_runtime(
 > {
     let (event_sender, event_receiver) = mpsc::channel(APPLICATION_EVENT_CHANNEL_CAPACITY);
     let resume = ApplicationResumeCoordinator::default();
+    let materialization = dependencies.materialization.clone();
     dependencies.event_sender = Some(event_sender);
     dependencies.resume = Some(resume.clone());
     // #973: read before the dependencies are consumed below. A caller that
@@ -2955,7 +2959,9 @@ pub(crate) async fn materialize_application_runtime(
     // root one does (#990): skipped and named on the root's notice, never a
     // failed turn for the Agents that do not call it.
     let mut skipped_pipeline_children = skipped_pipeline_children;
-    for child in skipped_nested {
+    // FU-243: plus what a pipeline `agent` node's Agent left out below (recorded on the shared
+    // assembly path by `pipeline::bind_scoped_agent`), so this root names it too.
+    for child in skipped_nested.into_iter().chain(materialization.skipped()) {
         if skipped_pipeline_children.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
             break;
         }
@@ -3055,6 +3061,23 @@ async fn materialize_pipeline_children(
         .await;
         let (definition, runtimes, child_tools) = match built {
             Ok(built) => built,
+            // FU-244: a bound violation (cycle, depth, tiers, scopes, budgets, a pause the
+            // root cannot continue) is an authoring error of the saved composition. It is
+            // refused with its typed readable terminal, never dropped as an edge.
+            Err(error) if is_composition_bound(&error) => return Err(error),
+            // Too large to load together with what is already loaded: left out and named
+            // where the root offers its attachments to its own model; a pipeline Agent node
+            // that selects it cannot run without it.
+            Err(error) if is_composition_size(&error) && selected_aliases.is_none() => {
+                if skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
+                    skipped.push(SkippedApplicationChild {
+                        agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
+                        name: crate::toolkits::bounded_label(&reference.alias),
+                        too_large: true,
+                    });
+                }
+                continue;
+            }
             Err(error) => {
                 tracing::warn!(
                     application_id = reference.identity.0,
@@ -3066,6 +3089,7 @@ async fn materialize_pipeline_children(
                     skipped.push(SkippedApplicationChild {
                         agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
                         name: crate::toolkits::bounded_label(&reference.alias),
+                        too_large: false,
                     });
                 }
                 continue;
@@ -3154,7 +3178,23 @@ pub(crate) async fn materialize_application_tools(
         let identity = reference.identity;
         let alias = reference.name.clone();
         let agent_type = reference.agent_type.clone();
-        let application = state.build(reference.clone(), 2).await?;
+        // The root's attachments share one byte budget (an ad-hoc chat model's participants
+        // included): one that no longer fits is left out and named, never failing the turn.
+        // A pipeline Agent node that selects it cannot run without it, so there it fails.
+        let application = match state.build(reference.clone(), 2).await {
+            Ok(application) => application,
+            Err(error) if is_composition_size(&error) && selected_aliases.is_none() => {
+                if state.skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
+                    state.skipped.push(SkippedApplicationChild {
+                        agent_type: crate::toolkits::bounded_label(&agent_type),
+                        name: crate::toolkits::bounded_label(&alias),
+                        too_large: true,
+                    });
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         tools.push(MaterializedApplicationTool {
             alias,
             agent_type,
@@ -3214,8 +3254,14 @@ impl ApplicationAssemblyState<'_> {
             );
             let result = async {
                 self.hops = self.hops.saturating_add(1);
-                if self.hops > MAX_APPLICATION_HOPS || tier > MAX_AGENT_TIERS {
-                    return Err(resource_exhausted());
+                if self.hops > MAX_APPLICATION_HOPS {
+                    return Err(composition_bound(
+                        resource_exhausted(),
+                        bound::APPLICATION_HOPS,
+                    ));
+                }
+                if tier > MAX_AGENT_TIERS {
+                    return Err(composition_bound(resource_exhausted(), bound::AGENT_TIERS));
                 }
                 // Unreachable from `application_references`, which filters
                 // these out and reports them as skipped (#973). Kept as the
@@ -3237,7 +3283,7 @@ impl ApplicationAssemblyState<'_> {
                 }
                 tracing::Span::current().record("cache_hit", false);
                 if !self.resolving.insert(identity) {
-                    return Err(invalid_configuration());
+                    return Err(composition_bound(invalid_configuration(), bound::CYCLE));
                 }
                 tracing::Span::current().record("stage", "resolve_version");
                 let parent_path = std::mem::replace(&mut self.materialization, next_path);
@@ -3564,6 +3610,9 @@ pub(crate) struct SkippedApplicationChild {
     pub(crate) agent_type: String,
     /// The alias the parent stores, which is the name the user picked.
     pub(crate) name: String,
+    /// Left out because it does not fit the composition's byte budget, not because this
+    /// worker cannot build its type.
+    pub(crate) too_large: bool,
 }
 
 /// The attached application children whose `agent_type` this worker does not
@@ -3621,6 +3670,7 @@ pub(crate) fn skipped_application_children(
         skipped.insert(SkippedApplicationChild {
             agent_type: crate::toolkits::bounded_label(agent_type),
             name: crate::toolkits::bounded_label(reference.toolkit_name()),
+            too_large: false,
         });
     }
     skipped.into_iter().collect()
@@ -3639,10 +3689,17 @@ pub(crate) fn skipped_application_children_notice_text(
     let mut lines = skipped
         .iter()
         .map(|child| {
-            format!(
-                "attached {} '{}' is not available on this worker",
-                child.agent_type, child.name
-            )
+            if child.too_large {
+                format!(
+                    "attached {} '{}' is too large to load with the other attachments",
+                    child.agent_type, child.name
+                )
+            } else {
+                format!(
+                    "attached {} '{}' is not available on this worker",
+                    child.agent_type, child.name
+                )
+            }
         })
         .collect::<Vec<_>>();
     lines.sort_unstable();

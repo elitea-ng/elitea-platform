@@ -3961,6 +3961,9 @@ async fn nested_agent_cycle_fails_after_one_exact_resolution_and_before_model_di
         error.code(),
         NativeAgentAssemblyErrorCode::InvalidConfiguration
     );
+    assert!(crate::agents::application_tools::is_composition_bound(
+        &error
+    ));
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(paths.lock().expect("runtime-context paths").len(), 2);
     assert!(captured.lock().expect("captured model requests").is_empty());
@@ -4014,6 +4017,10 @@ async fn nested_agent_tier_limit_fails_before_fetching_the_fourth_tier() {
         error.code(),
         NativeAgentAssemblyErrorCode::ResourceExhausted
     );
+    // FU-244: a tier past the bound is the typed composition refusal, never a skipped edge.
+    assert!(crate::agents::application_tools::is_composition_bound(
+        &error
+    ));
     assert_eq!(calls.load(Ordering::Acquire), 3);
     let paths = paths.lock().expect("runtime-context paths");
     assert!(
@@ -4657,6 +4664,88 @@ async fn an_unbuildable_attached_pipeline_is_skipped_and_the_agent_still_answers
     assert!(
         body["tools"].as_array().is_none_or(Vec::is_empty),
         "a child that could not be built was still offered to the model: {}",
+        body["tools"]
+    );
+}
+
+/// FU-244: a root's attachments share one byte budget. An attachment that no longer fits is
+/// left out and named (`too_large`), so an ad-hoc chat model with many participants keeps
+/// answering with the ones that fit instead of failing the turn.
+#[tokio::test(flavor = "current_thread")]
+async fn an_attachment_past_the_byte_budget_is_left_out_and_the_agent_still_answers() {
+    const EACH: usize = 900_000;
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    let references = (0..5u64)
+        .map(|index| {
+            stored_application_reference(
+                60 + index,
+                70 + index,
+                80 + index,
+                &format!("worker-{index}"),
+            )
+        })
+        .collect();
+    attach_application_tools(&mut request, references);
+    let mut responses = VecDeque::from([runtime_context_response(&serde_json::json!({
+        "schema_version": "elitea.runtime.elitea-client-token.v1",
+        "project_id": 17,
+        "token": TOKEN,
+    }))]);
+    for index in 0..5u64 {
+        let mut version = nested_agent_version("Worker.", "model-w", 23, Vec::new());
+        version["meta"] = serde_json::json!({"padding": "x".repeat(EACH)});
+        responses.push_back(application_version_response(
+            70 + index,
+            80 + index,
+            version,
+        ));
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let runtime_context =
+        runtime_context_client_from(responses, Arc::clone(&calls), Arc::clone(&paths));
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(text_response(
+            "root answer",
+        ))],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+
+    let mut invocation = assembler
+        .assemble(assembly)
+        .await
+        .expect("an attachment past the byte budget must not end the assembly");
+    let _ = invocation
+        .project_start(chrono::Utc::now())
+        .expect("agent start");
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _ = projector.project(&event).expect("projected event");
+    }
+    let completed = completion.select().await.expect("selected completion");
+    let _ = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output");
+
+    let captured = captured.lock().expect("captured model request");
+    assert_eq!(captured.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    assert_eq!(
+        body["tools"].as_array().map(Vec::len),
+        Some(4),
+        "the four attachments that fit are offered, the fifth is left out: {}",
         body["tools"]
     );
 }

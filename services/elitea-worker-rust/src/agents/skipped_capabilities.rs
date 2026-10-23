@@ -42,6 +42,7 @@ pub(crate) const KIND_TOOL: &str = "tool";
 const REASON_INTERNAL_TOOL: &str = "this built-in capability is not available on this worker yet, so it was turned off for this agent";
 const REASON_APPLICATION: &str =
     "this attached agent type is not available as a tool on this worker yet, so it was left out";
+const REASON_APPLICATION_TOO_LARGE: &str = "this attached agent or pipeline is too large to load together with the other attachments, so it was left out";
 
 /// The `skipped_capabilities` value: `{"items": [...], "more": N}` (`more`
 /// only when entries were cut), or `None` when the turn served everything.
@@ -96,8 +97,16 @@ pub(crate) fn skipped_capabilities(
             KIND_APPLICATION,
             &bounded_label(&child.name),
             &bounded_label(&child.agent_type),
-            "application_child_unsupported",
-            REASON_APPLICATION,
+            if child.too_large {
+                "application_child_too_large"
+            } else {
+                "application_child_unsupported"
+            },
+            if child.too_large {
+                REASON_APPLICATION_TOO_LARGE
+            } else {
+                REASON_APPLICATION
+            },
         ));
     }
     let mut total = 0;
@@ -146,6 +155,20 @@ mod tests {
     }
 
     #[test]
+    fn a_child_left_out_for_size_says_so() {
+        let children = vec![SkippedApplicationChild {
+            agent_type: "agent".to_owned(),
+            name: "big".to_owned(),
+            too_large: true,
+        }];
+        let value =
+            skipped_capabilities(&[], InternalToolCatalog::empty(), &children).expect("a list");
+        let entry = &items(&value)[0];
+        assert_eq!(entry["reason_code"], "application_child_too_large");
+        assert_eq!(entry["reason"], REASON_APPLICATION_TOO_LARGE);
+    }
+
+    #[test]
     fn internal_tools_and_children_are_named_deduplicated_and_ordered() {
         let catalog =
             InternalToolCatalog::from_values(Some(&json!(["swarm", "internal_mcp", "swarm"])))
@@ -154,10 +177,12 @@ mod tests {
             SkippedApplicationChild {
                 agent_type: "predict".to_owned(),
                 name: "b".to_owned(),
+                too_large: false,
             },
             SkippedApplicationChild {
                 agent_type: "predict".to_owned(),
                 name: "b".to_owned(),
+                too_large: false,
             },
         ];
         let value = skipped_capabilities(&[], catalog, &children).expect("a list");
@@ -192,6 +217,7 @@ mod tests {
             .map(|index| SkippedApplicationChild {
                 agent_type: "pipeline".to_owned(),
                 name: format!("child-{index:03}"),
+                too_large: false,
             })
             .collect();
         let catalog = InternalToolCatalog::from_values(Some(&json!(["swarm"]))).expect("names");
@@ -213,6 +239,7 @@ mod tests {
             .map(|index| SkippedApplicationChild {
                 agent_type: "pipeline".to_owned(),
                 name: format!("{index:02}{}", "ж".repeat(200)),
+                too_large: false,
             })
             .collect();
         let value =
