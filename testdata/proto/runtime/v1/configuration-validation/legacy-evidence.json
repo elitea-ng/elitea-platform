@@ -5,7 +5,7 @@
     "indexer_worker": {
       "revision": "d55520115dacc3dac41ee45d85a4d705b149dadf",
       "repository_method_path": "methods/indexer_configuration_validator.py",
-      "legacy_workspace_method_path": "centry/pylon_indexer/plugins/indexer_worker/methods/indexer_configuration_validator.py",
+      "legacy_workspace_method_path": "centry/legacy_indexer/plugins/indexer_worker/methods/indexer_configuration_validator.py",
       "lines": "35-54"
     },
     "elitea_sdk": {

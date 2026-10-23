@@ -1,5 +1,5 @@
--- 0091_pylon_viewer_secret_list_parity.sql — keep the #402 viewer split on a
--- Go-managed database, and withdraw it from a pylon-managed one.
+-- 0091_viewer_secret_list_parity.sql — keep the #402 viewer split on a
+-- Go-managed database, and withdraw it from a legacy-managed one.
 --
 -- THE DEFECT THIS FILE CORRECTS.
 --
@@ -8,20 +8,21 @@
 -- Its header states the blast radius as follows:
 --
 --   "That shape is the fresh Go database. It is never the shape of a
---    pylon-backed database, of a legacy dump, or of the end-to-end stack: each
+--    legacy-backed database, of a legacy dump, or of the end-to-end stack: each
 --    one seeds per-project rows, and those rows suppress the central fallback
 --    completely. So no existing deployment's members gain anything here."
 --
 -- That paragraph is wrong, and nine other files in this corpus repeat it. A
--- pylon-backed database seeds NO per-project permission row:
+-- legacy-backed database seeds NO per-project permission row:
 --
 --   * legacy/plugins/auth_core/db/migrations/202602261000_permission_consolidation.py
 --     TRUNCATEs auth_core__project_role_permission and calls the table dead.
---   * pylon project creation writes auth_core__project_role rows only. Its
---     admin_set_permission_for_role RPC is a `pass`.
---   * testdata/postgres/legacy-rbac-matrix.json, exported from pylon at
---     migration head 202604161400, reports project_role_permission_rows: 0.
---     Every one of its ten project roles carries an empty permission list.
+--   * the legacy runtime project creation writes auth_core__project_role rows
+--     only. Its admin_set_permission_for_role RPC is a `pass`.
+--   * testdata/postgres/legacy-rbac-matrix.json, exported from the legacy
+--     runtime at migration head 202604161400, reports
+--     project_role_permission_rows: 0. Every one of its ten project roles
+--     carries an empty permission list.
 --
 -- So the central fallback in internal/infra/legacyrbac/postgres.go IS live on
 -- such a database, and 0083 DOES widen every project viewer there. The hybrid
@@ -30,21 +31,23 @@
 --
 -- WHY THE WIDENING IS REFUSED FOR THE SECRET LISTING.
 --
--- legacy/plugins/secrets/api/v2/secrets.py gates the pylon listing route on the
--- same string, and declares `DEFAULT_MODE: {"admin": True, "viewer": False,
--- "editor": True}`. The row therefore changes what a PYLON route admits, not
--- only what a Go route admits. #402 decided the Go product's split. It did not
--- decide pylon's, and this corpus has no mandate to widen a second product's
--- surface. This file removes the row where pylon owns the auth tables.
+-- legacy/plugins/secrets/api/v2/secrets.py gates the legacy runtime listing
+-- route on the same string, and declares `DEFAULT_MODE: {"admin": True,
+-- "viewer": False, "editor": True}`. The row therefore changes what a LEGACY
+-- route admits, not only what a Go route admits. #402 decided the Go product's
+-- split. It did not decide the legacy runtime's, and this corpus has no mandate
+-- to widen a second product's surface. This file removes the row where the
+-- legacy runtime owns the auth tables.
 --
 -- WHY THE TWO AVATAR STRINGS STAY.
 --
 -- 0083 also grants `models.social.avatar.get` and `models.social.avatar.update`
--- to the default-mode `editor` and `viewer`. Neither widens a pylon route:
+-- to the default-mode `editor` and `viewer`. Neither widens a legacy runtime
+-- route:
 --
---   * `models.social.avatar.update` is not in pylon's catalogue at all. 0080
---     mapped it onto the legacy name `models.social.avatar.post`, so pylon gates
---     nothing on the Go string.
+--   * `models.social.avatar.update` is not in the legacy runtime's catalogue at
+--     all. 0080 mapped it onto the legacy name `models.social.avatar.post`, so
+--     the legacy runtime gates nothing on the Go string.
 --   * `models.social.avatar.get` gates
 --     legacy/plugins/social/api/v2/avatar.py, which lists the STOCK avatar image
 --     files under the plugin's own avatar directory. It reads no project data
@@ -59,7 +62,8 @@
 --
 -- "auth_core__project_role_permission is empty" is a transient state that an
 -- operator changes with one press of the admin console. Ownership of auth_core
--- is not. pylon seeds two role shapes that this repository never creates:
+-- is not. The legacy runtime seeds two role shapes that this repository never
+-- creates:
 --
 --   * the whole `developer` mode (five roles), and
 --   * a `default`-mode `super_admin`.
@@ -71,19 +75,19 @@
 -- creates a `developer`-mode role or a `default`-mode `super_admin`.
 --
 -- THE COST, STATED PLAINLY. auth_core__role_permission carries no provenance.
--- An operator who granted this one string to the pylon default-mode `viewer`
--- through the admin Permissions page loses that grant here. The legacy matrix
--- withholds the string from that role, so the row is far more likely to be
--- 0083's than an operator's, and the admin console can restore it.
+-- An operator who granted this one string to the legacy runtime default-mode
+-- `viewer` through the admin Permissions page loses that grant here. The legacy
+-- matrix withholds the string from that role, so the row is far more likely to
+-- be 0083's than an operator's, and the admin console can restore it.
 --
 -- THE PROJECT-OVERRIDE HALF. shared/0089 delivers the central default-mode
 -- grants to every project that carries its own permission rows. It runs before
--- this file, so on a pylon-managed database that holds any override row it has
+-- this file, so on a legacy-managed database that holds any override row it has
 -- already copied 0083's grant into that project. The second statement withdraws
 -- those copies. It carries the same provenance cost as the first.
 --
--- migrations/pylon_shape_blast_radius_postgres_integration_test.go is the gate.
--- It applies this corpus to a pylon-shaped auth_core and measures what a
+-- a blast-radius integration test was the gate until #1387 removed it.
+-- It applies this corpus to a legacy-shaped auth_core and measures what a
 -- default-mode viewer resolves.
 DO $$
 BEGIN

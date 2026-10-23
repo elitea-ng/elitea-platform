@@ -25,11 +25,12 @@
 -- e2e-stack.sh has to hand-list `models.applications.index_meta.details`
 -- "because project 1 carries per-project rows".
 --
--- THE RULE IS NOT THE BUG. The suppression rule is pylon's documented contract
--- and TestAProjectWithItsOwnGrantsIsRefusedEveryGate pins it. What pylon pairs
--- it with, and this corpus never adopted, is a backfill: when the platform adds
--- a permission, the projects that hold their own matrix are given it too. This
--- file is that backfill, applied once to the whole estate.
+-- THE RULE IS NOT THE BUG. The suppression rule is the legacy runtime's
+-- documented contract and TestAProjectWithItsOwnGrantsIsRefusedEveryGate pins
+-- it. What the legacy runtime pairs it with, and this corpus never adopted, is
+-- a backfill: when the platform adds a permission, the projects that hold their
+-- own matrix are given it too. This file is that backfill, applied once to the
+-- whole estate.
 --
 -- WHAT IT WRITES, AND THE ONE THING IT WILL NOT DO.
 --

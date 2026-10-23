@@ -5,8 +5,9 @@
 -- and `chat_canvas_versions`, and GetMessageByUUID LEFT JOINs the first. They
 -- existed only in testdata/postgres/legacy-centry-catalog.json — the pg_catalog
 -- dump of the live legacy database — which is to say they existed only where
--- pylon had made them. This is the same gap 0123 closed for the transcript
--- tables and 0127 closed for attachments, one branch of the graph further out.
+-- the legacy runtime had made them. This is the same gap 0123 closed for the
+-- transcript tables and 0127 closed for attachments, one branch of the graph
+-- further out.
 --
 -- WHICH CALL SITE IS ACTUALLY LIVE, because the two are not equal and the
 -- distinction is the whole reason this file exists rather than a deletion:
@@ -16,7 +17,7 @@
 --   which shared/0068_elitea_core_route_permissions.sql seeds and the legacy
 --   RBAC catalogue also carries; production_router_test.go pins the path and
 --   router_elitea_core_project_scope_test.go exercises its project scoping. On
---   every deployment pylon never touched, that route answered
+--   every deployment the legacy runtime never touched, that route answered
 --   `relation "p_1.chat_messages_canvas" does not exist` (42P01) as soon as a
 --   caller cleared the permission gate. GET and PUT
 --   /elitea_core/canvas/prompt_lib/{projectID}/{canvasID} are registered
@@ -89,16 +90,17 @@
 -- three columns and removes the next instance of this same defect.
 --
 -- `canvas_type` HAS NO LENGTH LIMIT, matching the deployed `character varying`.
--- pylon's model may declare one; the applied column does not, and a shorter
--- column here would reject a value pylon accepts in a database they share.
+-- The legacy runtime's model may declare one; the applied column does not, and
+-- a shorter column here would reject a value the legacy runtime accepts in a
+-- database they share.
 --
 -- Every statement is IF NOT EXISTS, which is the bargain 0123, 0124, 0125, 0126
--- and 0127 each struck: wherever pylon already created these tables and owns
--- their shape this migration records itself and changes nothing, and it becomes
--- the definition only where nothing else provides one. Neither ordering can
--- produce 42P07. The index keeps its deployed name, `ix_tenant_...`, for the
--- same reason — a name of our own would be a second index on the same column in
--- every mixed deployment.
+-- and 0127 each struck: wherever the legacy runtime already created these
+-- tables and owns their shape this migration records itself and changes
+-- nothing, and it becomes the definition only where nothing else provides one.
+-- Neither ordering can produce 42P07. The index keeps its deployed name,
+-- `ix_tenant_...`, for the same reason — a name of our own would be a second
+-- index on the same column in every mixed deployment.
 --
 -- Guarded on the PARENTS with to_regclass, exactly as 0125, 0126 and 0127 are:
 -- several integration fixtures apply the tenant chain to a schema of their own

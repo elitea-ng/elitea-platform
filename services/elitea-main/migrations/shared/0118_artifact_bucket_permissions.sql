@@ -75,9 +75,9 @@ CREATE INDEX bucket_permissions_project
 -- internal/api/router_permission_grant_gate_test.go exists to catch.
 --
 -- THE SPLIT COMES FROM THE MATRIX, NOT FROM THE ROUTE DECORATOR.
--- testdata/postgres/legacy-rbac-matrix.json holds the grants a real pylon
--- deployment carries. In `default` mode it gives `s3_credentials.view` to
--- admin, editor and viewer, and `s3_credentials.edit` to admin and editor.
+-- testdata/postgres/legacy-rbac-matrix.json holds the grants a real legacy
+-- runtime deployment carries. In `default` mode it gives `s3_credentials.view`
+-- to admin, editor and viewer, and `s3_credentials.edit` to admin and editor.
 -- That is the same split 0074 copies for the artifact strings, and this file
 -- copies it too. The route decorator's own `recommended_roles` block says
 -- viewer False on the GET; the matrix is what deployments actually hold, and a

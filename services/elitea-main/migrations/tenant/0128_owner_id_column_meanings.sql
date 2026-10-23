@@ -85,14 +85,14 @@
 --
 -- A PROJECT-kind column would reference `centry.project`. This corpus already
 -- records that decision three times, for the same reason each time:
--- `centry.project` is a pylon-owned table, so a Go-owned column that names a
+-- `centry.project` is a legacy-owned table, so a Go-owned column that names a
 -- project carries no foreign key to it and is validated at the write instead
 -- (shared/0071 token_project_binding, shared/0073 mcp_tool_registry,
 -- shared/0098 scim_group_bindings). This file follows that decision rather
 -- than reversing it in a tenant migration.
 --
 -- A USER-kind column would reference `public.auth_core__user`. That table is
--- pylon-owned as well, and it is ABSENT from a corpus-only database — the
+-- legacy-owned as well, and it is ABSENT from a corpus-only database — the
 -- repository test template is built from this corpus alone (see the header of
 -- tenant/0126). A guarded `REFERENCES` would therefore exist on a deployment
 -- and not exist under test, which is a constraint that only appears where it
@@ -136,7 +136,7 @@
 --
 -- COMMENT ON requires ownership of the table. Every deployment this repository
 -- builds runs one database role, and 0122, 0124 and 0126 already ALTER
--- pylon-created tables on that assumption. An installation that splits the
+-- legacy-created tables on that assumption. An installation that splits the
 -- roles raises a NOTICE per column and keeps this file as the record, rather
 -- than failing a migration chain over a comment.
 --

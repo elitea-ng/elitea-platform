@@ -2,7 +2,7 @@
   "capability": "toolkit.available_tools.v1",
   "legacy": {
     "revision": "d55520115dacc3dac41ee45d85a4d705b149dadf",
-    "source": "centry/pylon_indexer/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py",
+    "source": "centry/legacy_indexer/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py",
     "evidence_lines": "15-39",
     "semantics": "Call elitea_sdk.tools.get_toolkit_available_tools exactly once with toolkit_type and settings keyword arguments; on escaping Exception return tools=[], args_schemas={}, error=str(exception)."
   },

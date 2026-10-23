@@ -37,7 +37,7 @@
 -- type-checks and executes against a shape the migrations never produce.
 --
 -- A unique INDEX rather than a table constraint, and guarded rather than
--- unconditional: in a pylon-backed deployment the column already carries a
+-- unconditional: in a legacy-backed deployment the column already carries a
 -- uniqueness constraint under its own name, and this migration must leave that
 -- one alone. ON CONFLICT (uuid) is satisfied by either.
 --

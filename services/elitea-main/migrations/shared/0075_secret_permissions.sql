@@ -37,7 +37,7 @@
 -- BLAST RADIUS. legacyrbac's projectPermissions() reads the CENTRAL default-mode
 -- grants by role NAME. It reads them only for a project that carries NO
 -- per-project auth_core__project_role_permission rows. That shape is the fresh
--- Go database. It is never the shape of a pylon-backed database, of a legacy
+-- Go database. It is never the shape of a legacy-backed database, of a legacy
 -- dump, or of the end-to-end stack. Each one seeds per-project rows, and those
 -- rows suppress the central fallback completely. So no existing deployment's
 -- members gain anything here.

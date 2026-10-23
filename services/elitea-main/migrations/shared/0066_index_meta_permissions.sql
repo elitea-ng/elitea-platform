@@ -18,16 +18,16 @@
 -- legacyrbac's projectPermissions() falls back to the CENTRAL default-mode
 -- grants by role name for any project carrying no per-project rows. Nothing in
 -- shared/ granted any member of this family, so on such a database the index
--- plane is 403-for-everyone. A real pylon deployment is NOT in that position:
--- testdata/postgres/legacy-rbac-matrix.json, exported from a real legacy
--- database, has all three strings on default-mode admin and editor, and
+-- plane is 403-for-everyone. A real legacy runtime deployment is NOT in that
+-- position: testdata/postgres/legacy-rbac-matrix.json, exported from a real
+-- legacy database, has all three strings on default-mode admin and editor, and
 -- `.details` alone on default-mode viewer. This migration transcribes exactly
 -- that per-role split, so a Go-bootstrapped database resolves what a legacy one
 -- already did — it is parity restoration, not a new policy.
 --
 -- BLAST RADIUS. The central fallback applies only to projects with NO
 -- per-project role_permission rows, which is the fresh-Go-database shape and
--- never the shape of a pylon-backed database or a legacy dump — so no existing
+-- never the shape of a legacy-backed database or a legacy dump — so no existing
 -- deployment's members gain anything (pinned in
 -- internal/infra/legacyrbac/index_meta_grant_postgres_integration_test.go).
 -- Members' permission sets are already non-empty (0062), so this changes no

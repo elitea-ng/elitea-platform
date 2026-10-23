@@ -28,7 +28,7 @@
 -- BLAST RADIUS, AND WHY THE CENTRAL GRANT IS NOT ENOUGH ON ITS OWN.
 -- legacyrbac's projectPermissions() falls back to the CENTRAL default-mode
 -- grants by role name ONLY for a project carrying no per-project
--- role_permission rows — the fresh-Go-database shape alone. A pylon-backed
+-- role_permission rows — the fresh-Go-database shape alone. A legacy-backed
 -- database, a legacy dump and the E2E stack all seed per-project rows and
 -- suppress that fallback, so a central-only grant would be inert on every
 -- project an operator has ever touched. shared/0090 backfilled the corpus as of

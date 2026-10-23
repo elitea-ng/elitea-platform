@@ -684,14 +684,26 @@ test.describe('J20 artifacts lifecycle', () => {
       // project-wide, so a bucket another spec creates or drops in this window
       // moves it for a reason that has nothing to do with this upload.
       await expect
-        .poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 })
-        .toBe(await serverTotalSize(request, projectId));
+        .poll(
+          async () => {
+            const [shown, server] = [(await footerSize.textContent())?.trim(), await serverTotalSize(request, projectId)];
+            return shown === server ? 'equal' : `footer ${shown}, server ${server}`;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe('equal');
 
       await page.reload();
       await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
       await expect
-        .poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 })
-        .toBe(await serverTotalSize(request, projectId));
+        .poll(
+          async () => {
+            const [shown, server] = [(await footerSize.textContent())?.trim(), await serverTotalSize(request, projectId)];
+            return shown === server ? 'equal' : `footer ${shown}, server ${server}`;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe('equal');
     } finally {
       const removed = await request.post(
         `/api/v2/artifacts/objects/${projectId}/${READ_BUCKET}:batchDelete`,

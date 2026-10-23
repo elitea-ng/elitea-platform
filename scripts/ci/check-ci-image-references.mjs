@@ -19,12 +19,12 @@
 //
 // Run with the runner's node; only the standard library.
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { pyRepr, splitlines } from "./py-compat.mjs";
+import { isEntrypoint, pyRepr, readStrictUtf8, splitlines, trackedFiles } from "./py-compat.mjs";
+
 
 const SELF = fileURLToPath(import.meta.url);
 const REPOSITORY_ROOT = path.resolve(path.dirname(SELF), "..", "..");
@@ -57,19 +57,6 @@ export const CACHE_ONLY = {
 export const MINIMUM_ALLOWED_REFERENCES = 15;
 
 const count = (pattern, line) => (line.match(new RegExp(pattern, "g")) || []).length;
-
-export function trackedFiles(root) {
-  const out = execFileSync("git", ["ls-files", "-z"], { cwd: root, maxBuffer: 1 << 30 });
-  return out.toString("utf8").split("\0").filter(Boolean);
-}
-
-function readStrictUtf8(file) {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(file));
-  } catch {
-    return null; // not UTF-8, a directory (a submodule), or gone
-  }
-}
 
 export function scan(root, files) {
   const violations = [];
@@ -118,6 +105,6 @@ export function main(root = REPOSITORY_ROOT, log = console.log) {
   return 0;
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === SELF) {
+if (isEntrypoint(import.meta.url)) {
   process.exitCode = main();
 }

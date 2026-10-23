@@ -67,7 +67,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { loadYaml } from "./ci-compat.mjs";
+import { loadYaml, isEntrypoint } from "./ci-compat.mjs";
 import { pyRepr, pyStr, pyTruthy, splitlines } from "./py-compat.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -448,6 +448,6 @@ export function main(argv = process.argv.slice(2), log = console.log, err = cons
   return 0;
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === SELF) {
+if (isEntrypoint(import.meta.url)) {
   process.exitCode = main();
 }

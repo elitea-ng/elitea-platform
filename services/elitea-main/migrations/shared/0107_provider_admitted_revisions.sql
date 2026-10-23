@@ -6,8 +6,8 @@
 -- 501 on all three routes, and its header sets out at length why: there is no
 -- table to read, and two of the four columns the page shows never came from
 -- storage at all. `healthy` was which of two in-process Python dicts an entry
--- landed in when a pylon worker last started, and the row set was the union of
--- those dicts rather than a query.
+-- landed in when a legacy runtime worker last started, and the row set was the
+-- union of those dicts rather than a query.
 --
 -- This corpus does not reproduce that shape. ADR-0012 replaces the mutable
 -- descriptor blob with an admitted, immutable revision reached through review,
@@ -28,11 +28,11 @@
 --
 -- THE HEALTH SPLIT IS THE POINT, and it is the whole lesson of the file this
 -- migration unblocks. Storing `healthy` on the revision row would reproduce
--- pylon's category error in durable form: a boolean that looks like a fact
--- about the provider when it is a fact about the last probe. A projection has
--- an observed_at, so a reader can tell "unhealthy" from "nobody has asked
--- lately" — and the API answers `healthy: null` for the second, which is the
--- one answer the pylon page could never give.
+-- the legacy runtime's category error in durable form: a boolean that looks
+-- like a fact about the provider when it is a fact about the last probe. A
+-- projection has an observed_at, so a reader can tell "unhealthy" from "nobody
+-- has asked lately" — and the API answers `healthy: null` for the second, which
+-- is the one answer the legacy runtime page could never give.
 --
 -- TWO CONSTRAINTS CARRY THE ARCHITECTURE, both at the bottom of this file:
 --
@@ -46,10 +46,10 @@
 -- runtime that cannot invoke what it registers is worse than a refusal, and
 -- the constraint is what stops the next change from quietly crossing that line.
 --
--- NOTHING HERE IS OWNED BY PYLON. These are new tables in a new schema; no
--- legacy table is claimed, adopted or renamed. The corpus has been broken
--- three times by a migration claiming a pylon-owned table and colliding with a
--- seeded fixture at 42P07, and this file cannot do that.
+-- NOTHING HERE IS OWNED BY THE LEGACY RUNTIME. These are new tables in a new
+-- schema; no legacy table is claimed, adopted or renamed. The corpus has been
+-- broken three times by a migration claiming a legacy-owned table and colliding
+-- with a seeded fixture at 42P07, and this file cannot do that.
 
 CREATE SCHEMA IF NOT EXISTS provider_hub;
 
@@ -138,9 +138,9 @@ CREATE INDEX IF NOT EXISTS provider_admitted_revision_project_idx
 --
 -- A PROJECTION. One row per (project, provider), overwritten by whatever
 -- probed it last. observed_at is what lets a reader tell "unhealthy" from
--- "nobody has asked lately" — the distinction pylon's two in-process dicts
--- could not express, and the reason the API answers `healthy: null` rather
--- than defaulting to true or false.
+-- "nobody has asked lately" — the distinction the legacy runtime's two
+-- in-process dicts could not express, and the reason the API answers `healthy:
+-- null` rather than defaulting to true or false.
 CREATE TABLE IF NOT EXISTS provider_hub.provider_health_projection (
     project_id          BIGINT      NOT NULL,
     provider_id         TEXT        NOT NULL,

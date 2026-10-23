@@ -2,6 +2,13 @@
 // that showed `'value'` or `None` before the port from Python still does.
 // Only the language: a script that imports this needs no `npm ci`
 // (./ci-compat.mjs, which reads YAML, re-exports it).
+//
+// Also the standard-library helpers several checks share: the tracked-file
+// list, a strict UTF-8 read, and the entrypoint test.
+
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
 function reprString(text) {
   const quote = text.includes("'") && !text.includes('"') ? '"' : "'";
@@ -100,4 +107,34 @@ export function pyTruthy(value) {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "object" && !(value instanceof Date)) return Object.keys(value).length > 0;
   return true;
+}
+
+/** Every tracked file, as `git ls-files` names it. */
+export function trackedFiles(root) {
+  const out = execFileSync("git", ["ls-files", "-z"], { cwd: root, maxBuffer: 1 << 30 });
+  return out.toString("utf8").split("\0").filter(Boolean);
+}
+
+/** The file as strict UTF-8, or null: not UTF-8, a directory (a submodule), or gone. */
+export function readStrictUtf8(file) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(file));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the module at `moduleUrl` is the script node was started with.
+ * Both sides are resolved: comparing a resolved argv[1] with an unresolved
+ * module path is false on any checkout reached through a symlink (macOS
+ * /tmp, a linked workspace), and the check then exits 0 without running.
+ */
+export function isEntrypoint(moduleUrl) {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
 }

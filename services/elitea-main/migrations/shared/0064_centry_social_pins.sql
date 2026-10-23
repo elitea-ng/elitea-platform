@@ -13,15 +13,15 @@
 -- Why nothing created it. `internal/db/schema/centry_projects_baseline.sql`
 -- DECLARES the table, which is what let the query compile — but that file is a
 -- sqlc compiler input and says so in its own header: "This file is NOT a
--- runtime migration." In a pylon deployment the Projects plugin owns the table.
--- `001_initial.sql:585` does create a `social_pins`, but inside each TENANT
--- schema (`%I.social_pins`), which is a different table from the `centry` one
--- this query names. So the schema the generator type-checks against and the
--- schema the server runs against disagreed, and nothing in the build could see
--- it: sqlc was satisfied, and the failure only appears at runtime, on a route
--- no test had ever reached.
+-- runtime migration." In a legacy runtime deployment the Projects plugin owns
+-- the table. `001_initial.sql:585` does create a `social_pins`, but inside each
+-- TENANT schema (`%I.social_pins`), which is a different table from the
+-- `centry` one this query names. So the schema the generator type-checks
+-- against and the schema the server runs against disagreed, and nothing in the
+-- build could see it: sqlc was satisfied, and the failure only appears at
+-- runtime, on a route no test had ever reached.
 --
--- IF NOT EXISTS is load-bearing rather than defensive: on a pylon-backed
+-- IF NOT EXISTS is load-bearing rather than defensive: on a legacy-backed
 -- database the table already exists and is owned there, and this migration must
 -- leave it exactly as it is. Column order, types and the uniqueness constraint
 -- are transcribed from the baseline projection so the two cannot drift.

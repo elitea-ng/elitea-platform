@@ -451,7 +451,7 @@
             "question": {
               "type": "String",
               "required": true,
-              "description": "Question that may reference a repository. The system will automatically determine which wiki to query. Examples: 'How does elitea-sdk handle authentication?', 'What is the structure of the Pylon framework?'"
+              "description": "Question that may reference a repository. The system will automatically determine which wiki to query. Examples: 'How does elitea-sdk handle authentication?', 'What is the structure of the plugin framework?'"
             },
             "wiki_id_hint": {
               "type": "String",

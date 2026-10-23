@@ -147,4 +147,4 @@ export function loadYamlNodes(text) {
 }
 
 export { YAML };
-export { pyRepr, pyStr, splitlines } from "./py-compat.mjs";
+export { isEntrypoint, pyRepr, pyStr, splitlines } from "./py-compat.mjs";

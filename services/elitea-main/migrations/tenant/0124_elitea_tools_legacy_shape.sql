@@ -3,14 +3,14 @@
 -- internal/db/schema/toolkit_baseline.sql is the sqlc projection of this table
 -- and, like agent_chat_baseline.sql before #287, it says the table "already
 -- exists in each p_<project_id> schema and is owned by the current
--- tenant-schema lifecycle" — pylon's. So the Go bootstrap schema
+-- tenant-schema lifecycle" — the legacy runtime's. So the Go bootstrap schema
 -- (internal/infra/db/migrations/001_initial.sql:435-447) created its own,
 -- narrower version, and nothing reconciled the two.
 --
 -- Three columns are in the projection and not in the bootstrap table:
 -- `updated_at`, `shared_owner_id`, `shared_id`. They are not decoration —
 -- internal/db/queries/toolkits.sql selects all three by name, so on a
--- pylon-free deployment the very first toolkit read fails with
+-- legacy-free deployment the very first toolkit read fails with
 --
 --     ERROR: column "updated_at" does not exist  (SQLSTATE 42703)
 --
@@ -22,10 +22,11 @@
 -- exist.
 --
 -- Additive and IF NOT EXISTS for the same reason as 0123: in a mixed
--- deployment pylon already created these columns and owns their shape, so
--- there this migration records itself and changes nothing. Nullability of the
--- existing columns is deliberately left alone — narrowing `settings`/`meta` to
--- NOT NULL would be a change to a shape this repository does not own.
+-- deployment the legacy runtime already created these columns and owns their
+-- shape, so there this migration records itself and changes nothing.
+-- Nullability of the existing columns is deliberately left alone — narrowing
+-- `settings`/`meta` to NOT NULL would be a change to a shape this repository
+-- does not own.
 --
 -- (shared_owner_id, shared_id) mirrors 0122's skills columns: it points a
 -- public-catalog toolkit at the project + toolkit it was published from.
@@ -38,13 +39,14 @@
 -- `elitea_tools` appears only in `internal/db/schema/toolkit_baseline.sql`, a
 -- sqlc COMPILER projection, and in no migration — the same shape/ownership
 -- split 0123 was written for, one table further along. Any tenant schema
--- created without pylon therefore has no `elitea_tools` at all, and this
--- migration has nothing to say to it: it must record itself and move on, not
--- abort. Caught by `configurations_artifacts_postgres_integration_test.go`,
--- which applies the embedded tenant chain to a schema of its own making and
--- runs only where a test database is configured.
+-- created without the legacy runtime therefore has no `elitea_tools` at all,
+-- and this migration has nothing to say to it: it must record itself and move
+-- on, not abort. Caught by
+-- `configurations_artifacts_postgres_integration_test.go`, which applies the
+-- embedded tenant chain to a schema of its own making and runs only where a
+-- test database is configured.
 --
--- This deliberately does NOT create the table. Claiming a pylon-owned table
+-- This deliberately does NOT create the table. Claiming a legacy-owned table
 -- here has broken tenant seeding with 42P07 before; adopting `elitea_tools`
 -- is a separate decision about ownership, not a fix for this ALTER.
 DO $$

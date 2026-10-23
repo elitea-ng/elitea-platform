@@ -63,11 +63,9 @@ func TestNoLegacyBridgeWiringReturns(t *testing.T) {
 			why: "authsvc.New built the Redis remote-call client that asked " +
 				"the legacy auth service to validate a credential. Authentication is local: " +
 				"authsvc.NewLocalValidator and authsvc.NewPrincipalValidator read " +
-				"the database directly.",
-		},
-		{
-			pattern: "pylon_auth:rpc",
-			why:     "the Redis channel that client published on.",
+				"the database directly. The Redis channel it published on is " +
+				"named after the legacy runtime, which scripts/ci/check-legacy-runtime-name.mjs " +
+				"keeps out of every file.",
 		},
 		{
 			pattern: "InternalAdminToken",

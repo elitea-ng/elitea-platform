@@ -14,9 +14,10 @@
 -- `models.project_settings.edit`, and this file grants it to `admin` only.
 -- The project CONTEXT routes keep `models.project_context.edit`.
 --
--- A personal project has no admin. Its owner is its only member, and pylon made
--- that owner an `editor`. The router admits `models.project_context.edit` in the
--- caller's OWN personal project, so no grant to `editor` is necessary here.
+-- A personal project has no admin. Its owner is its only member, and the legacy
+-- runtime made that owner an `editor`. The router admits
+-- `models.project_context.edit` in the caller's OWN personal project, so no
+-- grant to `editor` is necessary here.
 --
 -- `system` and `super_admin` are omitted, as everywhere else in this corpus.
 --
@@ -44,24 +45,25 @@
 -- `projects` row grants nothing to `projects.projects.*`. The strings below
 -- are checked by no Go route, no elitea-web gate and no worker:
 --
---   * bare section nodes that pylon's admin module still registered:
---     projects, configuration, runtime, modes, migration, invites,
+--   * bare section nodes that the legacy runtime's admin module still
+--     registered: projects, configuration, runtime, modes, migration, invites,
 --     invites.platform;
 --
--- PYLON STILL CHECKS THE BARE SECTION NODES. legacy/plugins/admin/module.py
--- registers its administration sections with exactly these permissions
--- (["projects"], ["configuration"], ["modes"], ["runtime"], ["migration"],
--- ["invites"], ["invites.platform"]). Where pylon's own admin UI still runs
--- against this database, those sections disappear for every central admin
--- after this file runs, until pylon re-seeds its recommended roles on its
--- next restart. The rows then come back, and only the admin Roles catalogue
--- (retiredPermissions) hides them. The Go admin console checks none of them.
+-- THE LEGACY RUNTIME STILL CHECKED THE BARE SECTION NODES.
+-- legacy/plugins/admin/module.py registers its administration sections with
+-- exactly these permissions (["projects"], ["configuration"], ["modes"],
+-- ["runtime"], ["migration"], ["invites"], ["invites.platform"]). Where the
+-- legacy runtime's own admin UI still runs against this database, those
+-- sections disappear for every central admin after this file runs, until the
+-- legacy runtime re-seeds its recommended roles on its next restart. The rows
+-- then come back, and only the admin Roles catalogue (retiredPermissions) hides
+-- them. The Go admin console checks none of them.
 --   * prefix nodes that the legacy admin_ui Roles matrix saved as rows when an
 --     operator clicked a group toggle: admin, configurations;
 --   * models.chat.conversations.list_custom, which no role holds without
 --     `.list`;
---   * the five Collections strings that pylon's auth_core migration
---     202602261000 seeds and nothing checks.
+--   * the five Collections strings that the legacy runtime's auth_core
+--     migration 202602261000 seeds and nothing checks.
 --
 -- internal/api/router_permission_retired_gate_test.go keeps this list honest in
 -- both directions: no gate may check a string listed here, and the admin

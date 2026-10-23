@@ -1,6 +1,6 @@
 -- 0158_social_feedbacks_project.sql — the shared feedback table, with a project.
 --
--- WHY. Feedback lives in centry.social_feedbacks, the legacy (pylon) shared
+-- WHY. Feedback lives in centry.social_feedbacks, the legacy runtime's shared
 -- table: one row per submission, keyed by author, with no project. Nothing in
 -- this repository ever created it; it exists only on databases carried over
 -- from legacy, so a fresh install had no table to write to or list from. The

@@ -18,7 +18,7 @@ package migrations_test
 // apps/elitea-web/scripts/e2e-stack.sh grants permissions as PER-PROJECT
 // auth_core__project_role_permission rows. Those rows supply the permissions
 // directly, and they suppress legacyrbac's central default-mode fallback
-// completely. A pylon-backed database and a legacy dump hold the same shape. So
+// completely. A legacy dump holds the same shape. So
 // only a clean Go bootstrap breaks, and no seeded suite could see it.
 //
 // So this file asserts against the corpus a real deployment applies, and against
@@ -202,13 +202,14 @@ var (
 		{"runtime.airun.serviceproviders", []string{"admin", "super_admin"}},
 		{"provider_hub.descriptor.register", []string{"admin", "super_admin"}},
 		// shared/0109_provider_policy_overlay.sql. A CHOSEN string with no
-		// pylon original — pylon had no activation because it had no admission
-		// plane — kept separate from `.register` so that recording a descriptor
-		// and putting it in force are separately grantable. Same two holders,
-		// and no editor: activation is a fact about the deployment.
+		// legacy original — the legacy runtime had no activation because it had
+		// no admission plane — kept separate from `.register` so that recording
+		// a descriptor and putting it in force are separately grantable. Same
+		// two holders, and no editor: activation is a fact about the
+		// deployment.
 		{"provider_hub.descriptor.activate", []string{"admin", "super_admin"}},
 		{"configuration.governance", []string{"admin", "super_admin"}},
-		// shared/0114_toolkit_type_policy.sql. A CHOSEN string with no pylon
+		// shared/0114_toolkit_type_policy.sql. A CHOSEN string with no legacy
 		// original — the legacy platform has no add-or-remove-a-type surface,
 		// only the guardrails deny-list — kept separate from `runtime.plugins`
 		// so that editing a plugin's configuration values and deciding which
@@ -398,9 +399,9 @@ func TestANonMemberIsRefusedEveryDefaultModeGate(t *testing.T) {
 // only those rows. The central fallback is suppressed for that project, so none
 // of the 40 default-mode grants reaches it.
 //
-// This pins the blast radius. It is the shape of every pylon-backed database,
-// every legacy dump and the end-to-end stack. So these migrations cannot change
-// what an existing deployment's members may do.
+// This pins the blast radius. It is the shape of every legacy dump and the
+// end-to-end stack, so these migrations cannot change what an existing
+// deployment's members may do.
 func TestAProjectWithItsOwnGrantsIsRefusedEveryGate(t *testing.T) {
 	pool := newMigratedPool(t)
 	roleID := seedRoleMembership(t, pool, 3863, "admin", 1)

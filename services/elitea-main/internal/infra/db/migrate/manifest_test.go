@@ -120,7 +120,7 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 90: shared/0090_project_override_reconciliation.sql, the one-time
 	// delivery of the corpus's default-mode grants to the projects whose own
 	// permission rows suppress the central fallback.
-	// 91: shared/0091_pylon_viewer_secret_list_parity.sql, which withdraws
+	// 91: shared/0091_viewer_secret_list_parity.sql, which withdraws
 	// 0083's `configuration.secrets.secret.list` grant from the default-mode
 	// `viewer` on a legacy-managed auth_core. 0083 states that no existing
 	// deployment gains anything; a legacy-backed database carries no
