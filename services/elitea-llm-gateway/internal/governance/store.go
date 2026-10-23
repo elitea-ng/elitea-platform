@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
@@ -75,13 +74,6 @@ type GovernanceStore struct {
 	// override a real project_budget row, because that branch is only reached
 	// when there is none.
 	defaults BudgetDefaults
-
-	// natsSeenHealthy is set once this process completes a NATS budget read
-	// or increment. Until then a NATS-down admission gets NO degraded share
-	// (failmode.Params.JoinedDuringOutage, human decision, DECISIONS.md
-	// 2026-10-22): a pod that starts during an outage was not one of the N
-	// replicas the share divides by.
-	natsSeenHealthy atomic.Bool
 }
 
 // BudgetDefaults supplies the authored global budget for a project with no
@@ -161,21 +153,6 @@ func NewGovernanceStore(
 	return gs
 }
 
-// MarkNATSHealthy records that this process has seen NATS healthy. The
-// composition root calls it right after it builds the store, because it builds
-// one only from a NATS client that has just dialled and bound its JetStream
-// assets (server.New, server.RedialNATS): that bind is a successful JetStream
-// round trip. A successful budget read or increment also sets it.
-//
-// A pod that starts DURING an outage cannot bind, so it never builds a store:
-// the boot window refuses every spend route with 503 (human decision,
-// DECISIONS.md 2026-10-16). The flag is the second layer of the same rule.
-func (g *GovernanceStore) MarkNATSHealthy() {
-	if g != nil {
-		g.natsSeenHealthy.Store(true)
-	}
-}
-
 // Start binds the service-lifetime context to the recovery reconciler. It
 // MUST be called before the gateway starts serving (i.e. before concurrent
 // CheckBudget / UpdateUsage calls), so that the reconciler can derive a
@@ -207,9 +184,6 @@ func (g *GovernanceStore) CheckBudget(
 	// Attempt the authoritative NATS read (breaker-guarded, OpTimeout-bounded).
 	authoritativeNano, natsErr := g.nc.ReadBudget(ctx, subject)
 	natsUp := natsErr == nil
-	if natsUp {
-		g.natsSeenHealthy.Store(true)
-	}
 
 	if natsErr != nil && !errors.Is(natsErr, nats.ErrUnavailable) {
 		// A non-infrastructure error (parse/config) is worth logging but still
@@ -275,14 +249,21 @@ func (g *GovernanceStore) CheckBudget(
 	}
 
 	degradedKey := nats.BudgetSubject(scope, scopeID, periodStartUnix)
-	replicaDegradedNano := g.degraded.Get(degradedKey)
-	// A re-check of work already admitted (the realtime ticker) must not count
-	// the request's OWN reservation as other spend, or a session whose hold
-	// fills the share would refuse itself.
 	checkOnly := failmode.IsCheckOnly(ctx)
 	holds := failmode.HoldsFrom(ctx)
-	if checkOnly {
-		replicaDegradedNano -= holds.HeldFor(degradedKey)
+	// Decide reads this replica's degraded spend only while NATS is down, so
+	// the healthy path does not read the counter (and takes no lock on it).
+	var replicaDegradedNano int64
+	if !natsUp {
+		replicaDegradedNano = g.degraded.Get(degradedKey)
+		// A re-check of work already admitted (the realtime ticker) must not
+		// count the request's OWN reservation as other spend, or a session
+		// whose hold fills the share would refuse itself. HeldFor counts only
+		// holds of the current window: a Reset already took the older ones off
+		// the counter.
+		if checkOnly {
+			replicaDegradedNano -= holds.HeldFor(degradedKey)
+		}
 	}
 
 	// Apply the per-project fail-mode override when present: the snapshot carries
@@ -307,8 +288,6 @@ func (g *GovernanceStore) CheckBudget(
 		}
 	}
 
-	params.JoinedDuringOutage = !natsUp && !g.natsSeenHealthy.Load()
-
 	dec := failmode.Decide(natsUp, authoritativeNano, replicaDegradedNano, snap, reqCostNano, params)
 	dec.Budgeted = !snap.IsUnlimited && snap.HardLimitNano > 0
 	if dec.Verdict == failmode.Allow && dec.Capped && !checkOnly && holds != nil {
@@ -325,15 +304,15 @@ func (g *GovernanceStore) CheckBudget(
 // replica never total more than its share.
 //
 // The reservation is LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD (default 0.10
-// USD), never more than the share, so a small share still admits one request
-// at a time. The request's holds are released after its real cost is billed
-// onto the degraded counter (llmproxy updateUsageUnits).
+// USD). A share smaller than the reservation admits NOTHING (402, the same
+// reason as a full share): shrinking the reservation to the share would let
+// one request of any cost in. The request's holds are released after its real
+// cost is billed onto the degraded counter (failmode.Holds).
 func (g *GovernanceStore) reserve(dec failmode.Decision, key string, holds *failmode.Holds, params failmode.Params) failmode.Decision {
 	r := params.DegradedReservationNano
 	if r <= 0 {
 		r = failmode.DefaultDegradedReservationNano
 	}
-	r = min(r, dec.ReplicaShareNano)
 	hold, ok := g.degraded.TryReserve(key, r, dec.ReplicaShareNano)
 	if !ok {
 		dec.Verdict = failmode.Block402
@@ -429,9 +408,6 @@ func (g *GovernanceStore) UpdateUsage(
 	subject := nats.BudgetSubject(scope, scopeID, periodStartUnix)
 
 	_, _, incrErr := g.nc.IncrBudgetIdempotent(ctx, subject, eventID, costNano)
-	if incrErr == nil {
-		g.natsSeenHealthy.Store(true)
-	}
 	if incrErr != nil && !errors.Is(incrErr, nats.ErrUnavailable) {
 		return fmt.Errorf("governance: IncrBudgetIdempotent: %w", incrErr)
 	}
@@ -559,9 +535,11 @@ func (g *GovernanceStore) Drain() {
 
 // DumpTotal returns the current in-process degraded total for a scope/period.
 // When NATS is healthy this is 0 (the authoritative counter is the ground-truth);
-// during an outage it reflects this replica's billed spend since NATS went down.
+// during an outage it reflects this replica's BILLED spend since NATS went
+// down. Reservations of requests in flight are not spend, so they are not in
+// it (DegradedCounters.Billed).
 func (g *GovernanceStore) DumpTotal(scope, scopeID string, periodStartUnix int64) int64 {
-	return g.degraded.Get(nats.BudgetSubject(scope, scopeID, periodStartUnix))
+	return g.degraded.Billed(nats.BudgetSubject(scope, scopeID, periodStartUnix))
 }
 
 // ResetExpired is a no-op stub. Period rollover is handled automatically: the

@@ -40,19 +40,20 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   for the scope (402). Any positive minimum would let the fleet exceed the cap.
   *Unknown cost:* admission passes `reqCostNano=0`, and then `overShare`
   refuses once spent ≥ share, so a replica exactly AT its share refuses.
-  *Boot check:* `config.FromEnv` returns an error for a set
+  *Boot check:* `config.FromEnv` returns an error for a SET
   `LLM_BUDGET_EXPECTED_REPLICAS` that is not digits-only, no sign, no leading
   zero, ≥ 1 (the chart's `elitea.integer` rule; "+3" and "007" are refused by
-  both), and `main` refuses to start. A silent fallback to 1 would give each
-  replica the whole cap. The chart derives the value from the replica ceiling
-  and refuses an override below it. *Replicas that start during an outage:* a
-  replica that has not seen NATS healthy in its own process lifetime gets NO
-  share and answers 503 (`Params.JoinedDuringOutage`), so N bounds the
-  replicas that were live when the outage began. A store is built only from a
-  NATS client that has dialled and bound its JetStream assets, so
-  `buildGovernance` marks it healthy (`MarkNATSHealthy`); a pod that starts
-  during the outage cannot bind and is refused by the boot window (503, the
-  2026-10-16 entry). A successful budget read or increment also marks it.
+  both; an empty or blank value is refused too), and `main` refuses to start.
+  A silent fallback to 1 would give each replica the whole cap. The chart
+  derives the value from the replica ceiling and refuses an override below
+  it. *Replicas that start during an outage:* the boot window gives them no
+  share. A governance store is built only from a NATS client that dialled and
+  bound its JetStream assets, so a pod that starts while NATS is down has no
+  store, and the boot window refuses every spend route with 503 (the
+  2026-10-16 entry) until NATS returns. So N bounds the replicas that were
+  live when the outage began. A per-process "seen NATS healthy" flag was
+  tried and removed: every store is built after a bind, so the flag was
+  always set and its 503 path could not run.
   *Accepted cost:* while fewer replicas run than the expected count, the fleet
   spends less than the cap in degraded mode. To keep the per-replica share,
   raise `LLM_BUDGET_NATS_DEGRADED_CAP_USD` with the replica count.
@@ -64,19 +65,30 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   replica" was false: concurrent degraded admission was unbounded, exactly as
   the 2026-08-09 entry accepts for the healthy path. *Decision:* in
   FRESH_SAFE and FRESH_NEAR, `GovernanceStore.CheckBudget` reserves
-  `min(LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD, share)` (default 0.10 USD)
-  with `DegradedCounters.TryReserve`, which tests billed + held + reservation
-  ≤ share and adds in one atomic step; it refuses (402) when that does not
-  fit. The request carries its holds (`failmode.Holds`, set on the request
-  context in `buildContext`). The billing path takes them and releases them
-  only AFTER the real cost is on the degraded counter (the billing goroutine);
-  a request that bills nothing releases them when its context ends
-  (`context.AfterFunc`). A stream settler adopts its holds before it cancels
-  the stream context, because it bills after the cancel. A realtime session
-  keeps its hold until it ends; the re-check ticker is check-only
-  (`failmode.CheckOnly`): it reserves nothing and does not count the session's
-  own hold. Recovery (`Reset`, `ResetAll`) clears held amounts and bumps a
-  generation, so a leaked hold cannot shrink the next outage's share.
+  `LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD` (default 0.10 USD) with
+  `DegradedCounters.TryReserve`, which tests billed + held + reservation ≤
+  share and adds in one atomic step; it refuses (402) when that does not fit.
+  A share SMALLER than the reservation refuses every request (402, the same
+  reason as a full share): cutting the reservation to the share would admit
+  one request of any cost. With the default cap (10% of the hard limit) and
+  the default reservation, a replica admits while the hard limit is at least
+  N USD (the chart default N = 4: 4 USD). *Release:* a request's holds
+  (`failmode.Holds`) are created by the router-root middleware
+  `DegradedHoldsScope` and go when the LAST pin drops. The request's own pin
+  drops when its HTTP handler returns. Each biller (`updateUsageUnits`,
+  `updateUsageDirect`, a stream settler) pins before it hands a cost to a
+  goroutine and unpins after the cost is on the degraded counter. No release
+  is tied to a context cancel: a client disconnect, a stream with no grace,
+  or a realtime cleanup cancels while a bill can still come. So no billing
+  code decides who owns the holds, and no surface switch exists. A realtime
+  session keeps its hold until it ends; the re-check ticker is check-only
+  (`failmode.CheckOnly`): it reserves nothing and does not count the
+  session's own hold of the CURRENT window (`Holds.HeldFor` skips a hold that
+  a reset cleared). Recovery (`Reset`, `ResetAll`) clears held amounts and
+  bumps a generation, so a leaked hold cannot shrink the next outage's share.
+  *Cost on the healthy path:* none. `CheckBudget` reads the degraded counter
+  only while NATS is down, and the counter's reads take a read lock.
+  `DumpTotal` reports billed spend only (`DegradedCounters.Billed`).
   *The bound the code enforces:* on each replica, billed + held ≤ share at
   every admission. Spend passes the share only by what an admitted request
   costs above its reservation. So the fleet total is ≤ cap + Σ max(0, cost −

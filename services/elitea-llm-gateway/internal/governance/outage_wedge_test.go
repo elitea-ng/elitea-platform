@@ -414,7 +414,6 @@ func newWedgeRig(t *testing.T) *wedgeRig {
 	gs := NewGovernanceStore(nc, failmode.NewStore(pg), degraded, rec,
 		failmode.Params{Mode: failmode.ModeTieredHybrid, PGFreshness: 5 * time.Minute, ExpectedReplicas: 1},
 		nil)
-	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 	gs.Start(context.Background())
 	return &wedgeRig{nc: nc, pg: pg, gs: gs, rec: rec}
 }

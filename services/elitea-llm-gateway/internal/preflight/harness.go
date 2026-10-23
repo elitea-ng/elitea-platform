@@ -677,7 +677,6 @@ func NewSeededGovernance(
 	rec := failmode.NewReconciler(db, &nc2counter{nc: nc}, degraded, nil)
 
 	gs := governance.NewGovernanceStore(nc, fmStore, degraded, rec, params, nil)
-	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

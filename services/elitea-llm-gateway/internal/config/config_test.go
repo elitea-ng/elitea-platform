@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -19,6 +20,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	} {
 		t.Setenv(k, "")
 	}
+	// A SET but empty LLM_BUDGET_EXPECTED_REPLICAS is refused; the default
+	// comes from an UNSET one. t.Setenv above restores it after the test.
+	_ = os.Unsetenv("LLM_BUDGET_EXPECTED_REPLICAS")
 
 	cfg := mustFromEnv(t)
 

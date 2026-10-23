@@ -556,16 +556,15 @@ func (h *Handler) buildContext(w http.ResponseWriter, r *http.Request, detach bo
 	ctx, cancel := schemas.NewBifrostContextWithCancel(parent)
 	sc := &streamCancel{fn: cancel}
 
-	// The degraded-mode reservations this request will hold (human decision,
-	// DECISIONS.md 2026-10-22). CheckBudget adds a hold when it admits the
-	// request while NATS is down; the billing path takes the holds and releases
-	// them once the real cost is on the degraded counter. The context-done
-	// backstop releases the holds of a request that ends with nothing to bill.
-	// A stream settler adopts its holds first, because a stream's context is
-	// cancelled BEFORE the settler bills (stream_drain.go).
-	holds := failmode.NewHolds()
-	ctx.SetValue(failmode.HoldsKey, holds)
-	context.AfterFunc(ctx, holds.ReleaseUnlessAdopted)
+	// The degraded-mode reservations of this request (human decision,
+	// DECISIONS.md 2026-10-22). The request scope (DegradedHoldsScope, on the
+	// router root) creates them and ends them when the HTTP handler returns,
+	// NOT when a context is cancelled: a client disconnect must not release a
+	// hold before the request's cost is billed. Without a scope the request
+	// carries no holds, and CheckBudget reserves nothing for it.
+	if holds := failmode.HoldsFrom(r.Context()); holds != nil {
+		ctx.SetValue(failmode.HoldsKey, holds)
+	}
 
 	// vk = the resolved projectID handle (never the raw key). Only set when
 	// present; a missing project is fatal at the gateway only when

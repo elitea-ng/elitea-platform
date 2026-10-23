@@ -57,18 +57,22 @@ because each was a real bug found across 3 review rounds.
   positive minimum: either lets N replicas spend more than the cap. A set
   `LLM_BUDGET_EXPECTED_REPLICAS` that is not digits-only and ≥ 1 makes
   `config.FromEnv` return an error and `main` refuse to start; do not let it
-  fall back to 1. A replica that never saw NATS healthy gets no share (503).
+  fall back to 1 (an empty value is refused too). A pod that starts during an
+  outage gets no share because the boot window refuses it (503, 2026-10-16).
 - **A NATS-down admission RESERVES against the share** (human decision,
   2026-10-22, supersedes 2026-08-09 for the degraded states only).
-  `CheckBudget` reserves with `DegradedCounters.TryReserve` (atomic); the
-  request carries the hold in `failmode.Holds` on its context. Release a hold
-  ONLY after the real cost is on the degraded counter (the billing goroutine),
-  or when the request ends with nothing to bill (the context-done backstop in
-  `buildContext`). A stream settler MUST adopt its holds before it cancels the
-  stream context. A mid-session re-check MUST stay check-only
-  (`recheckVerdict` wraps `failmode.CheckOnly`): it reserves nothing and does
-  not count the session's own hold. A new billing path MUST take the holds
-  (`failmode.HoldsFrom(ctx).Take()`) and release them after its bill.
+  `CheckBudget` reserves with `DegradedCounters.TryReserve` (atomic); a share
+  smaller than the reservation refuses (402), do NOT cut the reservation to
+  the share. The request carries the hold in `failmode.Holds`, which the
+  router-root middleware `DegradedHoldsScope` creates. The holds go when the
+  LAST pin drops: the request's own pin drops when the HTTP handler returns,
+  and each biller pins before it hands a cost to a goroutine and unpins after
+  the cost is on the counter. NEVER tie a release to a context cancel: a
+  client disconnect cancels before the bill. A new billing path MUST pin
+  (`failmode.HoldsFrom(ctx).Pin()`) and unpin after its bill; a stream settler
+  MUST pin in the handler's goroutine (`pinHolds`). A mid-session re-check
+  MUST stay check-only (`recheckVerdict` wraps `failmode.CheckOnly`): it
+  reserves nothing and does not count the session's own hold.
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

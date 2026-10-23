@@ -22,11 +22,11 @@ import (
 )
 
 // degradedRealtimeFixture is the realtime fixture with the real degraded store
-// in place of the recording gate. 4 replicas and a 100 USD reservation: the
+// in place of the recording gate. 4 replicas and a 2.5 USD reservation: the
 // session's own reservation fills the 2.5 USD share by itself.
 func degradedRealtimeFixture(t *testing.T) (*realtimeFixture, *failmode.DegradedCounters) {
 	t.Helper()
-	gs, degraded := buildDegradedStore(t, 4, 100*failmode.NanoUSD)
+	gs, degraded := buildDegradedStore(t, 4, degradedShare)
 	costs := &fakeCostEstimator{inputRateNano: 1000, outputRateNano: 2000}
 	f := newRealtimeFixture(t, WithBudgetGate(gs, costs))
 	return f, degraded

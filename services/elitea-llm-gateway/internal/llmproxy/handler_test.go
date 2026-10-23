@@ -23,6 +23,7 @@ import (
 // added only here is not served.
 func newTestRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()
+	r.Use(h.DegradedHoldsScope) // as the production router root does
 	r.NotFound(h.NotFound)
 	r.MethodNotAllowed(h.MethodNotAllowed)
 	r.Route("/llm/v1", func(r chi.Router) {

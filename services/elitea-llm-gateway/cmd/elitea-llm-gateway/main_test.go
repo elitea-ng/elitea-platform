@@ -63,7 +63,6 @@ func TestMainWiring(t *testing.T) {
 		{"llmproxy.WithRealtimeOrigins(", "the accept-side Origin allowlist is never configured — a WebSocket handshake is not subject to CORS, so this is the only place the operator's browser-origin policy is applied"},
 		{"logRealtimeMode(", "the realtime Origin policy is never stated at startup — a widened allowlist would be invisible to operators, which is the failure logLoopBreakerMode exists to prevent for the other guard"},
 		{"rt.CloseRealtimeSessions(", "live realtime sessions are never closed on shutdown — http.Server.Shutdown neither closes nor waits for a hijacked connection, so every rolling deploy would leave sessions running until the pod is killed and their last turn unbilled"},
-		{"govStore.MarkNATSHealthy(", "the store never records that this process saw NATS healthy — every NATS outage then gives this replica NO degraded share (it is treated as a pod that started during the outage), so tiered_hybrid refuses every budgeted request with 503 (human decision, DECISIONS.md 2026-10-22)"},
 		{"govStore.Start(", "the recovery reconciler is inert until Start binds its context — CheckBudget would silently skip recovery"},
 		{"makeReadyzHandler(", "the NATS circuit-breaker /readyz handler is never mounted — a pod with a dead budget-enforcement path stays in the load-balancer rotation"},
 		{"budgetPendingOpts(", "the boot-window decision is never taken — no spend route is refused while enforcement is configured and unwired ([human decision] 2026-10-16)"},

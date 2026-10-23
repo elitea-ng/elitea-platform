@@ -887,11 +887,6 @@ func buildGovernance(
 	// are present (IncrBudget, IncrBudgetIdempotent, ReadBudget, PublishDelta,
 	// TryAlertCooldown, OnBreakerStateChange, BreakerState).
 	govStore := governance.NewGovernanceStore(nc, fmStore, degraded, rec, params, logger)
-	// nc reached here only after it dialled and bound its JetStream assets
-	// (server.New or server.RedialNATS), so this process has seen NATS
-	// healthy. Without the mark, a NATS outage that starts before this
-	// replica's first budget read would give it no degraded share.
-	govStore.MarkNATSHealthy()
 	govStore.Start(ctx)
 
 	calc := cost.New(cost.Config{

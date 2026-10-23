@@ -290,7 +290,6 @@ func buildIntStore(nc *integNATS, db *integDB) *governance.GovernanceStore {
 		DegradedCapNano:  0,
 	}
 	gs := governance.NewGovernanceStore(nc, fmStore, degraded, rec, params, nil)
-	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 	gs.Start(context.Background())
 	return gs
 }

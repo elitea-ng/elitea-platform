@@ -403,8 +403,8 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 	// or more must stop the real main(), not fall back to 1. The mode is OFF
 	// here, so the only thing that can stop this process is that refusal; the
 	// "off keeps serving" subtest below is the negative control.
-	for _, bad := range []string{"0", "-3", "+3", "007"} {
-		t.Run("expected replicas "+bad+" refuses", func(t *testing.T) {
+	for _, bad := range []string{"0", "-3", "+3", "007", ""} {
+		t.Run(fmt.Sprintf("expected replicas %q refuses", bad), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			cmd, out := command(t, ctx, config.RequireEnforcementOff)

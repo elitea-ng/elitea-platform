@@ -277,7 +277,8 @@ type Config struct {
 	// (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD, default 0.10). It bounds how
 	// many requests can be admitted at once against one share. Set it at or
 	// above the largest cost one request can have, and the degraded cap holds
-	// exactly; a request that costs more adds the difference.
+	// exactly; a request that costs more adds the difference. A share smaller
+	// than the reservation admits nothing while NATS is down.
 	NATSDegradedReservationUSD float64
 
 	// The mTLS material of the GatewayService gRPC listener (#1359): the
@@ -445,16 +446,19 @@ var expectedReplicasPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 // names the minimum rather than the format.
 var negativeOrZeroPattern = regexp.MustCompile(`^(0|-[1-9][0-9]*)$`)
 
-// ExpectedReplicasFromEnv reads LLM_BUDGET_EXPECTED_REPLICAS strictly. Unset or
-// blank gives DefaultNATSReplicas (1). Leading and trailing spaces are
-// ignored, as the chart trims them. Any other value must match
-// expectedReplicasPattern and fit an int.
+// ExpectedReplicasFromEnv reads LLM_BUDGET_EXPECTED_REPLICAS strictly. UNSET
+// gives DefaultNATSReplicas (1). A SET value must match expectedReplicasPattern
+// exactly and fit an int: an empty value, spaces and any other text are
+// refused, because a fallback to 1 gives each replica the whole cap.
 func ExpectedReplicasFromEnv(lookup func(string) (string, bool)) (int, error) {
 	const key = "LLM_BUDGET_EXPECTED_REPLICAS"
 	raw, ok := lookup(key)
-	raw = strings.TrimSpace(raw)
-	if !ok || raw == "" {
+	if !ok {
 		return DefaultNATSReplicas, nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return 0, fmt.Errorf("%s is set but empty. Set it to the most gateway replicas that can run, "+
+			"or unset it for 1", key)
 	}
 	if negativeOrZeroPattern.MatchString(raw) {
 		return 0, fmt.Errorf("%s must be at least 1, and it is %s. The NATS-down degraded budget cap is "+

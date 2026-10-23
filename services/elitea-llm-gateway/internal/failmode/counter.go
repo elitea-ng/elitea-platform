@@ -2,6 +2,7 @@ package failmode
 
 import (
 	"sync"
+	"sync/atomic"
 )
 
 // DegradedCounters tracks, per budget scope, the nano-USD this replica has
@@ -22,13 +23,15 @@ import (
 //     decision, DECISIONS.md 2026-10-22).
 //
 // Get reports billed + held, the amount the FSM compares with the share.
+// Billed reports billed only, the spend a dump or a reconciliation reports.
 //
 // It is safe for concurrent use: the request path calls Add/Get/TryReserve;
-// the recovery goroutine calls Reset/ResetAll. One mutex guards the map and
-// every entry. The degraded path is the only caller of TryReserve, and it runs
-// only while NATS is down, so contention is not a concern.
+// the recovery goroutine calls Reset/ResetAll. One RWMutex guards the map and
+// every entry. Get, Held and Billed take the read lock, so concurrent reads do
+// not wait for each other. GovernanceStore.CheckBudget reads the counter only
+// while NATS is down, so the healthy path takes no lock here.
 type DegradedCounters struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	vals map[string]*degradedEntry
 }
 
@@ -70,8 +73,8 @@ func (d *DegradedCounters) Add(key string, deltaNano int64) int64 {
 // Get returns this replica's degraded-window spend for key: billed plus held
 // (0 if never used).
 func (d *DegradedCounters) Get(key string) int64 {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	e := d.vals[key]
 	if e == nil {
 		return 0
@@ -79,10 +82,21 @@ func (d *DegradedCounters) Get(key string) int64 {
 	return e.billed + e.held
 }
 
+// Billed returns only the billed degraded-window spend for key, without the
+// reservations of requests in flight (0 if never used).
+func (d *DegradedCounters) Billed(key string) int64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if e := d.vals[key]; e != nil {
+		return e.billed
+	}
+	return 0
+}
+
 // Held returns the reserved, not yet billed amount for key.
 func (d *DegradedCounters) Held(key string) int64 {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if e := d.vals[key]; e != nil {
 		return e.held
 	}
@@ -92,7 +106,8 @@ func (d *DegradedCounters) Held(key string) int64 {
 // TryReserve reserves nano against key when billed + held + nano <= share, and
 // returns the Hold that releases it. The test and the add are one atomic step,
 // so concurrent admissions cannot all pass against the same spend. A share or
-// a reservation of 0 or less reserves nothing and returns ok=false.
+// a reservation of 0 or less reserves nothing and returns ok=false. A
+// reservation larger than the share never fits, so it refuses too.
 func (d *DegradedCounters) TryReserve(key string, nano, share int64) (*Hold, bool) {
 	if nano <= 0 || share <= 0 {
 		return nil, false
@@ -139,11 +154,12 @@ func (d *DegradedCounters) ResetAll() {
 // Hold is one admitted degraded request's reservation. Release returns it.
 // Release is idempotent and safe on a nil Hold.
 type Hold struct {
-	d    *DegradedCounters
-	key  string
-	nano int64
-	gen  uint64
-	once sync.Once
+	d        *DegradedCounters
+	key      string
+	nano     int64
+	gen      uint64
+	once     sync.Once
+	released atomic.Bool
 }
 
 // Key is the budget scope key the hold is reserved against.
@@ -169,10 +185,23 @@ func (h *Hold) Release() {
 		return
 	}
 	h.once.Do(func() {
+		h.released.Store(true)
 		h.d.mu.Lock()
 		defer h.d.mu.Unlock()
 		if e := h.d.vals[h.key]; e != nil && e.gen == h.gen {
 			e.held -= h.nano
 		}
 	})
+}
+
+// live reports whether the hold is still counted in its scope's held amount:
+// not released, and taken in the scope's current window (no Reset since).
+func (h *Hold) live() bool {
+	if h == nil || h.d == nil || h.released.Load() {
+		return false
+	}
+	h.d.mu.RLock()
+	defer h.d.mu.RUnlock()
+	e := h.d.vals[h.key]
+	return e != nil && e.gen == h.gen
 }

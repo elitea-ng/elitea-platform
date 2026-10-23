@@ -6,30 +6,45 @@ import (
 )
 
 // Holds is the set of degraded-mode reservations ONE request holds (human
-// decision, DECISIONS.md 2026-10-22). The request path creates it with the
-// request context; GovernanceStore.CheckBudget adds a Hold to it when it
-// admits a capped degraded request; the billing path takes the holds and
-// releases them after the real cost is on the degraded counter.
+// decision, DECISIONS.md 2026-10-22). GovernanceStore.CheckBudget adds a Hold
+// to it when it admits a capped degraded request.
 //
-// The order matters: a hold is released only AFTER the request's cost is
-// billed (or when the request ends with nothing to bill). Releasing first
-// would leave a window in which neither the hold nor the cost is counted.
+// THE RULE: a hold is released only AFTER the request's cost is on the
+// degraded counter, or when it is certain that nothing will be billed.
+// Releasing first would leave a window in which neither the hold nor the cost
+// is counted.
+//
+// The set enforces the rule with pins. It starts with one pin, the request's
+// own, which the request scope drops (End) when the HTTP handler returns. Each
+// biller pins the set before it hands a cost to a billing goroutine, and unpins
+// after that goroutine put the cost on the counter. The holds are released
+// when the LAST pin drops. So:
+//
+//   - a client disconnect or a context cancel releases nothing: the handler
+//     is still running and holds the request's pin;
+//   - a stream settler that bills after the handler returned pinned the set
+//     while the handler still ran;
+//   - a realtime session's last turn bills before the session's holds go.
+//
+// No code path "owns" or "takes" the holds, so no caller has to know which
+// surface it serves.
 //
 // The zero value is not usable; call NewHolds. All methods are safe on a nil
 // receiver and for concurrent use.
 type Holds struct {
 	mu   sync.Mutex
 	list []*Hold
-	// adopted: a stream settler owns the release. The context-done backstop
-	// then does nothing, because a stream's context is cancelled BEFORE the
-	// settler bills (stream_drain.go).
-	adopted bool
-	// closed: the holds were released or taken; a late Add releases at once.
-	closed bool
+	// pins counts who still needs the holds: the request itself (until End)
+	// and each biller in flight.
+	pins int
+	// closed: the last pin dropped and the holds were released. A late Add
+	// releases at once and a late Pin is a no-op.
+	closed  bool
+	endOnce sync.Once
 }
 
-// NewHolds returns an empty set.
-func NewHolds() *Holds { return &Holds{} }
+// NewHolds returns an empty set that carries the request's own pin.
+func NewHolds() *Holds { return &Holds{pins: 1} }
 
 // Add records h. When the set is already closed, h is released at once, so a
 // hold can never outlive the request that took it.
@@ -48,7 +63,10 @@ func (s *Holds) Add(h *Hold) {
 	s.mu.Unlock()
 }
 
-// HeldFor returns the amount this request holds against key.
+// HeldFor returns the amount this request holds against key in the CURRENT
+// degraded window. A hold that a Reset or ResetAll already cleared is not
+// counted: the counter no longer includes it, so subtracting it would
+// under-count the replica's spend.
 func (s *Holds) HeldFor(key string) int64 {
 	if s == nil {
 		return 0
@@ -57,7 +75,7 @@ func (s *Holds) HeldFor(key string) int64 {
 	defer s.mu.Unlock()
 	var n int64
 	for _, h := range s.list {
-		if h.key == key {
+		if h.key == key && h.live() {
 			n += h.nano
 		}
 	}
@@ -74,53 +92,46 @@ func (s *Holds) Len() int {
 	return len(s.list)
 }
 
-// Take hands the holds to the caller, who must release them after the bill
-// lands, and closes the set.
-func (s *Holds) Take() []*Hold {
+// Pin keeps the holds until the returned function runs. A biller calls it
+// before it hands a cost to a billing goroutine, and runs the returned
+// function after the cost is on the counter. The returned function is
+// idempotent. On a nil or closed set Pin returns a no-op.
+func (s *Holds) Pin() (unpin func()) {
 	if s == nil {
-		return nil
+		return func() {}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := s.list
-	s.list = nil
+	if s.closed {
+		s.mu.Unlock()
+		return func() {}
+	}
+	s.pins++
+	s.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(s.unpin) }
+}
+
+// End drops the request's own pin. The request scope calls it when the HTTP
+// handler returns. It is idempotent.
+func (s *Holds) End() {
+	if s == nil {
+		return
+	}
+	s.endOnce.Do(s.unpin)
+}
+
+func (s *Holds) unpin() {
+	s.mu.Lock()
+	s.pins--
+	if s.pins > 0 || s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.closed = true
-	return out
-}
-
-// Adopt marks the set as owned by a stream settler: ReleaseUnlessAdopted then
-// does nothing, and the settler calls ReleaseAll when it settles.
-func (s *Holds) Adopt() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.adopted = true
+	list := s.list
+	s.list = nil
 	s.mu.Unlock()
-}
-
-// ReleaseAll releases every hold still in the set and closes it.
-func (s *Holds) ReleaseAll() {
-	ReleaseHolds(s.Take())
-}
-
-// ReleaseUnlessAdopted is the context-done backstop: it releases the holds of
-// a request that ended without billing, unless a stream settler adopted them.
-func (s *Holds) ReleaseUnlessAdopted() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	adopted := s.adopted
-	s.mu.Unlock()
-	if !adopted {
-		s.ReleaseAll()
-	}
-}
-
-// ReleaseHolds releases each hold in hs.
-func ReleaseHolds(hs []*Hold) {
-	for _, h := range hs {
+	for _, h := range list {
 		h.Release()
 	}
 }

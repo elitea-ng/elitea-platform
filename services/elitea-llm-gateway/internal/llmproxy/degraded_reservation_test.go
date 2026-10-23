@@ -2,9 +2,9 @@ package llmproxy
 
 // degraded_reservation_test.go — the NATS-down reservation through the REAL
 // handler and the REAL GovernanceStore (human decision, DECISIONS.md
-// 2026-10-22). Admission reserves against the replica's share; the billing
-// path releases the reservation after the real cost lands; a request that
-// bills nothing releases it when its context ends.
+// 2026-10-22). Admission reserves against the replica's share; the holds go
+// when the last pin drops: the request's own (its handler returned) and each
+// bill's (the cost is on the counter).
 
 import (
 	"context"
@@ -45,7 +45,6 @@ func buildDegradedStore(t *testing.T, replicas int, reservationNano int64) (*gov
 		ExpectedReplicas:        replicas,
 		DegradedReservationNano: reservationNano,
 	}, nil)
-	gs.MarkNATSHealthy()
 	gs.Start(context.Background())
 	t.Cleanup(gs.Drain)
 	return gs, degraded
@@ -55,9 +54,9 @@ func degradedSubject() string {
 	return natspkg.BudgetSubject("project", integProjectIDStr, billingPeriodStart(time.Now()))
 }
 
-// waitHeld polls until the held amount reaches want. The context-done
-// backstop runs on its own goroutine (context.AfterFunc), so it is not
-// synchronous with the handler's return.
+// waitHeld polls until the held amount reaches want. The last pin can drop
+// in a billing or drain goroutine, so it is not synchronous with the
+// handler's return.
 func waitHeld(t *testing.T, d *failmode.DegradedCounters, want int64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -73,6 +72,12 @@ func waitHeld(t *testing.T, d *failmode.DegradedCounters, want int64) {
 	}
 }
 
+// serveScoped serves req through hf inside the request scope, as the router
+// root does in production (DegradedHoldsScope).
+func serveScoped(h *Handler, hf http.HandlerFunc, w http.ResponseWriter, req *http.Request) {
+	h.DegradedHoldsScope(hf).ServeHTTP(w, req)
+}
+
 var degradedUsage = &schemas.BifrostLLMUsage{PromptTokens: 1000, CompletionTokens: 500, TotalTokens: 1500}
 
 // TestDegraded_UnaryReleasesAfterBilling: the hold is gone after the request,
@@ -84,7 +89,7 @@ func TestDegraded_UnaryReleasesAfterBilling(t *testing.T) {
 	h := NewHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
-	h.Chat(rec, chatReqWithProject(t, integProjectIDStr, false))
+	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, false))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
 	}
@@ -95,17 +100,17 @@ func TestDegraded_UnaryReleasesAfterBilling(t *testing.T) {
 	}
 }
 
-// TestDegraded_UnbilledRequestReleasesOnContextEnd: a request that was
-// admitted (and so reserved) but billed nothing — a provider error — gives
-// the reservation back when its context ends.
-func TestDegraded_UnbilledRequestReleasesOnContextEnd(t *testing.T) {
+// TestDegraded_UnbilledRequestReleasesWhenTheHandlerReturns: a request that
+// was admitted (and so reserved) but billed nothing — a provider error — gives
+// the reservation back when its handler returns.
+func TestDegraded_UnbilledRequestReleasesWhenTheHandlerReturns(t *testing.T) {
 	gs, degraded := buildDegradedStore(t, 1, failmode.NanoUSD)
 	router := &trackingRouter{}
 	router.chatErr = &schemas.BifrostError{Error: &schemas.ErrorField{Message: "upstream down"}}
 	h := NewHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
-	h.Chat(rec, chatReqWithProject(t, integProjectIDStr, false))
+	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, false))
 	if !router.called.Load() {
 		t.Fatal("the request was not admitted, so it proves nothing about the release")
 	}
@@ -116,7 +121,7 @@ func TestDegraded_UnbilledRequestReleasesOnContextEnd(t *testing.T) {
 }
 
 // TestDegraded_StreamReleasesAfterBilling: a stream's context is cancelled
-// BEFORE the settler bills; the settler adopts the holds, so they are released
+// BEFORE the settler bills; the settler pinned the holds, so they are released
 // only after the bill, and nothing is left held.
 func TestDegraded_StreamReleasesAfterBilling(t *testing.T) {
 	gs, degraded := buildDegradedStore(t, 1, failmode.NanoUSD)
@@ -127,7 +132,7 @@ func TestDegraded_StreamReleasesAfterBilling(t *testing.T) {
 	h := NewHandler(&fakeRouter{streamChan: chunks}, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
-	h.Chat(rec, chatReqWithProject(t, integProjectIDStr, true))
+	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, true))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
 	}
@@ -171,7 +176,7 @@ func TestDegraded_ConcurrentRequestsAreBoundedByTheShare(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			rec := httptest.NewRecorder()
-			h.Chat(rec, chatReqWithProject(t, integProjectIDStr, false))
+			serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, false))
 			codes[i] = rec.Code
 		}(i)
 	}

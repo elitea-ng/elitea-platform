@@ -385,12 +385,12 @@ type streamSettler struct {
 	// close is therefore the only happens-before edge that makes the read
 	// safe. Without this gate the money path carries a data race.
 	chanClosed bool
-	// holds are the request's degraded-mode reservations. The settler adopts
-	// them when it settles (adoptHolds), because the stream context is
-	// cancelled before report() bills, and the context-done backstop would
-	// otherwise release them first. report() releases whatever the billing
-	// path did not take.
+	// holds are the request's degraded-mode reservations. The settler pins
+	// them when it settles (pinHolds), while the HTTP handler still runs,
+	// because report() can bill after the handler returned. report() drops
+	// the pin when it ends; the billing path pins on its own.
 	holds *failmode.Holds
+	unpin func()
 }
 
 // newChatSettler builds the settler for the OpenAI chat SSE dialect.
@@ -565,7 +565,7 @@ func (s *streamSettler) settleClean() {
 		return // defence in depth: a stream is billed at most once
 	}
 	s.settled = true
-	s.adoptHolds()
+	s.pinHolds()
 	// The SSE loop consumed the channel to closure, so the producer has
 	// finished. That is the happens-before edge accumulatedUsage() needs.
 	s.chanClosed = true
@@ -606,7 +606,7 @@ func (s *streamSettler) settleEarly(reason string) {
 		return
 	}
 	s.settled = true
-	s.adoptHolds()
+	s.pinHolds()
 	// Record what is known now. The drain that follows runs after the row is
 	// written, so a count it recovers cannot reach the log.
 	s.recordLogTokens()
@@ -765,9 +765,11 @@ func (s *streamSettler) drain(grace time.Duration) string {
 // The partial is consulted ONLY when no trailer arrived, so a recovered
 // trailer always wins and can never be overwritten downward (issue #79).
 func (s *streamSettler) report(reason, outcome string) {
-	// Whatever the billing path below did not take is released when the
-	// settle ends: nothing to bill, a refused bill, or no usage at all.
-	defer s.holds.ReleaseAll()
+	// The settle's pin drops when it ends. A bill below pinned the holds on
+	// its own, so they stay until that bill lands.
+	if s.unpin != nil {
+		defer s.unpin()
+	}
 	partial := false
 	if !s.gotUsage {
 		if in, out, ok := s.accumulatedUsage(); ok {
@@ -1052,13 +1054,13 @@ func (s *streamSettler) billingContext() context.Context {
 	return context.WithValue(base, contextKeyExecutionID, s.executionID)
 }
 
-// adoptHolds takes ownership of the request's degraded-mode reservations. It
-// runs before the settle cancels the stream context, so the context-done
-// backstop in buildContext sees the adoption and releases nothing.
-func (s *streamSettler) adoptHolds() {
+// pinHolds pins the request's degraded-mode reservations for the settle. It
+// runs in the HTTP handler's goroutine, before the handler returns and drops
+// the request's own pin, so the holds cannot go before report() bills.
+func (s *streamSettler) pinHolds() {
 	if s.ctx == nil {
 		return
 	}
 	s.holds = failmode.HoldsFrom(s.ctx)
-	s.holds.Adopt()
+	s.unpin = s.holds.Pin()
 }

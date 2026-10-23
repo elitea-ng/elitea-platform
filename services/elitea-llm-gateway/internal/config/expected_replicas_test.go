@@ -33,12 +33,10 @@ func TestExpectedReplicasFromEnv(t *testing.T) {
 		want int
 	}{
 		{"", false, 1},
-		{"", true, 1},
-		{"  ", true, 1},
 		{"1", true, 1},
 		{"2", true, 2},
 		{"3", true, 3},
-		{" 7 ", true, 7},
+		{"7", true, 7},
 		{"40", true, 40},
 		{"100", true, 100},
 	}
@@ -51,6 +49,11 @@ func TestExpectedReplicasFromEnv(t *testing.T) {
 	refused := []struct {
 		v, msg string
 	}{
+		{"", "set but empty"},
+		{"  ", "set but empty"},
+		{"\t", "set but empty"},
+		{" 7 ", "whole number"},
+		{"7\n", "whole number"},
 		{"0", "at least 1"},
 		{"-1", "at least 1"},
 		{"-40", "at least 1"},

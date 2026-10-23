@@ -735,22 +735,16 @@ func (h *Handler) updateUsageUnits(
 	// the log is about what happened rather than about what was charged.
 	recordLoggedUsage(ctx, u)
 
-	// The request's degraded-mode reservations (human decision, DECISIONS.md
-	// 2026-10-22). They are released AFTER the real cost is on the degraded
-	// counter (the billing goroutine), or here when nothing is billed.
-	// Releasing first would leave a window in which neither is counted.
-	//
-	// A realtime TURN does not take them: the session's reservation stays
-	// until the session ends, so a live session keeps counting against the
-	// replica's share between its turns.
-	var held []*failmode.Hold
-	if surface != surfaceRealtime {
-		held = failmode.HoldsFrom(ctx).Take()
-	}
+	// Pin the request's degraded-mode reservations until the billing
+	// goroutine has put the real cost on the counter (failmode.Holds, human
+	// decision, DECISIONS.md 2026-10-22). A bill that is not handed off unpins
+	// on return. The holds go when the last pin drops, so this code does not
+	// decide who releases them.
+	unpin := failmode.HoldsFrom(ctx).Pin()
 	handed := false
 	defer func() {
 		if !handed {
-			failmode.ReleaseHolds(held)
+			unpin()
 		}
 	}()
 
@@ -893,7 +887,7 @@ func (h *Handler) updateUsageUnits(
 		ExecutionID: identityExecutionFromCtx(ctx),
 	}
 
-	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, held) {
+	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, unpin) {
 		handed = true
 		return billBilled
 	}
@@ -930,12 +924,12 @@ func (h *Handler) updateUsageDirect(
 	// the log is about what happened, not about what was charged.
 	recordLoggedCredentialOwner(ctx, requestlog.FromContext(ctx))
 
-	// See updateUsageUnits: the holds are released after the bill lands.
-	held := failmode.HoldsFrom(ctx).Take()
+	// See updateUsageUnits: the pin keeps the holds until the bill lands.
+	unpin := failmode.HoldsFrom(ctx).Pin()
 	handed := false
 	defer func() {
 		if !handed {
-			failmode.ReleaseHolds(held)
+			unpin()
 		}
 	}()
 
@@ -963,7 +957,7 @@ func (h *Handler) updateUsageDirect(
 		ExecutionID:    identityExecutionFromCtx(ctx),
 	}
 
-	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, costNano, dims, held) {
+	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, costNano, dims, unpin) {
 		handed = true
 		return billBilled
 	}
@@ -1012,7 +1006,7 @@ func (h *Handler) spawnBillingGoroutine(
 	periodStart, periodEnd int64,
 	costNano int64,
 	dims *failmode.UsageDimensions,
-	held []*failmode.Hold,
+	unpin func(),
 ) bool {
 	scopeID := strconv.Itoa(pid)
 	eventID := uuid.NewString()
@@ -1030,10 +1024,11 @@ func (h *Handler) spawnBillingGoroutine(
 	h.billingWg.Add(1)
 	go func() {
 		defer h.billingWg.Done()
-		// The degraded-mode reservations go back only after both increments
-		// below have put the real cost on the counter (DECISIONS.md 2026-10-22).
-		// Deferred functions run last-in first-out, so this runs before Done.
-		defer failmode.ReleaseHolds(held)
+		// The request's degraded-mode reservations stay pinned until both
+		// increments below have put the real cost on the counter (DECISIONS.md
+		// 2026-10-22). Deferred functions run last-in first-out, so this runs
+		// before Done.
+		defer unpin()
 
 		// FIX #27: pre-increment snapshot, read here (detached goroutine) instead
 		// of on the request goroutine. Used only by the soft-alert crossing check

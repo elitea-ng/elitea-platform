@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestTryReserve_ConcurrentAdmissionsAreBounded is the defect the reservation
@@ -63,7 +64,7 @@ func TestTryReserve_FleetOfReplicasStaysWithinCap(t *testing.T) {
 	const capNano = 7 * NanoUSD
 	for _, n := range []int{1, 2, 3, 7} {
 		share := PerReplicaShare(capNano, n)
-		r := min(NanoUSD/10, share)
+		r := int64(NanoUSD / 10)
 		var fleet atomic.Int64
 		var wg sync.WaitGroup
 		for range n {
@@ -108,6 +109,9 @@ func TestTryReserve_Refusals(t *testing.T) {
 	if _, ok := d.TryReserve("k", 1, 10); !ok {
 		t.Fatal("a released hold must free its room")
 	}
+	if _, ok := NewDegradedCounters().TryReserve("k", 11, 10); ok {
+		t.Fatal("a reservation larger than the share must refuse, even on a zero spend")
+	}
 }
 
 // TestHold_ReleaseAfterResetIsANoOp: recovery clears billed and held; a hold
@@ -138,7 +142,10 @@ func TestHold_ReleaseAfterResetIsANoOp(t *testing.T) {
 	}
 }
 
-func TestHolds_TakeAdoptAndBackstop(t *testing.T) {
+// TestHolds_ReleaseOnTheLastUnpin: the holds go when the LAST pin drops,
+// whatever the order. The request's own pin (End) and each biller's pin count
+// the same.
+func TestHolds_ReleaseOnTheLastUnpin(t *testing.T) {
 	d := NewDegradedCounters()
 	reserve := func() *Hold {
 		h, ok := d.TryReserve("k", 1, 100)
@@ -148,61 +155,164 @@ func TestHolds_TakeAdoptAndBackstop(t *testing.T) {
 		return h
 	}
 
-	// The backstop releases a request that billed nothing.
+	// A request that bills nothing: End releases.
 	s := NewHolds()
 	s.Add(reserve())
 	s.Add(reserve())
 	if s.HeldFor("k") != 2 || s.HeldFor("other") != 0 || s.Len() != 2 {
 		t.Fatalf("HeldFor/Len wrong: %d %d", s.HeldFor("k"), s.Len())
 	}
-	s.ReleaseUnlessAdopted()
+	s.End()
+	s.End() // idempotent
 	if d.Held("k") != 0 {
-		t.Fatalf("backstop left %d held", d.Held("k"))
+		t.Fatalf("End left %d held", d.Held("k"))
 	}
 
-	// Take hands the holds over; the backstop then releases nothing.
+	// A biller pinned the set: End keeps the holds until the bill lands.
 	s = NewHolds()
 	s.Add(reserve())
-	taken := s.Take()
-	s.ReleaseUnlessAdopted()
+	unpin := s.Pin()
+	s.End()
 	if d.Held("k") != 1 {
-		t.Fatalf("held = %d, want 1 while the biller owns the hold", d.Held("k"))
+		t.Fatalf("held = %d, want 1 while a bill is in flight", d.Held("k"))
 	}
-	ReleaseHolds(taken)
+	unpin()
+	unpin() // idempotent: must not drop another pin
 	if d.Held("k") != 0 {
-		t.Fatal("ReleaseHolds did not release")
+		t.Fatal("the last unpin did not release")
 	}
 
-	// An adopted set survives the backstop; ReleaseAll releases it.
+	// The bill lands first; End releases.
 	s = NewHolds()
 	s.Add(reserve())
-	s.Adopt()
-	s.ReleaseUnlessAdopted()
+	unpin = s.Pin()
+	unpin()
 	if d.Held("k") != 1 {
-		t.Fatal("the backstop released an adopted hold")
+		t.Fatal("an unpin released while the request still runs")
 	}
-	s.ReleaseAll()
+	s.End()
 	if d.Held("k") != 0 {
-		t.Fatal("ReleaseAll did not release")
+		t.Fatal("End after the bill did not release")
 	}
 
-	// A hold added after the set closed is released at once.
+	// After the set closed: a late Add releases at once, a late Pin is a no-op.
 	s.Add(reserve())
 	if d.Held("k") != 0 {
 		t.Fatal("a late Add outlived its request")
 	}
+	s.Pin()()
 
 	// Nil receivers are safe.
 	var nilSet *Holds
 	nilSet.Add(reserve())
-	nilSet.Adopt()
-	nilSet.ReleaseAll()
-	if nilSet.Take() != nil || nilSet.HeldFor("k") != 0 || nilSet.Len() != 0 {
+	nilSet.Pin()()
+	nilSet.End()
+	if nilSet.HeldFor("k") != 0 || nilSet.Len() != 0 {
 		t.Fatal("nil set misbehaves")
 	}
 	if d.Held("k") != 0 {
 		t.Fatal("Add on a nil set must release the hold")
 	}
+}
+
+// TestHolds_ConcurrentPinsAndEnd: many billers pin and unpin while the request
+// ends. The holds are released exactly once, after the last unpin.
+func TestHolds_ConcurrentPinsAndEnd(t *testing.T) {
+	for range 200 {
+		d := NewDegradedCounters()
+		s := NewHolds()
+		h, _ := d.TryReserve("k", 5, 10)
+		s.Add(h)
+		const billers = 8
+		unpins := make([]func(), billers)
+		for i := range unpins {
+			unpins[i] = s.Pin()
+		}
+		var wg sync.WaitGroup
+		for _, u := range unpins {
+			wg.Add(1)
+			go func() { defer wg.Done(); u() }()
+		}
+		wg.Add(1)
+		go func() { defer wg.Done(); s.End() }()
+		wg.Wait()
+		if d.Held("k") != 0 {
+			t.Fatalf("held = %d after every pin dropped", d.Held("k"))
+		}
+	}
+}
+
+// TestHoldsHeldFor_OnlyTheCurrentWindow: a Reset takes the hold off the
+// counter, so HeldFor must stop counting it. Otherwise a re-check that spans
+// two outages subtracts a hold the counter no longer has, and under-counts.
+func TestHoldsHeldFor_OnlyTheCurrentWindow(t *testing.T) {
+	for name, reset := range map[string]func(*DegradedCounters){
+		"Reset":    func(d *DegradedCounters) { d.Reset("k") },
+		"ResetAll": func(d *DegradedCounters) { d.ResetAll() },
+	} {
+		d := NewDegradedCounters()
+		s := NewHolds()
+		h, _ := d.TryReserve("k", 4, 10)
+		s.Add(h)
+		if got := s.HeldFor("k"); got != 4 {
+			t.Fatalf("%s: HeldFor before the reset = %d, want 4", name, got)
+		}
+		reset(d)
+		if got := s.HeldFor("k"); got != 0 {
+			t.Fatalf("%s: HeldFor after the reset = %d, want 0 (the counter no longer has it)", name, got)
+		}
+		h.Release()
+		if got := s.HeldFor("k"); got != 0 {
+			t.Fatalf("%s: a released hold counted %d", name, got)
+		}
+	}
+}
+
+// TestDegradedCounters_BilledExcludesHolds: Get is billed + held (the gate),
+// Billed is billed only (the dump).
+func TestDegradedCounters_BilledExcludesHolds(t *testing.T) {
+	d := NewDegradedCounters()
+	d.Add("k", 3)
+	if _, ok := d.TryReserve("k", 2, 10); !ok {
+		t.Fatal("reserve")
+	}
+	if d.Get("k") != 5 || d.Billed("k") != 3 || d.Held("k") != 2 {
+		t.Fatalf("get=%d billed=%d held=%d", d.Get("k"), d.Billed("k"), d.Held("k"))
+	}
+	if d.Billed("none") != 0 {
+		t.Fatal("unknown key")
+	}
+}
+
+// TestDegradedCounters_ReadsShareTheLock: Get, Held and Billed take the READ
+// lock, so they do not wait for a reader that holds it.
+func TestDegradedCounters_ReadsShareTheLock(t *testing.T) {
+	d := NewDegradedCounters()
+	d.Add("k", 1)
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	done := make(chan struct{})
+	go func() {
+		_ = d.Get("k")
+		_ = d.Held("k")
+		_ = d.Billed("k")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a read waited for another reader: the counter takes the exclusive lock on reads")
+	}
+}
+
+func BenchmarkDegradedCounters_GetParallel(b *testing.B) {
+	d := NewDegradedCounters()
+	d.Add("k", 1)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = d.Get("k")
+		}
+	})
 }
 
 func TestHoldsContext(t *testing.T) {
@@ -220,28 +330,6 @@ func TestHoldsContext(t *testing.T) {
 	}
 	if HoldsFrom(nil) != nil || IsCheckOnly(nil) { //nolint:staticcheck // nil context on purpose
 		t.Fatal("nil context")
-	}
-}
-
-// TestDecide_JoinedDuringOutageGetsNoShare: a replica that never saw NATS
-// healthy answers 503 in the capped states, whatever its spend.
-func TestDecide_JoinedDuringOutageGetsNoShare(t *testing.T) {
-	p := tieredParams()
-	p.JoinedDuringOutage = true
-	for _, acc := range []int64{0, 85 * NanoUSD} { // SAFE and NEAR
-		snap := Snapshot{HardLimitNano: 100 * NanoUSD, AccumulatedNano: acc, SoftAlertPct: 80, Found: true}
-		d := Decide(false, 0, 0, snap, 0, p)
-		if d.Verdict != Block503 || !d.Degraded || !d.Capped || d.ReplicaShareNano != 0 {
-			t.Fatalf("accumulated=%d: want 503 with no share, got %+v", acc, d)
-		}
-	}
-	// It does not affect an unlimited project or an explicit fail_open.
-	if d := Decide(false, 0, 0, Snapshot{IsUnlimited: true}, 0, p); d.Verdict != Allow {
-		t.Fatalf("unlimited must still allow: %+v", d)
-	}
-	// And NATS up is authoritative.
-	if d := Decide(true, 0, 0, Snapshot{HardLimitNano: 100 * NanoUSD}, 0, p); d.Verdict != Allow {
-		t.Fatalf("NATS up must decide on the counter: %+v", d)
 	}
 }
 

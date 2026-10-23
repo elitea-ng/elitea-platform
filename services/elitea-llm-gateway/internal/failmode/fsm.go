@@ -176,16 +176,12 @@ type Params struct {
 	// DegradedMaxDuration — forces closed (§8.5). Set by GovernanceStore per
 	// request; never set by external callers of Decide directly.
 	OutageExceededMax bool
-	// JoinedDuringOutage reports this replica has not completed a NATS budget
-	// read or increment in its own process lifetime. The capped degraded
-	// states then give it no share and answer 503 (human decision, DECISIONS.md
-	// 2026-10-22). Set by GovernanceStore per request.
-	JoinedDuringOutage bool
 	// DegradedReservationNano is what one admitted capped degraded request
 	// reserves against the replica's share until it is billed
 	// (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD). 0 means
-	// DefaultDegradedReservationNano. The reservation is never larger than the
-	// share. Used by GovernanceStore, not by Decide.
+	// DefaultDegradedReservationNano. A share smaller than the reservation
+	// admits nothing (402); the reservation is never cut to the share. Used by
+	// GovernanceStore, not by Decide.
 	DegradedReservationNano int64
 }
 
@@ -369,20 +365,15 @@ func decide(natsUp bool, authoritativeNano int64, replicaDegradedNano int64, sna
 // cappedDecision is the shared tail of FRESH_SAFE and FRESH_NEAR: the two
 // states where this replica may spend only its share of a fleet allowance.
 //
-// A replica that has not completed a NATS budget read or increment in its own
-// process lifetime (Params.JoinedDuringOutage) gets NO share and answers 503.
-// N in the share counts the replicas that were live when the outage began; a
-// pod that starts during the outage was not one of them, and a fresh share
-// for it would let each restart add one more share to the fleet total. 503
-// and not 402: the budget is not known to be exhausted, the replica cannot
-// tell.
+// A pod that starts during an outage never reaches this function: it cannot
+// bind NATS, so it builds no governance store, and the boot window refuses
+// every spend route with 503 (DECISIONS.md 2026-10-16). So N in the share
+// counts only replicas that were live when the outage began, and a restart
+// cannot add a fresh share to the fleet total.
 //
 // The Decision carries the share so the caller can reserve against it
 // (GovernanceStore.CheckBudget, DegradedCounters.TryReserve).
 func cappedDecision(state State, share, spentNano, reqCostNano int64, p Params) Decision {
-	if p.JoinedDuringOutage {
-		return Decision{Verdict: Block503, State: state, Degraded: true, Capped: true}
-	}
 	d := Decision{State: state, Degraded: true, Capped: true, ReplicaShareNano: share}
 	if overShare(spentNano, reqCostNano, share) {
 		d.Verdict = Block402
