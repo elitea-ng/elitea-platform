@@ -79,9 +79,12 @@ jobs:
     # fixture generation. Measured on the first green run (2026-09-03):
     # the whole job in under 15 min with three images warm from the shared
     # cache. S10 added the Inventory engine and elitea-vector (two more Rust
-    # builds, both cached by ci-web-e2e.yml) and Qdrant; not yet re-measured,
-    # hence the extra headroom.
-    timeout-minutes: 50
+    # builds, both cached by ci-web-e2e.yml) and Qdrant. Warm, the whole job
+    # takes 22-30 min. Fully COLD (a change that touches every Go module and a
+    # shared Rust crate, #1406) the image bake alone took 47 min, and a PR
+    # writes no cache, so a rerun is just as cold: 50 min cancelled it in the
+    # side-load step. 80 leaves room for that case and still ends a hang.
+    timeout-minutes: 80
     # The cache policy: READ ONLY, on every event. Each image reads the
     # registry layer cache ci-web-e2e.yml's build-once jobs write for the
     # same Containerfile and stage (ghcr.io/elitea-ng/ci-cache-<image>:
