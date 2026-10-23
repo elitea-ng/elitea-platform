@@ -58,8 +58,10 @@ adminTest('J33: the listing is the routine registry, read from the database', as
   await openSchedules(page, probe);
   await expect(page.getByText('Failed to load schedules.')).toHaveCount(0);
 
-  // elitea-main registers its own jobs on start.
-  await expect(page.getByText('index.schedule.scan.v1', { exact: true })).toBeVisible();
+  // elitea-main registers its own jobs on start. The pipeline scan is
+  // registered on every stack; the index scan only when index scheduling is
+  // enabled, which the E2E stack leaves off.
+  await expect(page.getByText('pipeline.schedule.scan.v1', { exact: true })).toBeVisible();
 
   const row = page.getByRole('row').filter({ hasText: probe });
   await expect(row.getByText(SEEDED_SCHEDULE, { exact: true })).toBeVisible();
