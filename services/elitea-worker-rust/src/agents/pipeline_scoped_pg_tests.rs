@@ -248,13 +248,13 @@ async fn static_tool_phase(pool: &sqlx::PgPool, phase: &str, pending: &str) {
             assert!(!paused, "static_start: the static pause completes the turn");
             let terminal = browser.last().expect("static_start: a completed result");
             assert_eq!(terminal["type"], "full_message", "{browser:?}");
-            let pauses = terminal["response_metadata"]["pipeline_static_tools_v1"]["pauses"]
+            let inventory = terminal["response_metadata"]["pipeline_static_tools_v1"]["pauses"]
                 .as_array()
                 .cloned()
                 .unwrap_or_else(|| panic!("static_start: inventory missing: {terminal:?}"));
-            assert_eq!(pauses.len(), 1);
+            assert_eq!(inventory.len(), 1);
             assert_eq!(model_requests(&captured), 1, "static_start: one Agent call");
-            println!("{PENDING_MARKER}{}", pauses[0]);
+            println!("{PENDING_MARKER}{}", inventory[0]);
         }
         "static_continue" | "static_repeat" => {
             let (assembler, captured) = ordinary_assembler(

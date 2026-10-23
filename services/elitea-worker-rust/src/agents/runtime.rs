@@ -203,10 +203,10 @@ impl<'a> AuthorizedNativeAssembly<'a> {
     /// Test-only: the same authority over another request (a lifecycle test
     /// whose fixed input fixture needs saved tools attached).
     #[cfg(test)]
-    pub(crate) fn with_request<'b>(
+    pub(crate) fn with_request(
         self,
-        request: &'b AgentExecutionRequest,
-    ) -> AuthorizedNativeAssembly<'b> {
+        request: &AgentExecutionRequest,
+    ) -> AuthorizedNativeAssembly<'_> {
         AuthorizedNativeAssembly {
             sandbox: self.sandbox,
             request,

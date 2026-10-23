@@ -3601,9 +3601,13 @@ impl NativeAgentAssembler for StaticToolAssembler {
 
 #[test]
 fn static_tool_pause_is_the_acked_completed_terminal_with_its_inventory() {
+    // The real ordinary assembler and a nested saved pipeline run here, not a
+    // one-event fake: in a debug build that path needs more than the 2 MiB the
+    // fake-agent cases fit in (a plain, non-pausing pipeline does too), so this
+    // case is bounded at 4 MiB.
     std::thread::Builder::new()
-        .name("static-tool-2mib-stack".to_owned())
-        .stack_size(2 * 1024 * 1024)
+        .name("static-tool-4mib-stack".to_owned())
+        .stack_size(4 * 1024 * 1024)
         .spawn(|| {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -3623,7 +3627,7 @@ fn static_tool_pause_is_the_acked_completed_terminal_with_its_inventory() {
 #[allow(clippy::too_many_lines)] // One end-to-end terminal proof keeps authority ordering explicit.
 async fn static_tool_pause_lifecycle_case() {
     use crate::agents::pipeline_tests::scoped_tests::{
-        STATIC_GRAPH, saved_runtime, saved_version, tool_call_response,
+        STATIC_GRAPH, saved_runtime_for_project, saved_version, tool_call_response,
     };
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
@@ -3665,7 +3669,8 @@ async fn static_tool_pause_lifecycle_case() {
         (7, 8),
         saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
     )]);
-    let (platform, model_facade, _captured, _) = saved_runtime(
+    // The signed fixture command's resource project.
+    let (platform, model_facade, _captured, _) = saved_runtime_for_project(
         &versions,
         vec![
             crate::transport::openai_compatible_facade::TestModelGatewayOutcome::Response(
@@ -3676,6 +3681,7 @@ async fn static_tool_pause_lifecycle_case() {
                 ),
             ),
         ],
+        7,
     );
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
         Arc::new(StaticToolAssembler {

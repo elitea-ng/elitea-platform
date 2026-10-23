@@ -20,6 +20,8 @@ pub(crate) type Saved = (u64, u64);
 pub(super) struct SavedVersions {
     versions: BTreeMap<Saved, Value>,
     reads: Arc<Mutex<Vec<Saved>>>,
+    /// The project Main answers every read for (the claim's resource project).
+    project_id: u64,
 }
 
 #[async_trait]
@@ -30,7 +32,7 @@ impl RuntimeContextRpc for SavedVersions {
     ) -> Result<Response<Body>, RuntimeContextTransportError> {
         let path = request.uri().path();
         let value = if path.ends_with("/elitea-client-token") {
-            json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,
+            json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":self.project_id,
                 "token":"ephemeral-scoped-token"})
         } else {
             let parts = path.split('/').collect::<Vec<_>>();
@@ -47,7 +49,7 @@ impl RuntimeContextRpc for SavedVersions {
                 .versions
                 .get(&identity)
                 .ok_or(RuntimeContextTransportError::Unavailable)?;
-            json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
+            json!({"schema_version":"elitea.runtime.application-version.v1","project_id":self.project_id,
                 "application_id":identity.0,"version_id":identity.1,"version_details":details})
         };
         Ok(runtime_response(&value))
@@ -65,11 +67,21 @@ pub(crate) fn saved_runtime(
     versions: &BTreeMap<Saved, Value>,
     outcomes: Vec<TestModelGatewayOutcome>,
 ) -> SavedRuntime {
+    saved_runtime_for_project(versions, outcomes, 17)
+}
+
+/// `saved_runtime` for a claim of another resource project.
+pub(crate) fn saved_runtime_for_project(
+    versions: &BTreeMap<Saved, Value>,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    project_id: u64,
+) -> SavedRuntime {
     let reads = Arc::new(Mutex::new(Vec::new()));
     let runtime = RuntimeContextClient::with_rpc(
         SavedVersions {
             versions: versions.clone(),
             reads: Arc::clone(&reads),
+            project_id,
         },
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
