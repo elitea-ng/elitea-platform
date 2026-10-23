@@ -606,10 +606,17 @@ async fn pdf_and_office_files_are_text_only_when_the_host_brings_an_extractor() 
     );
     assert_eq!(source.fetch_now("notes.md").unwrap().bytes, b"# notes\n");
 
-    // Without an extractor the same selection leaves the pdf out, as before.
+    // Without an extractor the same selection leaves the pdf out, as before,
+    // unless this build extracts PDFs in process (`elitea-doc-extract` with
+    // `documents`, which a workspace-wide `--all-features` run turns on; the
+    // desktop host never links it).
     let without =
         LocalFolderSource::new(workspace(folder.path(), &[])).selecting(Selection::default());
     let skipped = without.list_now().unwrap();
     let report = skipped.iter().find(|r| r.key == "report.pdf").unwrap();
-    assert_eq!(report.version, "");
+    assert_eq!(
+        report.version.is_empty(),
+        !elitea_doc_extract::can_extract("application/pdf"),
+        "{report:?}"
+    );
 }
