@@ -118,6 +118,12 @@ struct NeverCompletion;
 
 #[async_trait]
 impl NativeAgentCompletionSelector for NeverCompletion {
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
+    }
+
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
         Err(NativeAgentAssemblyError::new(
             NativeAgentAssemblyErrorCode::InvalidResult,
@@ -205,6 +211,12 @@ struct FailedCompletion(NativeAgentAssemblyErrorCode);
 
 #[async_trait]
 impl NativeAgentCompletionSelector for FailedCompletion {
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
+    }
+
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
         Err(NativeAgentAssemblyError::new(
             self.0,

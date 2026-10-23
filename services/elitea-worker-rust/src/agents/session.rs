@@ -1820,6 +1820,14 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
         CompletedAgentBrowserOutput::ordinary(PIPELINE_COMPLETED_CONTENT.to_owned(), self.thread_id)
             .map_err(|error| completed_output_error(&error))
     }
+
+    /// A pipeline root reports its own static pause through its graph result
+    /// (`pipeline_static_v1`), never through an Agent's static tool inventory.
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
+    }
 }
 
 pub(super) const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";

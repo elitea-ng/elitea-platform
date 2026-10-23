@@ -149,6 +149,51 @@ mid-stream on the rest. The all-decisions rule now runs before either resolver
 (`agents/session.rs:2077-2093`). The existing tests that assert it
 (`pipeline_agent_node_resumes_parallel_nested_*`) pass on the scoped resolver.
 
+### An ordinary Agent's saved pipeline that stops at a static pause (journey (c))
+
+This branch makes a static saved pipeline reachable as an ordinary Agent's tool. Before, the pipeline was skipped and
+not offered. The path must work end to end (PLAN §8.1), not sit behind a notice.
+
+Symptom (browser, agent 171 calling static pipeline 170, chat 920, Worker `2a1-99c90e178`): the pipeline paused at
+`interrupt_after`. The Worker then closed the turn with `agent_pause.invalid_state` (execution `1a0ad8011d7b`,
+FAILED/INTERNAL). Main refused the follow-up message ("application turn row not found"), because no pause had been
+stored.
+
+Root cause (pre-existing since the static inventory landed, unreachable until this branch):
+- The projector counted the Agent's own static tool inventory as a pause (`is_paused`).
+- The lifecycle's pause aggregator (`native_agent_lifecycle.rs` `AgentPauseAccumulator`) knows only HITL and
+  authorization cards, so it could never finish such a pause.
+- Main expects this pause as a COMPLETED `full_message` carrying `pipeline_static_tools_v1`
+  (`elitea-main/.../repos/agent_execution_results.go:374,406`). It continues from that stored inventory
+  (`repos/agent_start.go` `ResolveCurrentStaticToolContinuation`), so Main needs no change.
+
+Fix (Worker only):
+- `events.rs:2530-2546`: `is_paused` no longer counts the Agent's own inventory. A descendant's inventory still
+  suspends its parent (`is_suspended`). `has_static_tool_pause` names it.
+- `events.rs:1272`: the inventory is collected; the mid-stream result message is removed.
+- `events.rs:3443,3578`: `finish_after_eos` ends the turn with the static pause message and the inventory on the
+  one terminal `full_message`.
+- `runtime.rs:146`, `session.rs:1787`, `agent_preparation.rs:1134`, `native_agent_lifecycle.rs:605`: the completion
+  is selected as a static pause. Content comes from the projector; the cloud workspace is published as paused.
+- `native_agent_lifecycle.rs:520`: a static inventory mixed with a pause card is refused (Main refuses that mix
+  too), never published half.
+
+Proofs:
+- `static_tool_pause_is_the_acked_completed_terminal_with_its_inventory` (`execution/output_delivery_tests.rs:3605`):
+  the production `OrdinaryNativeAgentAssembler` runs through `NativeAuthorizedAgentLifecycle`. It ends as the
+  acknowledged COMPLETED terminal with one `full_message` carrying the inventory. **Red without the fix**: no
+  acknowledged settlement, as live.
+  - The test runs on a 4 MiB thread. In a debug build, the real assembler with any nested saved pipeline (a plain,
+    non-pausing one too) exceeds the 2 MiB the fake-agent lifecycle cases use (follow-up below).
+- Real PostgreSQL, each phase its own OS process and claim:
+  `postgres_ordinary_agent_static_saved_pipeline_pause_completes_and_continues_once`
+  (`pipeline_scoped_pg_tests.rs:314`).
+  - `static_start`: the terminal message carries the inventory.
+  - `static_continue`: a replacement Worker continues the pipeline once after its tick ("COUNT 1", never "COUNT 2").
+  - `static_repeat`: a second continuation of the consumed pause is refused before any model call.
+- In-process: `an_ordinary_agent_offers_a_static_saved_pipeline_and_continues_it_once` and
+  `static_saved_pipeline_produces_authorized_inventory_and_resumes_after_once` assert the new terminal shape.
+
 ## Changed paths
 
 | Path | Change |
@@ -184,7 +229,8 @@ mid-stream on the rest. The all-decisions rule now runs before either resolver
 Counts are from `cargo test --offline --locked --no-fail-fast --all-targets --all-features` in
 `services/elitea-worker-rust` against a disposable `postgres:18` with the CI environment
 (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`).
-**2014 passed, 0 failed, 71 ignored** across all targets (library 1919 passed, 71 ignored). The ignored tests are the
+**2602 passed, 0 failed, 103 ignored** across all targets on the head that merges `main` `d5e966074` (with #1321),
+no PostgreSQL skips. The ignored tests are the
 supervisor, preparation and hydration `#[ignore]` suites CI runs separately; this PR does not touch them, so they
 were not run. `ELITEA_REQUIRE_NATS_SECURE_TEST` was not set locally (the secured-NATS permission test needs
 `natstest-serve`), which CI provides.
@@ -234,7 +280,7 @@ older-conversation case.
 
 Other gates: `cargo fmt --all -- --check` clean; `cargo clippy --offline --locked --all-targets --all-features -- -D warnings`
 clean; `RUSTDOCFLAGS="-D warnings" cargo doc --offline --locked --no-deps --all-features` clean;
-`libs/rust` is unchanged; its workspace suite (`cargo test --offline --locked --workspace --all-targets --all-features`) passes 1640 tests, 0 failed, 1 ignored. `cargo deny --all-features check advisories`: two **pre-existing** findings,
+`libs/rust` is unchanged by this branch (identical to `main`). `cargo deny --all-features check advisories`: two **pre-existing** findings,
 RUSTSEC-2023-0071 (`rsa`, Marvin attack) and RUSTSEC-2024-0449 (`unsafe-libyaml` unmaintained); this PR changes no
 dependency, so it adds none.
 
@@ -302,8 +348,21 @@ Logs and errors: no prompt, argument, token or URL is added to any log or error;
 | Worker × same, the dispatch record cannot be written | F (`agent.dispatch_unrecorded`, nothing ran) | `scoped_runtime.rs:401-425,576-600` | `postgres_failed_dispatch_record_ends_the_run_typed_and_never_runs_the_call` |
 | Worker × same, a late duplicate decision | I (stale, no effect) | `graph/resume.rs:651` + #1321 `continuation_pause` | `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale` |
 | Worker × P12, conversation paused by an older Worker | R (continues on the resolver that paused it) | `pipeline.rs:1854` | PG `postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts` |
-| Worker × tool call, static pause of a tool-invoked saved pipeline | R | `pipeline.rs:1799-1830`, `events.rs:1568` | `an_ordinary_agent_offers_a_static_saved_pipeline_and_continues_it_once`; browser journey (c) |
+| Worker × tool call, static pause of a tool-invoked saved pipeline (ordinary Agent) | R: the turn completes with the inventory; a replacement continues once after the tick | `events.rs:2530-2546,3443,3578`, `native_agent_lifecycle.rs:520,605` | lifecycle `static_tool_pause_is_the_acked_completed_terminal_with_its_inventory`; PG `postgres_ordinary_agent_static_saved_pipeline_pause_completes_and_continues_once`; browser journey (c) |
 | Worker × tool call, static pause beneath a graph root | F (typed refusal before any model call; listed as a follow-up) | `pipeline.rs:1816-1829` | `a_graph_root_refuses_a_static_saved_pipeline_tool_before_any_model_call` |
+
+## #1321 post-merge verification
+
+#1321 (approved sensitive calls run once, FU-226/FU-236) merged into `main` after this branch took its last copy of
+it. This branch merges `main` `d5e966074`, which contains #1321 (`0d2bd889d`). Everything below this point also runs
+#1321's code as merged:
+- the full Worker suite on real PostgreSQL (#1321's `ordinary_effect_pg_tests` and `pipeline_effect_pg_tests`
+  included);
+- the image build;
+- the browser journeys.
+
+It therefore stands as #1321's post-merge check on `main`. The Main side of #1321 (`execution_settlements.error_code`)
+runs in the Main image built from `d5e966074`.
 
 ## Browser evidence
 

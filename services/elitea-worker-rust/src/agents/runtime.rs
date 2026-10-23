@@ -143,14 +143,12 @@ pub(crate) trait NativeAgentCompletionSelector: Send {
     /// The run stopped at a static pause of a tool-invoked saved pipeline. It
     /// completes with that pause (the projector supplies the content and the
     /// inventory), not with a final model text the turn never wrote.
+    ///
+    /// Required, with no default: a wrapper that forgot to forward it would
+    /// fall back to `select` and fail the turn with no final text.
     async fn select_static_pause(
         self,
-    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>
-    where
-        Self: Sized,
-    {
-        self.select().await
-    }
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>;
 
     /// The run paused for input (a HITL interrupt) and `select` will not be
     /// called. A cloud-executor turn publishes its work so far here

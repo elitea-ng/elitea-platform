@@ -1179,6 +1179,15 @@ impl crate::agents::runtime::NativeAgentCompletionSelector for UnusedRecoveryCom
     > {
         panic!("failed assembly cannot select a result")
     }
+
+    async fn select_static_pause(
+        self,
+    ) -> Result<
+        crate::agents::events::CompletedAgentBrowserOutput,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        self.select().await
+    }
 }
 #[async_trait]
 impl crate::agents::runtime::NativeAgentAssembler for RecoveryOnlyAssembler {

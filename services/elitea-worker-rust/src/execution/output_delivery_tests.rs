@@ -1426,6 +1426,12 @@ impl NativeAgentCompletionSelector for FixedCompletion {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
         Ok(CompletedAgentBrowserOutput::fixture("hello"))
     }
+
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
+    }
 }
 
 struct TestNativeAssembler {
@@ -3579,16 +3585,23 @@ async fn sensitive_interrupt_lifecycle_case() {
     drop(temporary);
 }
 
-/// The production ordinary assembler with a saved static pipeline attached as
-/// the Agent's one tool (the fixed input fixture has none).
+/// The production assembler composition (`NativeRuntimeAssembler` over the
+/// ordinary and pipeline assemblers, as the Worker binary builds it) with a
+/// saved static pipeline attached as the Agent's one tool (the fixed input
+/// fixture has none). Its completion is the production wrapper, so a selector
+/// the wrapper does not forward fails here as it does live.
+type ProductionAssembler = crate::agents::native_runtime::NativeRuntimeAssembler<
+    crate::agents::ordinary::OrdinaryNativeAgentAssembler,
+    crate::agents::pipeline::PipelineNativeAgentAssembler,
+>;
+
 struct StaticToolAssembler {
-    inner: crate::agents::ordinary::OrdinaryNativeAgentAssembler,
+    inner: ProductionAssembler,
 }
 
 #[async_trait]
 impl NativeAgentAssembler for StaticToolAssembler {
-    type Completion =
-        <crate::agents::ordinary::OrdinaryNativeAgentAssembler as NativeAgentAssembler>::Completion;
+    type Completion = <ProductionAssembler as NativeAgentAssembler>::Completion;
 
     async fn assemble(
         &self,
@@ -3687,12 +3700,18 @@ async fn static_tool_pause_lifecycle_case() {
     );
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
         Arc::new(StaticToolAssembler {
-            inner: crate::agents::ordinary::OrdinaryNativeAgentAssembler::new(
-                platform,
-                model_facade,
-                Arc::new(
-                    crate::toolkits::ToolAdmissionPolicy::new(&[], &BTreeMap::new())
-                        .expect("empty tool policy"),
+            inner: crate::agents::native_runtime::NativeRuntimeAssembler::new(
+                crate::agents::ordinary::OrdinaryNativeAgentAssembler::new(
+                    platform,
+                    model_facade,
+                    Arc::new(
+                        crate::toolkits::ToolAdmissionPolicy::new(&[], &BTreeMap::new())
+                            .expect("empty tool policy"),
+                    ),
+                ),
+                crate::agents::pipeline::PipelineNativeAgentAssembler::with_state(
+                    Arc::new(InMemorySessionService::new()),
+                    Arc::new(adk_rust::graph::MemoryCheckpointer::new()),
                 ),
             ),
         }),
@@ -5668,6 +5687,12 @@ impl NativeAgentCompletionSelector for WrapUpCompletion {
         Ok(CompletedAgentBrowserOutput::fixture(
             crate::workspace_run::wrap_up::NOTE,
         ))
+    }
+
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
     }
 
     fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
