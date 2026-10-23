@@ -202,10 +202,11 @@ var (
 		{"runtime.airun.serviceproviders", []string{"admin", "super_admin"}},
 		{"provider_hub.descriptor.register", []string{"admin", "super_admin"}},
 		// shared/0109_provider_policy_overlay.sql. A CHOSEN string with no
-		// legacy original — the legacy runtime had no activation because it had no admission
-		// plane — kept separate from `.register` so that recording a descriptor
-		// and putting it in force are separately grantable. Same two holders,
-		// and no editor: activation is a fact about the deployment.
+		// legacy original — the legacy runtime had no activation because it had
+		// no admission plane — kept separate from `.register` so that recording
+		// a descriptor and putting it in force are separately grantable. Same
+		// two holders, and no editor: activation is a fact about the
+		// deployment.
 		{"provider_hub.descriptor.activate", []string{"admin", "super_admin"}},
 		{"configuration.governance", []string{"admin", "super_admin"}},
 		// shared/0114_toolkit_type_policy.sql. A CHOSEN string with no legacy
@@ -398,8 +399,9 @@ func TestANonMemberIsRefusedEveryDefaultModeGate(t *testing.T) {
 // only those rows. The central fallback is suppressed for that project, so none
 // of the 40 default-mode grants reaches it.
 //
-// This pins the blast radius. It is the shape of every legacy dump and the end-to-end stack. So these migrations cannot change
-// what an existing deployment's members may do.
+// This pins the blast radius. It is the shape of every legacy dump and the
+// end-to-end stack, so these migrations cannot change what an existing
+// deployment's members may do.
 func TestAProjectWithItsOwnGrantsIsRefusedEveryGate(t *testing.T) {
 	pool := newMigratedPool(t)
 	roleID := seedRoleMembership(t, pool, 3863, "admin", 1)

@@ -27,6 +27,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isEntrypoint } from "./py-compat.mjs";
+
 const SELF = fileURLToPath(import.meta.url);
 const REPOSITORY_ROOT = path.resolve(path.dirname(SELF), "..", "..");
 
@@ -101,6 +103,6 @@ export function main({ root = REPOSITORY_ROOT, out = console.log, err = console.
   return 0;
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === SELF) {
+if (isEntrypoint(import.meta.url)) {
   process.exitCode = main();
 }

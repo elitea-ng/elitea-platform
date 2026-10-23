@@ -34,7 +34,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadYaml } from "./ci-compat.mjs";
+import { loadYaml, isEntrypoint } from "./ci-compat.mjs";
 import { fnmatchcase, pyRepr, splitlines } from "./py-compat.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -258,6 +258,6 @@ export function main(log = console.log) {
   return 0;
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === SELF) {
+if (isEntrypoint(import.meta.url)) {
   process.exitCode = main();
 }

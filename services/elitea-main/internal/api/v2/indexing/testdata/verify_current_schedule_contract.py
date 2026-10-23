@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Generate or verify frozen current index-schedule observations.
 
-This harness intentionally does not import Elitea or legacy-runtime source. It defines the
-small public validation contract independently, then evaluates the checked-in
-payloads with the installed Pydantic and croniter. Point PYTHONPATH at the
-current scheduling plugin's installed requirements when croniter is not in the
-active environment.
+This harness intentionally does not import Elitea or legacy-runtime source. It
+defines the small public validation contract independently, then evaluates the
+checked-in payloads with the installed Pydantic and croniter. Point PYTHONPATH
+at the current scheduling plugin's installed requirements when croniter is not
+in the active environment.
 
 Examples:
   python verify_current_schedule_contract.py

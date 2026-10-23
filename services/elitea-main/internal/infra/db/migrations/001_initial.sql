@@ -340,14 +340,15 @@ CREATE TABLE IF NOT EXISTS public.pipeline_runs (
 -- Global, admin-authored platform settings: one row per (section, key) of the
 -- schema `internal/api/v2/admin/config_schemas.go` publishes.
 --
--- This table has no counterpart in the legacy deployment, and that is the point.
--- The legacy runtime had no configuration table either: its admin Configuration
--- page read an IN-PROCESS dict of runtime heartbeats (`admin.remote_runtimes`, 15s announce /
--- 60s freshness cut-off), and its save re-serialises a plugin's whole YAML and
--- fires `bootstrap_runtime_update` onto the Arbiter bus fire-and-forget, where a
--- bootstrap handler on the target runtime upserts it into that runtime's own
--- `plugin_config` table (legacy/plugins/admin/api/v2/plugin_config_values.py:275-305,
--- the legacy runtime's core/providers/internal/db_config.py:65-88).
+-- This table has no counterpart in the legacy deployment, and that is the
+-- point. The legacy runtime had no configuration table either: its admin
+-- Configuration page read an IN-PROCESS dict of runtime heartbeats
+-- (`admin.remote_runtimes`, 15s announce / 60s freshness cut-off), and its save
+-- re-serialises a plugin's whole YAML and fires `bootstrap_runtime_update` onto
+-- the Arbiter bus fire-and-forget, where a bootstrap handler on the target
+-- runtime upserts it into that runtime's own `plugin_config` table
+-- (legacy/plugins/admin/api/v2/plugin_config_values.py:275-305, the legacy
+-- runtime's core/providers/internal/db_config.py:65-88).
 --
 -- That mechanism is runtime plugin loading plus Arbiter transport, which AGENTS.md
 -- names as things the target architecture does NOT preserve — and "Go owns
@@ -669,10 +670,11 @@ BEGIN
     --
     -- The shapes come from those migrations, which take them in turn from the
     -- pg_catalog dump of the live legacy database (schema p_1) rather than from
-    -- the legacy runtime's SQLAlchemy models. Two details that read as oversights are
-    -- deliberate and are copied rather than improved: chat_messages_attachment's
-    -- `content` is `json` and NOT `jsonb`, because rows the legacy runtime
-    -- wrote must read back as the bytes that were written, and
+    -- the legacy runtime's SQLAlchemy models. Two details that read as
+    -- oversights are deliberate and are copied rather than improved:
+    -- chat_messages_attachment's `content` is `json` and NOT `jsonb`, because
+    -- rows the legacy runtime wrote must read back as the bytes that were
+    -- written, and
     -- `jsonb` normalises whitespace, reorders keys and drops duplicates; and
     -- chat_messages_context lists `id` LAST, which is the deployed column order.
 
@@ -799,8 +801,8 @@ BEGIN
         CREATE INDEX IF NOT EXISTS chat_message_group_conversation_id_idx
             ON %I.chat_message_group (conversation_id, id)', schema_name);
     -- Keeps the deployed name, `ix_tenant_...`, rather than one of our own: an
-    -- index we named differently would be a SECOND index on the same column in
-    -- every database the legacy runtime already built the first in.
+    -- index we named differently would be a SECOND index on the same column
+    -- wherever the legacy runtime had already built the first.
     EXECUTE format('
         CREATE INDEX IF NOT EXISTS ix_tenant_chat_canvas_versions_created_at
             ON %I.chat_canvas_versions (created_at)', schema_name);
@@ -1060,7 +1062,8 @@ ON CONFLICT (id) DO NOTHING;
 -- turned "the admin panel works" into "403 for everyone" on a fresh database.
 -- The reads are gated now (internal/api/router.go), so the roles have to exist.
 --
--- The legacy runtime's equivalent is auth_core/db/migrations/202202021633_core.py plus
+-- The legacy runtime's equivalent is
+-- auth_core/db/migrations/202202021633_core.py plus
 -- 202604161400_add_super_admin_role.py. `system` is omitted: it is not in the
 -- Go product's role vocabulary (users.go `adminRolePriority` is
 -- super_admin/admin/editor/viewer) and nothing assigns it.
@@ -1085,12 +1088,12 @@ ON CONFLICT (id) DO NOTHING;
 --
 -- `editor` and `viewer` get nothing: every declaration sets them False.
 --
--- Only the `administration` mode is seeded. The legacy runtime also registered these in
--- `developer` and `default`, but no Go route resolves an admin-panel permission
--- in either, and granting `admin.auth.users` to the DEFAULT-mode `admin` role
--- would leak it into project-scoped resolution — projectPermissions() falls
--- back to central default-mode grants by role name when a project has no
--- per-project rows.
+-- Only the `administration` mode is seeded. The legacy runtime also registered
+-- these in `developer` and `default`, but no Go route resolves an admin-panel
+-- permission in either, and granting `admin.auth.users` to the DEFAULT-mode
+-- `admin` role would leak it into project-scoped resolution —
+-- projectPermissions() falls back to central default-mode grants by role name
+-- when a project has no per-project rows.
 INSERT INTO auth_core__role_permission (role_id, permission)
 SELECT role.id, grant_row.permission
 FROM auth_core__role AS role
