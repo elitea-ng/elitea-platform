@@ -16,12 +16,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 func seedStrayJob(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64) {

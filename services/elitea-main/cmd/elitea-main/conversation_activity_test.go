@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/conversationactivity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 )
 
 // A conversation activity frame goes onto the conversations family with its

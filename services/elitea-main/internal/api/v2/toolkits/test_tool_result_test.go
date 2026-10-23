@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	"github.com/go-chi/chi/v5"
 )
 

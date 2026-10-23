@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // ModelCatalog supplies the authorized project catalog and its configured default.

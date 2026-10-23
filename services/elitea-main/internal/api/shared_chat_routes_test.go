@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
+	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 )
 
 // refusingSharedChatStore answers ErrNoLink for everything. It is what a real

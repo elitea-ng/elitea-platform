@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
 )
 
 // SignCommittedCodeCall reuses Main's existing key owner. Supervisor forwards it.

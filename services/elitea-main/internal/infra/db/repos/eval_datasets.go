@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // EvalDatasetsRepo stores Agent Evaluation datasets and their cases in the

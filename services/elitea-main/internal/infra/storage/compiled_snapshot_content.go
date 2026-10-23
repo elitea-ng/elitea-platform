@@ -8,9 +8,9 @@ import (
 	"io"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"

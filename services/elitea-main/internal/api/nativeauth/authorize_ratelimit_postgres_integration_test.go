@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
+	nativeapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/nativeauth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 func withAddresses(addresses nativeapi.ClientAddresses) stackOption {

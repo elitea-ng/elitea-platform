@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // The hidden workspace bucket answers 404 BEFORE any access answer, even to

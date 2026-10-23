@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
-	gatewayv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
+	gatewayv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
 )
 
 // Identity metadata: the X-Elitea-* header names, lower-cased. elitea-main

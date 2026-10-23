@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

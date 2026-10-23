@@ -37,9 +37,9 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/overhead"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
 )
 
 // SelfReferentialCredentialReason is the rejection reason emitted when a

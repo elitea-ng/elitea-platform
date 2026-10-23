@@ -38,8 +38,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/addrcheck"
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/addrcheck"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 )
 
 // RefusalHeader carries the reason of a refusal, from the fixed set in

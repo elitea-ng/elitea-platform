@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // filePack writes a schema-valid pack with a marker product name and returns

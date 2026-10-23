@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
 )
 
 func TestAdmissionPostureDefaultsToRecordAndRefusesATypo(t *testing.T) {

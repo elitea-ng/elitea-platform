@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // State is the closed set index_meta carries today. `scheduled_reindex` is a

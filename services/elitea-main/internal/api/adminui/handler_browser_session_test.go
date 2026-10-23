@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
 
 // stubSessions answers one prepared result, so this file tests what the SHELL

@@ -16,11 +16,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // txJournal records what the repository hands it and whether it came with the

@@ -377,7 +377,7 @@ const file_elitea_runtime_v1_egress_audit_proto_rawDesc = "" +
 	"otherHostsJ\x04\b\r\x10\x15\"\"\n" +
 	"\x1aReportRunSummaryResponseV1J\x04\b\x01\x10\x062\x85\x01\n" +
 	"\x12EgressAuditService\x12o\n" +
-	"\x10ReportRunSummary\x12,.elitea.runtime.v1.ReportRunSummaryRequestV1\x1a-.elitea.runtime.v1.ReportRunSummaryResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x10ReportRunSummary\x12,.elitea.runtime.v1.ReportRunSummaryRequestV1\x1a-.elitea.runtime.v1.ReportRunSummaryResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_egress_audit_proto_rawDescOnce sync.Once

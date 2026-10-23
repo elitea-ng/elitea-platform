@@ -9,8 +9,8 @@ import (
 	"math"
 	"strings"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
 const maxCurrentToolkitIdentityBytes = 1024

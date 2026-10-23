@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 
-	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
 )
 
 func TestConfigFromEnvIsDisabledByDefaultAndFailClosedWhenEnabled(t *testing.T) {

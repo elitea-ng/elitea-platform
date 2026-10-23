@@ -21,12 +21,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
-	handoffapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
+	handoffapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // The route patterns (contract §2).

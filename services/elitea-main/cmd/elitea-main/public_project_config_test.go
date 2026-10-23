@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 )
 
 func TestResolvePublicProject(t *testing.T) {

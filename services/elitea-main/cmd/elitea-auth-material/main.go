@@ -47,8 +47,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/materialinstall"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/materialinstall"
 )
 
 const (

@@ -19,8 +19,8 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // allowingGate returns a budget checker that admits every request and records

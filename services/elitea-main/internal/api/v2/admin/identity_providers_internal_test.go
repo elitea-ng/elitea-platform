@@ -32,7 +32,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 // providerRequest builds a request whose chi context carries {key}.

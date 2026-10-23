@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
 // The tests below assert on the RESOLVED definition, never on the presence of a

@@ -17,11 +17,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 func TestBranding_SaveMovesPackJSONAndDiscoveryWithBootstrap(t *testing.T) {

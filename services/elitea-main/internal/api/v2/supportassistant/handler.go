@@ -76,10 +76,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // unavailableMessage is the single sentence every refusal in this package uses

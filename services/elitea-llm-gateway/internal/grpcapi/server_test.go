@@ -15,9 +15,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	gatewayv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	gatewayv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 func head(method, path string, headers ...string) *gatewayv1.HttpRequestHead {

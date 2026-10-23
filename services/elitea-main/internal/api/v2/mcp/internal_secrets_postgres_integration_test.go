@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 )
 
 func TestInternalSecretLifecycleUsesEncryptedVaultWithoutReturningPlaintext(t *testing.T) {

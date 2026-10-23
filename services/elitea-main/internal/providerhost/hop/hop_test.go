@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/hop"
 )
 
 // The message has to name the setting an operator would edit and the value

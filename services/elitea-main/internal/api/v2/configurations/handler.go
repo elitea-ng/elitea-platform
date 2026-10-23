@@ -14,17 +14,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 const (

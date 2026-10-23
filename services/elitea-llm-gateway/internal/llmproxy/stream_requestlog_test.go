@@ -11,7 +11,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // A streamed completion must log the tokens it used.

@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 )
 
 // The chooser sends the browser to the canonical login routes.

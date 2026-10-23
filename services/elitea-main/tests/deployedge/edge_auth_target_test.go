@@ -39,7 +39,7 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // removedAuthPath is the edge-auth address elitea-main used to register.

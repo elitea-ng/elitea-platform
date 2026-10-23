@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/go-chi/chi/v5"
 )
 

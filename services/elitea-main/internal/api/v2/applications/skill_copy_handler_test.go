@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 type skillCopyCaptureRepo struct {

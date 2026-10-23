@@ -45,7 +45,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // PrebuiltSecretReader reads a catalogue client secret out of the platform

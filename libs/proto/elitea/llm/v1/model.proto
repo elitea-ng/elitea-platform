@@ -37,7 +37,7 @@ syntax = "proto3";
 
 package elitea.llm.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1";
 
 service ModelService {
   // ChatCompletions is POST /llm/v1/chat/completions (OpenAI dialect). The

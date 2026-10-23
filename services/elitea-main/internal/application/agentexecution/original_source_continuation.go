@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 // Main reads the single original chat_predict input and source under the same

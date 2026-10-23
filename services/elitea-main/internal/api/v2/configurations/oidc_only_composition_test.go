@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // TestCurrentConfigurationRoutesComposeOnAnOIDCOnlyDeployment holds the boot of

@@ -24,8 +24,8 @@ package oapiserver_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
 )
 
 func collectFullSurface(t *testing.T) *oapiserver.RouteSet {

@@ -1052,7 +1052,7 @@ const file_elitea_extract_v1_extract_proto_rawDesc = "" +
 	"\x11SKIP_REASON_EMPTY\x10\b2\xcd\x01\n" +
 	"\x16DocumentExtractService\x12R\n" +
 	"\aExtract\x12!.elitea.extract.v1.ExtractRequest\x1a\".elitea.extract.v1.ExtractResponse(\x01\x12_\n" +
-	"\fCapabilities\x12&.elitea.extract.v1.CapabilitiesRequest\x1a'.elitea.extract.v1.CapabilitiesResponseBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/extract/v1;extractv1b\x06proto3"
+	"\fCapabilities\x12&.elitea.extract.v1.CapabilitiesRequest\x1a'.elitea.extract.v1.CapabilitiesResponseBTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/extract/v1;extractv1b\x06proto3"
 
 var (
 	file_elitea_extract_v1_extract_proto_rawDescOnce sync.Once

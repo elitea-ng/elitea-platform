@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 func toolRunDispatchPolicy() ToolkitCallToolDispatchPolicy {

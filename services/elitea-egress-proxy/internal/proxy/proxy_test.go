@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 )
 
 // tlsDestination starts an HTTPS server and routes public 203.0.113.10:443

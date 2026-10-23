@@ -3,7 +3,7 @@ package llmproxy
 import (
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 )
 
 // The INBOUND half of hop-marker detection (issue #164, follow-up to #12).

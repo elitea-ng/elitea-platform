@@ -59,7 +59,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 )
 
 // Provisioner is the create/delete half of projectprovisioning.Provisioner this

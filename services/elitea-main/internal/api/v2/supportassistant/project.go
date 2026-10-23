@@ -26,7 +26,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // Provisioner is the project-create pipeline, narrowed to the one call this

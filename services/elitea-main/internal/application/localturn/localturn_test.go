@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 func TestBoundReportCutsAndCounts(t *testing.T) {

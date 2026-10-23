@@ -33,12 +33,12 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
-	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 )
 
 const identitySecret = "shared-with-the-provider"

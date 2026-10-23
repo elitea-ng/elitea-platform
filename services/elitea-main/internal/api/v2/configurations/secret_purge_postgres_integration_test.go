@@ -22,8 +22,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func purgeVaultHolds(t *testing.T, pool *pgxpool.Pool, name string) bool {

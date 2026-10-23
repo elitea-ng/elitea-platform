@@ -4177,7 +4177,7 @@ const file_elitea_runtime_v1_content_proto_rawDesc = "" +
 	"\x13GetCompiledSnapshot\x12/.elitea.runtime.v1.GetCompiledSnapshotRequestV1\x1a0.elitea.runtime.v1.GetCompiledSnapshotResponseV1\x12\x84\x01\n" +
 	"\x17PublishCompiledSnapshot\x123.elitea.runtime.v1.PublishCompiledSnapshotRequestV1\x1a4.elitea.runtime.v1.PublishCompiledSnapshotResponseV1\x12\x8c\x01\n" +
 	"\x19FetchCompiledSnapshotFile\x125.elitea.runtime.v1.FetchCompiledSnapshotFileRequestV1\x1a6.elitea.runtime.v1.FetchCompiledSnapshotFileResponseV10\x01\x12\x8f\x01\n" +
-	"\x1aUploadCompiledSnapshotFile\x126.elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1\x1a7.elitea.runtime.v1.UploadCompiledSnapshotFileResponseV1(\x01BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x1aUploadCompiledSnapshotFile\x126.elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1\x1a7.elitea.runtime.v1.UploadCompiledSnapshotFileResponseV1(\x01BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_content_proto_rawDescOnce sync.Once

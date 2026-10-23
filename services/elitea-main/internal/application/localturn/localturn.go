@@ -41,9 +41,9 @@ import (
 
 	"github.com/google/uuid"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // Bounds. The request bounds keep one commit a bounded write; the report

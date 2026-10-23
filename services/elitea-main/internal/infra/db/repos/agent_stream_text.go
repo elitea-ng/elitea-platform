@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/jackc/pgx/v5"
 )
 

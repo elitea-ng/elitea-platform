@@ -13,10 +13,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	configurationdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/configurations"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 const MaxValidationSettingsBytes = 256 * 1024

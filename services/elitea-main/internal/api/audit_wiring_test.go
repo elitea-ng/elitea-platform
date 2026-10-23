@@ -19,8 +19,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 type routerAuditRecorder struct {

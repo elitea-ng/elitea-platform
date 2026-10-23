@@ -23,8 +23,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // rebindingResolver is a fake DNS answer for a name the attacker controls —

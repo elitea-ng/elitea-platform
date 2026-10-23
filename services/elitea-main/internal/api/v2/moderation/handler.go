@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 )
 
 type Handler struct {

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/google/uuid"
 )
 

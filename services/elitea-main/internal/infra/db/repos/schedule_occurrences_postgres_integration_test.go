@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
 )
 
 // TestScheduleOccurrenceRepositoryPostgresTakeover is a real PostgreSQL

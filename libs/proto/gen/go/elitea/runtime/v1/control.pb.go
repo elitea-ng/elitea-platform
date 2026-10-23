@@ -1725,7 +1725,7 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"RenewLease\x12&.elitea.runtime.v1.RenewLeaseRequestV1\x1a'.elitea.runtime.v1.RenewLeaseResponseV1\x12x\n" +
 	"\x13ObserveDesiredState\x12/.elitea.runtime.v1.ObserveDesiredStateRequestV1\x1a0.elitea.runtime.v1.ObserveDesiredStateResponseV1\x12r\n" +
 	"\x11PrepareSettlement\x12-.elitea.runtime.v1.PrepareSettlementRequestV1\x1a..elitea.runtime.v1.PrepareSettlementResponseV1\x12`\n" +
-	"\vRemoveIndex\x12'.elitea.runtime.v1.RemoveIndexRequestV1\x1a(.elitea.runtime.v1.RemoveIndexResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\vRemoveIndex\x12'.elitea.runtime.v1.RemoveIndexRequestV1\x1a(.elitea.runtime.v1.RemoveIndexResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_control_proto_rawDescOnce sync.Once

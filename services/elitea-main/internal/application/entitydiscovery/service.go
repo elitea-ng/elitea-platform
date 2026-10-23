@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

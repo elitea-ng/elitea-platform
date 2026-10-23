@@ -23,7 +23,7 @@ var advisoryPackagesWithoutFix = []string{
 // under, an advisoryPackagesWithoutFix entry. It lists the graph the images
 // build: linux on both published architectures, with cgo off.
 func TestNoBinaryLinksAdvisoryPackagesWithoutFix(t *testing.T) {
-	const self = "github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/cmd/elitea-llm-gateway"
+	const self = "github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/cmd/elitea-llm-gateway"
 	assertNoLinkedAdvisoryPackages(t, self, advisoryPackagesWithoutFix)
 }
 

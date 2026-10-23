@@ -18,13 +18,13 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
-	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/cancelbus"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn/natstest"
+	subappv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/cancelbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 // sharedStore is what PostgreSQL is to the replicas: one set of rows, and

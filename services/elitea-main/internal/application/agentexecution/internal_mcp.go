@@ -3,8 +3,8 @@ package agentexecution
 import (
 	"encoding/json"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 func currentBuilderFlag(name string) bool {

@@ -127,7 +127,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // analyticsReadTimeout bounds one dashboard read. Every statement below is

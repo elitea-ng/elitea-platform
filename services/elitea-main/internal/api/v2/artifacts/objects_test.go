@@ -14,9 +14,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func newObjectTestRouter(h *artifacts.Handler) chi.Router {

@@ -57,8 +57,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // ToolkitTypePolicyStore is the seam this surface writes through.

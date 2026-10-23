@@ -16,7 +16,7 @@ package guardrails_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 func TestCanonicalKeyCollapsesNamingStyles(t *testing.T) {

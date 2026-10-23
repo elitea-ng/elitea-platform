@@ -26,7 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 )
 
 func costAttributionRouter(pool *pgxpool.Pool, now time.Time) chi.Router {

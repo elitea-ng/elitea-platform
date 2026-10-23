@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 )
 
 // countFeedbackRows reports how many chat_message_feedback rows exist for one

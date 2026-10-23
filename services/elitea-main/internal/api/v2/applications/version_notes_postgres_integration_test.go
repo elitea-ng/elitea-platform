@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func notesOf(t *testing.T, body map[string]any) string {

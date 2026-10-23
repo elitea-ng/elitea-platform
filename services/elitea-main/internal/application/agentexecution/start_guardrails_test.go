@@ -14,7 +14,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 // The same target every other start test uses, minimal for this file's purpose:

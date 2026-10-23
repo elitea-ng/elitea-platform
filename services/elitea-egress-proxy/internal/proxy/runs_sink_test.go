@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 )
 
 // Every logged summary also reaches the sink (elitea-main's audit reporter):

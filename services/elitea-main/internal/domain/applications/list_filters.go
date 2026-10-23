@@ -3,7 +3,7 @@ package applications
 import (
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // ValidateList bounds work before a repository query and sets stable defaults.

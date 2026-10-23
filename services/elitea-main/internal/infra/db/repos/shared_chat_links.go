@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 )
 
 // SharedChatLinksRepo is the store behind "share a conversation by link".

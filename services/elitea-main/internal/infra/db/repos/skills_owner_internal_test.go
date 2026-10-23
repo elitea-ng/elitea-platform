@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // skills.owner_id is the OWNING PROJECT. The statement bound it to the literal

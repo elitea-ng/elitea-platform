@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // The header must reach a plain JSON response. This is the case the eight

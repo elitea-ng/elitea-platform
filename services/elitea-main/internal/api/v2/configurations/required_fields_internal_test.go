@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 func pinnedSchemaFor(t *testing.T, configType string) json.RawMessage {

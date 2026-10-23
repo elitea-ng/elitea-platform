@@ -7,10 +7,10 @@ import (
 	"io"
 	"log/slog"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )

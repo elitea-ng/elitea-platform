@@ -39,10 +39,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // The cluster once ran a SECOND browser edge with its own rule list, and for a

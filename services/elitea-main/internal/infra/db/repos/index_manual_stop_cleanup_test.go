@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

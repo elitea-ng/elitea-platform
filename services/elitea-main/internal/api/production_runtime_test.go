@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type productionRuntimePrincipalValidatorFunc func(context.Context, auth.User) (auth.User, error)

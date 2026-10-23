@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // This file is the #874 acceptance suite: skills gained the multi-version

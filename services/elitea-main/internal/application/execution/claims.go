@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	recoverydomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	recoverydomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 var (

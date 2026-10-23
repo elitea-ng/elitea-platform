@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 func env(pairs map[string]string) func(string) (string, bool) {

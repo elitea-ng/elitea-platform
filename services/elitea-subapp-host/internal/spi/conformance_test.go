@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 const (

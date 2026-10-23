@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
 func TestLogFormUserConfigurationNamesTheRefusedLogins(t *testing.T) {

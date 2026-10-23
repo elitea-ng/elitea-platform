@@ -38,8 +38,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/materialinstall"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/materialinstall"
 )
 
 const (

@@ -13,13 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type ApplicationsRepo struct {

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/addrcheck"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/addrcheck"
 )
 
 // MaxEntries bounds one run's allowlist.

@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/testpg"
 	"os"
 	"path/filepath"
 	"testing"

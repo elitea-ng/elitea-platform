@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/client"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/client"
 )
 
 // ── 8. Client contract 1.1: chat enrichment, over a native access token ─────

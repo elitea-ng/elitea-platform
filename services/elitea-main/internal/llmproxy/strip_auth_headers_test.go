@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // TestProxy_StripsClientAuthHeaders asserts that a request carrying spoofed

@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"strconv"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 )
 

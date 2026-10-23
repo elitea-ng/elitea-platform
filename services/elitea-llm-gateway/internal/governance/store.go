@@ -19,8 +19,8 @@ import (
 
 	"github.com/sony/gobreaker/v2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
 )
 
 // natsClient is the minimal NATS surface the GovernanceStore needs. *nats.Client

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

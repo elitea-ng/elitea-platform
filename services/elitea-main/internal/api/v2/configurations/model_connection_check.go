@@ -50,8 +50,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 const llmModelConfigurationType = "llm_model"

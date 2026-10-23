@@ -59,7 +59,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // agentExecutionCapabilities is internal/infra/db/repos/analytics.go's

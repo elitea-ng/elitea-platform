@@ -25,11 +25,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc/status"
 
-	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
+	subappv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/hop"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
 // Store is what the registrar writes to: the admission plane.

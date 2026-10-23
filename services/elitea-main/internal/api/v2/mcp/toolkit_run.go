@@ -36,7 +36,7 @@ import (
 	"fmt"
 	"strings"
 
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // ToolkitRunUseCase is the narrow slice of the tool-run producer this package

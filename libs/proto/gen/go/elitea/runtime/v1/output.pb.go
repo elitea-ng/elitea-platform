@@ -639,7 +639,7 @@ const file_elitea_runtime_v1_output_proto_rawDesc = "" +
 	"7EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT\x10\a\x12>\n" +
 	":EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_EXECUTE_READ_RESULT\x10\b2{\n" +
 	"\x16ExecutionOutputService\x12a\n" +
-	"\aPublish\x12).elitea.runtime.v1.ExecutionOutputFrameV1\x1a'.elitea.runtime.v1.ExecutionOutputAckV1(\x010\x01BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\aPublish\x12).elitea.runtime.v1.ExecutionOutputFrameV1\x1a'.elitea.runtime.v1.ExecutionOutputAckV1(\x010\x01BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_output_proto_rawDescOnce sync.Once

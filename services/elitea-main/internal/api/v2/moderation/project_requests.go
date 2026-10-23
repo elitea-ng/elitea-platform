@@ -63,7 +63,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 )
 
 // ProjectRequestIssueType is the `issue_type` that marks a

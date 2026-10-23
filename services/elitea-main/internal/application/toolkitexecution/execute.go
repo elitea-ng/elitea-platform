@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strconv"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 var ErrToolkitExecuteReadResultMismatch = errors.New("direct toolkit result does not match admitted invocation")

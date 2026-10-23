@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 func TestAgentToolkitDiscoveryPreservesSchemaAndPolicy(t *testing.T) {

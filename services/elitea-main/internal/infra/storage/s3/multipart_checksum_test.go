@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // partRecorder is a minimal S3 multipart endpoint that remembers which

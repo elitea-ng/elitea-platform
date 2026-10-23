@@ -16,12 +16,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
 func TestRoutesPreserveExactFormSurfaceAndMethods(t *testing.T) {

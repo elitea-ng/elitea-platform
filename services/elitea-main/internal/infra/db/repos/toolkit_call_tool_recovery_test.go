@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 type recoveryToolkitProducer struct {

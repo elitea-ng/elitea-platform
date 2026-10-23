@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 func openCompiledSnapshotStatePool(ctx context.Context, config runtimecomposition.Config) (runtimePoolResource, error) {

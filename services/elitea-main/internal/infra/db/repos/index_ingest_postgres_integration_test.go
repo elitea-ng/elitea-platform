@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // TestPostgresServiceBackedIndexIngestAdmission is a real PostgreSQL 16-18

@@ -15,7 +15,7 @@ package auth
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -24,11 +24,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	bootstrapschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	bootstrapschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 func TestAFreshInstallMakesItsFirstAdministratorThroughOIDCFromTheEnvironment(t *testing.T) {

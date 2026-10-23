@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 type mcpDiscoveryToken struct {

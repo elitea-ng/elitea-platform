@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 )
 
 // KeySource holds the current run-token key set.

@@ -34,7 +34,7 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 // Toolkit alias sets, mirroring the host's admission table

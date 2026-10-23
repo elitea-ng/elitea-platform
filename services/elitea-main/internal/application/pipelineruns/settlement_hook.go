@@ -38,8 +38,8 @@ import (
 	"context"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 )
 
 // Run is one admitted pipeline run's tracked identity — what RecordRunStart

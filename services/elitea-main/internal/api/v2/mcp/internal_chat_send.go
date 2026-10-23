@@ -10,11 +10,11 @@ import (
 	"strconv"
 	"time"
 
-	configsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	conversationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	agentapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	configsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	conversationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	agentapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/google/uuid"
 )
 

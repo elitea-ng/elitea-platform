@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 // Typed failures. Callers branch with errors.Is; none carries a value, display

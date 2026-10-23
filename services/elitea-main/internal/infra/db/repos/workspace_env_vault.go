@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // WorkspaceEnvVault keeps a handed-off thread's harvested environment as one

@@ -15,9 +15,9 @@ import (
 	"mime"
 	"strings"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"

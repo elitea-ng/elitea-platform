@@ -140,10 +140,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // RunPermission is what a caller must hold in the project for a pipeline to

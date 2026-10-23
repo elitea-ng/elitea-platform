@@ -14,10 +14,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handoffapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	handoffapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const (

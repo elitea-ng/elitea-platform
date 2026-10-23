@@ -33,7 +33,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // ErrCallbackTokenRefused reports a mint the platform would not perform: an

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 )
 
 // These fakes are shared by the runtime-context and current-vault compatibility

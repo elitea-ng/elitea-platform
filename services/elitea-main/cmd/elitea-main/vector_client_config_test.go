@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 )
 
 var completeVectorEnv = map[string]string{

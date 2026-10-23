@@ -13,7 +13,7 @@ package mcpregistry_test
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -22,7 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 func TestPrebuiltStoreRoundTrip(t *testing.T) {

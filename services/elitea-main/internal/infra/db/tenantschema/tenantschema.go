@@ -40,7 +40,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // Prefix starts every tenant schema name. It agrees with create_tenant_schema

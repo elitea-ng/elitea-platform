@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/browser"
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/client"
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/samlidp"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/browser"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/client"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/samlidp"
 )
 
 const samlProviderPath = "/api/v2/admin/identity_providers/administration/conformance-saml"

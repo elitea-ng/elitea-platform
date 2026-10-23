@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/conversationactivity"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 // activityLookups records which conversation the notifier was asked to read.

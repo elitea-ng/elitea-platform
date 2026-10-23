@@ -26,8 +26,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
 // admissionAuditPool is the emitter harness's database with the admission plane

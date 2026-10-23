@@ -42,8 +42,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // PrebuiltSecretStore is the vault seam this surface writes catalogue

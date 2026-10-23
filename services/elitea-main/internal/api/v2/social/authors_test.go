@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	socialapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentAuthorsReaderStub struct {

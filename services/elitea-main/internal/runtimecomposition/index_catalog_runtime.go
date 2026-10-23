@@ -1,9 +1,9 @@
 package runtimecomposition
 
 import (
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // This file hands the Rust indexing runtime's index catalog (ADR-0030 I1) to

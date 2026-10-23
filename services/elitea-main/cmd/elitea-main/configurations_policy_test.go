@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // currentPolicyEffects records what the lifecycle actually wrote. It is a

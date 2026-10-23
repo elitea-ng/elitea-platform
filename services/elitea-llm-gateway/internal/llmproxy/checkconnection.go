@@ -14,7 +14,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // checkconnection.go implements POST /llm/v1/check_connection (#319): a real,

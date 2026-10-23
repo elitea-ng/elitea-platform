@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 )
 
 // grpcListenerTestEnv is the environment a gateway subprocess needs to start

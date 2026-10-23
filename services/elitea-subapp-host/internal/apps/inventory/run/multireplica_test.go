@@ -24,11 +24,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/cancelbus"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/cancelbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/testpg"
 )
 
 // inventoryHostMigrations are the migrations that create the host's tables

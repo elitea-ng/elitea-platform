@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type formSessionAuthorizerFunc func(context.Context, string) (browserapp.Authorization, error)

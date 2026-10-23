@@ -32,8 +32,8 @@ import (
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // ── the stub provider ───────────────────────────────────────────────────────

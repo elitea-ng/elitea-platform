@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // AuditEntityType is the entity type of every handoff and store audit event

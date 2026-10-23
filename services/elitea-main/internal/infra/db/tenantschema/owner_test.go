@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // A PROJECT-kind owner_id has one correct value per tenant schema: the project

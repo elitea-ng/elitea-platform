@@ -31,10 +31,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // expandedFixture is one project holding one agent version that exercises every

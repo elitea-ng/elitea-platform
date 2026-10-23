@@ -42,9 +42,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // WikiQueryTools are the four tools of the wiki_query family, in the order

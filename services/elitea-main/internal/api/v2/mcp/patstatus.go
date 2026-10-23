@@ -73,7 +73,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // Token states, spelled as the legacy runtime spells them because the toolkit

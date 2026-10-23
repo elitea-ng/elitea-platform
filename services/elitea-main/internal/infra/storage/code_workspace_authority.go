@@ -10,10 +10,10 @@ import (
 	"math"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	recovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	recovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )

@@ -29,12 +29,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/governance"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/governance"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/server"
 )
 
 // budgetRecoveryInterval is how often a gateway with no enforcement re-dials

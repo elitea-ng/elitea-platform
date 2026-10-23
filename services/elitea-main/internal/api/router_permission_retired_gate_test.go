@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	v2admin "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2admin "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 )
 
 // projectSettingsMigration is 0136, which also carries the admin-only

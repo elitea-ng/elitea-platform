@@ -36,8 +36,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
 // The refusal codes. Stable strings: a client asserts on them and an E2E

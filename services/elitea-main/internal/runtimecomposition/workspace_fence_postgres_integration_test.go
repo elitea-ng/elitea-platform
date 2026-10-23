@@ -21,11 +21,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // workspaceFenceSeedSQL is the minimum legacy schema the ledgered corpus

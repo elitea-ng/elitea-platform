@@ -29,8 +29,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	migrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // The tables the issue names that this corpus builds. `prompt_collections` is

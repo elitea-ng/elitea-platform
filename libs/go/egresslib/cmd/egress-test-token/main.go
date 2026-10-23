@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 )
 
 func main() {

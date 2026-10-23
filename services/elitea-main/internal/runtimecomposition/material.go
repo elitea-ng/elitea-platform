@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 // MaterialFile is one deployment file that the enabled runtime plane opens at

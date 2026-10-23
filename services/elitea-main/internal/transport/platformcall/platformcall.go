@@ -28,8 +28,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/modelgrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/modelgrpc"
 )
 
 // NewRequest builds the in-process request one RPC makes: method on path

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
 )
 
 // IndexRemover runs Main's index delete flow for a worker's live claim

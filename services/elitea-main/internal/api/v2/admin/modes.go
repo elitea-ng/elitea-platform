@@ -46,7 +46,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // modeAssignment is one row of the listing.

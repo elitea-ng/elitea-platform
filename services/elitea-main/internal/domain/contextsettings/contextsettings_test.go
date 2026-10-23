@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 )
 
 // The frozen contract's constants, asserted as VALUES rather than by

@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
 
 // ActorPATName is the `auth_core__token.name` this service writes when it

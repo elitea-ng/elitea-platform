@@ -7,7 +7,7 @@ package repos
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 func TestSortUserActivityAppliesTheDocumentedTieBreak(t *testing.T) {

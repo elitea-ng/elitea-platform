@@ -3,10 +3,10 @@ package runtimecomposition_test
 import (
 	"testing"
 
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
 // Under the Rust indexing runtime the Rust worker serves the five index tools

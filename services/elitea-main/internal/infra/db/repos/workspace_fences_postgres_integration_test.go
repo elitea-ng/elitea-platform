@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 func TestPostgresLocalTurnRefusedWhileTheCloudOwnsTheThread(t *testing.T) {

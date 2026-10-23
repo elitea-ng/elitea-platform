@@ -12,9 +12,9 @@ import (
 	"net/url"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	nativeapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/nativeauth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 func (s *stack) setPolicy(values map[string]string) {

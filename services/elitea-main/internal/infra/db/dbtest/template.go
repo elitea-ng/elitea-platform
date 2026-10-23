@@ -55,7 +55,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 )
 
 // buildDeadline bounds one template build: the scratch database, the seed, the

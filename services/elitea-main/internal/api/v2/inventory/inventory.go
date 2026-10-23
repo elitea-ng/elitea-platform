@@ -30,11 +30,11 @@ import (
 	"log/slog"
 	"net/http"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/routes"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/routes"
 )
 
 // Mode is the permission mode these routes resolve in. Inventory's legacy

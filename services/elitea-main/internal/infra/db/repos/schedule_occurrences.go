@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"

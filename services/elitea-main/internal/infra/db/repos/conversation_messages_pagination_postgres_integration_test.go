@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 )
 
 // seedOrderedTranscript writes `count` message groups whose created_at values

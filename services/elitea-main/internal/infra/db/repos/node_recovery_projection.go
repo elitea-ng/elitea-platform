@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 // The accepted NodeEvent transaction owns the current claim and sequence locks.

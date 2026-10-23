@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	indexing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	toolkitexecution "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	indexing "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	toolkitexecution "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 )
 
 // currentActorToolkitReader applies the folder access overlay before settings resolution.

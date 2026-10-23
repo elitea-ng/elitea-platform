@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 func TestPipelineHITLContinuationBindsNewResponseOnlyForDirectReview(t *testing.T) {

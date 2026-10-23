@@ -3,7 +3,7 @@ package repos
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // An agent whose author's account was deleted keeps its author on the list row

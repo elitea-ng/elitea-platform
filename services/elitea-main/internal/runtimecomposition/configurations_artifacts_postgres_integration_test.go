@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

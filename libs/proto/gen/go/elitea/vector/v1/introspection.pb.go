@@ -391,7 +391,7 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\x1bMEMORY_INTENT_PROJECT_WRITE\x10\x03\x12$\n" +
 	" MEMORY_INTENT_SHARED_INDEX_WRITE\x10\x042\x83\x01\n" +
 	"\x19TokenIntrospectionService\x12f\n" +
-	"\x0fIntrospectToken\x12(.elitea.vector.v1.IntrospectTokenRequest\x1a).elitea.vector.v1.IntrospectTokenResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
+	"\x0fIntrospectToken\x12(.elitea.vector.v1.IntrospectTokenRequest\x1a).elitea.vector.v1.IntrospectTokenResponseBRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 
 var (
 	file_elitea_vector_v1_introspection_proto_rawDescOnce sync.Once

@@ -16,7 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // fenceRunner is a DeepWiki runner whose generate_wiki is labelled with the

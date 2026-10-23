@@ -81,9 +81,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/run"
 )
 
 // The two request headers the drawer sends with an invoke.

@@ -10,9 +10,9 @@ import (
 	"sort"
 	"time"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	toolkitexecution "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	toolkitexecution "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 )
 
 const CodeWorkspacePurpose = "code_workspace"

@@ -34,9 +34,9 @@ import (
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // ── the fake provider socket ────────────────────────────────────────────────

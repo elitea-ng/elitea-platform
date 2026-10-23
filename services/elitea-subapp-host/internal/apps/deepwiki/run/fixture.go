@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // The fixture runner: the real composition and upload over canned results.

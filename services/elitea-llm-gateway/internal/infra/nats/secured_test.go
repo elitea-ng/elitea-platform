@@ -10,8 +10,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn/natstest"
 )
 
 // TestSecuredGatewayRunsOnTheChartsPermissions runs the gateway's real NATS

@@ -2,7 +2,7 @@ package mcpoauth_test
 
 import (
 	"context"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"

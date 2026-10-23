@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // FormSessionAuthorizer reads one Form browser session back. The Form

@@ -14,8 +14,8 @@ import (
 	"context"
 	"fmt"
 
-	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	vectorv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

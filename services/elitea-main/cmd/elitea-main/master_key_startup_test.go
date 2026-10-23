@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 )
 
 func TestRunRefusesToStartOnAMalformedMasterKey(t *testing.T) {

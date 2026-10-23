@@ -19,7 +19,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mailer"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mailer"
 )
 
 // fakeSource stands in for the database layer.

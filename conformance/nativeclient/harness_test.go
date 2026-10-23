@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/browser"
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/client"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/browser"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/client"
 )
 
 // config is everything the suite reads from its environment. The defaults

@@ -3,7 +3,7 @@ package run
 import (
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
 // The artifact upload path. The transport — the platform's artifact service,

@@ -15,9 +15,9 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"google.golang.org/grpc/metadata"
 
-	gatewayv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	gatewayv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 // echoProvider is a provider socket that answers every frame with itself.

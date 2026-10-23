@@ -1,6 +1,6 @@
 package main
 
-import "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
+import "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 
 // newDomainEventsPublisher builds the one domain-events Publisher the
 // composition root shares between every producer (#876).

@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

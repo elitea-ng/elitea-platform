@@ -14,8 +14,8 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
 )
 
 // BudgetFraction returns the fraction of the project's ceiling consumed in the

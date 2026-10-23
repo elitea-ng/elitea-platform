@@ -21,7 +21,7 @@ import (
 	"github.com/russellhaering/gosaml2/types"
 	dsig "github.com/russellhaering/goxmldsig"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 const (

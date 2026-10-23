@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // The admin port's /readyz is the readiness the provider service's Health

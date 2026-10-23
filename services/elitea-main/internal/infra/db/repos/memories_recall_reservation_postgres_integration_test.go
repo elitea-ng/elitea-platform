@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
 )
 
 // TestPostgresMemoriesRepoRecallReservesNewestMemoryAfterPreviousTurn: a

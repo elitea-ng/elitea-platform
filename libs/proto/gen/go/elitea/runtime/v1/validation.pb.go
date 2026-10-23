@@ -368,7 +368,7 @@ const file_elitea_runtime_v1_validation_proto_rawDesc = "" +
 	"\x16settings_entry_version\x18\v \x01(\tR\x14settingsEntryVersion\x12S\n" +
 	"\x17settings_content_digest\x18\f \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x15settingsContentDigest\x12\x14\n" +
 	"\x05valid\x18\r \x01(\bR\x05valid\x12I\n" +
-	"\x06issues\x18\x0e \x03(\v21.elitea.runtime.v1.ConfigurationValidationIssueV1R\x06issuesJ\x04\b\x0f\x10 BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x06issues\x18\x0e \x03(\v21.elitea.runtime.v1.ConfigurationValidationIssueV1R\x06issuesJ\x04\b\x0f\x10 BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_validation_proto_rawDescOnce sync.Once

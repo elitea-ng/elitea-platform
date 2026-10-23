@@ -16,8 +16,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
 const (

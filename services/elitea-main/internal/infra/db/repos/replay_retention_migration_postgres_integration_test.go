@@ -7,8 +7,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

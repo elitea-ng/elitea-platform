@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 )
 
 // The remote toolkit route runs a platform MCP tool through a bridge the

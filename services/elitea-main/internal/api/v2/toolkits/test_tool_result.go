@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 

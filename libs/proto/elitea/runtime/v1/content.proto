@@ -4,7 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/toolkit.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // RuntimeContentService is elitea-main's runtime content plane (#1359 U4):
 // the claim-bound data a running execution reads and writes, and the sandbox

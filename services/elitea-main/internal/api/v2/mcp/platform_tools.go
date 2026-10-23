@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // ErrNotPlatformTool is a toolkit type that names no internal builder, or a

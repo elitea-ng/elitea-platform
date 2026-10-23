@@ -18,7 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // degradedRealtimeFixture is the realtime fixture with the real degraded store

@@ -16,11 +16,11 @@ import (
 
 	"errors"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/coreos/go-oidc/v3/oidc"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"

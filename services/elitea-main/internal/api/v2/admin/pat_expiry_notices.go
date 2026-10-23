@@ -40,7 +40,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
 )
 
 // PATExpiryNotifier is the one method this route needs.

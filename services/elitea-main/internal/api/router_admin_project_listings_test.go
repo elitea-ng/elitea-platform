@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 // The project MEMBER listing and the project ROLE listing under /admin (#313).

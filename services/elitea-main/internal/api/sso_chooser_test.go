@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 type chooserProviderStore map[identityproviders.Kind]identityproviders.Provider

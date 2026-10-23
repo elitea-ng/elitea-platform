@@ -1211,7 +1211,7 @@ const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"2TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED\x10\x05\x12.\n" +
 	"*TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED\x10\x06\x12.\n" +
 	"*TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED\x10\a\x121\n" +
-	"-TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED\x10\bBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"-TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED\x10\bBTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_toolkit_proto_rawDescOnce sync.Once

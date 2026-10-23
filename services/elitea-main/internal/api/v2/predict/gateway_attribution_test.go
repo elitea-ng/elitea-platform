@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 // captureIdentity runs one completion and returns the identity headers the

@@ -3,8 +3,8 @@ package storage
 import (
 	"context"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 )
 
 // CodeCallOriginalIntent is an owning journal relation, not an output proof.

@@ -25,8 +25,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	gatewayv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	gatewayv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/gateway/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 // Realtime serves one realtime session. It is not counted by Drain: a session

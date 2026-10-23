@@ -31,11 +31,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // scriptedRemoverFunc is an application engine with nothing behind it: its

@@ -15,8 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth/grpcauthtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth/grpcauthtest"
 )
 
 // A hand-written service so the test does not depend on any product proto:

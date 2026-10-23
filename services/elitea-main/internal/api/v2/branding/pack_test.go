@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 )
 
 // validPackMap returns a fully-populated, schema-valid brand pack as a

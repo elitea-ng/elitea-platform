@@ -21,7 +21,7 @@ package analytics
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -29,7 +29,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 func TestCostReadsShareOneSnapshotAcrossTheAggregateAndTheListing(t *testing.T) {

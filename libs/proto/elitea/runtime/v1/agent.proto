@@ -4,7 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // AgentExecutionCommandV1 is shared by the two current execution semantics:
 // agent.execute.application.v1 and agent.execute.adhoc.v1. The capability ID

@@ -57,8 +57,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 // IdentityProviderSecretStore is the vault seam this surface seals through.

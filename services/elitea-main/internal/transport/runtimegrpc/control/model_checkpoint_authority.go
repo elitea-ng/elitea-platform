@@ -2,8 +2,8 @@ package control
 
 import (
 	"context"
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 func (s *Server) AuthorizeAgentModelCheckpoint(ctx context.Context, request *runtimev1.AuthorizeAgentModelCheckpointRequestV1) (*runtimev1.AuthorizeAgentModelCheckpointResponseV1, error) {

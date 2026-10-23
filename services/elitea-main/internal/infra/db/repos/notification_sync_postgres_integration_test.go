@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
 )
 
 func TestNotificationChangesArePerUserAndCarryMarkSeenAndDeletes(t *testing.T) {

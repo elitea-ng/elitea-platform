@@ -7,10 +7,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
+	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
 
 // mcpAuthorizationEgressGuard returns the guard the MCP OAuth and DCR proxies

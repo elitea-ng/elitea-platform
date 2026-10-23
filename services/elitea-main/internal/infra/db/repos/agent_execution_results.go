@@ -11,10 +11,10 @@ import (
 	"reflect"
 	"strings"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // ToolkitCallToolEnvelopePreparer signs a reference command without publishing it.

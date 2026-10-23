@@ -10,9 +10,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // Truthy is Python's truth, because the legacy merge branches on `if value`.

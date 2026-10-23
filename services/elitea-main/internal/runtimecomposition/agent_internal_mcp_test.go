@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/stretchr/testify/require"
 )
 

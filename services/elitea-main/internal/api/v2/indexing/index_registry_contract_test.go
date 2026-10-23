@@ -17,15 +17,15 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 type registryMemoryStore struct {

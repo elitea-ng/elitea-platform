@@ -24,7 +24,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // The two audio methods trackingRouter needs. Without them the embedded

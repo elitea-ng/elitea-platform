@@ -3,9 +3,9 @@ package folders
 import (
 	"context"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // activityWire is a row's `activity` (client contract 1.12): the state and

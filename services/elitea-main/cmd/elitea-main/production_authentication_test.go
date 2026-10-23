@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
 )
 
 // configurationsWritePath is the credential CREATE route of the Configurations

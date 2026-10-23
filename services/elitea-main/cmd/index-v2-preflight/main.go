@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/cutover"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

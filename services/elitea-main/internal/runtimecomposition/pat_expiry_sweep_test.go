@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
 )
 
 type recordingPATExpiryRunner struct {

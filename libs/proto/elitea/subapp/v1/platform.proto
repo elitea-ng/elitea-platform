@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package elitea.subapp.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1";
 
 // PlatformOperations are the operations a sub-application host (ADR-0023)
 // offers the platform itself, as opposed to the toolkit tools it offers users

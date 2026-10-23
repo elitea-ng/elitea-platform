@@ -29,8 +29,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,8 +41,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const pinnedListingDatabaseURL = "ELITEA_TEST_DATABASE_URL"

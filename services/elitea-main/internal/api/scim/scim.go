@@ -65,7 +65,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
 // BasePath is where this tree is mounted, and the value that appears in every
@@ -205,7 +205,7 @@ func (h *Handler) ServiceProviderConfig(w http.ResponseWriter, _ *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"schemas": []string{schemaProviderCfg},
 		"documentationUri": "https://" +
-			"github.com/EliteaAI/elitea-platform/blob/main/services/elitea-main/internal/api/scim/scim.go",
+			"github.com/elitea-ng/elitea-platform/blob/main/services/elitea-main/internal/api/scim/scim.go",
 		"patch":          map[string]any{"supported": true},
 		"bulk":           map[string]any{"supported": false, "maxOperations": 0, "maxPayloadSize": 0},
 		"filter":         map[string]any{"supported": true, "maxResults": maxPageSize},

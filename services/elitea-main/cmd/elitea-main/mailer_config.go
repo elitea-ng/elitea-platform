@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
 )
 
 // mailerConfig is the ENVIRONMENT layer of outbound e-mail.

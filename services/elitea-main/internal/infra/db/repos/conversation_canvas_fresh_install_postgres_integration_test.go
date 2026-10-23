@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // The canvas half of the same fresh-install question the sibling file asks of

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 func codeMaterialDeployment(t *testing.T) deployment {

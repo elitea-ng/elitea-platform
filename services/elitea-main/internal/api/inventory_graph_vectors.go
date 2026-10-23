@@ -17,7 +17,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
 // InventoryGraphVectors deletes one Inventory toolkit's graph vectors.

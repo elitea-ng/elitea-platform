@@ -84,8 +84,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // importedSkill is one skill that the import or the fork created, addressed the

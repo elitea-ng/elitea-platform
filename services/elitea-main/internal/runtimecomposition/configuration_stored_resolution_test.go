@@ -15,8 +15,8 @@ import (
 	"reflect"
 	"testing"
 
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 func TestCurrentStoredConfigurationResolutionUnsecretsTheOwnerThenExpands(t *testing.T) {

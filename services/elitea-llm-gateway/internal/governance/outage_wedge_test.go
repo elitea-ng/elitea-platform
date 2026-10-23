@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/sony/gobreaker/v2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
 )
 
 // outage_wedge_test.go is the end-to-end reproduction of issue #515 and the

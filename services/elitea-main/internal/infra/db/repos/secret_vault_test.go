@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )

@@ -6,8 +6,8 @@ import (
 	"math"
 	"time"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 // Metadata is the `metadata` object of one list element: the keys index_meta's

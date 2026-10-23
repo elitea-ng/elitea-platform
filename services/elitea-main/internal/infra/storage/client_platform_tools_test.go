@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 const platformApplications = "mcp_elitea_internal_applications"

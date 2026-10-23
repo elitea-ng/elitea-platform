@@ -9,8 +9,8 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // audioOnlyPricedEstimator prices the ONE audio basis it is given from the

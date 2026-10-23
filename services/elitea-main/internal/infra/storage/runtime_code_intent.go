@@ -8,16 +8,16 @@ import (
 	"errors"
 	"math"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 type OriginalCodeIntentStore interface {

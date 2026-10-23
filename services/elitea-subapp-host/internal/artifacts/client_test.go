@@ -28,8 +28,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
 // fakeService stands in for elitea-main's ArtifactObjectService: bearer

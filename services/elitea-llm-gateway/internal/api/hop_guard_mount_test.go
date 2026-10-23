@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 // TestRouterMountsHopGuardOnEveryRoute walks the router with a request that

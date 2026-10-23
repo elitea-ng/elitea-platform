@@ -43,8 +43,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/httpcache"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicorigin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/httpcache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicorigin"
 )
 
 // PackJSONPath is the route the brand pack JSON is served at.

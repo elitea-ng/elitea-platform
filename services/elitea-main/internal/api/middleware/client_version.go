@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/clientversion"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/clientversion"
 )
 
 // The minimum client version gate (ADR-0025 decision 5, WP4).

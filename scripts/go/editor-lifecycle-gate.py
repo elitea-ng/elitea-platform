@@ -5,7 +5,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-PACKAGE = "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+PACKAGE = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 LIFECYCLE_SCENARIOS = (
     "TestEditorLifecyclePostgres/atomic_scope_immutable_identity_and_saved_version",
     "TestEditorLifecyclePostgres/participant_failure_rolls_back_atomic_initial_scope",

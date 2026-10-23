@@ -365,8 +365,8 @@ mod tests {
     fn remote_urls_name_their_repository() {
         for (url, want) in [
             (
-                "https://github.com/EliteaAI/elitea-platform.git",
-                "eliteaai/elitea-platform",
+                "https://github.com/elitea-ng/elitea-platform.git",
+                "elitea-ng/elitea-platform",
             ),
             ("https://github.com/o/r", "o/r"),
             ("git@github.com:o/r.git", "o/r"),

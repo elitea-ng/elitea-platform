@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // The Rust-native Inventory engine (ADR-0027) behind THIS host's own sidecar

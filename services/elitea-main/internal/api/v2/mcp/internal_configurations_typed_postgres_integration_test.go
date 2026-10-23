@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	configapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	configapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	configapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	configapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 func TestInternalTypedConfigurationPostgresDefaultAndSharedScope(t *testing.T) {

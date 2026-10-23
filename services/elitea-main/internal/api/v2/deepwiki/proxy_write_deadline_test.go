@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 )
 
 // The DeepWiki hop clears the per-connection write deadline before streaming.

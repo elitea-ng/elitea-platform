@@ -18,12 +18,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
-	deepwikirun "github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	inventoryrun "github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
+	deepwikirun "github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	inventoryrun "github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // RunnerFactory builds one runner for an application from its settings.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
 // wrappedWriter reproduces the shape every response on the router carries:

@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
 )
 
 // weightSumEpsilon bounds float error when re-verifying that a routing rule's

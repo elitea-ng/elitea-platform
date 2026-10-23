@@ -35,7 +35,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 )
 
 // newSDKArtifactTestRouter mounts the alias exactly as production mounts it

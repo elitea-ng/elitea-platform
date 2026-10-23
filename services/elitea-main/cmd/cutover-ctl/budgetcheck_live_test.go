@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 // TestBudgetCheckLive_ProbeSignsTheFixtureIdentity pins the probe identity to

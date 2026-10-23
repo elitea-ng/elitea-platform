@@ -835,7 +835,7 @@ const file_elitea_runtime_v1_workspace_run_proto_rawDesc = "" +
 	"\x13WorkspaceRunService\x12r\n" +
 	"\x11StartWorkspaceRun\x12-.elitea.runtime.v1.StartWorkspaceRunRequestV1\x1a..elitea.runtime.v1.StartWorkspaceRunResponseV1\x12o\n" +
 	"\x10ExecWorkspaceRun\x12*.elitea.runtime.v1.WorkspaceRunExecInputV1\x1a+.elitea.runtime.v1.WorkspaceRunExecOutputV1(\x010\x01\x12x\n" +
-	"\x13DestroyWorkspaceRun\x12/.elitea.runtime.v1.DestroyWorkspaceRunRequestV1\x1a0.elitea.runtime.v1.DestroyWorkspaceRunResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x13DestroyWorkspaceRun\x12/.elitea.runtime.v1.DestroyWorkspaceRunRequestV1\x1a0.elitea.runtime.v1.DestroyWorkspaceRunResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_workspace_run_proto_rawDescOnce sync.Once

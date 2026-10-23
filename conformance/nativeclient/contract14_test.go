@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/client"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/client"
 )
 
 // ── 10. Client contract 1.4, over a native access token ────────────────────

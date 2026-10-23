@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 const (

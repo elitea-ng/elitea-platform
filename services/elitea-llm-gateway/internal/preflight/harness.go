@@ -32,12 +32,12 @@ import (
 
 	"github.com/sony/gobreaker/v2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/governance"
-	natspkg "github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/governance"
+	natspkg "github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 	"github.com/maximhq/bifrost/core/schemas"
 )
 

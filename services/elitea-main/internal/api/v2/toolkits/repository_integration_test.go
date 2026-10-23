@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 func TestToolkitRepositoryLifecycleAgainstPostgres(t *testing.T) {

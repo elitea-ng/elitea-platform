@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
+	vectorv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

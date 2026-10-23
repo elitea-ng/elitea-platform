@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // fakeModelProvider stands in for a provider's completion route. It records

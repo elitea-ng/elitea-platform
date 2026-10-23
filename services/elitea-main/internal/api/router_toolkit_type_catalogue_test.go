@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
 // GET /elitea_core/toolkits/prompt_lib/{projectID} is the toolkit TYPE

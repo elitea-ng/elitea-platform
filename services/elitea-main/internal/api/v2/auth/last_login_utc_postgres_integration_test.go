@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 )
 
 func TestPostgresLoginStoresLastLoginAsTheUTCWallClock(t *testing.T) {

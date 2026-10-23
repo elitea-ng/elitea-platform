@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 )
 
 // standardWebhookHeaders is what a GitLab webhook with a SIGNING TOKEN sends:

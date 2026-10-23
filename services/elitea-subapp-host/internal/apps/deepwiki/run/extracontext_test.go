@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
 )
 
 func extraFile(name, content string) map[string]any {

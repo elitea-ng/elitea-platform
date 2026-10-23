@@ -12,10 +12,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore/workspacestoretest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore/workspacestoretest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // workspaceThreadFixture is one Local work thread of project 1.

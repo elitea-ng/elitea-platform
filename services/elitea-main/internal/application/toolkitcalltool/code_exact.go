@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	codeplatform "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	codeplatform "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"strconv"
 )
 

@@ -7,7 +7,7 @@
 package configv1
 
 import (
-	v1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	v1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -716,7 +716,7 @@ const file_elitea_config_v1_capability_manifest_proto_rawDesc = "" +
 	"\x1bsdk_framework_compatibility\x18\x04 \x01(\v2-.elitea.config.v1.SDKFrameworkCompatibilityV1R\x19sdkFrameworkCompatibility\x12I\n" +
 	"\fcapabilities\x18\x05 \x03(\v2%.elitea.config.v1.RuntimeCapabilityV1R\fcapabilities\x12W\n" +
 	"\x13runtime_constraints\x18\x06 \x01(\v2&.elitea.config.v1.RuntimeConstraintsV1R\x12runtimeConstraints\x12Z\n" +
-	"\x0flimits_profiles\x18\a \x01(\v21.elitea.config.v1.RuntimeLimitsProfileReferenceV1R\x0elimitsProfilesJ\x04\b\b\x10\x10BQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/config/v1;configv1b\x06proto3"
+	"\x0flimits_profiles\x18\a \x01(\v21.elitea.config.v1.RuntimeLimitsProfileReferenceV1R\x0elimitsProfilesJ\x04\b\b\x10\x10BRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/config/v1;configv1b\x06proto3"
 
 var (
 	file_elitea_config_v1_capability_manifest_proto_rawDescOnce sync.Once

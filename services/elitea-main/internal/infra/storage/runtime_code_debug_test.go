@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 func debugFixture(t *testing.T) (CodeDebugAdmission, []byte) {

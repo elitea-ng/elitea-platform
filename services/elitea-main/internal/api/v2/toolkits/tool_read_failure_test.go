@@ -27,9 +27,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // missingSchemaProjectIDLegacy names a project whose tenant schema `p_4242` was

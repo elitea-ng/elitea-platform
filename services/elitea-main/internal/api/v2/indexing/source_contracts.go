@@ -3,7 +3,7 @@ package indexing
 import (
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // These current-baseline contracts remain source-only until their application,

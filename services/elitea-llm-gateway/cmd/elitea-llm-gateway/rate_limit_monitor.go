@@ -22,8 +22,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/server"
 )
 
 // rateLimitProbeInterval is how often the monitor re-dials (while unbound) or

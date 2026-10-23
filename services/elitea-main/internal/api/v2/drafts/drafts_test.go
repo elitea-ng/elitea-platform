@@ -20,10 +20,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
-	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
+	v2predict "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // stubCompleter stands in for the gateway hop. It records the request so a test

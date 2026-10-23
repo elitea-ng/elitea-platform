@@ -10,9 +10,9 @@ import (
 	"slices"
 	"testing"
 
-	generated "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/generated"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	generated "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/generated"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesideLegacyKeys is the

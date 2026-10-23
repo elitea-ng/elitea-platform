@@ -28,7 +28,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 )
 
 // ---- the decision -----------------------------------------------------------

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 )
 
 // forwarded is the toolkit-level configuration the provider would receive.

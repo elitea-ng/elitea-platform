@@ -12,8 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authstatetest"
 )
 
 func TestNewPostgresAdmitterRejectsIncompleteConfiguration(t *testing.T) {

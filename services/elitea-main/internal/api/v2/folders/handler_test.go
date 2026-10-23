@@ -12,8 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // mockFolderRepo implements folders.Repository.

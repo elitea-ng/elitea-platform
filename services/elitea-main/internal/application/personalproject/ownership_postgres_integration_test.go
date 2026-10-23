@@ -13,7 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 )
 
 func seedProjectRow(t *testing.T, pool *pgxpool.Pool, name string, ownerID int64) string {

@@ -35,7 +35,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // The budgets, in characters. Total across every attached file, and per file.

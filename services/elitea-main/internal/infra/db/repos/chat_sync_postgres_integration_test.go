@@ -15,8 +15,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
 )
 
 // backdate moves a row's sync stamp into the past. The stamp trigger rewrites

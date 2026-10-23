@@ -1535,7 +1535,7 @@ const file_elitea_runtime_v1_artifact_object_proto_rawDesc = "" +
 	"\tGetObject\x12-.elitea.runtime.v1.ArtifactGetObjectRequestV1\x1a..elitea.runtime.v1.ArtifactGetObjectResponseV10\x01\x12l\n" +
 	"\tPutObject\x12-.elitea.runtime.v1.ArtifactPutObjectRequestV1\x1a..elitea.runtime.v1.ArtifactPutObjectResponseV1(\x01\x12a\n" +
 	"\x06Delete\x12*.elitea.runtime.v1.ArtifactDeleteRequestV1\x1a+.elitea.runtime.v1.ArtifactDeleteResponseV1\x12p\n" +
-	"\vDeleteBatch\x12/.elitea.runtime.v1.ArtifactDeleteBatchRequestV1\x1a0.elitea.runtime.v1.ArtifactDeleteBatchResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\vDeleteBatch\x12/.elitea.runtime.v1.ArtifactDeleteBatchRequestV1\x1a0.elitea.runtime.v1.ArtifactDeleteBatchResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_artifact_object_proto_rawDescOnce sync.Once

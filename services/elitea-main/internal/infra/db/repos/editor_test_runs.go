@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5"
 )
 

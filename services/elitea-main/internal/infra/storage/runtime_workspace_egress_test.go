@@ -16,9 +16,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egresstoken"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egresstoken"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 )
 
 func egressServer(t *testing.T, policies *fakePolicies, egress workspaceruntime.Egress) *ContentServer {

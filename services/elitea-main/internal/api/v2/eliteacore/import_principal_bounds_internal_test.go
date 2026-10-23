@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // importPrincipalUserID narrows an int64 owner id to `int`. `int` is 32 bits on

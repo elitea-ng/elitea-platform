@@ -16,14 +16,14 @@ import (
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/pkg/ssewriter"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/overhead"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/pkg/ssewriter"
 )
 
 // Handler serves the /llm dialect surface. It decodes OpenAI/Anthropic wire

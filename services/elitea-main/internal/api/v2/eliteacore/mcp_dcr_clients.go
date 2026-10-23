@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/go-chi/chi/v5"
 )
 

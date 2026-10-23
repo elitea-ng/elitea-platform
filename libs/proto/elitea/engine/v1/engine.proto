@@ -21,7 +21,7 @@ syntax = "proto3";
 
 package elitea.engine.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1;enginev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1;enginev1";
 
 // EngineService is served by the engine sidecar on its socket.
 service EngineService {

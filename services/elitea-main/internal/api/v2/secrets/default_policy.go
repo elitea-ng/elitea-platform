@@ -6,7 +6,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

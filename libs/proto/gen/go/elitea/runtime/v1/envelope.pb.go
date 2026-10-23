@@ -238,7 +238,7 @@ const file_elitea_runtime_v1_envelope_proto_rawDesc = "" +
 	"\x12SignatureProfileV1\x12$\n" +
 	" SIGNATURE_PROFILE_V1_UNSPECIFIED\x10\x00\x12.\n" +
 	"*SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256\x10\x01\x12 \n" +
-	"\x1cSIGNATURE_PROFILE_V1_ED25519\x10\x02BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x1cSIGNATURE_PROFILE_V1_ED25519\x10\x02BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_envelope_proto_rawDescOnce sync.Once

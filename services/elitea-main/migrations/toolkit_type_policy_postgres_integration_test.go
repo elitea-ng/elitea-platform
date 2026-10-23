@@ -22,7 +22,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 )
 
 // THE HEADLINE PROPERTY. A migrated database with no rows must serve the FULL

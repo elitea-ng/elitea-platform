@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	enginev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
 )
 
 // What an engine can do, from the engine itself.

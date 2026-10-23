@@ -14,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	recovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	recovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 const ResultAudience = "elitea.runtime.code-sandbox-whole-result.v1"

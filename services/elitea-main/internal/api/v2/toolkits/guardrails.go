@@ -37,7 +37,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 // GuardrailPolicySource resolves the live guardrails policy.

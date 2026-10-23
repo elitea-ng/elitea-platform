@@ -90,8 +90,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // ErrProjectNotFound reports a delete for a project id that has no row.

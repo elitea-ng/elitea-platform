@@ -16,7 +16,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
 )
 
 const wikiHistoryUser int64 = 4242

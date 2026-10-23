@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
 
 // memorySessions implements browsersession.Store for these tests.

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 
-	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	v2artifacts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 )
 
 // The S3-shaped bucket listing is the one artifact route that names its

@@ -45,7 +45,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 )
 
 // Environment variable names.

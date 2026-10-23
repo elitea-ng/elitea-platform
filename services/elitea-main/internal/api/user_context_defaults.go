@@ -3,8 +3,8 @@ package api
 import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // newUserContextDefaults wires the conversation routes' middle resolution tier

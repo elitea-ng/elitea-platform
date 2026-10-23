@@ -2,7 +2,7 @@ package migrate
 
 import (
 	"crypto/sha256"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"testing"
 )
 

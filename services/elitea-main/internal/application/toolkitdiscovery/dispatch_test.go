@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"testing"
 	"time"
 )

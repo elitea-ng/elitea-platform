@@ -1198,7 +1198,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"+AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED\x10\x01\x121\n" +
 	"-AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL\x10\x02\x125\n" +
 	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH\x10\x03\x125\n" +
-	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_agent_proto_rawDescOnce sync.Once

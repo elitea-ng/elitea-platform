@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
-	transport "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mailer"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	transport "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mailer"
 )
 
 type brandStub struct{ pack *v2branding.Pack }

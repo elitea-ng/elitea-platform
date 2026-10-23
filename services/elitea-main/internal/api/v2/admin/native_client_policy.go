@@ -5,8 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/clientversion"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/clientversion"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // The `native_client_policy` Configuration section (ADR-0025 decision 5,

@@ -23,12 +23,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
 )
 
 // billingCtxTimeout is the deadline for the background billing context used

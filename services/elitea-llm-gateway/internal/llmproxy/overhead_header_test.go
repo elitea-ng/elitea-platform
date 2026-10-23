@@ -13,7 +13,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 )
 
 // resolveDelay stands for the Account's Postgres read plus the Fernet decrypt.

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
 const minTransactionLifetime = time.Second

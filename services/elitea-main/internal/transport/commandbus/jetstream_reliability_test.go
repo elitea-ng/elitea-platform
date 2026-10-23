@@ -12,8 +12,8 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn/natstest"
 )
 
 const natsReliabilityRoundsEnv = "ELITEA_RUNTIME_NATS_RELIABILITY_ROUNDS"

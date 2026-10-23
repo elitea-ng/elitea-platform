@@ -1,10 +1,10 @@
 package main
 
 import (
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // apiGroupAuthConfig composes the credential set that api.NewRouter applies to

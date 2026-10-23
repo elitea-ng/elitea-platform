@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	draftsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
-	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	draftsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
+	skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // This test uses PostgreSQL and an in-process MCP server with a fake LLM.

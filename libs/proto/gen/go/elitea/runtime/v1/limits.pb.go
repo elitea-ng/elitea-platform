@@ -214,7 +214,7 @@ const file_elitea_runtime_v1_limits_proto_rawDesc = "" +
 	"\x16claim_lease_ttl_millis\x18\f \x01(\x04R\x13claimLeaseTtlMillis\x12B\n" +
 	"\x1emax_lease_poll_interval_millis\x18\r \x01(\x04R\x1amaxLeasePollIntervalMillis\x123\n" +
 	"\x16max_grpc_request_bytes\x18\x0e \x01(\x04R\x13maxGrpcRequestBytes\x125\n" +
-	"\x17max_grpc_response_bytes\x18\x0f \x01(\x04R\x14maxGrpcResponseBytesJ\x04\b\x10\x10 BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x17max_grpc_response_bytes\x18\x0f \x01(\x04R\x14maxGrpcResponseBytesJ\x04\b\x10\x10 BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_limits_proto_rawDescOnce sync.Once

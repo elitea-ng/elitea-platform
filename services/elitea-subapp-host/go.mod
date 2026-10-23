@@ -1,11 +1,11 @@
-module github.com/EliteaAI/elitea-platform/services/elitea-subapp-host
+module github.com/elitea-ng/elitea-platform/services/elitea-subapp-host
 
 go 1.26.9
 
-replace github.com/EliteaAI/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
+replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
 
 require (
-	github.com/EliteaAI/elitea-platform/libs/proto/gen/go v0.0.0
+	github.com/elitea-ng/elitea-platform/libs/proto/gen/go v0.0.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/nats-io/nats-server/v2 v2.12.6
 	google.golang.org/grpc v1.83.2
@@ -24,7 +24,7 @@ require (
 )
 
 require (
-	github.com/EliteaAI/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -37,4 +37,4 @@ require (
 	google.golang.org/protobuf v1.36.12
 )
 
-replace github.com/EliteaAI/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
+replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn

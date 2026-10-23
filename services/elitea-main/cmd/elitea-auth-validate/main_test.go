@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 func TestRunValidatesResolvedFormSnapshotWithoutOutput(t *testing.T) {

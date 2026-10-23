@@ -19,15 +19,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
-	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // scriptedResolver answers each lookup from a list, one answer per call. The

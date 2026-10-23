@@ -34,8 +34,8 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/spi"
 	"github.com/go-chi/chi/v5"
 )
 

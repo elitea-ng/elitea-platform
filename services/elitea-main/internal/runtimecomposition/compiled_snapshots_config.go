@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 const compiledSnapshotConfigPrefix = "ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_"

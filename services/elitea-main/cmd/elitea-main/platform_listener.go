@@ -10,12 +10,12 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/artifactgrpc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/internaltoolgrpc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/modelgrpc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/artifactgrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/internaltoolgrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/modelgrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 // The platform listener (#1359 D1) is elitea-main's internal gRPC port

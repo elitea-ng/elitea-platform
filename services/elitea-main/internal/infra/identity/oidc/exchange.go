@@ -15,7 +15,7 @@ import (
 	coreoidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
 const (

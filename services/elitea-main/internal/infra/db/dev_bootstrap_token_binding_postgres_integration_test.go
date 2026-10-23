@@ -23,7 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -31,7 +31,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
 
 const devBootstrapTokenUUID = "9d7c1f1e-2b3a-4c5d-8e9f-0a1b2c3d4e5f"

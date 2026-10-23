@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // stubRepo answers every method with the same outcome, so one case covers the

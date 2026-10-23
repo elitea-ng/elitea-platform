@@ -31,18 +31,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
-	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
-	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
+	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
+	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2social "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 // publicByDesign lists the routes that answer without credentials, each with

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 func TestApplicationsRepoPostgres_DeletePreservesImportedNonCascadingSchema(t *testing.T) {

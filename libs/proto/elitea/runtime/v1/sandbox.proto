@@ -6,7 +6,7 @@ import "elitea/runtime/v1/common.proto";
 import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/errors.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // Main checks the original worker's verified mTLS session and active execution
 // fence. The audience is an exact configured supervisor identity, not a URL.

@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-egress-proxy/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-egress-proxy/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-egress-proxy/internal/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy/internal/proxy"
 )
 
 func main() {

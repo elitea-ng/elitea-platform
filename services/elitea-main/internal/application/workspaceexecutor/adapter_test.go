@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 const (

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 )
 
 // Probe opens one connection the way any client does — read the server's

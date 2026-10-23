@@ -1,6 +1,6 @@
 package admin
 
-import secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+import secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 
 func defaultSecretsSection() map[string]any {
 	return map[string]any{

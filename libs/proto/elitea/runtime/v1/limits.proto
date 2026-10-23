@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package elitea.runtime.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // ProtocolLimitsV1 is selected by revision during admission. Every producer
 // measures the complete encoded representation before transport, and every

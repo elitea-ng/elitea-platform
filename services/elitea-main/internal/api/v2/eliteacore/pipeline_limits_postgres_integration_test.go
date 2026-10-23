@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 const pipelineLimitMarker = "LIMIT-MARKER-DO-NOT-ECHO"

@@ -3,7 +3,7 @@ package run_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
 )
 
 // The transport an invocation carries is its bearer and its project, read in

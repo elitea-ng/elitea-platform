@@ -11,7 +11,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	specfiles "github.com/EliteaAI/elitea-platform/services/elitea-main/api/openapi"
+	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
 )
 
 // chiParam matches a chi path parameter such as {projectID}.

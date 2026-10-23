@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 // The platform listener used to serve the public HTTP handler with the

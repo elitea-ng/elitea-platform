@@ -50,7 +50,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
 // SCIMGroupBindingStore is the store seam.

@@ -92,7 +92,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // adminVaultKey is the `centry.secrets_key` / `centry.secrets_data` row id of

@@ -32,7 +32,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 )
 
 // budgetProbeTimeout bounds the startup probe. A database that does not answer

@@ -497,7 +497,7 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"*WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC\x10\t\x12,\n" +
 	"(WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL\x10\n" +
 	"\x12/\n" +
-	"+WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ\x10\vBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"+WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ\x10\vBTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_command_proto_rawDescOnce sync.Once

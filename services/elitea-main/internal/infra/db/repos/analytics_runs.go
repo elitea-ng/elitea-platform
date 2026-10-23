@@ -64,7 +64,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // The ledger NAMES of the migrations whose apply time bounds what a run read

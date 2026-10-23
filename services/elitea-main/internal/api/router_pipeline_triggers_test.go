@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // pipelineTriggerRouter builds the production router with the trigger handler

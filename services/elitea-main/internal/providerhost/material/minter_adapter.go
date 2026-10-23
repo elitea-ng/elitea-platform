@@ -14,7 +14,7 @@ import (
 	"context"
 	"time"
 
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 )
 
 type authCallbackMinter struct {

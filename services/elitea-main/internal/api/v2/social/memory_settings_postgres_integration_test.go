@@ -36,8 +36,8 @@ import (
 	"strconv"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 

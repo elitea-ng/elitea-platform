@@ -50,7 +50,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // projectUserActivityRow is one member's event count. `user_email` is nullable

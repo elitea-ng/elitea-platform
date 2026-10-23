@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	notificationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 func TestInternalNotificationLifecyclePreservesGlobalUserScopeAndIdempotentSeen(t *testing.T) {

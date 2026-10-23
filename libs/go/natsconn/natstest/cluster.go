@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 )
 
 // EnvSecureHAConf names the nats.conf rendered from the chart's HA profile

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
 )
 
 var ErrNotificationNotFound = errors.New("notification not found")

@@ -22,8 +22,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 )
 
 const interruptContractFixtures = "../../../../../../libs/jsonschema/runtime/v1/fixtures"

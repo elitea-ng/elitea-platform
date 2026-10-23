@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 )
 
 // UserContextDefaultsRepo reads one user's context-management defaults off the

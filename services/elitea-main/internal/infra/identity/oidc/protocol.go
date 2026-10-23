@@ -25,9 +25,9 @@ import (
 	coreoidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
 const (

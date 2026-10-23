@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 // oneDirectoryEnvironment is validEnvironment with every file path moved under

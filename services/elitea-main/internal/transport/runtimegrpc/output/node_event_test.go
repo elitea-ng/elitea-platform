@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 	"google.golang.org/protobuf/proto"
 )
 

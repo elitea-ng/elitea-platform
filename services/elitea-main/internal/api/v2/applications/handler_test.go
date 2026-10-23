@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type mockRepo struct {

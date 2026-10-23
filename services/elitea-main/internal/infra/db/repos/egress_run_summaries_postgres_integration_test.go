@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit/storetest"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit/storetest"
 )
 
 func newEgressSummaries(t *testing.T) *EgressRunSummaries {

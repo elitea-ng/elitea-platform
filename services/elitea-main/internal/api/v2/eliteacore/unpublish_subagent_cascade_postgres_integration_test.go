@@ -34,7 +34,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 // cascadeInstructions is long enough to clear the pre-publish check's

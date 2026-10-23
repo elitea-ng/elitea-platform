@@ -53,7 +53,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // gatewayAPIEdgeFiles are the checked-in Gateway-API manifests that serve a

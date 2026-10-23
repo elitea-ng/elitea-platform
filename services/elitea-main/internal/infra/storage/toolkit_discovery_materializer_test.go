@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"testing"
 )
 

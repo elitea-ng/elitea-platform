@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
 func importHarness(t *testing.T) *harness {

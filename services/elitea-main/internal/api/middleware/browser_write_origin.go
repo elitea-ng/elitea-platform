@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // BrowserWriteOrigin refuses a state-changing request that a browser cookie

@@ -56,10 +56,10 @@ import (
 	"testing"
 	"time"
 
-	v2budgets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/budgets"
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	v2budgets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/budgets"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The permissions are read from the production constants, not copied, so a

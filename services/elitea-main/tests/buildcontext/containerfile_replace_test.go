@@ -7,7 +7,7 @@
 // libs/go/egresslib, and added the relative `replace` both modules need. Both
 // modules compiled, `task test` was green, and every image build in CI died:
 //
-//	go: github.com/EliteaAI/elitea-platform/libs/go/egresslib@v0.0.0-...
+//	go: github.com/elitea-ng/elitea-platform/libs/go/egresslib@v0.0.0-...
 //	(replaced by ../../libs/go/egresslib): reading /src/libs/go/egresslib/go.mod:
 //	open /src/libs/go/egresslib/go.mod: no such file or directory
 //

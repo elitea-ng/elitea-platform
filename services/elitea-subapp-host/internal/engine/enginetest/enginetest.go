@@ -13,7 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	enginev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
 )
 
 // Serve runs server on a fresh Unix socket until the test ends and returns

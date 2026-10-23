@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 )
 
 // CodeBrokerPolicy is deployment-owned. Authored Code selects only a boolean.

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	enginev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // A fake sidecar on a Unix socket: it records the request, streams the

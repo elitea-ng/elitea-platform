@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/nativepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 type stubNativeClients []nativeauth.Client

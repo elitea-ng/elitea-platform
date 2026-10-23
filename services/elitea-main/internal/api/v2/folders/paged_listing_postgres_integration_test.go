@@ -31,8 +31,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // pagedConversation is one row as the rail reads it.

@@ -55,7 +55,7 @@ has_typed_discovery_result() {
   local result_type use_case
 
   [ -f "$contract_file" ] || return 1
-  grep -qF 'discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"' "$file" || return 1
+  grep -qF 'discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"' "$file" || return 1
   grep -qE '^[[:space:]]*discovery[[:space:]]+discovery\.UseCase[[:space:]]*$' "$file" || return 1
   grep -qF 'result, err := h.discovery.AvailableTools(r.Context(), request)' <<<"$func_body" || return 1
   [ "$(grep -cE '(^|[^[:alnum:]_])result[[:space:]]*(,|:?=)' <<<"$func_body")" -eq 1 ] || return 1

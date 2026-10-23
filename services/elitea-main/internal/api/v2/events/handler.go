@@ -10,12 +10,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
 // EventSource is the seam the SSE handler consumes. It yields decoded events on

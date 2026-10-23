@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
-	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 )
 
 func TestRunAnalyticsRoutesRefuseWhenAnalyticsIsDisabled(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth/grpcauthtest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth/grpcauthtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 // The probe against a real platform listener: SERVING with a runtime-CA

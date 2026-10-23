@@ -114,8 +114,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // auditedSurfaces are the path prefixes an audit row is written for. Every

@@ -60,9 +60,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 // The default-mode roles 001_initial.sql seeds. The legacy matrix

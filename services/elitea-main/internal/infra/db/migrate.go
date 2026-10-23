@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 //go:embed migrations/*.sql

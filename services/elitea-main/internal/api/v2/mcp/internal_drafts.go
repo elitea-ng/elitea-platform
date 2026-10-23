@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	draftsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	draftsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type internalDraftOperation string

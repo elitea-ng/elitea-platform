@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 // formSingle parses an RFC 6749 form body: urlencoded only, bounded, and no

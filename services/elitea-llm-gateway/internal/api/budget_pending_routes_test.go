@@ -22,7 +22,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 // countingRouter counts every provider dispatch, whatever the dialect.

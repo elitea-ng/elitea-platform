@@ -6,7 +6,7 @@ import (
 	"errors"
 	"math"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 var (

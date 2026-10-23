@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // The dependency that makes an empty database unmigratable without this file

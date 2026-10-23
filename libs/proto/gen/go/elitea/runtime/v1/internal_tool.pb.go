@@ -734,7 +734,7 @@ const file_elitea_runtime_v1_internal_tool_proto_rawDesc = "" +
 	"\x13InternalToolService\x12h\n" +
 	"\tListTools\x12,.elitea.runtime.v1.InternalToolListRequestV1\x1a-.elitea.runtime.v1.InternalToolListResponseV1\x12f\n" +
 	"\bCallTool\x12,.elitea.runtime.v1.InternalToolCallRequestV1\x1a*.elitea.runtime.v1.InternalToolCallFrameV10\x01\x12o\n" +
-	"\rInvokeToolkit\x12..elitea.runtime.v1.InternalToolInvokeRequestV1\x1a,.elitea.runtime.v1.InternalToolInvokeFrameV10\x01BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\rInvokeToolkit\x12..elitea.runtime.v1.InternalToolInvokeRequestV1\x1a,.elitea.runtime.v1.InternalToolInvokeFrameV10\x01BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_internal_tool_proto_rawDescOnce sync.Once

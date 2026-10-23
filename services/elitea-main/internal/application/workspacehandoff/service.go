@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // ObjectEraser erases a thread's objects (*workspacestore.Service).

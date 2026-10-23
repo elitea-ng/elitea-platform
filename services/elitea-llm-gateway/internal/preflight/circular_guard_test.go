@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/preflight"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/preflight"
 )
 
 // TestCircularRoutingGuard_LoopContained is the §2.6 guard-#2 integration gate.

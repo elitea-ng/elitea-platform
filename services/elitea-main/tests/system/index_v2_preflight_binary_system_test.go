@@ -13,16 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn/natstest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
 const indexV2PreflightSystemTestOptIn = "ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST"

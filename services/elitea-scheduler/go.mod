@@ -1,14 +1,14 @@
-module github.com/EliteaAI/elitea-platform/services/elitea-scheduler
+module github.com/elitea-ng/elitea-platform/services/elitea-scheduler
 
 go 1.26.9
 
-replace github.com/EliteaAI/elitea-platform/libs/go/observability => ../../libs/go/observability
+replace github.com/elitea-ng/elitea-platform/libs/go/observability => ../../libs/go/observability
 
-replace github.com/EliteaAI/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
+replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
 
 require (
-	github.com/EliteaAI/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
-	github.com/EliteaAI/elitea-platform/libs/go/observability v0.0.0
+	github.com/elitea-ng/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/observability v0.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nats-io/nats.go v1.53.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0

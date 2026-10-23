@@ -18,10 +18,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 const (

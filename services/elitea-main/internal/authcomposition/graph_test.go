@@ -14,9 +14,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 func TestNewFormGraphComposesTheFormPlane(t *testing.T) {

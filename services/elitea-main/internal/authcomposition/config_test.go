@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
+	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	forwardapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 func TestParseAcceptsOneCompleteFormSnapshot(t *testing.T) {

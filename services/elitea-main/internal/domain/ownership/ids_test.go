@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // The point of the package: the two meanings are two TYPES, not two ints.

@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 const codeConsumerConfigLimit = 16 * 1024

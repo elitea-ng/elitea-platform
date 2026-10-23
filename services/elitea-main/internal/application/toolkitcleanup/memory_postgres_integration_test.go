@@ -19,8 +19,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
 type memoryCall struct {

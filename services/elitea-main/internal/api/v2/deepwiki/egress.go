@@ -10,7 +10,7 @@ package deepwiki
 // stays here is the NAME: one allowlist variable per app, so a deployment can
 // let DeepWiki clone from a host Inventory may not.
 
-import "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+import "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 
 // GitAllowlistEnv names the variable both halves of DeepWiki's control read.
 // One variable, because two would drift and the drift would only show at

@@ -17,7 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 )
 
 const (

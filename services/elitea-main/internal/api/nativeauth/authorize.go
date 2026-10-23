@@ -12,11 +12,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 var (
