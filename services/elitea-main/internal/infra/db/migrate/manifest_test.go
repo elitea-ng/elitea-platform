@@ -728,7 +728,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// provider_hub.provider_origin_registration.origin admits grpcs://host:port,
 	// the gRPC listener the facades' registrar now records (#1359). No data,
 	// no permission.
-	require.EqualValues(t, 171, Head(shared))
+	//
+	// 172: shared/0172_retire_legacy_admin_section_permissions.sql, the removal
+	// of `configuration.roles` and `projects.projects`, two legacy admin
+	// section names no code checks (the same rule as 0136). No new permission.
+	require.EqualValues(t, 172, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

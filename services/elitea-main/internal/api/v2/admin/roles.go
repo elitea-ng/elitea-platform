@@ -270,9 +270,10 @@ func catalogueFrom(granted []string) []string {
 // loses those sections after 0136 until it re-seeds its roles on restart.
 // The re-seeded rows are why this list also filters the catalogue.
 //
-// Shared migration 0136 deletes the rows. This list MUST equal the list in that
-// file; internal/api/router_permission_retired_gate_test.go checks both that,
-// and that no route gate checks any name here.
+// Shared migrations 0136 and 0172 delete the rows. This list MUST equal the
+// union of the lists in those files;
+// internal/api/router_permission_retired_gate_test.go checks both that, and
+// that no route gate checks any name here.
 var retiredPermissions = map[string]struct{}{
 	"projects":                              {},
 	"configuration":                         {},
@@ -289,6 +290,9 @@ var retiredPermissions = map[string]struct{}{
 	"models.promptlib_shared.public_collection.details": {},
 	"models.promptlib_shared.approve_collection.post":   {},
 	"models.promptlib_shared.reject_collection.delete":  {},
+	// 0172: the legacy admin module's Roles and Projects section names.
+	"configuration.roles": {},
+	"projects.projects":   {},
 }
 
 // RetiredPermissions returns the retired names, sorted. It exists for the
