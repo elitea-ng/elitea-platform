@@ -56,12 +56,20 @@ import (
 )
 
 func main() {
-	cfg := config.FromEnv()
+	cfg, cfgErr := config.FromEnv()
 
 	level := new(slog.LevelVar)
 	level.Set(parseLevel(cfg.LogLevel))
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
+
+	// A configuration value that must never fall back to a default is wrong:
+	// stop. Today that is LLM_BUDGET_EXPECTED_REPLICAS, which divides the
+	// NATS-down degraded cap (human decision, DECISIONS.md 2026-10-22).
+	if cfgErr != nil {
+		slog.Error("FATAL: refusing to start", "err", cfgErr)
+		os.Exit(1)
+	}
 
 	// The vault master key gate, before anything opens the database: the same
 	// rule elitea-main enforces (master_key_gate.go). A malformed key always
@@ -820,8 +828,9 @@ func logLoopBreakerMode(logger *slog.Logger, p llmproxy.LoopBreakerParams) {
 // GovernanceStore + cost.Calculator) and calls Start before returning.
 //
 // FIX #7: cfg.NATSDegradedCapUSD (float64 USD) is converted to int64 nano-USD
-// and set on failmode.Params.DegradedCapNano so the per-replica degraded cap is
-// enforced by the FSM (previously it was silently 0 — never set).
+// and set on failmode.Params.DegradedCapNano so the fleet-wide degraded cap is
+// enforced by the FSM (previously it was silently 0 — never set). Each replica
+// admits failmode.PerReplicaShare(cap, ExpectedReplicas) of it.
 func buildGovernance(
 	ctx context.Context,
 	cfg config.Config,
@@ -833,6 +842,12 @@ func buildGovernance(
 	var degradedCapNano int64
 	if cfg.NATSDegradedCapUSD > 0 {
 		degradedCapNano = int64(math.Round(cfg.NATSDegradedCapUSD * float64(failmode.NanoUSD)))
+	}
+	// The per-request reservation against the share, same conversion. 0 makes
+	// GovernanceStore use failmode.DefaultDegradedReservationNano.
+	var degradedReservationNano int64
+	if cfg.NATSDegradedReservationUSD > 0 {
+		degradedReservationNano = int64(math.Round(cfg.NATSDegradedReservationUSD * float64(failmode.NanoUSD)))
 	}
 
 	db := failmode.NewPoolDB(pool)
@@ -849,16 +864,20 @@ func buildGovernance(
 	rec := failmode.NewReconciler(db, counter, degraded, logger)
 
 	params := failmode.Params{
-		Mode:                failmode.FailMode(cfg.NATSFailMode),
-		PGFreshness:         cfg.PGFreshnessMin,
-		ExpectedReplicas:    cfg.ExpectedReplicas,
-		DegradedCapNano:     degradedCapNano,             // FIX #7
-		DegradedMaxDuration: cfg.NATSDegradedMaxDuration, // FIX #8 consumed by GovernanceStore
+		Mode:             failmode.FailMode(cfg.NATSFailMode),
+		PGFreshness:      cfg.PGFreshnessMin,
+		ExpectedReplicas: cfg.ExpectedReplicas,
+		DegradedCapNano:  degradedCapNano, // FIX #7
+		// DECISIONS.md 2026-10-22: what one admitted NATS-down request holds.
+		DegradedReservationNano: degradedReservationNano,
+		DegradedMaxDuration:     cfg.NATSDegradedMaxDuration, // FIX #8 consumed by GovernanceStore
 	}
 	if params.Mode == "" {
 		params.Mode = failmode.ModeTieredHybrid
 	}
 	if params.ExpectedReplicas < 1 {
+		// main refuses such a value at boot (expectedReplicas). This floor is a
+		// second guard for a caller that builds a Config by hand.
 		params.ExpectedReplicas = 1
 	}
 

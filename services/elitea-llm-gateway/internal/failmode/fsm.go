@@ -157,11 +157,14 @@ type Params struct {
 	Mode FailMode
 	// PGFreshness is the max snapshot age still trusted (§8.5, default 5m).
 	PGFreshness time.Duration
-	// ExpectedReplicas is N for the FRESH_NEAR per-replica cap (§8.5, default 1).
+	// ExpectedReplicas is N, the replica count that shares the fleet-wide
+	// degraded allowance: the FRESH_NEAR remaining budget and the FRESH_SAFE
+	// degraded cap are both divided by it (§8.5, default 1, PerReplicaShare).
 	ExpectedReplicas int
-	// DegradedCapNano is the per-replica degraded-window overspend cap in
-	// nano-USD (§8.5). Resolved from LLM_BUDGET_NATS_DEGRADED_CAP_USD or, when 0,
-	// 10% of HardLimitNano by the caller.
+	// DegradedCapNano is the FLEET-wide degraded-window overspend cap in
+	// nano-USD (§8.5). Each replica admits PerReplicaShare(cap, ExpectedReplicas)
+	// of it (human decision, DECISIONS.md 2026-10-22). It comes from
+	// LLM_BUDGET_NATS_DEGRADED_CAP_USD; 0 makes Decide use 10% of HardLimitNano.
 	DegradedCapNano int64
 	// DegradedMaxDuration is the continuous-outage ceiling: once the NATS
 	// circuit breaker has been open longer than this the GovernanceStore sets
@@ -173,7 +176,18 @@ type Params struct {
 	// DegradedMaxDuration — forces closed (§8.5). Set by GovernanceStore per
 	// request; never set by external callers of Decide directly.
 	OutageExceededMax bool
+	// DegradedReservationNano is what one admitted capped degraded request
+	// reserves against the replica's share until it is billed
+	// (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD). 0 means
+	// DefaultDegradedReservationNano. A share smaller than the reservation
+	// admits nothing (402); the reservation is never cut to the share. Used by
+	// GovernanceStore, not by Decide.
+	DegradedReservationNano int64
 }
+
+// DefaultDegradedReservationNano is the reservation per admitted degraded
+// request when none is configured: 0.10 USD.
+const DefaultDegradedReservationNano int64 = NanoUSD / 10
 
 // Decision is the FSM output: the enforcement verdict plus the state and the
 // per-request billable nano amount the caller must add to the in-process
@@ -204,6 +218,12 @@ type Decision struct {
 	// snapshot it read. The audio routes read it to refuse a model the catalog
 	// cannot price, rather than bill it zero against a budget (audio.go).
 	Budgeted bool
+	// Capped reports the decision came from a state where this replica may
+	// spend only its share of a fleet allowance (FRESH_SAFE, FRESH_NEAR).
+	Capped bool
+	// ReplicaShareNano is that share in nano-USD (valid when Capped). The
+	// caller reserves against it before it dispatches the request.
+	ReplicaShareNano int64
 }
 
 // natsHealthy is the sentinel the caller passes as authoritativeNano to signal
@@ -313,35 +333,101 @@ func decide(natsUp bool, authoritativeNano int64, replicaDegradedNano int64, sna
 
 	case accumulated >= softThreshold:
 		// FRESH_NEAR: allow up to the per-replica share of the remaining budget.
-		n := int64(p.ExpectedReplicas)
-		if n < 1 {
-			n = 1
-		}
-		perReplicaCap := (limit - accumulated) / n
-		if replicaDegradedNano+reqCostNano > perReplicaCap {
-			return Decision{Verdict: Block402, State: StateDownPGFreshNear, Degraded: true}
-		}
-		return Decision{Verdict: Allow, State: StateDownPGFreshNear, Degraded: true}
+		return cappedDecision(StateDownPGFreshNear,
+			PerReplicaShare(limit-accumulated, p.ExpectedReplicas),
+			replicaDegradedNano, reqCostNano, p)
 
 	default:
-		// FRESH_SAFE: allow, bounded by the per-replica degraded overspend cap so
-		// a long outage across replicas cannot run unbounded (§8.5).
+		// FRESH_SAFE: allow, bounded by this replica's share of the FLEET
+		// degraded overspend cap, so a long outage across replicas cannot run
+		// unbounded (§8.5).
 		//
 		// Design §8.5 mandates a 10% default cap when the operator has not
 		// configured an explicit DegradedCapNano (i.e. DegradedCapNano == 0).
 		// Derive it as max(1, limit/10): integer division of limit<10 nanoUSD
-		// floors to 0, which disables the cap entirely (every degraded request
-		// would be admitted without bound). Using max(1, …) ensures that even a
-		// 1-nanoUSD budget has a non-zero cap — a 1-nanoUSD degraded limit is
-		// effectively a forced-closed policy, which is the correct conservative
-		// behaviour for extremely small budgets (Fix round-3 #11).
-		effectiveCap := p.DegradedCapNano
-		if effectiveCap <= 0 {
-			effectiveCap = max(1, limit/10)
+		// floors to 0, which once disabled the cap entirely (Fix round-3 #11).
+		//
+		// The cap is the bound for the WHOLE FLEET, not for one replica (human
+		// decision, DECISIONS.md 2026-10-22). Each replica counts its degraded
+		// spend in process and cannot see the others, so each one admits only
+		// PerReplicaShare(cap, ExpectedReplicas). Before this decision every
+		// replica admitted the full cap, and N replicas overspent by N x cap.
+		fleetCap := p.DegradedCapNano
+		if fleetCap <= 0 {
+			fleetCap = max(1, limit/10)
 		}
-		if effectiveCap > 0 && replicaDegradedNano+reqCostNano > effectiveCap {
-			return Decision{Verdict: Block402, State: StateDownPGFreshSafe, Degraded: true}
-		}
-		return Decision{Verdict: Allow, State: StateDownPGFreshSafe, Degraded: true}
+		return cappedDecision(StateDownPGFreshSafe,
+			PerReplicaShare(fleetCap, p.ExpectedReplicas),
+			replicaDegradedNano, reqCostNano, p)
 	}
+}
+
+// cappedDecision is the shared tail of FRESH_SAFE and FRESH_NEAR: the two
+// states where this replica may spend only its share of a fleet allowance.
+//
+// A pod that starts during an outage never reaches this function: it cannot
+// bind NATS, so it builds no governance store, and the boot window refuses
+// every spend route with 503 (DECISIONS.md 2026-10-16). So N in the share
+// counts only replicas that were live when the outage began, and a restart
+// cannot add a fresh share to the fleet total.
+//
+// The Decision carries the share so the caller can reserve against it
+// (GovernanceStore.CheckBudget, DegradedCounters.TryReserve).
+func cappedDecision(state State, share, spentNano, reqCostNano int64, p Params) Decision {
+	d := Decision{State: state, Degraded: true, Capped: true, ReplicaShareNano: share}
+	if overShare(spentNano, reqCostNano, share) {
+		d.Verdict = Block402
+		return d
+	}
+	d.Verdict = Allow
+	return d
+}
+
+// PerReplicaShare is the part of a fleet-wide degraded allowance that ONE
+// replica may spend while NATS is down: floor(total / replicas).
+//
+// The rounding is FLOOR on purpose. replicas x floor(total/replicas) <= total
+// for every input, so the fleet can never spend more than total. Ceiling would
+// let the fleet exceed total by up to replicas-1 nano-USD.
+//
+// The minimum share is 0. When total < replicas the share is 0, and the
+// replica admits no degraded request for that scope (402, overShare) until
+// NATS returns.
+// Any positive minimum m would let replicas x m exceed total. A share of 0 is
+// the conservative result: such a cap is below one nano-USD per replica.
+//
+// replicas < 1 is read as 1 so the function never divides by zero. The boot
+// check (LLM_BUDGET_EXPECTED_REPLICAS, cmd/elitea-llm-gateway) refuses such a
+// value before it reaches here. A negative total yields a share of 0.
+func PerReplicaShare(total int64, replicas int) int64 {
+	if total <= 0 {
+		return 0
+	}
+	n := int64(replicas)
+	if n < 1 {
+		n = 1
+	}
+	return total / n
+}
+
+// overShare reports that a degraded request must be refused.
+//
+//   - share <= 0: the replica has no share at all.
+//   - reqCostNano == 0 (the cost is not known, which is every admission
+//     check): refuse once spent >= share. A replica exactly AT its share has
+//     nothing left, so "spent+0 > share" would admit one more request.
+//   - reqCostNano > 0: refuse when spent + reqCostNano > share; a request that
+//     fits exactly is admitted.
+//
+// spentNano is billed + held (DegradedCounters.Get). The reservation that
+// actually bounds concurrent admissions is taken after this test, atomically,
+// by DegradedCounters.TryReserve.
+func overShare(spentNano, reqCostNano, shareNano int64) bool {
+	if shareNano <= 0 {
+		return true
+	}
+	if reqCostNano <= 0 {
+		return spentNano >= shareNano
+	}
+	return spentNano+reqCostNano > shareNano
 }

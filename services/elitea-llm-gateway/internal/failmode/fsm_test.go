@@ -278,9 +278,14 @@ func TestDecide_FreshSafe_DefaultDegradedCap_LargeLimit(t *testing.T) {
 	}
 	p := tieredParams()       // DegradedCapNano = 0 → default to 10% = $10M nano
 	capNano := limitNano / 10 // $10M
-	// At exactly the cap: degraded=cap, req=0 → allow (not > cap).
-	if d := Decide(false, 0, capNano, snap, 0, p); d.Verdict != Allow {
-		t.Fatalf("large limit at 10%% cap should allow: %+v", d)
+	// One nano below the cap with no cost estimate: allow.
+	if d := Decide(false, 0, capNano-1, snap, 0, p); d.Verdict != Allow {
+		t.Fatalf("large limit below 10%% cap should allow: %+v", d)
+	}
+	// Exactly AT the cap with no cost estimate: nothing is left, so refuse
+	// (an unknown cost uses spent >= share).
+	if d := Decide(false, 0, capNano, snap, 0, p); d.Verdict != Block402 {
+		t.Fatalf("large limit at 10%% cap with an unknown cost should block: %+v", d)
 	}
 	// One nano over the cap: must block.
 	if d := Decide(false, 0, capNano, snap, 1, p); d.Verdict != Block402 {

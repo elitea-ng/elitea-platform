@@ -50,6 +50,29 @@ because each was a real bug found across 3 review rounds.
   readiness. So a boot during a NATS outage must not serve unmetered. Do not
   revert this to serving without a human. Do NOT let a probe that FAILED to
   read the budget tables be read as "no budgets".
+- **The NATS-down degraded cap is a FLEET bound** (human decision, the owner
+  approved it on 2026-10-22, DECISIONS.md). Each replica admits
+  `failmode.PerReplicaShare(cap, ExpectedReplicas)` = `floor(cap / N)`, minimum
+  0, in FRESH_SAFE and FRESH_NEAR alike. Do NOT round up and do NOT add a
+  positive minimum: either lets N replicas spend more than the cap. A set
+  `LLM_BUDGET_EXPECTED_REPLICAS` that is not digits-only and ≥ 1 makes
+  `config.FromEnv` return an error and `main` refuse to start; do not let it
+  fall back to 1 (an empty value is refused too). A pod that starts during an
+  outage gets no share because the boot window refuses it (503, 2026-10-16).
+- **A NATS-down admission RESERVES against the share** (human decision,
+  2026-10-22, supersedes 2026-08-09 for the degraded states only).
+  `CheckBudget` reserves with `DegradedCounters.TryReserve` (atomic); a share
+  smaller than the reservation refuses (402), do NOT cut the reservation to
+  the share. The request carries the hold in `failmode.Holds`, which the
+  router-root middleware `DegradedHoldsScope` creates. The holds go when the
+  LAST pin drops: the request's own pin drops when the HTTP handler returns,
+  and each biller pins before it hands a cost to a goroutine and unpins after
+  the cost is on the counter. NEVER tie a release to a context cancel: a
+  client disconnect cancels before the bill. A new billing path MUST pin
+  (`failmode.HoldsFrom(ctx).Pin()`) and unpin after its bill; a stream settler
+  MUST pin in the handler's goroutine (`pinHolds`). A mid-session re-check
+  MUST stay check-only (`recheckVerdict` wraps `failmode.CheckOnly`): it
+  reserves nothing and does not count the session's own hold.
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

@@ -48,6 +48,10 @@ func NewRouterWithLog(h *llmproxy.Handler, recorder *requestlog.Recorder) http.H
 	// and BEFORE every handler so a loop is contained before dispatch. An
 	// unarmed marker (no GATEWAY_HOP_SECRET) makes it a pass-through.
 	r.Use(h.HopGuard)
+	// The degraded-mode reservations of a request live until its handler
+	// returns (human decision, DECISIONS.md 2026-10-22). Mounted on the root so
+	// a route added later is covered without anyone remembering.
+	r.Use(h.DegradedHoldsScope)
 	r.NotFound(h.NotFound)
 	r.MethodNotAllowed(h.MethodNotAllowed)
 

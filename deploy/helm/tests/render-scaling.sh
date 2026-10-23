@@ -440,6 +440,26 @@ expect_refusal "an explicit LLM_BUDGET_EXPECTED_REPLICAS below the autoscaler's 
   --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=3
 expect_render "an explicit value above the fleet is the operator's to make" gw-above \
   --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=5
+check gw-above "an explicit LLM_BUDGET_EXPECTED_REPLICAS above the ceiling is kept as given" \
+  "env('elitea-llm-gateway','elitea-llm-gateway','LLM_BUDGET_EXPECTED_REPLICAS') == '5'"
+expect_render "autoscaling to 7: the ceiling, not the floor, divides the degraded cap" gw-seven \
+  --set llmGateway.autoscaling.minReplicas=2 --set llmGateway.autoscaling.maxReplicas=7
+check gw-seven "LLM_BUDGET_EXPECTED_REPLICAS follows autoscaling.maxReplicas (7), not minReplicas or replicaCount" \
+  "env('elitea-llm-gateway','elitea-llm-gateway','LLM_BUDGET_EXPECTED_REPLICAS') == '7'"
+expect_refusal "an explicit LLM_BUDGET_EXPECTED_REPLICAS of 0" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be at least 1" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=0
+expect_refusal "a negative LLM_BUDGET_EXPECTED_REPLICAS" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=-2
+expect_refusal "a non-numeric LLM_BUDGET_EXPECTED_REPLICAS" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be a whole number" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=two
+# The gateway's own parser (config.ExpectedReplicasFromEnv) refuses these too;
+# the two rules must agree, or the chart renders a value the gateway rejects.
+expect_refusal "a signed LLM_BUDGET_EXPECTED_REPLICAS (+5)" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be a whole number" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=+5
+expect_refusal "a zero-padded LLM_BUDGET_EXPECTED_REPLICAS (007)" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be a whole number" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=007
+check default "LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD renders its 0.10 default" \
+  "env('elitea-llm-gateway','elitea-llm-gateway','LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD') == '0.10'"
 expect_refusal "the removed preStop.command" "llmGateway.preStop.command was removed" \
   --set 'llmGateway.preStop.command[0]=sleep'
 

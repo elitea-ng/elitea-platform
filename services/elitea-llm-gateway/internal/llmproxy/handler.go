@@ -17,6 +17,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
@@ -554,6 +555,16 @@ func (h *Handler) buildContext(w http.ResponseWriter, r *http.Request, detach bo
 	}
 	ctx, cancel := schemas.NewBifrostContextWithCancel(parent)
 	sc := &streamCancel{fn: cancel}
+
+	// The degraded-mode reservations of this request (human decision,
+	// DECISIONS.md 2026-10-22). The request scope (DegradedHoldsScope, on the
+	// router root) creates them and ends them when the HTTP handler returns,
+	// NOT when a context is cancelled: a client disconnect must not release a
+	// hold before the request's cost is billed. Without a scope the request
+	// carries no holds, and CheckBudget reserves nothing for it.
+	if holds := failmode.HoldsFrom(r.Context()); holds != nil {
+		ctx.SetValue(failmode.HoldsKey, holds)
+	}
 
 	// vk = the resolved projectID handle (never the raw key). Only set when
 	// present; a missing project is fatal at the gateway only when

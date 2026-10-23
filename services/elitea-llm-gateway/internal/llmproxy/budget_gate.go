@@ -166,9 +166,16 @@ func parseProjectID(s string) int {
 // reqCostNano is 0 because the gateway has no pre-flight token estimate: the
 // wire formats do not carry a pre-counted prompt token count, and computing one
 // from the marshalled body would over-count inline base64 image/audio payloads
-// by orders of magnitude. 0 is the conservative value — the FSM uses
-// reqCostNano only for the degraded-path FRESH_NEAR per-replica cap, so it can
-// never over-gate. The actual cost is billed after the response arrives.
+// by orders of magnitude. The actual cost is billed after the response arrives.
+//
+// With an unknown cost the FSM refuses a NATS-down request once this replica's
+// degraded spend is AT its share (spent >= share), so 0 does not admit a
+// request past the share. It does not bound concurrent admissions either: that
+// is the reservation's job. While NATS is down, CheckBudget reserves a fixed
+// amount per admitted request against the share and the billing path releases
+// it after the real cost lands (failmode.Holds, human decision, DECISIONS.md
+// 2026-10-22). While NATS is up there is no reservation, and the
+// concurrent-admission overshoot of DECISIONS.md 2026-08-09 still applies.
 //
 // Issue #10: an in-process per-project "in-flight reservation" counter used to
 // be added here, claiming to bound the concurrent-admission overshoot. Every
@@ -289,7 +296,9 @@ func (h *Handler) admissionVerdict(ctx context.Context, model string) budgetVerd
 // circuit for the project's real /llm traffic. The budget half of the answer is
 // identical; only the backstop half changes.
 func (h *Handler) recheckVerdict(ctx context.Context, model string) budgetVerdict {
-	return h.admissionVerdictFor(ctx, model, admissionRecheck)
+	// A re-check reserves nothing, and it does not count the session's own
+	// degraded-mode reservation as other spend (failmode.CheckOnly).
+	return h.admissionVerdictFor(failmode.CheckOnly(ctx), model, admissionRecheck)
 }
 
 func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode admissionMode) budgetVerdict {
@@ -726,6 +735,19 @@ func (h *Handler) updateUsageUnits(
 	// the log is about what happened rather than about what was charged.
 	recordLoggedUsage(ctx, u)
 
+	// Pin the request's degraded-mode reservations until the billing
+	// goroutine has put the real cost on the counter (failmode.Holds, human
+	// decision, DECISIONS.md 2026-10-22). A bill that is not handed off unpins
+	// on return. The holds go when the last pin drops, so this code does not
+	// decide who releases them.
+	unpin := failmode.HoldsFrom(ctx).Pin()
+	handed := false
+	defer func() {
+		if !handed {
+			unpin()
+		}
+	}()
+
 	bp := h.budget()
 	if bp.gate == nil || bp.calc == nil {
 		return billNotBillable
@@ -865,7 +887,8 @@ func (h *Handler) updateUsageUnits(
 		ExecutionID: identityExecutionFromCtx(ctx),
 	}
 
-	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims) {
+	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, unpin) {
+		handed = true
 		return billBilled
 	}
 	return billRefused
@@ -901,6 +924,15 @@ func (h *Handler) updateUsageDirect(
 	// the log is about what happened, not about what was charged.
 	recordLoggedCredentialOwner(ctx, requestlog.FromContext(ctx))
 
+	// See updateUsageUnits: the pin keeps the holds until the bill lands.
+	unpin := failmode.HoldsFrom(ctx).Pin()
+	handed := false
+	defer func() {
+		if !handed {
+			unpin()
+		}
+	}()
+
 	bp := h.budget()
 	if bp.gate == nil || costNano <= 0 {
 		return billNotBillable
@@ -925,7 +957,8 @@ func (h *Handler) updateUsageDirect(
 		ExecutionID:    identityExecutionFromCtx(ctx),
 	}
 
-	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, costNano, dims) {
+	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, costNano, dims, unpin) {
+		handed = true
 		return billBilled
 	}
 	return billRefused
@@ -973,6 +1006,7 @@ func (h *Handler) spawnBillingGoroutine(
 	periodStart, periodEnd int64,
 	costNano int64,
 	dims *failmode.UsageDimensions,
+	unpin func(),
 ) bool {
 	scopeID := strconv.Itoa(pid)
 	eventID := uuid.NewString()
@@ -990,6 +1024,11 @@ func (h *Handler) spawnBillingGoroutine(
 	h.billingWg.Add(1)
 	go func() {
 		defer h.billingWg.Done()
+		// The request's degraded-mode reservations stay pinned until both
+		// increments below have put the real cost on the counter (DECISIONS.md
+		// 2026-10-22). Deferred functions run last-in first-out, so this runs
+		// before Done.
+		defer unpin()
 
 		// FIX #27: pre-increment snapshot, read here (detached goroutine) instead
 		// of on the request goroutine. Used only by the soft-alert crossing check

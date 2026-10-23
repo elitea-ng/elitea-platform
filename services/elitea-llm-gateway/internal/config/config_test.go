@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -19,8 +20,11 @@ func TestFromEnvDefaults(t *testing.T) {
 	} {
 		t.Setenv(k, "")
 	}
+	// A SET but empty LLM_BUDGET_EXPECTED_REPLICAS is refused; the default
+	// comes from an UNSET one. t.Setenv above restores it after the test.
+	_ = os.Unsetenv("LLM_BUDGET_EXPECTED_REPLICAS")
 
-	cfg := FromEnv()
+	cfg := mustFromEnv(t)
 
 	if cfg.HTTPAddr != ":8083" {
 		t.Errorf("HTTPAddr = %q, want :8083", cfg.HTTPAddr)
@@ -104,7 +108,7 @@ func TestStreamGraceFromEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("LLM_STREAM_GRACE_MS", tc.grace)
 			t.Setenv("LLM_STREAM_DRAIN_MAX_INFLIGHT", tc.limit)
-			cfg := FromEnv()
+			cfg := mustFromEnv(t)
 			if cfg.StreamGrace != tc.want {
 				t.Errorf("StreamGrace = %v, want %v", cfg.StreamGrace, tc.want)
 			}
@@ -133,7 +137,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("LLM_BUDGET_CB_FAILURE_THRESHOLD", "5")
 	t.Setenv("LLM_BUDGET_CB_OPEN_DURATION_SEC", "20")
 
-	cfg := FromEnv()
+	cfg := mustFromEnv(t)
 
 	if cfg.HTTPAddr != ":9999" {
 		t.Errorf("HTTPAddr = %q", cfg.HTTPAddr)
@@ -183,11 +187,10 @@ func TestFromEnvInvalidValuesFallBackToDefaults(t *testing.T) {
 	t.Setenv("GATEWAY_SHUTDOWN_TIMEOUT", "not-a-duration")
 	t.Setenv("GATEWAY_INITIAL_POOL_SIZE", "-5")
 	t.Setenv("GATEWAY_PROVIDER_CONCURRENCY", "abc")
-	t.Setenv("LLM_BUDGET_EXPECTED_REPLICAS", "0")
 	t.Setenv("LLM_BUDGET_CB_FAILURE_THRESHOLD", "-1")
 	t.Setenv("LLM_BUDGET_CB_OPEN_DURATION_SEC", "notint")
 
-	cfg := FromEnv()
+	cfg := mustFromEnv(t)
 
 	if cfg.ShutdownTimeout != DefaultShutdownTimeout {
 		t.Errorf("ShutdownTimeout = %v, want default on invalid input", cfg.ShutdownTimeout)
@@ -199,9 +202,8 @@ func TestFromEnvInvalidValuesFallBackToDefaults(t *testing.T) {
 		t.Errorf("ProviderConcurrency = %d, want default on invalid input", cfg.ProviderConcurrency)
 	}
 	// Non-positive / non-numeric NATS knobs fall back to the §8.5 defaults.
-	if cfg.ExpectedReplicas != DefaultNATSReplicas {
-		t.Errorf("ExpectedReplicas = %d, want default on non-positive input", cfg.ExpectedReplicas)
-	}
+	// LLM_BUDGET_EXPECTED_REPLICAS is the exception: see
+	// TestExpectedReplicasFromEnv.
 	if cfg.CBFailureThreshold != DefaultCBFailureThreshold {
 		t.Errorf("CBFailureThreshold = %d, want default on invalid input", cfg.CBFailureThreshold)
 	}
@@ -214,7 +216,7 @@ func TestFromEnvInvalidValuesFallBackToDefaults(t *testing.T) {
 // (BFF.6): trim, drop empties, nil when unset.
 func TestSelfLLMOriginsParsing(t *testing.T) {
 	t.Setenv("GATEWAY_SELF_LLM_ORIGINS", " https://dev.elitea.ai/llm/v1 ,, http://elitea-main:8080/llm/v1 ")
-	cfg := FromEnv()
+	cfg := mustFromEnv(t)
 	if len(cfg.SelfLLMOrigins) != 2 ||
 		cfg.SelfLLMOrigins[0] != "https://dev.elitea.ai/llm/v1" ||
 		cfg.SelfLLMOrigins[1] != "http://elitea-main:8080/llm/v1" {
@@ -222,7 +224,7 @@ func TestSelfLLMOriginsParsing(t *testing.T) {
 	}
 
 	t.Setenv("GATEWAY_SELF_LLM_ORIGINS", "")
-	if got := FromEnv().SelfLLMOrigins; got != nil {
+	if got := mustFromEnv(t).SelfLLMOrigins; got != nil {
 		t.Fatalf("SelfLLMOrigins = %#v with unset env, want nil", got)
 	}
 }
@@ -247,7 +249,7 @@ func TestPublicProjectID(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ELITEA_AI_PROJECT_ID", tc.env)
-			if got := FromEnv().PublicProjectIDString(); got != tc.want {
+			if got := mustFromEnv(t).PublicProjectIDString(); got != tc.want {
 				t.Errorf("PublicProjectIDString() = %q, want %q", got, tc.want)
 			}
 		})
@@ -263,7 +265,7 @@ func TestWorkloadIdentityEnabledIsStrict(t *testing.T) {
 		"TRUE": false, "True": false, "1": false, "yes": false, "t": false, " true": false,
 	} {
 		t.Setenv("GATEWAY_WORKLOAD_IDENTITY_ENABLED", raw)
-		if got := FromEnv().WorkloadIdentityEnabled; got != want {
+		if got := mustFromEnv(t).WorkloadIdentityEnabled; got != want {
 			t.Errorf("GATEWAY_WORKLOAD_IDENTITY_ENABLED=%q: got %v, want %v", raw, got, want)
 		}
 	}
