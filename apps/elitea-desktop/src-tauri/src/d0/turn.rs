@@ -65,7 +65,7 @@ use super::api::{
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::attachments::{Added, Attachment, Attachments, ImagePick};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
-use super::catalogue::{self, Catalogue, ReasoningReplay};
+use super::catalogue::{self, Catalogue};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted, ModelChoice};
@@ -2843,9 +2843,9 @@ impl AgentHost {
             vision,
             lane: UsageLane::Turn,
             tail: Some(tail.clone()),
-            // The catalogue's mark of a provider of its own (Anthropic): the
-            // body carries its cache breakpoints (`model::Layout`).
-            cache_hints: replay == ReasoningReplay::SignedBlocks,
+            // A native Anthropic model: the body carries its cache
+            // breakpoints (`model::Layout`).
+            cache_hints: catalogue::takes_cache_hints(replay, &admitted.model.model_name),
         };
         let instruction = system_instruction(
             &admitted.instructions,
@@ -4090,13 +4090,15 @@ fn sees_images(admitted: &Admitted, models: Option<&Catalogue>) -> bool {
 }
 
 /// Images go only to a model the catalogue marks as seeing them
-/// (`model_no_vision`): refused, never dropped.
+/// (`model_no_vision`): refused, never dropped. A catalogue the turn could
+/// not read says nothing about the model: the images go, and the gateway
+/// decides, as it does for a chosen model the catalogue could not check.
 fn check_vision(
     images: &[Arc<Attachment>],
     admitted: &Admitted,
     models: Option<&Catalogue>,
 ) -> Result<(), TurnError> {
-    if images.is_empty() || sees_images(admitted, models) {
+    if images.is_empty() || models.is_none() || sees_images(admitted, models) {
         return Ok(());
     }
     Err(TurnError::new(

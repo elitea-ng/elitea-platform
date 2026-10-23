@@ -7,6 +7,10 @@
  *
  * `enabled` is false for a thread that runs in the cloud (its turns take no
  * local images): nothing is offered, and a paste is left to the input.
+ *
+ * The images belong to one workspace: when the composer moves to another, or
+ * goes away, the ones not sent are let go (the host forgets their tokens), and
+ * one still on its way is let go when it lands.
  */
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 
@@ -49,17 +53,41 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
   const [error, setError] = useState<string | null>(null);
   // How many are attached or on their way: the limit holds across quick pastes.
   const held = useRef(0);
+  // The tokens the host holds for this composer and not yet sent: let go when the workspace changes or the composer goes.
+  const pending = useRef<string[]>([]);
+  // Which workspace's attachments are current: an answer for an earlier one is let go, not shown.
+  const generation = useRef(0);
+
+  useEffect(() => {
+    const ours = generation.current;
+    return () => {
+      generation.current = ours + 1;
+      const tokens = pending.current;
+      pending.current = [];
+      held.current = 0;
+      setEntries([]);
+      setError(null);
+      for (const token of tokens) void ipc.removeAttachment(workspaceId, token).catch(() => undefined);
+    };
+  }, [ipc, workspaceId]);
 
   const adopt = useCallback(
-    (source: TurnImagePick['source'], attach: () => Promise<AttachedImage>): void => {
+    (source: TurnImagePick['source'], attach: () => Promise<AttachedImage>, release: (token: string) => void): void => {
       if (held.current >= MAX_TURN_IMAGES) return;
       held.current += 1;
+      const ours = generation.current;
       attach().then(
         (image) => {
+          if (generation.current !== ours) {
+            release(image.token);
+            return;
+          }
+          pending.current = [...pending.current, image.token];
           setError(null);
           setEntries((current) => [...current, { image, source }]);
         },
         (failure: unknown) => {
+          if (generation.current !== ours) return;
           held.current -= 1;
           setError(describeWorkspaceError(failure));
         },
@@ -68,11 +96,18 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
     [],
   );
 
+  const release = useCallback(
+    (token: string): void => {
+      void ipc.removeAttachment(workspaceId, token).catch(() => undefined);
+    },
+    [ipc, workspaceId],
+  );
+
   const attachFiles = useCallback(
     (paths: string[]): void => {
-      for (const path of paths) adopt('file', () => ipc.attachFile(workspaceId, path));
+      for (const path of paths) adopt('file', () => ipc.attachFile(workspaceId, path), release);
     },
-    [adopt, ipc, workspaceId],
+    [adopt, ipc, workspaceId, release],
   );
 
   // The shell's file drop reaches the composer on screen through the session.
@@ -89,7 +124,7 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
     // An image on the clipboard is the paste; any text beside it is the image's caption in some apps, and is dropped.
     event.preventDefault();
     for (const file of files) {
-      adopt('clipboard', async () => ipc.attachBytes(workspaceId, file.type, await base64Of(file), file.name === '' ? undefined : file.name));
+      adopt('clipboard', async () => ipc.attachBytes(workspaceId, file.type, await base64Of(file), file.name === '' ? undefined : file.name), release);
     }
   };
 
@@ -97,8 +132,9 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
     const entry = entries[index];
     if (entry === undefined) return;
     held.current -= 1;
+    pending.current = pending.current.filter((token) => token !== entry.image.token);
     setEntries((current) => current.filter((_, at) => at !== index));
-    void ipc.removeAttachment(workspaceId, entry.image.token).catch(() => undefined);
+    release(entry.image.token);
   };
 
   return {
@@ -111,6 +147,8 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
     remove,
     clear: () => {
       held.current = 0;
+      // Sent: the turn used them up, nothing is left to let go.
+      pending.current = [];
       setEntries([]);
       setError(null);
     },

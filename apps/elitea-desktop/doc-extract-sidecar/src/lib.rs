@@ -16,11 +16,15 @@ use serde::Serialize;
 
 /// The largest request: the host's own file cap (64 MiB) and the header.
 pub const MAX_REQUEST_BYTES: u64 = 64 * 1024 * 1024 + 1024;
-/// The most page text one answer carries. The host reads at most 8 MiB of
-/// stdout; JSON escaping can double the text, so this leaves room. A page
-/// range that holds more is cut after the page that crosses it, and the host
-/// asks for the rest from the next page.
+/// The most page text one answer carries. A page range that holds more is
+/// cut after the page that crosses it, and the host asks for the rest from
+/// the next page.
 pub const MAX_ANSWER_TEXT_BYTES: usize = 3 * 1024 * 1024;
+/// The most bytes the pages' text takes in the answer once JSON-escaped:
+/// the host reads at most 8 MiB of stdout, and the envelope (page numbers,
+/// keys) takes far less than the rest. Measured, not assumed: a control
+/// character escapes to six bytes.
+pub const MAX_ANSWER_ESCAPED_BYTES: usize = 7 * 1024 * 1024;
 
 /// One page of the answer.
 #[derive(Serialize)]
@@ -100,7 +104,9 @@ pub fn handle(input: impl Read) -> Answer {
 pub fn answer(mime: &str, bytes: Vec<u8>, range: &PageRange) -> Answer {
     match InProcessExtractor.extract(mime, bytes, range) {
         Ok(text) => {
-            let text = text.select(range, MAX_ANSWER_TEXT_BYTES);
+            let text = text
+                .select(range, MAX_ANSWER_TEXT_BYTES)
+                .fit_escaped(MAX_ANSWER_ESCAPED_BYTES);
             Answer::Ok {
                 ok: true,
                 extractor: text.extractor,

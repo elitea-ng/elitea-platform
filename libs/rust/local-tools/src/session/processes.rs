@@ -364,7 +364,7 @@ impl LocalSession {
                 )
                 .await?;
                 let before = process.end();
-                process.write(&input)?;
+                process.write(&input).await?;
                 process
                     .settle(Duration::from_millis(
                         args.yield_ms.unwrap_or(DEFAULT_WRITE_YIELD_MS),
@@ -490,11 +490,21 @@ impl LocalSession {
         self.mcp.stop_all().await;
     }
 
-    /// [`Self::stop_processes`] from synchronous code (the app quits),
-    /// waiting at most `grace` before `SIGKILL`.
+    /// [`Self::stop_processes`] from synchronous code (the app quits):
+    /// `SIGTERM` to every process and server first, then one wait of at
+    /// most `grace` for all of them together, then `SIGKILL` to the rest.
     pub fn stop_processes_blocking(&self, grace: Duration) {
-        self.processes.stop_all_blocking(grace);
-        self.mcp.stop_all_blocking(grace);
+        let processes = self.processes.terminate_all();
+        let servers = self.mcp.terminate_all();
+        let deadline = std::time::Instant::now() + grace;
+        while (processes.iter().any(|process| process.is_running())
+            || servers.iter().any(|server| !server.exited()))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        crate::process::kill_left(&processes);
+        self.mcp.kill_left(&servers);
     }
 }
 

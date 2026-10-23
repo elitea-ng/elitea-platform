@@ -264,7 +264,7 @@ mod tests {
         registry.end_turn().await;
         sink.bind_turn(None);
         let before = emitter.all().len();
-        process.write(b"x\n").expect("write");
+        process.write(b"x\n").await.expect("write");
         assert!(process.wait_exit(std::time::Duration::from_secs(20)).await);
         assert!(
             process

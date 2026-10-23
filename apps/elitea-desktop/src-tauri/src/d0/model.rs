@@ -91,8 +91,8 @@ pub struct GatewayTransport {
     /// own model only, never a summary or a sub-agent.
     pub tail: Option<Arc<TurnTail>>,
     /// Send Anthropic `cache_control` breakpoints ([`Layout::cache_hints`]):
-    /// a model the catalogue marks as a provider of its own
-    /// (`openai_compatible: false`), and never on a summary call.
+    /// a native Anthropic model ([`super::catalogue::takes_cache_hints`]),
+    /// and never on a summary call.
     pub cache_hints: bool,
 }
 

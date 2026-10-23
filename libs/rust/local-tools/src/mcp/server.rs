@@ -476,17 +476,21 @@ impl McpServers {
         self.reset_stopped();
     }
 
-    /// [`Self::stop_all`] from synchronous code (the app quits).
-    pub fn stop_all_blocking(&self, grace: Duration) {
+    /// The first half of [`Self::stop_all`] from synchronous code (the app
+    /// quits): `SIGTERM` every running server now, and return them for
+    /// [`Self::kill_left`] once the caller's grace is over.
+    pub fn terminate_all(&self) -> Vec<Arc<Running>> {
         let running = self.take_running();
         for server in &running {
             server.signal(rustix::process::Signal::TERM);
         }
-        let deadline = Instant::now() + grace;
-        while running.iter().any(|server| !server.exited()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        for server in &running {
+        running
+    }
+
+    /// The second half of [`Self::terminate_all`]: `SIGKILL` the servers
+    /// that are still there.
+    pub fn kill_left(&self, running: &[Arc<Running>]) {
+        for server in running {
             server.signal(rustix::process::Signal::KILL);
         }
         self.reset_stopped();

@@ -114,6 +114,60 @@ impl PagedText {
         self.pages = kept;
         self
     }
+
+    /// Bounds the pages' text as a JSON answer carries it (escaped) to
+    /// `max_escaped` bytes. The C0 control characters other than tab,
+    /// newline and carriage return go first: they carry no text, and JSON
+    /// escapes each as six bytes. Then pages are kept while their escaped
+    /// text fits; a first page that alone does not is cut (and says so).
+    #[must_use]
+    pub fn fit_escaped(mut self, max_escaped: usize) -> Self {
+        const CUT: &str = "\n[the rest of this page is too long to return]";
+        let mut left = max_escaped;
+        let mut kept = Vec::new();
+        for mut page in self.pages.drain(..) {
+            page.text
+                .retain(|c| u32::from(c) >= 0x20 || matches!(c, '\t' | '\n' | '\r'));
+            let size = escaped_len(&page.text);
+            if size <= left {
+                left -= size;
+                kept.push(page);
+                continue;
+            }
+            if kept.is_empty() {
+                let room = left.saturating_sub(escaped_len(CUT));
+                let mut used = 0;
+                let end = page
+                    .text
+                    .char_indices()
+                    .find(|&(_, c)| {
+                        used += escaped_char_len(c);
+                        used > room
+                    })
+                    .map_or(page.text.len(), |(at, _)| at);
+                page.text.truncate(end);
+                page.text.push_str(CUT);
+                kept.push(page);
+            }
+            break;
+        }
+        self.pages = kept;
+        self
+    }
+}
+
+/// The bytes `c` takes inside a JSON string (`serde_json`'s escaping).
+fn escaped_char_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+        c if u32::from(c) < 0x20 => 6,
+        c => c.len_utf8(),
+    }
+}
+
+/// The bytes `text` takes inside a JSON string.
+fn escaped_len(text: &str) -> usize {
+    text.chars().map(escaped_char_len).sum()
 }
 
 /// Why a document gave no pages.
@@ -246,6 +300,38 @@ fn paged_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paged(texts: &[&str]) -> PagedText {
+        PagedText {
+            extractor: "utf8".to_owned(),
+            page_count: u32::try_from(texts.len()).unwrap_or(u32::MAX),
+            pages: (1..)
+                .zip(texts)
+                .map(|(number, text)| Page {
+                    number,
+                    text: (*text).to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn escaped_text_fits_its_budget_and_control_characters_go() {
+        // Control characters (six bytes each, escaped) carry no text.
+        let control = "a\u{1}b\u{1f}\tc\n".repeat(10);
+        let fitted = paged(&[&control]).fit_escaped(1000);
+        assert_eq!(fitted.pages[0].text, "ab\tc\n".repeat(10));
+        // A page past what is left is not returned; the caller goes on from it.
+        let fitted = paged(&["x".repeat(60).as_str(), "y".repeat(60).as_str()]).fit_escaped(100);
+        assert_eq!(fitted.pages.len(), 1);
+        // A first page that alone does not fit is cut, within the budget.
+        let quotes = "\"".repeat(1000);
+        let fitted = paged(&[&quotes]).fit_escaped(200);
+        let text = &fitted.pages[0].text;
+        assert!(escaped_len(text) <= 200, "{}", escaped_len(text));
+        assert!(text.starts_with(&"\"".repeat(70)));
+        assert!(fitted.pages[0].text.ends_with("too long to return]"));
+    }
 
     #[test]
     fn page_ranges_parse_and_print() {

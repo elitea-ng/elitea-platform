@@ -95,11 +95,16 @@ function PdfFailure({ onDownload }: { readonly onDownload: () => void }): ReactN
   );
 }
 
-/** One page at a time, scaled to the pane's width. Mounted once per opened document. */
+/**
+ * One page at a time, scaled to the pane's width. Mounted once per opened
+ * document. A page that does not render shows its own error in its place:
+ * the other pages, and the way to them, stay.
+ */
 function PdfPages(props: { readonly pdf: PdfDocument; readonly filename: string; readonly onDownload: () => void }): ReactNode {
   const { pdf } = props;
   const [page, setPage] = useState(1);
-  const [renderFailed, setRenderFailed] = useState(false);
+  // The page whose render failed, if the one on screen is it.
+  const [failedPage, setFailedPage] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const width = Math.max(1, Math.floor(useElementWidth(containerRef, 800)));
@@ -126,8 +131,9 @@ function PdfPages(props: { readonly pdf: PdfDocument; readonly filename: string;
         const task = pdfPage.render({ canvas, viewport });
         cancelRender = () => task.cancel();
         await task.promise;
+        if (active) setFailedPage((current) => (current === page ? null : current));
       } catch (cause) {
-        if (active && !isRenderCancelled(cause)) setRenderFailed(true);
+        if (active && !isRenderCancelled(cause)) setFailedPage(page);
       }
     })();
     return () => {
@@ -136,7 +142,7 @@ function PdfPages(props: { readonly pdf: PdfDocument; readonly filename: string;
     };
   }, [pdf, page, width]);
 
-  if (renderFailed) return <PdfFailure onDownload={props.onDownload} />;
+  const pageFailed = failedPage === page;
 
   return (
     <Box
@@ -167,12 +173,32 @@ function PdfPages(props: { readonly pdf: PdfDocument; readonly filename: string;
           <NavigateNextIcon />
         </IconButton>
       </Box>
+      {pageFailed && (
+        <Box sx={{ display: 'grid', placeItems: 'center', minHeight: '16rem', textAlign: 'center' }}>
+          <Box>
+            <Typography
+              role="alert"
+              variant="bodySmall"
+              sx={{ mb: 2 }}
+            >
+              {t('artifacts.preview.pdfPageFailed', 'Page {{page}} cannot be shown. The other pages may still open, or download the file to view it.', { page })}
+            </Typography>
+            <Button
+              variant="contained"
+              onClick={props.onDownload}
+            >
+              {t('artifacts.preview.downloadFile', 'Download file')}
+            </Button>
+          </Box>
+        </Box>
+      )}
+      {/* Kept mounted (hidden) under a failed page: the next page draws on it. */}
       <Box
         component="canvas"
         ref={canvasRef}
         aria-label={t('artifacts.preview.pdfPageAria', 'Page {{page}} of {{name}}', { page, name: props.filename })}
         data-testid="artifacts-pdf-canvas"
-        sx={{ display: 'block', maxWidth: '100%', height: 'auto' }}
+        sx={{ display: pageFailed ? 'none' : 'block', maxWidth: '100%', height: 'auto' }}
       />
     </Box>
   );

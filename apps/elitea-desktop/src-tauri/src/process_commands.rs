@@ -24,6 +24,7 @@ fn process_error(error: &ToolError) -> IpcError {
     let code = match error.code() {
         ErrorCode::NotFound => "process_unknown",
         ErrorCode::Conflict => "process_ended",
+        ErrorCode::Timeout => "process_not_reading",
         ErrorCode::InvalidArgument => "invalid_request",
         _ => "internal",
     };
@@ -118,9 +119,12 @@ pub fn process_read(
 }
 
 /// Type into a process: the keystrokes as the terminal produced them
-/// (nothing is added).
+/// (nothing is added). Async: the write runs on the process's writer
+/// thread, never the main one, so a process that does not read its input
+/// answers `process_not_reading` after a few seconds instead of freezing
+/// the window.
 #[tauri::command(rename_all = "snake_case")]
-pub fn process_write(
+pub async fn process_write(
     state: State<'_, LocalState>,
     workspace_id: String,
     process_id: String,
@@ -135,6 +139,7 @@ pub fn process_write(
     let (_, process, _) = process(&state, &workspace_id, &process_id)?;
     process
         .write(data.as_bytes())
+        .await
         .map_err(|error| process_error(&error))
 }
 

@@ -21,8 +21,13 @@ use image::{DynamicImage, ImageFormat, ImageReader, Limits, Rgb, RgbImage};
 
 /// The longest side, in pixels, an image keeps.
 pub const MAX_SIDE: u32 = 2048;
-/// The most bytes an image keeps after [`prepare`].
-pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+/// The most bytes an image's base64 may take in a request: a provider's
+/// image limit counts the encoded image (Anthropic's is 5 MiB), and this
+/// keeps a margin under it.
+pub const MAX_ENCODED_BYTES: usize = 5_000_000;
+/// The most bytes an image keeps after [`prepare`]: what encodes to at most
+/// [`MAX_ENCODED_BYTES`] of base64 (4 characters per 3 bytes).
+pub const MAX_IMAGE_BYTES: usize = MAX_ENCODED_BYTES / 4 * 3;
 /// The most bytes of source [`prepare`] reads (the model-input cap adk-core
 /// puts on one inline part).
 pub const MAX_SOURCE_BYTES: usize = 10 * 1024 * 1024;
@@ -173,8 +178,8 @@ pub fn prepare(source: &[u8]) -> Result<Picture, PictureError> {
     let (width, height) = (decoded.width(), decoded.height());
     let too_large = || {
         PictureError::TooLarge(format!(
-            "the image is over {} MiB even shrunk to {MAX_SIDE} px",
-            MAX_IMAGE_BYTES / (1024 * 1024)
+            "the image is over {} KB even shrunk to {MAX_SIDE} px",
+            MAX_IMAGE_BYTES / 1000
         ))
     };
     if kind != Kind::Jpeg {
@@ -298,6 +303,28 @@ mod tests {
         assert_eq!((picture.width, picture.height), (2048, 1024));
         assert_eq!(picture.mime, "image/png");
         assert_eq!(dimensions(&picture.bytes), Some((2048, 1024)));
+    }
+
+    #[test]
+    fn an_image_whose_base64_is_over_the_limit_is_recompressed() {
+        // Noise does not compress: a PNG of it within the side but past
+        // the bytes that encode to the provider's limit.
+        let mut seed = 0x2545_f491_u32;
+        let noise = RgbImage::from_fn(1200, 1100, |_, _| {
+            let mut next = || {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                u8::try_from(seed >> 24).unwrap_or(0)
+            };
+            Rgb([next(), next(), next()])
+        });
+        let mut source = Vec::new();
+        DynamicImage::ImageRgb8(noise)
+            .write_to(&mut Cursor::new(&mut source), ImageFormat::Png)
+            .expect("encode");
+        assert!(source.len() > MAX_IMAGE_BYTES && source.len() < 5 * 1024 * 1024);
+        let picture = prepare(&source).expect("prepare");
+        assert_eq!(picture.mime, "image/jpeg");
+        assert!(picture.bytes.len().div_ceil(3) * 4 <= MAX_ENCODED_BYTES);
     }
 
     #[test]

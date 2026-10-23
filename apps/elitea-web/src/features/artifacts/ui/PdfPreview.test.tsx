@@ -93,6 +93,45 @@ describe('PdfPreview', () => {
     expect(onDownload).toHaveBeenCalled();
   });
 
+  it('shows a page that fails to render as an error in its place, and keeps the others', async () => {
+    const renderPage = vi.fn((pageNumber: number) => ({
+      promise: pageNumber === 2 ? Promise.reject(new Error('bad page')) : Promise.resolve(),
+      cancel: renderCancel,
+    }));
+    const pages = vi.fn((pageNumber: number) => Promise.resolve({
+      pageNumber,
+      getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale }),
+      render: () => renderPage(pageNumber),
+    }));
+    vi.mocked(openPdfDocument).mockReturnValue(
+      fakeTask(Promise.resolve({ numPages: 3, getPage: pages })) as unknown as PdfLoadingTask,
+    );
+    const onDownload = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <PdfPreview
+        data={pdfBlob()}
+        filename="report.pdf"
+        onDownload={onDownload}
+      />,
+    );
+    expect(await screen.findByTestId('artifacts-pdf-page-indicator')).toHaveTextContent('Page 1 of 3');
+    await waitFor(() => expect(renderPage).toHaveBeenCalledWith(1));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page 2 cannot be shown');
+    // The way on stays, and the download works from the page's error.
+    expect(screen.getByTestId('artifacts-pdf-page-indicator')).toHaveTextContent('Page 2 of 3');
+    await user.click(screen.getByRole('button', { name: 'Download file' }));
+    expect(onDownload).toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(renderPage).toHaveBeenCalledWith(3));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('artifacts-pdf-canvas')).toBeVisible();
+  });
+
   it('shows the error when pdf.js itself fails to load', async () => {
     vi.mocked(loadPdfjs).mockRejectedValue(new Error('chunk failed'));
     renderWithProviders(

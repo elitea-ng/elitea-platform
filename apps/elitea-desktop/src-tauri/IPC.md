@@ -294,8 +294,9 @@ starts with it, a refused start keeps it):
 * **Types and limits**, enforced here and not only in the UI: PNG, JPEG,
   WebP and GIF, sniffed from the bytes (never the extension); a source over
   10 MiB is refused (`image_too_large`); an image over 2048 px on its longest
-  side or 5 MiB is shrunk (JPEG stays JPEG, any other becomes PNG, a GIF keeps
-  its first frame; a PNG that stays over 5 MiB is sent as JPEG on white; one
+  side or 3.75 MB (what encodes to 5 MB of base64, under the providers' 5 MiB
+  image limit) is shrunk (JPEG stays JPEG, any other becomes PNG, a GIF keeps
+  its first frame; a PNG that stays over 3.75 MB is sent as JPEG on white; one
   no quality brings under the limit is refused `image_too_large`); more than
   five in a turn is `too_many_images`; an unknown, sent or other-workspace
   token is `attachment_unknown`.
@@ -759,7 +760,7 @@ persistent processes, so its tool list keeps the plain `run_command`.
 | --- | --- | --- |
 | `process_list` | `{workspace_id}` | `ProcessInfo[]` — the workspace session's processes, running and ended (an ended one stays listed until the session ends), oldest first; `[]` when the workspace has no session yet |
 | `process_read` | `{workspace_id, process_id, since?: number}` | `{data: string, offset: number, next_offset: number, dropped_bytes: number, screen?: string}` — the output from byte `since`, or without it the latest 256 KiB the buffer holds (a pane opened late catches up with it), at most 256 KiB; `offset` is the byte offset of `data`'s first byte (offsets count the process's raw bytes; `data` is that text cut at a whole character, any invalid UTF-8 replaced). `dropped_bytes` is what the buffer no longer holds between `since` and `data`; `screen` (terminal processes) is the rendered screen, rows joined by `\n`. Rejects `process_unknown`, `workspace_unknown` |
-| `process_write` | `{workspace_id, process_id, data: string}` | `null` — the person's keystrokes into the pane (a terminal process's input, or a piped process's stdin), at most 64 KiB, sent as typed (never classified: the person typed it). Rejects `process_unknown`, `process_ended`, `invalid_request` |
+| `process_write` | `{workspace_id, process_id, data: string}` | `null` — the person's keystrokes into the pane (a terminal process's input, or a piped process's stdin), at most 64 KiB, sent as typed (never classified: the person typed it). The write runs off the main thread and waits at most 5 s for the process to take it. Rejects `process_unknown`, `process_ended`, `process_not_reading` (it did not take the input in time, or an earlier write is still pending), `invalid_request` |
 | `process_resize` | `{workspace_id, process_id, rows: number, cols: number}` | `null` — a terminal process's size (1 to 1000 each; it starts at 40 × 120); a piped process ignores it. Rejects `process_unknown`, `invalid_request` |
 | `process_kill` | `{workspace_id, process_id}` | `null` — stops the process's whole process group (`SIGTERM`, then `SIGKILL` after 2 s); an ended one is not an error. Rejects `process_unknown` |
 | `process_pin` | `{workspace_id, process_id, pinned: boolean}` | `null` — a pinned process outlives the end of its turn (until the session ends, below); unpinning one whose turn has ended and that the agent did not keep stops it. Rejects `process_unknown` |

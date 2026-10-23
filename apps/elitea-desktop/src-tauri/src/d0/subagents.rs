@@ -8,7 +8,8 @@
 //! gateway's budget gate covers its spend. It is offered the turn's local and
 //! index tools (the runtime keeps only the read-only ones; the remote
 //! toolkits are not offered at all), each wrapped with a [`ToolObserver`]
-//! that records its calls in the commit's `tool_calls` under the
+//! that records its calls in the commit's `tool_calls` (keyed
+//! `<agent_id>:<call_id>`, [`ChildLineage::run_id`]) under the
 //! `spawn_agent` call (`parent_agent_call_id`, `parent_agent_path`,
 //! `sibling_ordinal`: the hierarchy the cloud worker writes for nested
 //! agents) and sends them to the webview as `subagent_event`s.
@@ -72,6 +73,15 @@ impl ChildLineage {
             hierarchy,
             sent: AtomicUsize::new(0),
         }
+    }
+
+    /// The key a child's call has in the commit's `tool_calls`: its own id
+    /// under the child's, as the model's call ids are unique only within
+    /// one agent's run (the parent's and a sibling's may repeat them). The
+    /// webview's events keep the bare id, scoped by `agent_id`.
+    #[must_use]
+    pub fn run_id(&self, call_id: &str) -> String {
+        format!("{}:{call_id}", self.agent_id)
     }
 
     /// The fields a child's `tool_calls` entry carries.

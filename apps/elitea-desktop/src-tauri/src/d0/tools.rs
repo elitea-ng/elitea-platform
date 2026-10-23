@@ -315,9 +315,13 @@ impl Tool for ObservedTool {
         // Past the most tool calls a commit may carry the call is not run
         // (nor shown): the turn stops after this step (`turn.rs` `run_once`).
         let hierarchy = observer.child.as_ref().map(|child| child.hierarchy());
+        let run_id = observer
+            .child
+            .as_ref()
+            .map_or_else(|| call_id.clone(), |child| child.run_id(&call_id));
         if !observer
             .recorder
-            .tool_started_under(&call_id, &tool, &args, hierarchy)
+            .tool_started_under(&run_id, &tool, &args, hierarchy)
         {
             return Ok(json!({
                 "status": "error",
@@ -409,7 +413,7 @@ impl Tool for ObservedTool {
             observer.recorder.mcp_call(value);
         }
         observer.recorder.tool_finished(
-            &call_id,
+            &run_id,
             observed.as_ref().map_or(&Value::Null, |value| &**value),
             error.as_deref(),
         );

@@ -7168,6 +7168,37 @@ async fn non_vision_model_refuses_images_before_start() {
 }
 
 #[tokio::test]
+async fn an_unread_catalogue_leaves_images_to_the_gateway() {
+    // The catalogue fails (a 503): nothing says the model cannot see, so
+    // the image goes and the gateway decides.
+    let inner = vision_platform(Some(false), |_| say("ok"));
+    let server = serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(503, &json!({"error": "unavailable"}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for chosen in [false, true] {
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pasted(&h)];
+        if chosen {
+            asked.model =
+                Some(crate::d0::definition::ModelChoice::parse("gpt-test", None).unwrap());
+        }
+        let started = h.host.start(asked).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+    }
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 2);
+    for body in &bodies {
+        let user = *person_messages(body).last().unwrap();
+        assert_eq!(user["content"][1]["type"], "image_url", "{user}");
+    }
+}
+
+#[tokio::test]
 async fn an_attachment_belongs_to_one_workspace_and_a_turn_takes_five() {
     let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
@@ -7465,7 +7496,9 @@ async fn subagent_spend_uses_the_turn_execution_id() {
     // The commit carries the child's call under the spawn call.
     let commit = &commit_bodies(&h.server)[0];
     let calls = commit["tool_calls"].as_object().unwrap();
-    let read = &calls["child-read"];
+    // Keyed under the child: a model's call ids are unique only per agent.
+    assert!(!calls.contains_key("child-read"));
+    let read = &calls[&format!("{agent_id}:child-read")];
     assert_eq!(read["parent_agent_call_id"], "call-spawn");
     assert_eq!(read["sibling_ordinal"], 1);
     assert_eq!(read["parent_agent_name"], "notes");

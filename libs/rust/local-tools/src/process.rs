@@ -65,6 +65,10 @@ pub const TERM_GRACE: Duration = Duration::from_secs(2);
 /// grandchild that left the group can hold the pipe).
 const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(2);
 
+/// How long [`Process::write`] waits for the process to take its input
+/// before it answers that the process is not reading.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Whether a process outlives the end of the turn that started it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -370,6 +374,8 @@ struct Status {
 }
 
 type Writer = Box<dyn Write + Send>;
+/// One write for the writer thread, and where it answers.
+type WriteJob = (Vec<u8>, tokio::sync::oneshot::Sender<std::io::Result<()>>);
 type Master = Box<dyn portable_pty::MasterPty + Send>;
 
 /// One process.
@@ -383,7 +389,12 @@ pub struct Process {
     status: Mutex<Status>,
     buffer: Mutex<OutputBuffer>,
     screen: Option<Mutex<vt100::Parser>>,
-    input: Mutex<Option<Writer>>,
+    /// The writer thread's queue (`None` once the process ended). The
+    /// blocking write happens on that thread, never on the caller's: a
+    /// process that does not read its input cannot stall the caller.
+    input: Mutex<Option<std::sync::mpsc::SyncSender<WriteJob>>>,
+    /// A write is with the writer thread (cleared when it finished).
+    writing: AtomicBool,
     master: Option<Mutex<Master>>,
     /// Woken on new output and on the exit.
     changed: tokio::sync::Notify,
@@ -499,38 +510,71 @@ impl Process {
             .map(|parser| lock(parser).screen().contents())
     }
 
-    /// Write `bytes` to its input (a terminal's, or stdin).
+    /// Write `bytes` to its input (a terminal's, or stdin), waiting at
+    /// most [`WRITE_TIMEOUT`] for the process to take them.
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Conflict`] when it has ended or closed its input.
-    pub fn write(&self, bytes: &[u8]) -> ToolResult<()> {
+    /// [`ErrorCode::Conflict`] when it has ended or closed its input;
+    /// [`ErrorCode::Timeout`] when it does not take the bytes in time, or
+    /// an earlier write is still pending.
+    pub async fn write(&self, bytes: &[u8]) -> ToolResult<()> {
+        self.write_within(bytes, WRITE_TIMEOUT).await
+    }
+
+    async fn write_within(&self, bytes: &[u8], timeout: Duration) -> ToolResult<()> {
         if !self.is_running() {
             return Err(ToolError::new(
                 ErrorCode::Conflict,
                 format!("process {} has ended", self.id),
             ));
         }
-        let mut input = lock(&self.input);
-        let Some(writer) = input.as_mut() else {
+        // One write at a time: a process that stopped reading keeps the
+        // writer thread on its pending write, and more would only queue.
+        if self.writing.swap(true, Ordering::SeqCst) {
+            return Err(ToolError::new(
+                ErrorCode::Timeout,
+                format!(
+                    "process {} is not reading its input (an earlier write is still pending)",
+                    self.id
+                ),
+            ));
+        }
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        let queued = lock(&self.input)
+            .as_ref()
+            .is_some_and(|queue| queue.try_send((bytes.to_vec(), answer)).is_ok());
+        if !queued {
+            self.writing.store(false, Ordering::SeqCst);
             return Err(ToolError::new(
                 ErrorCode::Conflict,
                 format!("process {} has closed its input", self.id),
             ));
-        };
-        writer
-            .write_all(bytes)
-            .and_then(|()| writer.flush())
-            .map_err(|error| {
-                ToolError::new(
-                    ErrorCode::Conflict,
-                    format!(
-                        "process {} no longer takes input: {}",
-                        self.id,
-                        error.kind()
-                    ),
-                )
-            })
+        }
+        match tokio::time::timeout(timeout, answered).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(ToolError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "process {} no longer takes input: {}",
+                    self.id,
+                    error.kind()
+                ),
+            )),
+            Ok(Err(_)) => Err(ToolError::new(
+                ErrorCode::Conflict,
+                format!("process {} has closed its input", self.id),
+            )),
+            // The write stays with the writer thread, which clears
+            // `writing` once the process takes it (or ends).
+            Err(_) => Err(ToolError::new(
+                ErrorCode::Timeout,
+                format!(
+                    "process {} is not reading its input (the write is still pending)",
+                    self.id
+                ),
+            )),
+        }
     }
 
     /// Set a terminal process's size (a piped one has none).
@@ -804,6 +848,7 @@ impl ProcessRegistry {
         } else {
             spawn_piped(&spec)?
         };
+        let (queue, jobs) = std::sync::mpsc::sync_channel(1);
         let group = child
             .pid()
             .and_then(|pid| i32::try_from(pid).ok())
@@ -832,7 +877,8 @@ impl ProcessRegistry {
                     0,
                 ))
             }),
-            input: Mutex::new(Some(input)),
+            input: Mutex::new(Some(queue)),
+            writing: AtomicBool::new(false),
             master: master.map(Mutex::new),
             changed: tokio::sync::Notify::new(),
             emitted: AtomicU64::new(0),
@@ -852,7 +898,7 @@ impl ProcessRegistry {
         if let Some(events) = self.shared.events() {
             events.started(&process.info());
         }
-        start_threads(&process, child, reader, &self.shared);
+        start_threads(&process, child, reader, (input, jobs), &self.shared);
         Ok(process)
     }
 
@@ -895,21 +941,23 @@ impl ProcessRegistry {
         stop_all(&self.list()).await;
     }
 
-    /// [`Self::stop_all`] from synchronous code (the app quits): `SIGTERM`
-    /// now, `SIGKILL` to whatever still runs after at most `grace`.
-    pub fn stop_all_blocking(&self, grace: Duration) {
-        let processes = self.list();
-        let stopping: Vec<&Arc<Process>> = processes
-            .iter()
+    /// The first half of [`Self::stop_all`] from synchronous code (the app
+    /// quits): `SIGTERM` every running process now, and return them for
+    /// [`kill_left`] once the caller's grace is over (one grace shared
+    /// with whatever else the caller stops).
+    pub fn terminate_all(&self) -> Vec<Arc<Process>> {
+        self.list()
+            .into_iter()
             .filter(|process| process.terminate())
-            .collect();
-        let deadline = Instant::now() + grace;
-        while stopping.iter().any(|process| process.is_running()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        for process in stopping {
-            process.kill_hard();
-        }
+            .collect()
+    }
+}
+
+/// The second half of [`ProcessRegistry::terminate_all`]: `SIGKILL`
+/// whatever of `stopping` still runs.
+pub fn kill_left(stopping: &[Arc<Process>]) {
+    for process in stopping {
+        process.kill_hard();
     }
 }
 
@@ -1037,6 +1085,7 @@ fn start_threads(
     process: &Arc<Process>,
     mut child: Child,
     mut reader: Box<dyn Read + Send>,
+    (mut input, jobs): (Writer, std::sync::mpsc::Receiver<WriteJob>),
     shared: &Arc<Shared>,
 ) {
     let reading = Arc::clone(process);
@@ -1087,9 +1136,18 @@ fn start_threads(
                 status.exit_code = code;
             }
         }
-        // It takes no more input; a pending write fails rather than block.
+        // It takes no more input: the writer thread ends with its queue.
         lock(&waiting.input).take();
         waiting.changed.notify_waiters();
+    };
+    let feeding = Arc::clone(process);
+    let write = move || {
+        for (bytes, answer) in jobs {
+            let written = input.write_all(&bytes).and_then(|()| input.flush());
+            feeding.writing.store(false, Ordering::SeqCst);
+            // The caller may have stopped waiting (its timeout).
+            let _ = answer.send(written);
+        }
     };
     let pumping = Arc::clone(process);
     let shared = Arc::clone(shared);
@@ -1100,6 +1158,7 @@ fn start_threads(
             Box::new(read) as Box<dyn FnOnce() + Send>,
         ),
         ("elitea-process-wait", Box::new(wait)),
+        ("elitea-process-write", Box::new(write)),
         ("elitea-process-pump", Box::new(pump)),
     ] {
         if let Err(error) = std::thread::Builder::new()
@@ -1368,7 +1427,7 @@ mod tests {
         assert_eq!(text, "one\ntwo\n", "stdout and stderr share the pipe");
         assert_eq!(process.info().exit_code, Some(3));
         // Writing to an ended process is refused.
-        assert!(process.write(b"x").is_err());
+        assert!(process.write(b"x").await.is_err());
     }
 
     #[tokio::test]
@@ -1377,7 +1436,7 @@ mod tests {
         let cat = registry
             .spawn(spec("read line; echo got $line", KeepAlive::Turn))
             .expect("spawn");
-        cat.write(b"hello\n").expect("write");
+        cat.write(b"hello\n").await.expect("write");
         assert!(cat.wait_exit(Duration::from_secs(5)).await);
         cat.wait_output(0, Duration::from_secs(1)).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1397,5 +1456,35 @@ mod tests {
         assert_eq!(refused.code().as_str(), "local_tools.too_many_processes");
         registry.stop_all().await;
         assert!(held.iter().all(|process| !process.is_running()));
+    }
+
+    #[tokio::test]
+    async fn a_process_that_does_not_read_cannot_stall_a_write_or_its_stop() {
+        let registry = ProcessRegistry::new();
+        let deaf = registry
+            .spawn(spec("sleep 30", KeepAlive::Turn))
+            .expect("spawn");
+        // The pipe's buffer fills, then a write waits only its timeout.
+        let chunk = vec![b'x'; 64 * 1024];
+        let started = std::time::Instant::now();
+        let mut refused = None;
+        for _ in 0..8 {
+            if let Err(error) = deaf.write_within(&chunk, Duration::from_millis(200)).await {
+                refused = Some(error);
+                break;
+            }
+        }
+        let refused = refused.expect("a full pipe refuses the write");
+        assert_eq!(refused.code().as_str(), "local_tools.timeout");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // While that write is pending, the next is refused at once.
+        let again = std::time::Instant::now();
+        assert!(deaf.write(b"y").await.is_err());
+        assert!(again.elapsed() < Duration::from_secs(1));
+        // And the stuck write does not hold up its stop.
+        let stopping = std::time::Instant::now();
+        deaf.stop().await;
+        assert!(!deaf.is_running());
+        assert!(stopping.elapsed() < Duration::from_secs(3));
     }
 }
