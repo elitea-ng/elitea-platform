@@ -359,6 +359,30 @@ fn context_management_admits_the_frozen_contract_and_refuses_the_rest() {
         ),
         "an active contract reaches the Runner composition seam"
     );
+    assert_eq!(profile.step_compaction(), None);
+
+    // `session_compaction` (#1368) is admitted and reaches the root.
+    let mut step = ordinary_request(AgentExecutionKind::Application);
+    step.payload.context_settings.insert(
+        "session_compaction".to_owned(),
+        json!({"keep_recent_tokens": 5_000}),
+    );
+    let profile = OrdinaryNoToolProfile::validate(&step).expect("session_compaction is admitted");
+    assert_eq!(
+        profile
+            .step_compaction()
+            .map(|policy| policy.keep_recent_tokens),
+        Some(5_000)
+    );
+    step.payload
+        .context_settings
+        .insert("session_compaction".to_owned(), json!("yes"));
+    assert_eq!(
+        OrdinaryNoToolProfile::validate(&step)
+            .expect_err("a malformed session_compaction is refused")
+            .code(),
+        NativeAgentAssemblyErrorCode::InvalidInput
+    );
 
     let mut editing = ordinary_request(AgentExecutionKind::Application);
     editing

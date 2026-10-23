@@ -64,6 +64,8 @@
     "allow-index-embeddings-set",
     "allow-index-embeddings-status",
     "allow-index-embeddings-rebuild",
+    "allow-index-estimate",
+    "allow-index-embeddings-caps-set",
     "allow-index-models",
     "allow-index-model-download",
     "allow-index-model-cancel",

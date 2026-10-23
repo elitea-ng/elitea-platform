@@ -23,6 +23,7 @@ import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
 import type { UsageCounts } from '@/shared/desktop/turnUsage';
 import { t } from '@/shared/i18n';
+import { formatMoney } from '@/shared/lib/money';
 
 export type TurnUsage = NonNullable<WorkspaceTurn['view']['usage']>;
 
@@ -42,9 +43,6 @@ export interface BudgetLine {
 }
 
 const compact = (value: number): string => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-
-const money = (amount: number, currency: string): string =>
-  new Intl.NumberFormat(undefined, { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2 }).format(amount);
 
 const finite = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
 
@@ -108,7 +106,7 @@ export function describeUsage(turn: TurnUsage, thread: ThreadUsage | undefined, 
   const label =
     price === undefined
       ? t('workspace.usage.label', '≈ {{tokens}} tokens', { tokens })
-      : t('workspace.usage.labelCost', '{{cost}} · {{tokens}} tokens', { cost: money(costOf(turn, price), price.currency), tokens });
+      : t('workspace.usage.labelCost', '{{cost}} · {{tokens}} tokens', { cost: formatMoney(costOf(turn, price), price.currency), tokens });
   const lines = [
     t('workspace.usage.turn', 'This turn: {{prompt}} in ({{cached}}% cached), {{completion}} out', { prompt: compact(turn.prompt), cached: cachedPercent, completion: compact(turn.completion) }),
   ];
@@ -120,12 +118,12 @@ export function describeUsage(turn: TurnUsage, thread: ThreadUsage | undefined, 
     lines.push(
       thread.cost === undefined
         ? t('workspace.usage.thread', 'This thread: {{tokens}} tokens', { tokens: threadTokens })
-        : t('workspace.usage.threadCost', 'This thread: {{tokens}} tokens, {{cost}}', { tokens: threadTokens, cost: money(thread.cost.amount, thread.cost.currency) }),
+        : t('workspace.usage.threadCost', 'This thread: {{tokens}} tokens, {{cost}}', { tokens: threadTokens, cost: formatMoney(thread.cost.amount, thread.cost.currency) }),
     );
   }
   if (budget !== undefined && budget.limit !== null) {
     lines.push(
-      t('workspace.usage.budget', 'Your budget: {{percent}}% of {{limit}} used this period', { percent: Math.round(budget.percentUsed ?? 0), limit: money(budget.limit, budget.currency) }),
+      t('workspace.usage.budget', 'Your budget: {{percent}}% of {{limit}} used this period', { percent: Math.round(budget.percentUsed ?? 0), limit: formatMoney(budget.limit, budget.currency) }),
     );
   }
   return { label, detail: lines.join(' · '), cachedPercent };

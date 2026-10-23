@@ -50,6 +50,7 @@ compile_error!("elitea-local-index supports macOS and Linux; Windows is ADR-0029
 
 pub mod chunks;
 pub mod dense;
+pub mod embed_caps;
 pub mod embedding;
 pub mod fs;
 pub mod ingest;

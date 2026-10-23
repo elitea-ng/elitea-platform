@@ -62,6 +62,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
+use elitea_local_index::embed_caps::EmbedCaps;
 use elitea_local_index::embedding::{EmbedStatus, Embedding, OFF, SETTING, TurnGuard, choice_of};
 
 use crate::embeddings::{Allowed, Choice};
@@ -69,7 +70,7 @@ use elitea_local_index::service::{
     IndexError, IndexEvent, IndexEvents, IndexService, IndexState, IndexStatus,
     limit_parser_threads, policy_fingerprint,
 };
-use elitea_local_index::sqlite_store::{FILE_NAME, Peek, SqliteGraphStore};
+use elitea_local_index::sqlite_store::{FILE_NAME, Peek, SqliteGraphStore, StoreError};
 use elitea_local_index::watch::{FolderWatcher, WatchConfig};
 use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::policy::LocalWorkPolicy;
@@ -84,6 +85,19 @@ pub const EVENT_NAME: &str = "index://event";
 
 /// The setting that records whether the person turned the index on.
 const ENABLED: &str = "enabled";
+
+/// What embedding a workspace would take
+/// ([`IndexRegistry::embedding_basis`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct EmbeddingBasis {
+    /// Distinct chunk texts to embed.
+    pub texts: u64,
+    /// Their estimated tokens.
+    pub tokens: u64,
+    pub caps: EmbedCaps,
+    /// Estimated tokens a remote embedder took today (UTC).
+    pub day_used: u64,
+}
 
 impl From<IndexError> for TurnError {
     fn from(error: IndexError) -> Self {
@@ -905,7 +919,8 @@ impl IndexRegistry {
             .map_err(IndexError::from)?;
         if let Some(embedding) = &self.embedding {
             embedding.add(&service);
-            embedding.wake_workspace(workspace_id);
+            // The person chose: a spent budget or a run cap is asked again.
+            embedding.ask_again(workspace_id);
         }
         Ok(stored)
     }
@@ -963,6 +978,86 @@ impl IndexRegistry {
         embedding.add(&service);
         embedding.force(workspace_id);
         Ok(())
+    }
+
+    /// What embedding the workspace would take: the distinct chunk texts
+    /// that have no vector in `stamp` (`None`: every text, for an embedder
+    /// not chosen yet), their estimated tokens, the caps and today's use.
+    ///
+    /// # Errors
+    ///
+    /// `local_index_disabled`, `index_off`, or the index could not be read.
+    pub async fn embedding_basis(
+        &self,
+        workspace_id: &str,
+        stamp: Option<String>,
+    ) -> Result<EmbeddingBasis, TurnError> {
+        let (policy, _) = self.policy_now().gate()?;
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        if !self.enabled(workspace_id, &mut slot).await? {
+            return Err(TurnError::new(
+                "index_off",
+                "Turn the index on for this workspace first.",
+            ));
+        }
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
+        drop(slot);
+        blocking(move || {
+            let store = service.store();
+            let (texts, tokens) = store.missing_text_stats(stamp.as_deref())?;
+            Ok::<_, StoreError>(EmbeddingBasis {
+                texts,
+                tokens,
+                caps: EmbedCaps::load(store),
+                day_used: store.embed_tokens_today()?,
+            })
+        })
+        .await?
+        .map_err(|error| TurnError::from(IndexError::from(error)))
+    }
+
+    /// Set the workspace's embedding caps (estimated tokens per run and
+    /// per UTC day, remote embedders only); a run stopped by a cap looks
+    /// again at once.
+    ///
+    /// # Errors
+    ///
+    /// `embed_caps_invalid` (a cap is zero or absurd), `local_index_disabled`,
+    /// `index_off`, or the index could not be written.
+    pub async fn set_embedding_caps(
+        &self,
+        workspace_id: &str,
+        caps: EmbedCaps,
+    ) -> Result<EmbedCaps, TurnError> {
+        if !caps.valid() {
+            return Err(TurnError::new(
+                "embed_caps_invalid",
+                "A cap must be between 1 and 10 000 000 000 tokens.",
+            ));
+        }
+        let (policy, _) = self.policy_now().gate()?;
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        if !self.enabled(workspace_id, &mut slot).await? {
+            return Err(TurnError::new(
+                "index_off",
+                "Turn the index on for this workspace first.",
+            ));
+        }
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
+        drop(slot);
+        blocking(move || caps.save(service.store()))
+            .await?
+            .map_err(|message| TurnError::new("embed_caps_invalid", message))?;
+        if let Some(embedding) = &self.embedding {
+            embedding.caps_changed(workspace_id);
+        }
+        Ok(caps)
     }
 
     /// The workspace's embeddings setting (`off` when never set), from the
@@ -2180,6 +2275,50 @@ mod tests {
         assert_eq!(
             f.registry.set_embeddings(&f.id, "off").await.unwrap(),
             "off"
+        );
+    }
+
+    /// The estimate counts what a run would embed; the caps default, are
+    /// kept per workspace and refuse nonsense.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_estimate_and_the_caps_are_per_workspace() {
+        let f = registry(json!({"allowed": true, "local_index": true,
+            "index_local_embeddings": true}));
+        let off = f.registry.embedding_basis(&f.id, None).await.unwrap_err();
+        assert_eq!(off.code, "index_off");
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        let basis = f.registry.embedding_basis(&f.id, None).await.unwrap();
+        assert!(basis.texts > 0 && basis.tokens >= basis.texts, "{basis:?}");
+        assert_eq!(basis.caps, EmbedCaps::default());
+        assert_eq!(basis.day_used, 0);
+        let kept = EmbedCaps {
+            run: 5000,
+            day: 900,
+        };
+        assert_eq!(
+            f.registry.set_embedding_caps(&f.id, kept).await.unwrap(),
+            kept
+        );
+        assert_eq!(
+            f.registry.embedding_basis(&f.id, None).await.unwrap().caps,
+            kept
+        );
+        for bad in [
+            EmbedCaps { run: 0, day: 5 },
+            EmbedCaps { run: 5, day: 0 },
+            EmbedCaps {
+                run: 5,
+                day: u64::MAX,
+            },
+        ] {
+            let refused = f.registry.set_embedding_caps(&f.id, bad).await.unwrap_err();
+            assert_eq!(refused.code, "embed_caps_invalid");
+        }
+        assert_eq!(
+            f.registry.embedding_basis(&f.id, None).await.unwrap().caps,
+            kept,
+            "a refused change changes nothing"
         );
     }
 

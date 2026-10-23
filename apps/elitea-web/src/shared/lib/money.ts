@@ -27,6 +27,15 @@
  * decision for that screen, not a correctness fix.
  */
 
+/**
+ * An amount in `currency` (an ISO 4217 code the platform served beside it):
+ * two fraction digits, four below one cent so a small cost is not shown as
+ * zero. For the composer's usage chip and the index's embedding estimate.
+ */
+export function formatMoney(amount: number, currency: string): string {
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2 }).format(amount);
+}
+
 /** The smallest non-zero amount six fraction digits can show. */
 const SMALLEST_SHOWN_USD = 0.000001;
 

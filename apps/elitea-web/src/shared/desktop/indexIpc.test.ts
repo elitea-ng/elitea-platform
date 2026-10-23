@@ -52,7 +52,7 @@ describe('createIndexIpc', () => {
   it('splits index://event by kind: a build, a model download, a workspace embedding', async () => {
     const build: IndexEvent = { workspace_id: 'w1', phase: 'ready', message: null, status: { ...OFF_STATUS, state: 'ready' } };
     const model = { kind: 'model', model: 'multilingual-e5-small', phase: 'downloading', done: 10, total: 100, error: null };
-    const embedding = { kind: 'embeddings', workspace_id: 'w1', status: { choice: 'off', state: 'done', done: 0, total: 0, held: null, error: null, forced: false } };
+    const embedding = { kind: 'embeddings', workspace_id: 'w1', status: { choice: 'off', state: 'done', done: 0, total: 0, held: null, error: null, forced: false, eta_seconds: null, tokens: 0, cap: null } };
     const listen = vi.fn<ListenFn>((_channel, handler) => {
       [build, model, embedding].forEach((payload) => handler(payload));
       return Promise.resolve(() => undefined);
@@ -77,6 +77,19 @@ describe('createIndexIpc', () => {
       ['index_model_download', { model_id: 'multilingual-e5-small', confirm: true }],
       ['index_embeddings_set', { workspace_id: 'w1', embeddings: 'local:multilingual-e5-small' }],
       ['index_embeddings_rebuild', { workspace_id: 'w1', full: true }],
+    ]);
+  });
+
+  it('sends the estimate and the caps with the host argument names, the choice only when one is considered', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const ipc = createIndexIpc(invoke, noListen);
+    await ipc.estimate('w1');
+    await ipc.estimate('w1', 'remote:text-embedding-3-small');
+    await ipc.setEmbeddingCaps('w1', { run: 500, day: 90 });
+    expect(invoke.mock.calls).toEqual([
+      ['index_estimate', { workspace_id: 'w1' }],
+      ['index_estimate', { workspace_id: 'w1', embeddings: 'remote:text-embedding-3-small' }],
+      ['index_embeddings_caps_set', { workspace_id: 'w1', run_tokens: 500, day_tokens: 90 }],
     ]);
   });
 });

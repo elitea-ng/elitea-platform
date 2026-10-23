@@ -47,10 +47,13 @@
 //! # Step compaction (#1217, host opt-in)
 //!
 //! [`StepCompaction`] is the policy a host with real model limits composes
-//! around its model ([`StepCompaction::wrap`]); the desktop does, the cloud
-//! worker does not yet (its requests and digests are unchanged, and its
-//! admission refuses the [`SESSION_COMPACTION_KEY`] setting as unknown
-//! until it composes it). Design sources, no code copied: pi
+//! around its model. The desktop wraps its model ([`StepCompaction::wrap`])
+//! and compacts by default. The cloud worker compacts this way only when the
+//! conversation's settings carry [`SESSION_COMPACTION_KEY`]
+//! ([`ContextManagementPlan::step_policy`]); it prepares each root request
+//! in its model checkpoint ([`StepCompaction::prepare`]) rather than wrapping
+//! the model, so its answer keeps streaming, and its pre-dispatch budget
+//! check stands in for the overflow retry. Design sources, no code copied: pi
 //! (`packages/coding-agent/docs/compaction.md`,
 //! `src/core/compaction/compaction.ts`, MIT), opencode
 //! (`packages/core/src/session/compaction.ts`, MIT) and Codex
@@ -134,7 +137,7 @@ const SDK_HISTORY_PLACEHOLDER: &str = "{messages}";
 const COMPACTION_ATTEMPTS: usize = 1;
 
 /// Every key Main is allowed to freeze into `context_settings`.
-const ADMITTED_KEYS: [&str; 9] = [
+const ADMITTED_KEYS: [&str; 10] = [
     "enabled",
     "budget_mode",
     "enable_summarization",
@@ -144,6 +147,7 @@ const ADMITTED_KEYS: [&str; 9] = [
     "preserve_system_messages",
     "summary_instructions",
     "summary_llm_settings",
+    SESSION_COMPACTION_KEY,
 ];
 
 const DEFAULT_MAX_CONTEXT_TOKENS: u64 = 64_000;
@@ -207,6 +211,9 @@ impl ContextManagementPlan {
             );
             return Err(invalid_input());
         }
+        // Checked even when the plan below is off: a malformed value is
+        // refused, never ignored.
+        CompactionPolicy::admit(settings)?;
         if !admit_bool(settings, "enabled", true)? {
             return Ok(Self::Disabled);
         }
@@ -253,6 +260,38 @@ impl ContextManagementPlan {
             preserve_system_messages,
             summary_instructions,
         }))
+    }
+
+    /// The step compaction the same `settings` ask for: `None` while the plan
+    /// is [`Self::Disabled`] or [`SESSION_COMPACTION_KEY`] is absent or
+    /// `false`, else [`CompactionPolicy::admit`]'s policy guided by an
+    /// explicit, non-empty `summary_instructions` (the desktop's rule; the
+    /// plan's default instruction is not guidance).
+    ///
+    /// # Errors
+    ///
+    /// [`NativeAgentAssemblyErrorCode::InvalidInput`] for a malformed
+    /// [`SESSION_COMPACTION_KEY`].
+    pub fn step_policy(
+        &self,
+        settings: &Map<String, Value>,
+    ) -> Result<Option<CompactionPolicy>, NativeAgentAssemblyError> {
+        if *self == Self::Disabled {
+            return Ok(None);
+        }
+        let Some(policy) = CompactionPolicy::admit(settings)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            match settings
+                .get("summary_instructions")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+            {
+                Some(guidance) => policy.with_guidance(guidance),
+                None => policy,
+            },
+        ))
     }
 
     /// Compose the admitted plan onto the exclusive Runner, after admission and
@@ -526,8 +565,9 @@ const fn invalid_input() -> NativeAgentAssemblyError {
 
 /// The context-settings key of [`CompactionPolicy::admit`]:
 /// `true`, or `{"reserve_tokens": n, "keep_recent_tokens": n,
-/// "fresh_window": bool}` (each optional). Not one of `ADMITTED_KEYS`:
-/// a worker that admitted it would also have to compose it.
+/// "fresh_window": bool}` (each optional). Main forwards it from the agent
+/// version's `context_settings`; the worker composes it at the root
+/// ([`ContextManagementPlan::step_policy`]).
 pub const SESSION_COMPACTION_KEY: &str = "session_compaction";
 
 /// pi's reserve: compact once the request passes `window − reserve`.
@@ -773,6 +813,7 @@ struct StepState {
     force_next: bool,
     latest: Option<String>,
     summary_calls: u32,
+    compactions: u32,
 }
 
 /// Step-level compaction of one root agent's requests (module docs).
@@ -823,6 +864,12 @@ impl StepCompaction {
     /// Summary model calls made so far.
     pub fn summary_calls(&self) -> u32 {
         self.state().summary_calls
+    }
+
+    /// Compactions made so far (a host that calls [`Self::prepare`] tells
+    /// a compacted request from a measured one by this).
+    pub fn compactions(&self) -> u32 {
+        self.state().compactions
     }
 
     /// `model` with this policy before every call, and the one retry after
@@ -977,6 +1024,7 @@ impl StepCompaction {
             summary_content,
         });
         state.latest = Some(summary);
+        state.compactions = state.compactions.saturating_add(1);
         compaction
     }
 

@@ -50,6 +50,14 @@ pub enum EmbedError {
     /// A remote embedder was refused or failed (status, transport).
     #[error("the embeddings service failed: {0}")]
     Remote(String),
+    /// The deployment refused with HTTP 402: the project's (or member's)
+    /// budget is spent. Retrying cannot help until it is raised or resets.
+    #[error("the embeddings budget is exhausted: {0}")]
+    BudgetExhausted(String),
+    /// HTTP 429 that the bounded retries did not outlast; `retry_after` is
+    /// how long the service asked to wait (or the last backoff).
+    #[error("the embeddings service is rate limited; try again in {} s", .retry_after.as_secs())]
+    RateLimited { retry_after: std::time::Duration },
     /// The answer does not fit (count or dimension).
     #[error("the embeddings answer is unusable: {0}")]
     Shape(String),
@@ -77,6 +85,23 @@ pub trait Embedder: Send + Sync {
     ///
     /// The model failed or the answer does not fit.
     fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError>;
+
+    /// [`Embedder::embed_documents`] that gives up with
+    /// [`EmbedError::Paused`] once `stop` answers `true`. Only an embedder
+    /// that waits (a remote one backing off a rate limit) looks at it; a
+    /// local one runs to the end of the batch.
+    ///
+    /// # Errors
+    ///
+    /// As [`Embedder::embed_documents`], or paused.
+    fn embed_documents_until(
+        &self,
+        texts: &[&str],
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<Vec<f32>>, EmbedError> {
+        let _ = stop;
+        self.embed_documents(texts)
+    }
 
     /// Embed a search query (with the model's query instruction, if any).
     ///

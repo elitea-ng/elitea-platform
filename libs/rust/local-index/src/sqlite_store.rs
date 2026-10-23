@@ -234,6 +234,22 @@ pub struct RunRow {
     pub error: Option<String>,
 }
 
+/// One embedding run, from the `runs` table (`toolkit_id` [`EMBEDDING_RUNS`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddingRun {
+    /// `embedding` while it runs, then `embedded`, `capped`,
+    /// `budget_exhausted`, `rate_limited`, `error` or `stopped`.
+    pub status: String,
+    /// Estimated tokens it embedded ([`crate::embed_caps::estimate_tokens`]).
+    pub tokens: u64,
+    pub error: Option<String>,
+}
+
+/// The `runs.toolkit_id` of embedding runs. They share the table with the
+/// graph's ingestion runs, which never see them: [`SqliteGraphStore::runs`]
+/// leaves them out and none of their statuses is `completed`.
+pub const EMBEDDING_RUNS: &str = "embeddings";
+
 /// The chunks a refresh staged for one document: the version they were
 /// cut from (the bytes it parsed) and the rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,12 +603,155 @@ impl SqliteGraphStore {
         self.with(|conn| {
             let mut statement = conn.prepare(
                 "SELECT status, finished_at, error FROM runs
-                  WHERE project_id = ?1 AND application_id = ?2 ORDER BY id",
+                  WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id <> ?3
+                  ORDER BY id",
             )?;
-            let rows = statement.query_map(params![key.project_id, key.application_id], |row| {
-                Ok(RunRow {
+            let rows = statement.query_map(
+                params![key.project_id, key.application_id, EMBEDDING_RUNS],
+                |row| {
+                    Ok(RunRow {
+                        status: row.get(0)?,
+                        finished_at: row.get(1)?,
+                        error: row.get(2)?,
+                    })
+                },
+            )?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Distinct chunk texts with no vector in `stamp` (`None`: every
+    /// text, as for an embedder not chosen yet), and their estimated
+    /// tokens ([`crate::embed_caps::estimate_tokens`], counted in SQL).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn missing_text_stats(&self, stamp: Option<&str>) -> Result<(u64, u64)> {
+        self.read(|conn| {
+            let (texts, tokens): (i64, i64) = conn.query_row(
+                "SELECT count(*), coalesce(sum((length(t) + 3) / 4), 0) FROM (
+                   SELECT c.text AS t FROM chunks c
+                    WHERE ?1 IS NULL OR NOT EXISTS (SELECT 1 FROM chunk_vectors v
+                                        WHERE v.stamp = ?1 AND v.text_hash = c.text_hash)
+                    GROUP BY c.text_hash)",
+                [stamp],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((
+                u64::try_from(texts).unwrap_or(0),
+                u64::try_from(tokens).unwrap_or(0),
+            ))
+        })
+    }
+
+    /// The estimated tokens embedded today (UTC), over every run.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn embed_tokens_today(&self) -> Result<u64> {
+        self.read(|conn| {
+            let today: String =
+                conn.query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))?;
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'embed_day_tokens'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(crate::embed_caps::day_total(stored.as_deref(), &today))
+        })
+    }
+
+    /// Record a batch that embedded `tokens` (estimated): into the run
+    /// `run` (a new `embedding` run when `None`) and, when `daily`, today's
+    /// counter (what the per-day cap holds; an on-device model is not
+    /// counted), in one transaction. Returns the run's id.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn embedding_batch_done(&self, run: Option<i64>, tokens: u64, daily: bool) -> Result<i64> {
+        let tokens = i64::try_from(tokens).unwrap_or(i64::MAX);
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            let run = if let Some(run) = run {
+                run
+            } else {
+                tx.execute(
+                    &format!(
+                        "INSERT INTO runs (project_id, application_id, toolkit_id,
+                                           started_at, status)
+                         VALUES (?1, ?2, ?3, {NOW}, 'embedding')"
+                    ),
+                    params![
+                        GraphKey::LOCAL.project_id,
+                        GraphKey::LOCAL.application_id,
+                        EMBEDDING_RUNS
+                    ],
+                )?;
+                tx.last_insert_rowid()
+            };
+            tx.execute(
+                "UPDATE runs SET tokens = tokens + ?2 WHERE id = ?1",
+                params![run, tokens],
+            )?;
+            if daily {
+                let today: String =
+                    tx.query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))?;
+                let stored: Option<String> = tx
+                    .query_row(
+                        "SELECT value FROM meta WHERE key = 'embed_day_tokens'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let total = crate::embed_caps::day_total(stored.as_deref(), &today)
+                    .saturating_add(u64::try_from(tokens).unwrap_or(0));
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES ('embed_day_tokens', ?1)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    [format!("{today}:{total}")],
+                )?;
+            }
+            tx.commit()?;
+            Ok(run)
+        })
+    }
+
+    /// End embedding run `run` with `status` (and the error that ended it).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn finish_embedding_run(&self, run: i64, status: &str, error: Option<&str>) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                &format!(
+                    "UPDATE runs SET status = ?2, error = ?3, finished_at = {NOW} WHERE id = ?1"
+                ),
+                params![run, status, error],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Every embedding run, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn embedding_runs(&self) -> Result<Vec<EmbeddingRun>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT status, tokens, error FROM runs WHERE toolkit_id = ?1 ORDER BY id",
+            )?;
+            let rows = statement.query_map([EMBEDDING_RUNS], |row| {
+                Ok(EmbeddingRun {
                     status: row.get(0)?,
-                    finished_at: row.get(1)?,
+                    tokens: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
                     error: row.get(2)?,
                 })
             })?;
@@ -958,6 +1117,24 @@ impl SqliteGraphStore {
                   GROUP BY c.text_hash ORDER BY min(c.id)",
             )?;
             let rows = statement.query_map([stamp], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// The text hashes of the chunks whose estimated tokens
+    /// ([`crate::embed_caps::estimate_tokens`], counted in SQL) are more
+    /// than `tokens`: texts a token cap that small can never let through.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_hashes_over(&self, tokens: u64) -> Result<HashSet<String>> {
+        let tokens = i64::try_from(tokens).unwrap_or(i64::MAX);
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT DISTINCT text_hash FROM chunks WHERE (length(text) + 3) / 4 > ?1",
+            )?;
+            let rows = statement.query_map([tokens], |row| row.get::<_, String>(0))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
     }

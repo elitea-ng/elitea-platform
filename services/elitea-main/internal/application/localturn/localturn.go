@@ -65,6 +65,10 @@ const (
 	MaxHITLFieldBytes = 4 * 1024
 	MaxHITLTokenBytes = 128
 
+	// MaxContextSummaryBytes bounds the turn's context summary: the shared v1
+	// record's own limit (elitea-agent-runtime context_summary).
+	MaxContextSummaryBytes = 32 * 1024
+
 	// The local work report: at most MaxReportedCommands commands of at most
 	// MaxReportedCommandBytes each, and MaxReportedPaths paths of at most
 	// MaxReportedPathBytes. Longer entries are cut and further entries are
@@ -233,6 +237,10 @@ type CommitRequest struct {
 	// ModelName is the model the turn ran on (the agent's, or the one the
 	// person chose for the turn); "" when the client does not say.
 	ModelName string
+	// ContextSummary is the latest v1 context summary the turn's model
+	// requests started from or made (#1368); absent when none did. Stored in
+	// the answer's meta, for the cloud executor that takes the thread over.
+	ContextSummary json.RawMessage
 	// ToolCalls is the runtime's `tool_calls` object, keyed by run id, in the
 	// shape a worker streams in partial_message.response_metadata.
 	ToolCalls json.RawMessage
@@ -413,6 +421,10 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 	if request.ModelName != "" {
 		response["model_name"] = request.ModelName
 	}
+	// The thread's context summary, for the executor that resumes it.
+	if summary := contextSummary(request.ContextSummary); summary != nil {
+		response["context_summary"] = summary
+	}
 	responseMeta, err := json.Marshal(response)
 	if err != nil {
 		return CommittedTurn{}, err
@@ -500,6 +512,9 @@ func validCommit(request CommitRequest) bool {
 	if !request.AssistantIsError && request.AssistantError != "" {
 		return false
 	}
+	if !validContextSummary(request.ContextSummary) {
+		return false
+	}
 	if mode := request.Report.SandboxMode; mode != "" && !platformconfig.ValidSandboxMode(mode) {
 		return false
 	}
@@ -520,6 +535,45 @@ func validCommit(request CommitRequest) bool {
 		}
 	}
 	return true
+}
+
+// contextSummary is the stored form of a commit's context summary: compacted,
+// or nil when the client sent none (absent or null).
+func contextSummary(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	var buffer bytes.Buffer
+	if err := json.Compact(&buffer, trimmed); err != nil {
+		return nil
+	}
+	return json.RawMessage(buffer.Bytes())
+}
+
+// validContextSummary admits an absent summary, or a JSON object of at most
+// MaxContextSummaryBytes (compacted) whose `version` is 1. The rest of the
+// record is the runtime's contract: the server stores it as sent, and the
+// executor that reads it validates it as it validates its own.
+func validContextSummary(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return true
+	}
+	summary := contextSummary(trimmed)
+	// A NUL escape is refused as in every text field: the meta is jsonb,
+	// which cannot hold one.
+	if summary == nil || len(summary) > MaxContextSummaryBytes || !utf8.Valid(summary) ||
+		bytes.Contains(summary, []byte(`\u0000`)) {
+		return false
+	}
+	var record struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if summary[0] != '{' || json.Unmarshal(summary, &record) != nil {
+		return false
+	}
+	return string(record.Version) == "1"
 }
 
 func validText(value string, limit int, allowEmpty bool) bool {
@@ -689,14 +743,15 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 		AssistantIsError bool              `json:"assistant_is_error"`
 		AssistantError   string            `json:"assistant_error"`
 		ModelName        string            `json:"model_name,omitempty"`
+		ContextSummary   json.RawMessage   `json:"context_summary,omitempty"`
 		ToolCalls        json.RawMessage   `json:"tool_calls"`
 		ThinkingSteps    []json.RawMessage `json:"thinking_steps"`
 		HITLExchanges    []HITLExchange    `json:"hitl_exchanges"`
 		Report           LocalWorkReport   `json:"local_work"`
 	}{
 		request.ExecutionID, request.UserMessage, request.AssistantMessage,
-		request.AssistantIsError, request.AssistantError, request.ModelName, toolCalls, steps,
-		exchanges, report,
+		request.AssistantIsError, request.AssistantError, request.ModelName,
+		contextSummary(request.ContextSummary), toolCalls, steps, exchanges, report,
 	})
 	if err != nil {
 		return [32]byte{}, err

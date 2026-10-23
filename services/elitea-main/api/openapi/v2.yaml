@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.17"
+  x-elitea-client-contract: "1.18"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4270,6 +4270,26 @@ components:
             $ref: '#/components/schemas/LocalTurnHITLExchange'
         local_work:
           $ref: '#/components/schemas/LocalTurnWorkReport'
+        context_summary:
+          type: object
+          required: [version]
+          additionalProperties: true
+          description: >-
+            Client contract 1.18. The latest context summary the turn's model
+            requests started from or made, in the runtime's shared v1 record
+            (`version` 1, at most 32 KiB). Stored as the answer's
+            `meta.context_summary`, for the cloud executor that takes the
+            thread over; absent or null leaves it out.
+          properties:
+            version:
+              type: integer
+              description: Always 1.
+          x-elitea-passthrough: >-
+            NOTE(W2): the runtime's v1 context summary record, read as
+            json.RawMessage (internal/api/v2/localturns/route.go:112) and
+            stored as sent after a shape and size check
+            (internal/application/localturn/localturn.go:558
+            `validContextSummary`).
     LocalTurnCommitted:
       type: object
       description: >-

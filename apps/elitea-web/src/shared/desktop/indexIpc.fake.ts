@@ -4,11 +4,11 @@
  * map of statuses. `emit` plays the host's side of `index://event`; `set`
  * puts an index in a given state without one.
  */
-import type { EmbeddingsEvent, EmbedStatus, IndexEvent, IndexEventHandler, IndexIpc, IndexModels, IndexStatus, ModelEvent, ModelInfo, RemoteModel } from './indexIpc';
+import type { EmbedCaps, EmbeddingsEvent, EmbedStatus, IndexEstimate, IndexEvent, IndexEventHandler, IndexIpc, IndexModels, IndexStatus, ModelEvent, ModelInfo, RemoteModel } from './indexIpc';
 import { EMBEDDINGS_OFF, OFF_STATUS } from './indexIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'status' | 'open' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove' | 'downloadModel' | 'importModel' | 'removeModel' | 'remoteModels' | 'setEmbeddings' | 'rebuildEmbeddings';
+type FailableCommand = 'status' | 'open' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove' | 'downloadModel' | 'importModel' | 'removeModel' | 'remoteModels' | 'setEmbeddings' | 'rebuildEmbeddings' | 'estimate' | 'setEmbeddingCaps';
 
 /** The host's catalogue (sizes as `catalog.rs` pins them, rounded). */
 const FAKE_MODELS: ModelInfo[] = [
@@ -41,6 +41,8 @@ export interface FakeIndexIpc extends IndexIpc {
     removed: string[];
     set: { workspaceId: string; choice: string }[];
     rebuilds: { workspaceId: string; full: boolean }[];
+    estimates: { workspaceId: string; choice: string | undefined }[];
+    caps: { workspaceId: string; caps: EmbedCaps }[];
   };
   readonly calls: { opened: string[]; enabled: string[]; disabled: string[]; refreshes: { workspaceId: string; full: boolean }[]; cancelled: string[]; removed: string[] };
 }
@@ -57,6 +59,8 @@ export interface FakeIndexOptions {
   remoteModels?: RemoteModel[];
   /** The policy's download mirror host (default none). */
   mirror?: string;
+  /** What `index_estimate` answers (default: 4 000 chunks, 120 000 tokens, the default caps, nothing known of the budget). */
+  estimate?: Partial<IndexEstimate>;
 }
 
 export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc {
@@ -71,9 +75,10 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
   const choices = new Map<string, string>(Object.entries(options.embeddings ?? {}));
   const embedStatuses = new Map<string, EmbedStatus>();
   const allowed = { local: options.embeddingsAllowed?.local ?? true, remote: options.embeddingsAllowed?.remote ?? false };
+  const caps = new Map<string, EmbedCaps>();
   const modelHandlers = new Set<(event: ModelEvent) => void>();
   const embeddingHandlers = new Set<(event: EmbeddingsEvent) => void>();
-  const embeddingCalls: FakeIndexIpc['embeddingCalls'] = { downloads: [], cancelled: [], imported: [], removed: [], set: [], rebuilds: [] };
+  const embeddingCalls: FakeIndexIpc['embeddingCalls'] = { downloads: [], cancelled: [], imported: [], removed: [], set: [], rebuilds: [], estimates: [], caps: [] };
   let cancelPick = false;
   const subscribe = <T>(set: Set<(event: T) => void>, handler: (event: T) => void): Promise<() => void> => {
     set.add(handler);
@@ -260,6 +265,34 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
       if (failed !== undefined) return failed;
       if ((choices.get(workspaceId) ?? EMBEDDINGS_OFF) === EMBEDDINGS_OFF) return reject('embeddings_off', 'Choose how this folder is embedded first.');
       return Promise.resolve();
+    },
+    estimate(workspaceId, choice) {
+      embeddingCalls.estimates.push({ workspaceId, choice });
+      const failed = failure('estimate');
+      if (failed !== undefined) return failed;
+      const asked = choice ?? choices.get(workspaceId) ?? EMBEDDINGS_OFF;
+      if (asked === EMBEDDINGS_OFF) return reject('embeddings_off', 'Choose how to embed this workspace to see an estimate.');
+      const remote = asked.startsWith('remote:');
+      const kept = caps.get(workspaceId) ?? { run: 2_000_000, day: 200_000 };
+      return Promise.resolve({
+        origin: remote ? 'remote' : 'local',
+        model: asked.split(':').at(-1) ?? asked,
+        texts: 4_000,
+        tokens: 120_000,
+        caps: kept,
+        day_used: 0,
+        days_needed: remote ? 1 : null,
+        project_budget: null,
+        ...options.estimate,
+      });
+    },
+    setEmbeddingCaps(workspaceId, next) {
+      embeddingCalls.caps.push({ workspaceId, caps: next });
+      const failed = failure('setEmbeddingCaps');
+      if (failed !== undefined) return failed;
+      if (next.run < 1 || next.day < 1) return reject('embed_caps_invalid', 'A cap must be between 1 and 10 000 000 000 tokens.');
+      caps.set(workspaceId, { ...next });
+      return Promise.resolve({ ...next });
     },
     onModelEvent: (handler) => subscribe(modelHandlers, handler),
     onEmbeddingsEvent: (handler) => subscribe(embeddingHandlers, handler),
