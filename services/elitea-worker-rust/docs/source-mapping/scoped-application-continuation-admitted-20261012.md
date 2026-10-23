@@ -366,7 +366,61 @@ runs in the Main image built from `d5e966074`.
 
 ## Browser evidence
 
-EVIDENCE_PLACEHOLDER
+Stack `twoaone` (2026-10-23), Chrome (Claude in Chrome), real models (`gpt-5.4-mini`, Claude Haiku), every case
+reloaded before it was read.
+
+**Stack and images.** Brought up with the updated local stack tool on the checkout at this branch's head. That
+checkout is `main` `d5e966074` merged; Traefik is removed, so `elitea-main` is the edge. `verify-profile`:
+**50 passed, 0 failed**.
+
+| Service | Image | Note |
+|---|---|---|
+| Worker | `elitea-worker-rust:2a1-590117ade` (`sha256:15ab22885a1d…`) | §3b check below |
+| Code supervisor | `elitea-sandbox-supervisor:2a1-1f617cfdb` (`sha256:6197f66ec44f…`) | |
+| Main | `elitea-main:main-d5e966074-verify` (`sha256:ea25de4e1bf3…`) | |
+| Web | `elitea-web:main-d5e966074-verify` (`sha256:3d31080c7772…`) | |
+| gateway, scheduler, subapp-host, vector, doc-extractor, both engines, mocks, runners | `main-d5e966074-verify` | built from sources identical to `d5e966074` |
+
+§3b check of the Worker binary (`docker create` + `docker cp` + `strings`):
+- `2a1-590117ade` carries `events_through_pause`, `is_resuming_revision_of` and `has_static_tool_pause`. The first two
+  are absent from #1321's image.
+- Its binary differs from `2a1-1f617cfdb` (sha256 `49f2eeceab42…` against `8b4ff0d09992…`).
+- It has 4 `OrdinaryAgentCompletion…select_static_pause` symbol references, against 2: the new forwarding path.
+
+**Data.** The real-model dump `dd0bbc170` migrated forward with `main`'s own migrations: Main shared 172 and tenant
+154, then deepwiki and inventory, which drop the vector objects. The result is the new runbook dump
+`product-real-models-main-d5e966074.dump`.
+
+Fixtures (stated honestly):
+- Agent 157 got its instructions, the `gpt-5.4-mini` model and its single MCP toolkit through the UI.
+- The static pipeline (168) and its caller agent (169) were created through the UI.
+- The caller's pipeline tool was attached with a **database insert** that mirrors Main's own insert minus
+  `owner_id`. Main's attach route answers HTTP 500 on legacy-created projects, because it writes
+  `elitea_tools.owner_id`, which they lack. That is a pre-existing Main defect, listed under follow-ups.
+- The `sensitive_tools` platform setting `{"mcp": ["reverse"]}` came with the dump.
+
+| Journey | Chat | Executions (all SUCCEEDED, no settlement error) | Evidence |
+|---|---|---|---|
+| (c) ordinary Agent 169 → static saved pipeline 168: pause, reload, Continue | 883 | `76d5a887ea6b` (pause), `36fd57626d60` (continue) | After reload the turn shows "Pipeline paused …" with "Execution paused at tick" and Continue. After Continue the Agent answers: The pipeline result is "COUNT 1" (the tick ran once). |
+| (a) pipeline 158 (`agent` node → Agent 157, sensitive MCP `reverse`), Authorize | 884 | `53cb3a55aa74`, `a1ba3f2408d3` | Card survives reload; "reverse returned ESREVER-1C."; mock MCP `tools/call` 0 → 1 |
+| (a) pipeline 158, Block | 885 | `1e4c8ce10a59`, `721e46fcc1f8` | "The call was declined."; mock MCP stays 1 |
+| (d) pipeline 138: two `agent` nodes, each a nested run of Agent 137 that asks once; Worker restarted (`docker restart`) while card 2 was pending | 886 | `7ed1082e7d5a`, `1039f10de51e`, `0c93b6b34669` | Both cards answered; after reload the report shows both calls' jokes once |
+
+Before the wrapper fix, (c) failed on `2a1-1f617cfdb` as `native_agent.invalid_result`: chats 881 and 882, executions
+`33879cd3b833` and `05f76d96e0e2` FAILED/INTERNAL. That run is how the production-wrapper defect was found.
+- During diagnosis Agent 169's type was briefly set to `agent` in the database; it made no difference.
+- It was reset to the UI's `openai` before the passing run, so the passing run uses the Agent as the UI created it.
+
+Worker logs: no ERROR in the window. One WARN on the (c) continuation, `agent_session_terminal_completion_unavailable`
+(best-effort enrichment; the result is correct).
+- Gateway: no `llm_provider_refusal`.
+
+UI note (parity, not a defect of this branch): the final message of (d) shows one answered-question summary (the
+first `ask_user`). Web's `findAskUserAction` returns the first completed `ask_user` call, ported unchanged from
+EliteaUI's `hitl.helpers.js`. Main stores both resolved question ids on the message.
+
+Earlier evidence on the previous stack `scoped` (old platform, Worker `2a1-99c90e178`, now torn down): (a) chats
+918/919 and (d) chat 921 passed the same way.
 
 ## Follow-ups
 
@@ -377,6 +431,17 @@ EVIDENCE_PLACEHOLDER
   the run at assembly.
 - Static pause of a tool-invoked saved pipeline beneath a graph root: needs the projector to accept a second checkpoint
   owner; refused today.
+- Main: attaching an Agent or pipeline as a tool (`api/v2/eliteacore/application_relation.go`
+  `insertApplicationToolReference`) writes `elitea_tools.owner_id`, which legacy-created project schemas lack. HTTP 500
+  on every project of the real-model dump (pre-existing; not this branch).
+- `NativeRuntimeCompletion` does not forward `wrap_up` either (the cloud executor take-back); pre-existing, outside
+  this change.
+- A debug build of the real ordinary assembler with a nested saved pipeline exceeds a 2 MiB thread stack (the
+  lifecycle test runs at 4 MiB). Release frames are smaller and the live Worker runs this path; measure release stack
+  depth before tightening.
+- A repeated static tool continuation refuses as `InvalidConfiguration`, not a typed stale code (Main never sends one).
+- Web: the answered-question summary shows only the first `ask_user` of a message (EliteaUI parity); a product
+  decision whether to list all.
 - FU-226 follow-ups are #1321's (its source mapping). The legacy unscoped resolver still reports a generic node
   failure for a conversation an older Worker paused.
 - Review notes accepted as limits: replay equivalence removes the two routing keys rather than requiring equal presence
