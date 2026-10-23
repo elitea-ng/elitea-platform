@@ -436,6 +436,29 @@ EliteaUI's `hitl.helpers.js`. Main stores both resolved question ids on the mess
 Earlier evidence on the previous stack `scoped` (old platform, Worker `2a1-99c90e178`, now torn down): (a) chats
 918/919 and (d) chat 921 passed the same way.
 
+**Review round 1 re-check** (same stack, 2026-10-23, Chrome, real `gpt-5.4-mini`, every case reloaded before it was
+read). Only the Worker and Web were swapped, both built from this branch:
+
+| Service | Image | §3b check |
+|---|---|---|
+| Worker | `elitea-worker-rust:2a1-a1f21fd41` (`sha256:8c732cd720a5…`) | `docker cp` + `strings`: tracing markers `application_tools.rs:3059` and `:4270` match this head's source lines; the previous image carries `:3047` and `:4239` |
+| Web | `elitea-web:2a1-a74ed37e4` (`sha256:c11c67f1586a…`) | the bundle contains "Execution paused at static interrupt" (3 occurrences) |
+
+`verify-profile` after the swap: **50 passed, 0 failed**.
+
+| Journey | Chat | Executions (all SUCCEEDED, no settlement error) | Evidence |
+|---|---|---|---|
+| (c) typed continuation: Agent 169 → static pipeline 168, reload, type "go ahead" in the chat input | 888 | `6b7326670280` (pause), `9f5679e30d84` (continue) | After reload the card reads "Execution paused at static interrupt. Choose the action to proceed or type the continuation message in chat."; the typed message continues the pause (no second user turn, no new pause; before this fix it started a new turn that paused again); answer "The pipeline result is "COUNT 1"", unchanged after a second reload |
+| (c) Continue button, same fixture | 889 | `4a4d73f558d6`, `0fb60d71f29f` | "COUNT 1" after reload |
+| (a) pipeline 158, sensitive MCP `reverse`, Authorize | 890 | `5697b273fd0b`, `e5532ad7cd3a` | card survives reload; "reverse returned ESREVER-1C"; mock MCP `tools/call` 1 → 2 (runs once) |
+| nested (depth 2): Agent 170 "S1 nested caller" → Agent 169 → static pipeline 168, reload, typed "continue please" | 891 | `a5f51282d31d` (pause), `4cf89a602614` (continue) | the root turn shows the static pause card after reload; the typed continuation resumes the sub-Agent's pipeline; the root quotes the sub-Agent once: "The pipeline result is "COUNT 1"." |
+
+Fixtures: Agent 170 was created through the UI (name, description, instructions, `gpt-5.4-mini`). Its tool (Agent 169)
+was attached with a **database insert** mirroring Main's insert minus `owner_id` (`elitea_tools` 104,
+`entity_tool_mapping` 123), for the pre-existing attach defect listed under follow-ups. Worker logs: no ERROR; nine
+`agent_session_terminal_completion_unavailable` WARNs (best-effort enrichment, as before). Gateway: no
+`llm_provider_refusal`.
+
 ## Follow-ups
 
 - #1084 has merged, so the stale `docs/remaining-gates.md` sentence ("Scoped continuation admission remains
@@ -456,6 +479,11 @@ Earlier evidence on the previous stack `scoped` (old platform, Worker `2a1-99c90
   decision whether to list all.
 - FU-226 follow-ups are #1321's (its source mapping). The legacy unscoped resolver still reports a generic node
   failure for a conversation an older Worker paused (the scoped resolver now sends registered codes).
+- Web: after a reload, a message that is still at a static pause shows "Thought for -1 h -1 min and -2 sec" (the
+  thinking header's duration); once continued it reads normally. Not introduced here (this branch does not touch
+  thinking timestamps); a display follow-up.
+- Web: the nested static pause's accordion is titled "Pipeline" without the sub-Agent level (the known one-level
+  nesting render limit).
 - Web: `src/shared/api/themePreference.test.ts` "keeps the mark in memory when storage refuses the write" fails
   locally on Node 24 (unrelated file, untouched here); CI runs Node 26.
 - Review notes accepted as limits: replay equivalence removes the two routing keys rather than requiring equal presence
