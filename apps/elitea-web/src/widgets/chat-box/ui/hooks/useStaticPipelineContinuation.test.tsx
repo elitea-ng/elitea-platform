@@ -175,6 +175,34 @@ describe("static Continue controls", () => {
     );
     expect(screen.getByTestId("dynamic")).toHaveTextContent("dynamic remains");
   });
+  it("continues every paused leaf with a message typed in the chat input", async () => {
+    const calls: Parameters<
+      StaticContinuationParams["continueExecution"]
+    >[0][] = [];
+    const { result } = renderHook(() =>
+      useStaticPauseCards({
+        ...base((request) => {
+          calls.push(request);
+          return Promise.resolve({ started: true });
+        }),
+        editorTest: undefined,
+      }),
+    );
+    act(() => {
+      result.current?.onSendText("go ahead");
+    });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({
+      contract: "agent.continue.static.v1",
+      body: {
+        message_id: response,
+        static_decisions: [
+          { pause_id: leaf("one", "a").proof.pause_id, action: "continue", value: "go ahead" },
+          { pause_id: leaf("two", "d").proof.pause_id, action: "continue", value: "go ahead" },
+        ],
+      },
+    });
+  });
   it("refuses a stale closure after generation/context changes", async () => {
     let calls = 0;
     const params = base(() => {
