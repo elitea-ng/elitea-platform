@@ -1,10 +1,13 @@
 {
   "schema": "elitea.application-composition-limits.v1",
-  "description": "Bounds of a saved composition of agents and pipelines (FU-244). The Worker refuses a violation at assembly with the registered message; Main refuses it at save (relation attach, pipeline save) naming the attachment. Both sides assert this file.",
+  "description": "Bounds of a saved composition of agents and pipelines (FU-244). The Worker refuses a violation at assembly with runtime_message; Main refuses it wherever a stack is composed, naming the attachment. max_version_bytes is the Worker's load budget, which Main cannot measure: an attachment past it is left out and named, and a root that cannot load its own composition ends with size_runtime_message. Both sides assert this file.",
   "max_agent_tiers": 3,
   "max_pipeline_depth": 3,
   "max_ordinary_graph_scopes": 2,
   "max_application_hops": 25,
+  "max_checkpoint_paths": 128,
+  "max_version_bytes": 4194304,
   "public_code": "APPLICATION_COMPOSITION_INVALID",
-  "runtime_message": "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule."
+  "runtime_message": "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule.",
+  "size_runtime_message": "This agent or pipeline cannot run: its attached agents and pipelines are too large to load together. Remove attachments or shorten their instructions."
 }

@@ -1285,7 +1285,19 @@ fn composition_bounds_match_the_shared_contract() {
     );
     assert_eq!(limit("max_application_hops"), super::MAX_APPLICATION_HOPS);
     assert_eq!(
+        limit("max_checkpoint_paths"),
+        crate::agents::pipeline::composition::MAX_PIPELINE_CHECKPOINT_PATHS
+    );
+    assert_eq!(
+        limit("max_version_bytes"),
+        super::MAX_MATERIALIZATION_VERSION_BYTES
+    );
+    assert_eq!(
         contract["runtime_message"],
         crate::protocol::output::APPLICATION_COMPOSITION_INVALID_MESSAGE
+    );
+    assert_eq!(
+        contract["size_runtime_message"],
+        crate::protocol::output::APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE
     );
 }

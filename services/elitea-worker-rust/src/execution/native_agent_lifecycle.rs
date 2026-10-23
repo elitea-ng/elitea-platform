@@ -1558,6 +1558,9 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     if crate::agents::application_tools::is_composition_bound(error) {
         return RuntimeFailureKind::ApplicationCompositionInvalid;
     }
+    if crate::agents::application_tools::is_composition_size(error) {
+        return RuntimeFailureKind::ApplicationCompositionTooLarge;
+    }
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
@@ -1812,10 +1815,6 @@ mod taxonomy_tests {
             ),
             (
                 NativeAgentAssemblyErrorCode::ResourceExhausted,
-                bound::VERSION_BYTES,
-            ),
-            (
-                NativeAgentAssemblyErrorCode::ResourceExhausted,
                 bound::CHECKPOINT_PATHS,
             ),
             (
@@ -1840,6 +1839,17 @@ mod taxonomy_tests {
             assert!(message.len() <= 256);
             assert!(!retryable);
         }
+        // The byte budget has its own terminal: Main cannot check it at save time.
+        let too_large = crate::agents::application_tools::composition_size();
+        let kind = assembly_failure(&too_large);
+        assert_eq!(kind, RuntimeFailureKind::ApplicationCompositionTooLarge);
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(
+            message,
+            crate::protocol::output::APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE
+        );
+        assert!(message.len() <= 256);
+        assert!(!retryable);
         let unavailable = NativeAgentAssemblyError::new(
             NativeAgentAssemblyErrorCode::UnsupportedCapability,
             "unavailable",

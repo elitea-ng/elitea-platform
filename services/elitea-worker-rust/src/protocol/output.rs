@@ -96,6 +96,8 @@ pub enum RuntimeFailureKind {
     /// FU-244: the saved composition breaks a bound (cycle, nesting, scopes, budgets, a pause
     /// a pipeline root cannot continue). Authoring error, refused before any model call.
     ApplicationCompositionInvalid,
+    /// FU-244: the versions a saved composition loads exceed the Worker's byte budget.
+    ApplicationCompositionTooLarge,
     PipelineInputLimit,
     PipelineToolUnavailable,
     PipelineToolFailed,
@@ -798,13 +800,17 @@ impl RuntimeFailureKind {
     }
 }
 
-/// A stored pipeline holds a direct node on a toolkit its position cannot serve.
-/// Data-free: the node is named by Main's start check and by the editor; Main
-/// registers this exact text.
 /// Registered text of [`RuntimeFailureKind::ApplicationCompositionInvalid`]. Data-free: Main's
 /// attach and pipeline save checks name the attachment; Main registers this exact text.
 pub(crate) const APPLICATION_COMPOSITION_INVALID_MESSAGE: &str = "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule.";
 
+/// Registered text of [`RuntimeFailureKind::ApplicationCompositionTooLarge`]. Data-free; Main
+/// registers this exact text.
+pub(crate) const APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE: &str = "This agent or pipeline cannot run: its attached agents and pipelines are too large to load together. Remove attachments or shorten their instructions.";
+
+/// A stored pipeline holds a direct node on a toolkit its position cannot serve.
+/// Data-free: the node is named by Main's start check and by the editor; Main
+/// registers this exact text.
 pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.";
 
 /// The upstream code a typed "may have started" refusal carries through the
@@ -863,6 +869,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::ApplicationCompositionInvalid => (
             RuntimeErrorCodeV1::UnsupportedCapability,
             APPLICATION_COMPOSITION_INVALID_MESSAGE,
+            false,
+        ),
+        RuntimeFailureKind::ApplicationCompositionTooLarge => (
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineChildInputTypeInvalid => (
@@ -1060,6 +1071,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::PipelineChildInputTypeInvalid,
         RuntimeFailureKind::PipelineNodeTypeNotAvailable,
         RuntimeFailureKind::ApplicationCompositionInvalid,
+        RuntimeFailureKind::ApplicationCompositionTooLarge,
         RuntimeFailureKind::PipelineInputLimit,
         RuntimeFailureKind::PipelineToolUnavailable,
         RuntimeFailureKind::PipelineToolFailed,

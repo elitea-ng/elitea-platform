@@ -14,8 +14,8 @@ use crate::agents::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH;
 pub(in crate::agents) const MAX_MATERIALIZATION_VERSION_BYTES: usize = 4 * 1024 * 1024;
 
 /// The typed cause every composition bound violation carries: a cycle, nesting past a tier,
-/// depth or scope bound, the hop or version-byte budget, or a pausing pipeline tool a graph
-/// root cannot continue. These are authoring errors of the saved composition, not runtime
+/// depth or scope bound, the hop or checkpoint-path budget, or a pausing pipeline tool a graph
+/// root cannot continue. Main checks the same bounds when a composition is saved. These are authoring errors of the saved composition, not runtime
 /// unavailability, so they are refused (`native_agent_lifecycle::assembly_failure` turns the
 /// cause into its registered readable terminal) and never degrade into a skipped attachment.
 pub(crate) const COMPOSITION_BOUND_CODE: &str = "application.composition_bound";
@@ -27,7 +27,6 @@ pub(crate) mod bound {
     pub(crate) const PIPELINE_DEPTH: &str = "pipeline_depth";
     pub(crate) const ORDINARY_GRAPH_SCOPES: &str = "ordinary_graph_scopes";
     pub(crate) const APPLICATION_HOPS: &str = "application_hops";
-    pub(crate) const VERSION_BYTES: &str = "version_bytes";
     pub(crate) const CHECKPOINT_PATHS: &str = "checkpoint_paths";
     pub(crate) const STATIC_PAUSE_UNDER_GRAPH_ROOT: &str = "static_pause_under_graph_root";
 }
@@ -45,6 +44,25 @@ pub(crate) fn is_composition_bound(error: &NativeAgentAssemblyError) -> bool {
     error
         .cause()
         .is_some_and(|cause| cause.code() == COMPOSITION_BOUND_CODE)
+}
+
+/// The typed cause of a composition whose loaded versions exceed the byte budget. Main cannot
+/// measure the frozen version documents the Worker loads, so this is not a save-time bound: an
+/// attachment that would exceed it is skipped and named (`too_large`) where the caller can
+/// degrade, and a root that cannot load its own composition ends with its own registered
+/// terminal (`RuntimeFailureKind::ApplicationCompositionTooLarge`).
+pub(crate) const COMPOSITION_SIZE_CODE: &str = "application.composition_size";
+
+/// The byte budget of one composition is exhausted (see [`COMPOSITION_SIZE_CODE`]).
+pub(crate) fn composition_size() -> NativeAgentAssemblyError {
+    resource_exhausted().with_cause(COMPOSITION_SIZE_CODE, None)
+}
+
+/// Whether `error` is an exhausted composition byte budget.
+pub(crate) fn is_composition_size(error: &NativeAgentAssemblyError) -> bool {
+    error
+        .cause()
+        .is_some_and(|cause| cause.code() == COMPOSITION_SIZE_CODE)
 }
 
 /// How the saved applications of one graph conversation continue.
@@ -221,7 +239,7 @@ impl ApplicationMaterializationPath {
                     .checked_add(bytes)
                     .filter(|total| *total <= MAX_MATERIALIZATION_VERSION_BYTES)
             })
-            .map_err(|_| composition_bound(resource_exhausted(), bound::VERSION_BYTES))?;
+            .map_err(|_| composition_size())?;
         Ok(())
     }
 }

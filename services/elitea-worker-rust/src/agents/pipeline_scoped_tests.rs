@@ -837,7 +837,7 @@ async fn assemble_versions_totalling(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte() {
+async fn the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte_at_a_pipeline_root() {
     assemble_versions_totalling(MAX_MATERIALIZATION_VERSION_BYTES)
         .await
         .expect("exactly 4 MiB of saved versions assembles");
@@ -849,7 +849,12 @@ async fn the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte() {
         error.code(),
         NativeAgentAssemblyErrorCode::ResourceExhausted
     );
-    assert_composition_bound(&error, bound::VERSION_BYTES);
+    // Main cannot measure the loaded documents, so this is its own terminal, not a bound.
+    assert!(!is_composition_bound(&error), "{error:?}");
+    assert!(
+        crate::agents::application_tools::is_composition_size(&error),
+        "{error:?}"
+    );
 }
 
 /// A root whose chain reaches `scopes` ordinary graph scopes: each scope is a saved pipeline whose

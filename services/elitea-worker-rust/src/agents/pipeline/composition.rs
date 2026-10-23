@@ -14,7 +14,7 @@ use super::{
     PipelineDefinition, PipelineExecutionProfile, PlatformClient, ToolAdmissionPolicy,
     invalid_pipeline_tool_scope,
 };
-use crate::agents::application_tools::{bound, composition_bound};
+use crate::agents::application_tools::{bound, composition_bound, composition_size};
 
 // Match the existing nested interrupt parser. Do not admit deeper pauses.
 pub(crate) const MAX_PIPELINE_COMPOSITION_DEPTH: usize = 3;
@@ -118,9 +118,9 @@ impl CompositionAdmission<'_> {
                                 .map_err(|_| invalid_pipeline_tool_scope())?
                                 .len(),
                         )
-                        .ok_or_else(|| composition_exhausted(bound::VERSION_BYTES))?;
+                        .ok_or_else(composition_size)?;
                     if self.version_bytes > MAX_COMPOSITION_VERSION_BYTES {
-                        return Err(composition_exhausted(bound::VERSION_BYTES));
+                        return Err(composition_size());
                     }
                     self.versions.insert(identity, version.clone());
                     version
