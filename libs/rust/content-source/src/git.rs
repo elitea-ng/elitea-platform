@@ -85,29 +85,34 @@ impl GitSource {
     }
 }
 
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "synchronous git and file I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
-)]
+/// The walk and the reads run on the blocking pool ([`crate::blocking`]).
 impl ContentSource for GitSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        let mut references = Vec::new();
-        for key in self.keys()? {
-            let bytes = self.read(&key)?;
-            references.push(Self::reference(&key, &bytes));
-        }
-        Ok(references)
+        let source = self.clone();
+        crate::blocking(move || {
+            let mut references = Vec::new();
+            for key in source.keys()? {
+                let bytes = source.read(&key)?;
+                references.push(Self::reference(&key, &bytes));
+            }
+            Ok(references)
+        })
+        .await
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        let bytes = self.read(key)?;
-        Ok(Document {
-            reference: Self::reference(key, &bytes),
-            title: key.rsplit('/').next().unwrap_or(key).to_owned(),
-            uri: None,
-            bytes,
-            metadata: Map::new(),
+        let (source, key) = (self.clone(), key.to_owned());
+        crate::blocking(move || {
+            let bytes = source.read(&key)?;
+            Ok(Document {
+                reference: Self::reference(&key, &bytes),
+                title: key.rsplit('/').next().unwrap_or(&key).to_owned(),
+                uri: None,
+                bytes,
+                metadata: Map::new(),
+            })
         })
+        .await
     }
 }
 
@@ -146,5 +151,56 @@ mod tests {
             Err(SourceError::NotFound(_))
         ));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A fetch that blocks on its read (a FIFO no one writes to yet) leaves
+    /// a current-thread runtime free: a timer started beside it fires
+    /// first. Inline, the read held the runtime's one thread and the timer
+    /// fired only after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_read_does_not_hold_the_runtime() {
+        use std::time::{Duration, Instant};
+        let root = std::env::temp_dir().join(format!("content-source-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let fifo = root.join("slow.txt");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // The writer comes late, whatever the runtime does.
+        let writer = {
+            let fifo = fifo.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                std::fs::write(fifo, b"late\n").unwrap();
+            })
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let source = GitSource::new(&root);
+        let (fetched, read_done, timer_done) = runtime.block_on(async {
+            let read = async {
+                let document = source.fetch("slow.txt").await;
+                (document, Instant::now())
+            };
+            let timer = async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                Instant::now()
+            };
+            let ((document, read_done), timer_done) = tokio::join!(read, timer);
+            (document, read_done, timer_done)
+        });
+        writer.join().unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(fetched.unwrap().bytes, b"late\n");
+        assert!(
+            timer_done < read_done,
+            "the timer fired only after the read returned"
+        );
     }
 }

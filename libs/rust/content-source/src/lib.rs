@@ -83,6 +83,33 @@ pub trait ContentSource: Send + Sync {
     fn fetch(&self, key: &str) -> impl Future<Output = Result<Document, SourceError>> + Send;
 }
 
+/// Run a source's synchronous work (directory walks, file reads) on tokio's
+/// blocking pool and await it, so a [`ContentSource`] future never holds an
+/// async worker while it reads. Needs a tokio runtime (any flavour).
+///
+/// Dropping the returned future does not stop work that has started: it
+/// runs to its end on the blocking pool and its answer is dropped (a
+/// source only reads). A panic in `work` resumes in the caller, as it did
+/// when the work ran inline.
+///
+/// # Errors
+///
+/// What `work` returns, or [`SourceError::Unavailable`] when the runtime
+/// shut down before the work ran.
+pub async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, SourceError> + Send + 'static,
+) -> Result<T, SourceError> {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(answer) => answer,
+        Err(error) => match error.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(_) => Err(SourceError::Unavailable(
+                "the source was stopped before it read".to_owned(),
+            )),
+        },
+    }
+}
+
 /// The lowercase SHA-256 hex of `bytes`: the version a source without its
 /// own revision ids uses.
 #[must_use]
