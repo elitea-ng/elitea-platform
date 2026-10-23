@@ -227,3 +227,49 @@ func TestReadPipelineFindsAgentNodesAndStaticPauses(t *testing.T) {
 		t.Fatal("an over-bound definition is not parsed")
 	}
 }
+
+type countingSource struct {
+	fakeSource
+	reads map[int64]int
+}
+
+func (s *countingSource) Version(ctx context.Context, id applicationcomposition.Identity) (applicationcomposition.Version, bool, error) {
+	s.reads[id.VersionID]++
+	return s.fakeSource.Version(ctx, id)
+}
+
+// The save check's database budget: each saved version is read at most once
+// per walk, so one check costs at most MaxApplicationHops+1 version reads
+// (the root plus every entered attachment), each one version row plus its
+// attachment rows.
+func TestEachVersionIsReadAtMostOnceWithinTheHopBudget(t *testing.T) {
+	// A diamond: both pipelines run the same agent, which carries the same tool.
+	diamond := &countingSource{fakeSource: fakeSource{
+		1: pipeline("Root", 2, 3), 2: pipeline("Left", 4), 3: pipeline("Right", 4), 4: agent("Shared", 5), 5: agent("Tool"),
+	}, reads: map[int64]int{}}
+	if err := applicationcomposition.Check(context.Background(), diamond, id(1), nil); err != nil {
+		t.Fatalf("diamond: %v", err)
+	}
+	for version, reads := range diamond.reads {
+		if reads != 1 {
+			t.Fatalf("version %d read %d times", version, reads)
+		}
+	}
+	wide := &countingSource{fakeSource: fakeSource{}, reads: map[int64]int{}}
+	var attached []int64
+	for n := int64(2); n < applicationcomposition.MaxApplicationHops+12; n++ {
+		wide.fakeSource[n] = agent(fmt.Sprintf("Leaf %d", n))
+		attached = append(attached, n)
+	}
+	wide.fakeSource[1] = agent("Root", attached...)
+	if applicationcomposition.Refusal(applicationcomposition.Check(context.Background(), wide, id(1), nil)) == nil {
+		t.Fatal("past the hop budget must be refused")
+	}
+	total := 0
+	for _, reads := range wide.reads {
+		total += reads
+	}
+	if total > applicationcomposition.MaxApplicationHops+2 {
+		t.Fatalf("a refused walk read %d versions, budget %d", total, applicationcomposition.MaxApplicationHops+2)
+	}
+}
