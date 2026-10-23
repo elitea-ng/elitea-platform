@@ -547,3 +547,69 @@ fn the_hosts_deny_list_is_never_listed() {
     let source = LocalFolderSource::new(Arc::new(workspace));
     assert_eq!(keys(&source), ["notes.md"]);
 }
+
+/// An extractor that reads every document as two pages.
+struct TwoPages;
+
+impl elitea_doc_extract::DocumentExtractor for TwoPages {
+    fn extract(
+        &self,
+        _mime: &str,
+        bytes: Vec<u8>,
+        _range: &elitea_doc_extract::PageRange,
+    ) -> Result<elitea_doc_extract::PagedText, elitea_doc_extract::ExtractFailure> {
+        if bytes.starts_with(b"BAD") {
+            return Err(elitea_doc_extract::ExtractFailure::Unreadable(
+                "damaged".to_owned(),
+            ));
+        }
+        let page = |number, text: &str| elitea_doc_extract::Page {
+            number,
+            text: text.to_owned(),
+        };
+        Ok(elitea_doc_extract::PagedText {
+            extractor: "fake".to_owned(),
+            page_count: 2,
+            pages: vec![page(1, "first page"), page(2, "second page")],
+        })
+    }
+}
+
+#[tokio::test]
+async fn pdf_and_office_files_are_text_only_when_the_host_brings_an_extractor() {
+    let folder = tempfile::tempdir().unwrap();
+    write(folder.path(), "notes.md", "# notes\n");
+    write(folder.path(), "report.pdf", "%PDF-1.4 fake");
+    write(folder.path(), "broken.docx", "BAD");
+    let plain = LocalFolderSource::new(workspace(folder.path(), &[]));
+    let document = plain.fetch_now("report.pdf").unwrap();
+    assert_eq!(document.reference.mime, "application/pdf");
+    assert_eq!(document.bytes, b"%PDF-1.4 fake");
+
+    let source = LocalFolderSource::new(workspace(folder.path(), &[]))
+        .selecting(Selection::default())
+        .with_documents(Arc::new(TwoPages));
+    let listed = source.list_now().unwrap();
+    let pdf = listed.iter().find(|r| r.key == "report.pdf").unwrap();
+    assert!(!pdf.version.is_empty(), "the pdf is admitted, not skipped");
+    let document = source.fetch_now("report.pdf").unwrap();
+    assert_eq!(document.reference.mime, "text/plain");
+    assert_eq!(document.bytes, b"first page\n\nsecond page");
+    assert_eq!(
+        document.reference.version,
+        elitea_content_source::content_version(b"%PDF-1.4 fake"),
+        "the version is the file's own"
+    );
+    assert!(
+        source.fetch_now("broken.docx").is_err(),
+        "one bad file fails alone"
+    );
+    assert_eq!(source.fetch_now("notes.md").unwrap().bytes, b"# notes\n");
+
+    // Without an extractor the same selection leaves the pdf out, as before.
+    let without =
+        LocalFolderSource::new(workspace(folder.path(), &[])).selecting(Selection::default());
+    let skipped = without.list_now().unwrap();
+    let report = skipped.iter().find(|r| r.key == "report.pdf").unwrap();
+    assert_eq!(report.version, "");
+}

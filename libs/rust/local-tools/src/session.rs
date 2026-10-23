@@ -31,6 +31,7 @@ use crate::approvals::{
 use crate::budget::{self, Budgets, SpillStore};
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
 use crate::deny::DenyList;
+use crate::document::{self, Documents, InProcessExtractor, SidecarExtractor};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
@@ -76,6 +77,10 @@ pub struct SessionConfig {
     /// searches and git). Output over a budget is cut; a command's, git's
     /// and a document's whole output is spilled for `read_output`.
     pub budgets: Budgets,
+    /// Where `read_document` gets PDF and Office text
+    /// ([`Documents::default`]: this process, which has no extractor on the
+    /// desktop; the host passes the bundled sidecar).
+    pub documents: Documents,
 }
 
 #[derive(Debug, Default)]
@@ -95,6 +100,7 @@ pub struct LocalSession {
     checkpoints: Checkpoints,
     shell: ShellConfig,
     budgets: Budgets,
+    documents: Documents,
     /// The session's spilled outputs, per conversation (under the data
     /// directory; kept across a reopen for [`budget::SPILL_RETENTION`]).
     spill: SpillStore,
@@ -225,11 +231,15 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_document",
         kind: ToolKind::ReadDocument,
-        description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, e-mail, HTML, or plain text).",
+        description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, e-mail, HTML, or plain text), page by page: a PDF page, a slide or a sheet is one page, marked [page N]. The result says page_count and which pages it shows; pass pages (\"1-20\", \"5\", \"30-\") to read a range of a long document, and when the text is cut, next_offset (with the same pages) continues it and next_pages names the pages after it.",
         parameters: || {
             json!({
                 "type": "object",
-                "properties": { "path": path_param("Path relative to the workspace root.") },
+                "properties": {
+                    "path": path_param("Path relative to the workspace root."),
+                    "pages": { "type": "string", "description": "Page range, e.g. \"1-20\" or \"5\". Default: from the first page until the output budget is reached." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Character offset into the selected text, for continuing a cut result." }
+                },
                 "required": ["path"]
             })
         },
@@ -703,6 +713,7 @@ impl LocalSession {
             checkpoints,
             shell,
             budgets: config.budgets,
+            documents: config.documents,
             spill,
             turn: Mutex::new(Turn::default()),
             edit_profile: Mutex::new(EditProfile::default()),
@@ -1238,15 +1249,33 @@ impl LocalSession {
                 ToolKind::FindFiles => {
                     files::find_files(&this.workspace, args, budget::bytes(budgets.search))
                 }
-                _ => files::document(
-                    &this.workspace,
-                    args,
-                    &this.spill,
-                    budget::bytes(budgets.document),
-                ),
+                _ => this.read_document(args, budget::bytes(budgets.document)),
             }
         })
         .await
+    }
+
+    /// `read_document`, with the extractor the host chose.
+    fn read_document(&self, args: Value, max_bytes: usize) -> ToolResult<Value> {
+        match &self.documents {
+            Documents::InProcess => document::read(
+                &self.workspace,
+                args,
+                &self.spill,
+                max_bytes,
+                &InProcessExtractor,
+            ),
+            Documents::Custom(extractor) => {
+                document::read(&self.workspace, args, &self.spill, max_bytes, &**extractor)
+            }
+            Documents::Sidecar(program) => {
+                // Read-only, no network: the parser gets bytes on stdin and
+                // has nowhere to send anything.
+                let request = self.sandbox_request(SandboxMode::ReadOnly, false)?;
+                let sidecar = SidecarExtractor::new(program, &request, &self.shell.sandbox);
+                document::read(&self.workspace, args, &self.spill, max_bytes, &sidecar)
+            }
+        }
     }
 
     /// Ask the approval channel about `call`.

@@ -110,6 +110,7 @@ async fn exercise(planted: &Planted) -> (Checkpoints, Value) {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     let mut results = Vec::new();

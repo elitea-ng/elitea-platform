@@ -1587,6 +1587,30 @@ thread's own outputs). Outputs are per conversation (at most 64 MiB each,
 and an app restart for 24 hours, and go with `thread_history_delete`; a
 gone id answers `local_tools.output_expired` (the model re-runs the tool).
 A `tool_result`'s `summary` is unchanged.
+**Documents** (`read_document`, #1220). PDF, Word, Excel, PowerPoint,
+OpenDocument, RTF, EPUB and e-mail files are read as text, page by page (a
+PDF page, a slide or a sheet is one page, marked `[page N]` in the text; a
+format with no pages is page 1). Arguments: `path`, `pages` (`"5"`, `"1-20"`,
+`"30-"`; default all) and `offset` (a character offset into the selected
+text). The result carries `page_count`, `pages` (the range the text shows),
+`text`, `truncated`, `extractor`, and, when something is left,
+`next_offset` (continue inside the selection with the same `pages`) and
+`next_pages` (the pages the selection did not reach: the extractor's answer
+is capped, and so is the selection at 512 KiB). The host does not link the
+extractor (xberg turns on `serde_json/preserve_order`); the release bundle
+carries it as a second binary beside the executable,
+`elitea-doc-extract-sidecar` (`apps/elitea-desktop/doc-extract-sidecar`,
+its own lockfile). Per document the host sends the bytes on stdin (a
+16-byte header, the media type, the file; no path) to one process run under
+the session's sandbox (read-only, no network, the session's deny list, an
+empty environment, 130 s wall clock then the process group is killed) and
+reads at most 8 MiB of JSON back. A crash, a timeout or an unreadable file
+is the tool's error (`local_tools.io`, `local_tools.timeout`,
+`local_tools.binary`); the host keeps running. Without the sidecar (a
+`cargo run` build) only text files are read and a PDF answers
+`local_tools.unsupported`; where the sandbox cannot hide the denied
+credentials, documents are not extracted
+(`local_tools.sandbox_unavailable`). No command or event is added.
 Inside a long turn, once a model request (its messages, the system
 instruction and the tool declarations) passes 60% of the model's window,
 the tool results older than the newest 6 are sent to the model as short

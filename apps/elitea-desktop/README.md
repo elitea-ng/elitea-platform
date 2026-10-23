@@ -295,6 +295,20 @@ Icons are the brand mark rasterised with
 `npx tauri icon ../elitea-web/public/brand/logo-mark.svg -o src-tauri/icons --fit contain`
 (keep the six files `tauri.conf.json` lists).
 
+## Document sidecar
+
+`read_document` extracts PDF, Office, OpenDocument, RTF, EPUB and e-mail text
+with xberg, which the host must not link (it turns on `serde_json/preserve_order`,
+ADR-0029 decision 2; `desktop_host_does_not_link_xberg` and the
+`cargo tree -e normal,features` step in `ci-desktop.yml` hold the line). The extractor is
+`doc-extract-sidecar/`, a binary with a lockfile of its own, run once per
+document under the session's sandbox (read-only, no network) by
+`elitea-local-tools`' `SidecarExtractor`. The release job builds it and Tauri
+bundles it as an `externalBin` (`src-tauri/tauri.sidecar.conf.json`, passed with
+`--config` so a plain `cargo build`/`cargo test` of the host needs no binary);
+it is signed and notarised with the app. `src/documents.rs` finds it beside the
+executable; a build without it reads text files only.
+
 ## Release signing and publishing
 
 Every run of `.github/workflows/publish.yml` (a release, a nightly, a dev

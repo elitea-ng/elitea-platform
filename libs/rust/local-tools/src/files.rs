@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::apply_patch::{self, Hunk, Pass};
-use crate::budget::{self, SpillStore};
+use crate::budget;
 use crate::edit::{self, EditMatch, EditSpec, Span, Unplaced, locate, snippet, splice};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
@@ -1618,53 +1618,6 @@ fn fuzzy_rank(pattern: &str, paths: impl Iterator<Item = WsPath>) -> Vec<(WsPath
         .collect()
 }
 
-#[derive(Deserialize)]
-pub(crate) struct DocumentArgs {
-    pub path: String,
-}
-
-/// `read_document`: text from PDF, Office, e-mail and HTML (with the
-/// `documents` feature), or text files; past `max_bytes` the head is shown
-/// and the whole text (up to [`MAX_DOCUMENT_OUTPUT`]) spilled.
-pub(crate) fn document(
-    workspace: &Workspace,
-    args: Value,
-    spill: &SpillStore,
-    max_bytes: usize,
-) -> ToolResult<Value> {
-    let args: DocumentArgs = parse(args)?;
-    let path = workspace.resolve(&args.path, Intent::Read)?;
-    let file = workspace.read(&path, MAX_DOCUMENT_BYTES)?;
-    let name = file.path.file_name().unwrap_or_default();
-    let mime = elitea_content_source::mime_of(name);
-    match elitea_doc_extract::extract(mime, &file.bytes) {
-        elitea_doc_extract::Extracted::Text { text, extractor } => {
-            let capped = budget::head(&text, MAX_DOCUMENT_OUTPUT);
-            let (shown, output_id, cut) = budget::spill_over(spill, capped, max_bytes);
-            let mut answer = json!({
-                "path": file.path.display_string(),
-                "mime_type": mime,
-                "extractor": extractor,
-                "text": shown,
-                "truncated": cut || capped.len() < text.len(),
-                "bytes": text.len(),
-            });
-            if let (Some(id), Value::Object(map)) = (output_id, &mut answer) {
-                map.insert("output_id".to_owned(), Value::String(id));
-            }
-            Ok(answer)
-        }
-        elitea_doc_extract::Extracted::Unsupported => Err(ToolError::new(
-            ErrorCode::Unsupported,
-            format!("this build cannot extract text from {mime}"),
-        )),
-        elitea_doc_extract::Extracted::Unreadable(reason) => Err(ToolError::new(
-            ErrorCode::Binary,
-            format!("`{path}` is unreadable as {mime}: {reason}"),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1708,7 +1661,13 @@ mod tests {
         args: serde_json::Value,
     ) -> crate::error::ToolResult<serde_json::Value> {
         let spill = SpillStore::new(&ws.root().join("..").join("spill"), "t");
-        super::document(ws, args, &spill, ROOMY)
+        crate::document::read(
+            ws,
+            args,
+            &spill,
+            ROOMY,
+            &elitea_doc_extract::InProcessExtractor,
+        )
     }
 
     fn setup(deny: &[&str]) -> (tempfile::TempDir, Workspace, ReadLedger) {

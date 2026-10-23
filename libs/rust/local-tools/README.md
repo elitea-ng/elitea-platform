@@ -206,7 +206,7 @@ Every result stays within a per-call budget of estimated tokens
 | `run_tests` | 6k tokens (the `run_command` budget) | counts always; at most 20 failures (or compiler errors), each message at most 2 KiB, first come first kept within the budget, the rest counted in `more_failures` / `more_errors`; the whole log (stdout, then stderr) always spilled: `output_id` |
 | `search_files`, `find_files` | 8k tokens | stops early; `truncated` |
 | `git_diff`, `git_log` | 8k tokens | the head; the whole output spilled: `output_id` |
-| `read_document` | 12k tokens | the head; the whole text spilled: `output_id` |
+| `read_document` | 12k tokens | the head; the rest of the selection spilled: `output_id`; `next_offset` continues it, `next_pages` names the pages it did not reach |
 
 Spill files live under the host's data directory,
 `<data_dir>/sessions/<session id>/out/<conversation>/<output_id>.txt`

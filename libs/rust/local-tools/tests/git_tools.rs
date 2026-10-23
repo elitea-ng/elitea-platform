@@ -75,6 +75,7 @@ async fn git_diff_leaves_out_path_deny_files() {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     for args in [
@@ -130,6 +131,7 @@ async fn the_git_summary_is_the_branch_and_a_count() {
             deny_read: Vec::new(),
             app_id: None,
             budgets: elitea_local_tools::budget::Budgets::default(),
+            documents: elitea_local_tools::document::Documents::default(),
         })
         .expect("session")
     };

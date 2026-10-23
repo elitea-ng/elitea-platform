@@ -15,6 +15,7 @@ mod credentials_file;
 mod d0;
 mod discovery;
 mod doctor;
+mod documents;
 mod embeddings;
 mod error;
 mod handoff;

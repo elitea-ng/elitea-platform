@@ -526,3 +526,132 @@ async fn checkpoint_refs_and_objects_are_out_of_reach() {
         refs_before
     );
 }
+
+/// An executable script standing in for the document sidecar.
+fn script(dir: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join("fake-sidecar.sh");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+fn extractor_for<'a>(
+    fixture: &'a Fixture,
+    program: &'a Path,
+    request: &'a elitea_local_tools::sandbox::SandboxRequest,
+) -> elitea_local_tools::document::SidecarExtractor<'a> {
+    elitea_local_tools::document::SidecarExtractor::new(program, request, &fixture.config.sandbox)
+}
+
+/// The sidecar's profile (read-only, network off, the session's deny list)
+/// refuses what a crafted document could ask the parser to do: read the
+/// stored sign-in, write a file, open a socket (loopback included).
+#[test]
+fn the_document_sidecar_runs_read_only_without_network_or_credentials() {
+    use elitea_doc_extract::{DocumentExtractor as _, PageRange};
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let data = fixture.config.deny_read.first().cloned().expect("data dir");
+    std::fs::create_dir_all(data.join("checkpoints")).expect("data");
+    plant(
+        &data.join("checkpoints/credentials.json"),
+        "SECRET-REFRESH-TOKEN",
+    );
+    let data = std::fs::canonicalize(data).expect("canonical");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("addr").port();
+    let target = fixture.workspace.root().join("written-by-sidecar");
+    let program = script(
+        &fixture.outside,
+        &format!(
+            r#"cat > /dev/null
+read_out=$(cat '{creds}' 2>&1 | tr -d '"\n')
+write_out=$(touch '{target}' 2>&1 | tr -d '"\n')
+net_out=$(/usr/bin/nc -z -G 2 127.0.0.1 {port} >/dev/null 2>&1 && echo connected || echo blocked)
+printf '{{"ok":true,"extractor":"fake","page_count":1,"pages":[{{"n":1,"text":"read=%s|write=%s|net=%s"}}]}}' "$read_out" "$write_out" "$net_out""#,
+            creds = data.join("checkpoints/credentials.json").display(),
+            target = target.display(),
+        ),
+    );
+    let request = elitea_local_tools::shell::sandbox_request(
+        &fixture.workspace,
+        &fixture.config,
+        SandboxMode::ReadOnly,
+        false,
+    )
+    .expect("request");
+    let extractor = extractor_for(&fixture, &program, &request);
+    let paged = extractor
+        .extract("application/pdf", b"%PDF-1.4".to_vec(), &PageRange::ALL)
+        .expect("the fake sidecar answered");
+    let text = &paged.pages[0].text;
+    assert!(text.contains("Operation not permitted"), "{text}");
+    assert!(!text.contains("SECRET-REFRESH-TOKEN"), "{text}");
+    assert!(text.contains("net=blocked"), "{text}");
+    assert!(
+        text.contains("write=") && !target.exists(),
+        "the sidecar wrote a file: {text}"
+    );
+    assert!(
+        matches!(
+            listener.accept(),
+            Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "the sidecar reached loopback"
+    );
+}
+
+/// A sidecar that hangs is stopped at the limit, with its process group, and
+/// one that dies without an answer is an error: neither takes the host down.
+#[test]
+fn the_document_sidecar_that_hangs_or_dies_is_an_error() {
+    use elitea_doc_extract::{DocumentExtractor as _, ExtractFailure, PageRange};
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let request = elitea_local_tools::shell::sandbox_request(
+        &fixture.workspace,
+        &fixture.config,
+        SandboxMode::ReadOnly,
+        false,
+    )
+    .expect("request");
+
+    let hang = script(&fixture.outside, "sleep 30 &\nsleep 30");
+    let started = std::time::Instant::now();
+    let slow = extractor_for(&fixture, &hang, &request)
+        .with_timeout(std::time::Duration::from_secs(1))
+        .extract("application/pdf", b"x".to_vec(), &PageRange::ALL);
+    assert!(matches!(slow, Err(ExtractFailure::Timeout(_))), "{slow:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    let dies = script(&fixture.outside, "exit 3");
+    let crashed = extractor_for(&fixture, &dies, &request).extract(
+        "application/pdf",
+        b"x".to_vec(),
+        &PageRange::ALL,
+    );
+    assert!(
+        matches!(crashed, Err(ExtractFailure::Unreadable(_))),
+        "{crashed:?}"
+    );
+
+    let answers = script(
+        &fixture.outside,
+        r#"cat > /dev/null
+printf '{"ok":false,"error":"unsupported","message":"no"}'"#,
+    );
+    let refused = extractor_for(&fixture, &answers, &request).extract(
+        "application/pdf",
+        b"x".to_vec(),
+        &PageRange::ALL,
+    );
+    assert_eq!(refused, Err(ExtractFailure::Unsupported));
+}

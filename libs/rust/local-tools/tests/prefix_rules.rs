@@ -51,6 +51,7 @@ async fn a_forbidden_rule_refuses_with_its_justification_for_the_model() {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     session.rules().set_command_rules(CommandRules {

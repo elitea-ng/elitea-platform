@@ -78,6 +78,7 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
 
@@ -189,6 +190,7 @@ async fn a_patch_target_swapped_during_approval_is_refused() {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     for path in ["a.txt", "other.txt"] {
