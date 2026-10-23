@@ -533,11 +533,10 @@ func positiveProjectID(value string) (int, bool) {
 // credentials. So the branch was an unchecked claim on another project. Any
 // writer of auth.User.Name could make that claim.
 //
-// The branch was latent and not reachable: authsvc.New has no non-test caller,
-// RouterConfig.AuthClient is never assigned, and the legacy Redis RPC client is
-// the one non-test writer of the field. Latent is not safe. deploy/centry-hybrid
-// composes a legacy auth plane, and a hybrid deployment that composes that
-// client makes the branch live at once.
+// The branch was latent when it was found: the one writer of a name-shaped
+// field was the legacy Redis RPC client, which no deployment composed and which
+// has since been deleted (legacy_bridge_absence_test.go). Latent is not safe:
+// any later writer of auth.User.Name would make the branch live at once.
 //
 // The check is the same predicate the selector header passes, through the same
 // function. A name-derived project therefore has exactly the power an

@@ -216,13 +216,12 @@ func toolkitSettingsFieldErrors(violations []configurationapp.CurrentToolkitSett
 // gate genuinely has nothing to resolve against: no auth.User in the request
 // context at all, an id outside int32, and a projectID that is not a positive
 // tenant-shaped integer. The (0,false) arm of OwningUserID needs an auth.User
-// that is a token AND has no UserID, and the one writer that could produce it
-// is the legacy Redis RPC client (internal/infra/authsvc/rpc.go), which copies
-// user_id straight from the response without checking it — and which has no
-// non-test caller (the same latency internal/api/middleware/project.go's
-// project-by-name note records). A hybrid deployment that composes that client
-// would make the arm live, and the skip is what keeps it from validating
-// against the wrong user when it does.
+// that is a token AND has no UserID. The one writer that could produce it was
+// the legacy Redis RPC client, which copied user_id straight from the response
+// without checking it and has since been deleted (the same history
+// internal/api/middleware/project.go's project-by-name note records). The skip
+// keeps any later writer of such a user from validating against the wrong
+// user.
 //
 // Substituting the "1" that Create defaults userID to would validate against
 // USER 1's credential visibility instead of the caller's, which is worse than

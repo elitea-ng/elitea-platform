@@ -5414,8 +5414,8 @@ var defaultAgentCategories = []string{
 
 func (h *Handler) AgentCategories(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
+	// The project id is validated, and nothing more: the taxonomy is global.
+	if _, schemaOK := tenantSchema(w, projectID); !schemaOK {
 		return
 	}
 	ctx := r.Context()
@@ -5431,37 +5431,14 @@ func (h *Handler) AgentCategories(w http.ResponseWriter, r *http.Request) {
 	// Extras from the admin Features page, which is where an operator can
 	// actually author them.
 	//
-	// The pre-existing read below looks for a `publishing_guardrail` row in the
-	// PROJECT's own `configuration` table. That row is per project, and the
-	// setting is not: the reference authors it once, globally, in the legacy
-	// plugin's config, and no surface in this platform writes a per-project
-	// `publishing_guardrail` row at all. So the project read was a lookup that
-	// could only ever miss, and every deployment got the nine hardcoded
-	// defaults no matter what an administrator configured.
-	//
-	// Both are consulted, global first. The project row is kept because it is
-	// the shape a hybrid deployment's data would already be in, and dropping it
-	// would silently discard categories some environment may be carrying.
+	// This handler used to read a `publishing_guardrail` row from the PROJECT's
+	// own `configuration` table. The setting is not per project: the reference
+	// authors it once, globally, and no surface in this platform writes a
+	// per-project row. That read could only ever miss, so it is gone.
 	for _, name := range h.extraAgentCategories(ctx) {
 		if !seen[name] {
 			seen[name] = true
 			categories = append(categories, map[string]any{"name": name, "is_default": false})
-		}
-	}
-
-	q := fmt.Sprintf(`SELECT data FROM %s.configuration WHERE section = 'publishing_guardrail' LIMIT 1`, s)
-	var data []byte
-	if err := h.pool.QueryRow(ctx, q).Scan(&data); err == nil && len(data) > 0 {
-		var cfg map[string]any
-		if json.Unmarshal(data, &cfg) == nil {
-			if extras, ok := cfg["agent_categories"].([]any); ok {
-				for _, e := range extras {
-					if name, ok := e.(string); ok && name != "" && !seen[name] {
-						seen[name] = true
-						categories = append(categories, map[string]any{"name": name, "is_default": false})
-					}
-				}
-			}
 		}
 	}
 
