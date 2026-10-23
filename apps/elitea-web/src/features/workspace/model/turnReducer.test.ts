@@ -359,3 +359,37 @@ describe('sub-agents (#1226)', () => {
     expect(view.subAgents?.map((lane) => lane.agentId)).toEqual(['a_1']);
   });
 });
+
+describe('usage, usage_total and context (#1227)', () => {
+  const meter = { used_tokens: 1_200, window_tokens: 10_000, percent: 12, phase: 'measured' as const, compacted: false, window_fallback: false };
+  const usage = (seq: number, prompt: number, cached?: number): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'usage',
+    payload: { model: 'gpt-x', step: seq, prompt_tokens: prompt, completion_tokens: 10, total_tokens: prompt + 10, reasoning_tokens: 2, ...(cached === undefined ? {} : { cached_tokens: cached }), context: meter },
+  });
+  const total = (seq: number): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'usage_total',
+    payload: { prompt: 3_500, completion: 30, cached: 900, cache_write: 0, reasoning: 4, calls: 3, subagents: { prompt: 300, completion: 10, cached: 0, cache_write: 0, reasoning: 0, calls: 1 } },
+  });
+
+  it('sums the turn’s calls while it runs, with the model and the meter', () => {
+    const view = activeView(run([status(0, 'running'), usage(1, 1_000), usage(2, 2_200, 900)]));
+    expect(view.usage).toEqual({ prompt: 3_200, completion: 20, cached: 900, cache_write: 0, reasoning: 4, calls: 2, final: false, model: 'gpt-x' });
+    expect(view.context?.percent).toBe(12);
+  });
+
+  it('takes the host’s total once the run ended, sub-agents included, and keeps it', () => {
+    const view = replayView([status(0, 'running'), usage(1, 1_000), usage(2, 2_200, 900), total(3), usage(4, 50)]);
+    expect(view.usage).toMatchObject({ prompt: 3_500, cached: 900, calls: 3, final: true, model: 'gpt-x' });
+    expect(view.usage?.subagents?.prompt).toBe(300);
+  });
+
+  it('follows the context event between usage events', () => {
+    const view = activeView(run([usage(1, 1_000), { turn_id: T, seq: 2, kind: 'context', payload: { ...meter, phase: 'compacting' } }]));
+    expect(view.context?.phase).toBe('compacting');
+    expect(view.usage?.calls).toBe(1);
+  });
+});

@@ -15,7 +15,7 @@
 //!   compaction wraps the model, so it measures the request the elision
 //!   left and compacts only when that is still past its trigger.
 //! * **Budget.** [`ProviderBudget`] measures the body the gateway transport
-//!   sends ([`super::model::request_body`]), not an estimate of the adk
+//!   sends ([`super::model::request_body_in`]), not an estimate of the adk
 //!   contents.
 //! * **Summary model.** The agent's own model, through the same `/llm`
 //!   transport and execution id (spend is the turn's), bound quiet: the
@@ -226,15 +226,23 @@ pub struct ProviderBudget {
     pub budget: RequestContextBudget,
     /// As the transport sends history (#1228).
     pub replay: ReasoningReplay,
+    /// The turn's context message and cache breakpoints, as the transport
+    /// lays them out (#1227): the tail weighs what it sends.
+    pub tail: Option<Arc<super::model::TurnTail>>,
+    pub cache_hints: bool,
 }
 
 impl ModelRequestBudget for ProviderBudget {
     fn measure(&self, request: &LlmRequest) -> adk_core::Result<RequestContextUsage> {
-        let body = super::model::request_body(
+        let body = super::model::request_body_in(
             &self.model,
             request,
-            self.replay,
-            super::model::Images::Measure,
+            super::model::Layout {
+                replay: self.replay,
+                images: super::model::Images::Measure,
+                tail: self.tail.as_deref(),
+                cache_hints: self.cache_hints,
+            },
         )?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| adk_core::AdkError::model("the model request could not be encoded"))?;

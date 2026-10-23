@@ -10,7 +10,9 @@
  * - `returning`: read-only, with its notice.
  *
  * A local thread's footer also shows the context meter (`ContextMeter`, lazy)
- * once a model call reported its occupancy; `/compact` marks the next send.
+ * once a model call reported its occupancy, and the usage chip (`UsageChip`,
+ * lazy: the latest turn's tokens, the thread's, a cost only from the
+ * catalogue's price, #1227); `/compact` marks the next send.
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
@@ -20,7 +22,7 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import { composer, type WorkspaceTurn } from '@/features/workspace';
+import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -37,6 +39,7 @@ import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 const ContextMeter = lazy(() => import('./ContextMeter'));
+const UsageChip = lazy(() => import('./UsageChip'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -77,6 +80,34 @@ function latestMeter(turn: WorkspaceTurn) {
   return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
 }
 
+type Usage = WorkspaceTurn['view']['usage'];
+
+/** Each recorded turn's usage (thread history), replayed once per history, not per render. */
+function recordedUsages(history: ThreadSession['history']): { turnId: string; usage: Usage }[] {
+  return history.kind === 'local' ? history.turns.map((stored) => ({ turnId: stored.turn_id, usage: replayView(stored.events).usage })) : [];
+}
+
+/** The usage of the thread's turns that reported any, oldest first: the recorded ones not shown live, then this visit's. */
+function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; usage: Usage }[]): NonNullable<Usage>[] {
+  const live = new Set(turn.earlier.map((earlier) => earlier.turnId));
+  if (turn.turnId !== null) live.add(turn.turnId);
+  const earlier = recorded.filter((entry) => !live.has(entry.turnId)).map((entry) => entry.usage);
+  return [...earlier, ...turn.earlier.map((entry) => entry.view.usage), turn.view.usage].filter((usage): usage is NonNullable<Usage> => usage !== undefined);
+}
+
+const NO_USAGE: NonNullable<Usage>[] = [];
+
+/** The footer's context meter and usage chip (both lazy), once a model call reported either. */
+function ComposerMeters({ meter, usages, projectId }: { meter: ReturnType<typeof latestMeter>; usages: NonNullable<Usage>[]; projectId: number }): React.JSX.Element | null {
+  if (meter === undefined && usages.length === 0) return null;
+  return (
+    <Suspense fallback={null}>
+      {meter === undefined ? null : <ContextMeter meter={meter} />}
+      {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
+    </Suspense>
+  );
+}
+
 /**
  * What the "/" menu offers besides the host commands: the custom commands and the project's own skills (after the
  * agent's), both the local host's only (`local`: none for the cloud copy). The project's skills are read once the
@@ -113,6 +144,8 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   };
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const meter = cloudMode ? undefined : latestMeter(turn);
+  const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
+  const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
   const modelNotice = cloudMode ? null : model.notice;
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
@@ -128,13 +161,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, cloudMode, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={
-          meter === undefined ? undefined : (
-            <Suspense fallback={null}>
-              <ContextMeter meter={meter} />
-            </Suspense>
-          )
-        }
+        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}

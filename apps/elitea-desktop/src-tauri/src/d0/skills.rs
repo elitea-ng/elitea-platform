@@ -319,11 +319,11 @@ pub fn with_project(
 /// The precedence line of the skills section. The order of the system
 /// instructions is the order of authority: the agent's own instructions,
 /// then the skill picked for this turn, then the workspace's AGENTS.md
-/// (`turn::PROJECT_PRECEDENCE` says the same from below).
+/// (`turn::PROJECT_PRECEDENCE` says the same from the other side).
 pub const SKILLS_PRECEDENCE: &str = "Precedence: the agent's own instructions and the \
      environment section above outrank this skill where they disagree; this skill \
-     outranks the workspace's project instructions (AGENTS.md), when a section of \
-     them follows.";
+     outranks the workspace's project instructions (AGENTS.md), when the \
+     instructions carry a section of them.";
 
 /// The agent's instructions, then the invoked skills as one delimited
 /// section (unchanged without any). Each skill is one [`framing::block`]

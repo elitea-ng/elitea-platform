@@ -2851,6 +2851,10 @@
                       "project_id"
                     ],
                     "properties": {
+                      "cached_input_cost_per_1m_tokens": {
+                        "type": "number",
+                        "nullable": true
+                      },
                       "config_id": {
                         "type": "integer"
                       },
@@ -2859,6 +2863,10 @@
                       },
                       "context_window": {
                         "type": "integer",
+                        "nullable": true
+                      },
+                      "currency": {
+                        "type": "string",
                         "nullable": true
                       },
                       "data": {
@@ -2884,6 +2892,10 @@
                       "id": {
                         "type": "integer"
                       },
+                      "input_cost_per_1m_tokens": {
+                        "type": "number",
+                        "nullable": true
+                      },
                       "is_default": {
                         "type": "boolean"
                       },
@@ -2905,6 +2917,10 @@
                       },
                       "openai_compatible": {
                         "type": "boolean",
+                        "nullable": true
+                      },
+                      "output_cost_per_1m_tokens": {
+                        "type": "number",
                         "nullable": true
                       },
                       "project_id": {

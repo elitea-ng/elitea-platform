@@ -18,8 +18,9 @@
 //! keys on the prefix: [`preamble`] (OS, sandbox, network, mode, tools) is
 //! stable within a thread and follows the agent's instructions, while
 //! [`current`] (the date and the workspace's git line, which change daily
-//! and on most turns) is spliced after the skills and AGENTS.md, just
-//! before the memory recall, so the text before it stays cached.
+//! and on most turns) opens the turn's host message before the person's
+//! message (`turn::volatile_context`, #1227), with the skills picked for the
+//! turn and the memory recall, so the system prompt stays cached.
 
 use std::path::Path;
 use std::sync::Arc;

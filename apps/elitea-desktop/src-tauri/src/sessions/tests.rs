@@ -1017,3 +1017,37 @@ fn an_adk_event_round_trips_through_plain_serde_json() {
         serde_json::to_value(&response.llm_response.content).unwrap()
     );
 }
+
+#[tokio::test]
+async fn a_thread_keeps_its_nonce_until_a_reseed_and_threads_do_not_share_one() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let first = sessions.open_session(&me, "fp").await.unwrap().nonce;
+    assert_eq!(first.hex().len(), 32);
+    assert_eq!(sessions.open_session(&me, "fp").await.unwrap().nonce, first);
+    // A changed path policy re-keys the session but is not a re-seed.
+    assert_eq!(
+        sessions.open_session(&me, "fp2").await.unwrap().nonce,
+        first
+    );
+    let reseeded = sessions
+        .seed(&me.key(), Vec::new(), Some("0".into()), &[])
+        .await
+        .unwrap();
+    assert_ne!(reseeded, first);
+    assert_eq!(
+        sessions.open_session(&me, "fp2").await.unwrap().nonce,
+        reseeded
+    );
+    let other = SessionIdentity {
+        conversation_uuid: "aaaaaaaa-2222-4333-8444-555555555555".into(),
+        ..me.clone()
+    };
+    assert_ne!(
+        sessions.open_session(&other, "fp").await.unwrap().nonce,
+        reseeded
+    );
+    // Never printed.
+    assert!(!format!("{reseeded:?}").contains(&reseeded.hex()));
+}

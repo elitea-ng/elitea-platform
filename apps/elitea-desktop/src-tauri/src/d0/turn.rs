@@ -64,15 +64,15 @@ use super::api::{
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::attachments::{Added, Attachment, Attachments, ImagePick};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
-use super::catalogue::{self, Catalogue};
+use super::catalogue::{self, Catalogue, ReasoningReplay};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
-use super::events::{EventEmitter, Phase, Timed, TurnEvents};
+use super::events::{EventEmitter, Phase, Timed, TurnEvents, UsageLane};
 use super::framing;
 use super::mentions;
-use super::model::GatewayTransport;
+use super::model::{GatewayTransport, TurnTail};
 use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
     MCP_AUTHORIZATION_WAIT, RemoteContext, RemoteToolProvider, RetryPolicy,
@@ -783,8 +783,9 @@ pub(super) const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instruct
 /// The precedence line of the AGENTS.md section: it ranks last (see
 /// `skills::SKILLS_PRECEDENCE` for the same order from above).
 pub(super) const PROJECT_PRECEDENCE: &str = "Precedence: these files rank last. The \
-     agent's own instructions, the environment section and any skill picked for \
-     this turn, all above, outrank them where they disagree.";
+     agent's own instructions and the environment section, above, and any skill \
+     picked for this turn (given with the person's message), outrank them where \
+     they disagree.";
 
 /// The agent's instructions (with any skill picked for this turn already
 /// after them), then the workspace's AGENTS.md files as one delimited
@@ -833,29 +834,41 @@ pub fn with_project_instructions(
     }
 }
 
-/// A turn's system prompt, in the order of authority: the agent's
-/// instructions, the stable part of the host's environment section
-/// (trusted: not framed), the skills picked for the turn and the
-/// workspace's AGENTS.md (both untrusted, framed under `nonce`), then the
-/// environment's volatile part (`current`: the date and the git line, last
-/// so a prompt cache keeps everything before it) and the memory recall.
+/// A thread's system prompt (#1227), in the order of authority: the
+/// agent's instructions, the stable part of the host's environment section
+/// (trusted: not framed), then the workspace's AGENTS.md (untrusted, framed
+/// under the thread's `nonce`). Nothing in it changes from one turn of a
+/// thread to the next unless the agent's version, the mode, the tools
+/// offered or the AGENTS.md files do, so a provider's prompt cache keeps
+/// it; what changes every turn is [`volatile_context`].
 #[must_use]
 pub fn system_instruction(
     agent: &str,
     environment: &str,
-    invoked: &[InvokedSkill],
     project: &ProjectInstructions,
+    nonce: &str,
+) -> String {
+    with_project_instructions(&splice_memory(agent, environment), project, nonce)
+}
+
+/// A turn's volatile context (#1227), sent as one host message right
+/// before the person's message (`model::TurnTail`), never stored in the
+/// session: the environment's volatile part (`current`: the date and the
+/// git line), the skills picked for the turn (untrusted, framed under the
+/// thread's `nonce`), then the memory recall, last, by the cloud's splice:
+/// its text and count are what a web turn receives; only where it sits
+/// moved (the cloud worker keeps it in its instructions today).
+#[must_use]
+pub fn volatile_context(
     current: &str,
+    invoked: &[InvokedSkill],
     recall: &str,
     nonce: &str,
 ) -> String {
-    let authored = splice_memory(agent, environment);
-    let stable = with_project_instructions(
-        &skills::with_invoked_skills(&authored, invoked, nonce),
-        project,
-        nonce,
-    );
-    splice_memory(&splice_memory(&stable, current), recall)
+    splice_memory(
+        &skills::with_invoked_skills(current, invoked, nonce),
+        recall,
+    )
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -2255,6 +2268,9 @@ impl AgentHost {
         workspace.prompt.bind(None);
         self.broker.forget_turn(events.turn_id());
         let conversation_id = request.conversation_id.clone();
+        // What every model call of the run used (before `done`, which the
+        // thread history keeps with it).
+        events.usage_total();
         let Some(result) = outcome else {
             let _ = sink.finish(RunOutcome::Stopped).await;
             // Nothing of a cancelled turn is saved: nothing of it stays.
@@ -2583,6 +2599,9 @@ impl AgentHost {
         // (its execution id: the spend is the turn's).
         let summarizer = GatewayTransport {
             quiet: true,
+            lane: UsageLane::Summary,
+            tail: None,
+            cache_hints: false,
             ..transport.clone()
         }
         .bind(ModelRequest {
@@ -2601,6 +2620,8 @@ impl AgentHost {
                 model: model_request,
                 budget,
                 replay: transport.replay,
+                tail: transport.tail.clone(),
+                cache_hints: transport.cache_hints,
             }),
             summarizer,
             Arc::new(host),
@@ -2634,9 +2655,10 @@ impl AgentHost {
         images: &[Arc<Attachment>],
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
-        // This turn's framing nonce: the untrusted blocks end only at a
-        // closing tag carrying it (d0/framing.rs).
-        let nonce = framing::nonce();
+        // The thread's framing nonce: the untrusted blocks end only at a
+        // closing tag carrying it (d0/framing.rs), the same every turn of the
+        // thread, so the system prompt stays cached (#1227).
+        let nonce = memory.nonce.clone();
         // The host's environment section names the tools offered now: the
         // session's, then the index tools when the workspace's index is on
         // and built (they only read, so plan mode keeps them). The index is
@@ -2719,6 +2741,28 @@ impl AgentHost {
         // mode included (a child only reads).
         extra_tools.extend(subagents::TOOL_NAMES.iter().map(|name| (*name).to_owned()));
         facts.tools.extend(extra_tools.iter().cloned());
+        // A command's expansion, framed under the thread's nonce, is the
+        // person's message to the model; anything else goes as typed.
+        let message = command.map_or_else(
+            || request.prompt.clone(),
+            |turn| {
+                mentions::with_mentions(
+                    &slash_commands::model_prompt(&turn.command, &nonce),
+                    &turn.mentions,
+                )
+            },
+        );
+        // What changes every turn goes in a host message before the
+        // person's (`TurnTail`): the system prompt stays the thread's.
+        let tail = Arc::new(TurnTail {
+            text: volatile_context(
+                &environment::current(&facts),
+                invoked,
+                &started.memory_recall.text,
+                &nonce,
+            ),
+            anchor: message.clone(),
+        });
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -2730,20 +2774,23 @@ impl AgentHost {
             recorder: Some(recorder.clone()),
             replay,
             vision,
+            lane: UsageLane::Turn,
+            tail: Some(tail.clone()),
+            // The catalogue's mark of a provider of its own (Anthropic): the
+            // body carries its cache breakpoints (`model::Layout`).
+            cache_hints: replay == ReasoningReplay::SignedBlocks,
         };
         let instruction = system_instruction(
             &admitted.instructions,
             &environment::preamble(&facts),
-            invoked,
             project,
-            &environment::current(&facts),
-            &started.memory_recall.text,
             &nonce,
         );
-        // The transport sends the instruction outside adk's contents: the
-        // elision below counts it as the provider request carries it.
-        let instruction_tokens =
-            elitea_agent_runtime::context_budget::estimate_tokens(instruction.len());
+        // The transport sends the instruction and the tail outside adk's
+        // contents: the elision below counts them as the request carries them.
+        let instruction_tokens = elitea_agent_runtime::context_budget::estimate_tokens(
+            instruction.len() + tail.text.len(),
+        );
         // The agent's `max_tokens`, at most what a chosen model can answer.
         let max_tokens = admitted.model.max_tokens.map(|tokens| {
             if admitted.model_chosen && !limits.max_output_fallback {
@@ -2837,20 +2884,21 @@ impl AgentHost {
             child: None,
         };
         // Sub-agents: the turn's model, quiet, and its local and index tools
-        // (never the remote toolkits); the AGENTS.md sections under this
-        // turn's nonce, never the agent's instructions or the history.
-        let child_instruction = system_instruction(
-            "",
-            &environment::preamble(&child_facts),
-            &[],
-            project,
+        // (never the remote toolkits); the AGENTS.md sections under the
+        // thread's nonce, never the agent's instructions, the history or the
+        // turn's tail. A child's prompt is its own: its volatile part stays
+        // in it. Its usage counts toward the turn's (`UsageLane::SubAgent`).
+        let child_instruction = splice_memory(
+            &system_instruction("", &environment::preamble(&child_facts), project, &nonce),
             &environment::current(&child_facts),
-            "",
-            &nonce,
         );
         let children = SubAgents::new(
             Arc::new(DesktopSubAgents::new(
-                transport.clone(),
+                GatewayTransport {
+                    lane: UsageLane::SubAgent,
+                    tail: None,
+                    ..transport.clone()
+                },
                 child_model,
                 toolsets
                     .iter()
@@ -2980,17 +3028,6 @@ impl AgentHost {
         // approvals); on "continue" the same runner runs again on the same
         // session, within this execution, from the host's own prompt.
         let mut budget = StepBudget::new(admitted.step_limit);
-        // A command's expansion, framed under this turn's nonce, is the
-        // person's message to the model; anything else goes as typed.
-        let message = command.map_or_else(
-            || request.prompt.clone(),
-            |turn| {
-                mentions::with_mentions(
-                    &slash_commands::model_prompt(&turn.command, &nonce),
-                    &turn.mentions,
-                )
-            },
-        );
         let mut content = Content::new("user").with_text(message);
         for image in images {
             content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
@@ -4337,7 +4374,7 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_then_the_environment_then_the_skill_then_agents_md_each_saying_its_rank() {
+    fn the_agent_then_the_environment_then_agents_md_then_the_tail_each_saying_its_rank() {
         use elitea_local_tools::project_instructions::InstructionFile;
         let project = ProjectInstructions {
             files: vec![InstructionFile {
@@ -4351,37 +4388,40 @@ mod tests {
             name: "Style".into(),
             instructions: "Write tersely.".into(),
         }];
-        let assembled = system_instruction(
-            "Be brief.",
-            "## Environment\n- OS: macOS",
-            &skill,
-            &project,
+        let system =
+            system_instruction("Be brief.", "## Environment\n- OS: macOS", &project, NONCE);
+        let tail = volatile_context(
             "## Environment (this turn)\n- Today: 2026-10-10",
+            &skill,
             "Memory: tea.",
             NONCE,
         );
-        let at = |needle: &str| {
-            assembled
-                .find(needle)
-                .unwrap_or_else(|| panic!("{needle}: {assembled}"))
+        let at = |text: &str, needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {text}"))
         };
         let order = [
-            at("Be brief."),
-            at("## Environment\n"),
-            at(skills::SKILLS_HEADING),
-            at(skills::SKILLS_PRECEDENCE),
-            at("Write tersely."),
-            at(skills::END_OF_SKILLS),
-            at("## Project instructions (AGENTS.md)"),
-            at(PROJECT_PRECEDENCE),
-            at("Run task test."),
-            at(END_OF_PROJECT_INSTRUCTIONS),
-            at("## Environment (this turn)\n- Today: 2026-10-10"),
-            at("Memory: tea."),
+            at(&system, "Be brief."),
+            at(&system, "## Environment\n"),
+            at(&system, "## Project instructions (AGENTS.md)"),
+            at(&system, PROJECT_PRECEDENCE),
+            at(&system, "Run task test."),
         ];
-        assert!(order.windows(2).all(|w| w[0] < w[1]), "{assembled}");
-        // The host's section is trusted: it is not framed under the nonce.
-        assert!(!assembled[..at(skills::SKILLS_HEADING)].contains(NONCE));
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+        assert!(system.ends_with(END_OF_PROJECT_INSTRUCTIONS), "{system}");
+        let order = [
+            at(&tail, "## Environment (this turn)\n- Today: 2026-10-10"),
+            at(&tail, skills::SKILLS_HEADING),
+            at(&tail, skills::SKILLS_PRECEDENCE),
+            at(&tail, "Write tersely."),
+            at(&tail, skills::END_OF_SKILLS),
+        ];
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{tail}");
+        // The recall is last, by the cloud's splice.
+        assert!(tail.ends_with("\n\nMemory: tea."), "{tail}");
+        // The host's sections are trusted: they are not framed.
+        assert!(!system[..at(&system, "## Project instructions")].contains(NONCE));
+        assert!(!tail[..at(&tail, skills::SKILLS_HEADING)].contains(NONCE));
         // Each preamble names what outranks it and what it outranks.
         assert!(skills::SKILLS_PRECEDENCE.contains(
             "agent's own instructions and the environment section above outrank this skill"
@@ -4392,15 +4432,17 @@ mod tests {
         );
         assert!(PROJECT_PRECEDENCE.contains("rank last"));
         assert!(PROJECT_PRECEDENCE.contains(
-            "the environment section and any skill picked for this turn, all above, outrank them"
+            "any skill picked for this turn (given with the person's message), outrank them"
         ));
+        // Without skills or recall the tail is the environment's part alone.
+        assert_eq!(volatile_context("## Now", &[], "", NONCE), "## Now");
     }
 
-    /// #1314: two turns whose facts differ only in the date and the git line
-    /// assemble byte-identical prompts up to the environment's volatile part,
-    /// so a provider prompt cache keeps the skills and AGENTS.md text.
+    /// #1314 / #1227: two turns whose facts differ only in the date and the
+    /// git line, and whose skills and recall differ, assemble byte-identical
+    /// system prompts: all of that is in the turn's tail.
     #[test]
-    fn the_date_and_git_line_leave_the_cached_prefix_unchanged() {
+    fn the_date_git_line_skills_and_recall_leave_the_system_prompt_unchanged() {
         use elitea_local_tools::project_instructions::InstructionFile;
         let project = ProjectInstructions {
             files: vec![InstructionFile {
@@ -4434,38 +4476,21 @@ mod tests {
             branch: Some("main".into()),
             changed: 4,
         };
-        let assemble = |facts: &environment::Facts| {
-            system_instruction(
-                "Be brief.",
-                &environment::preamble(facts),
-                &skill,
-                &project,
-                &environment::current(facts),
-                "Memory: tea.",
-                NONCE,
-            )
+        let system = |facts: &environment::Facts| {
+            system_instruction("Be brief.", &environment::preamble(facts), &project, NONCE)
         };
-        let (one, two) = (assemble(&monday), assemble(&tuesday));
-        assert_ne!(one, two);
-        let split = |text: &str| -> usize {
-            text.find(environment::CURRENT_HEADING)
-                .unwrap_or_else(|| panic!("{text}"))
-        };
-        assert_eq!(split(&one), split(&two));
-        let prefix = &one[..split(&one)];
-        assert_eq!(prefix, &two[..split(&two)]);
-        // The prefix carries the stable environment, the skill and AGENTS.md.
-        for needle in [
-            "## Environment\n",
-            "Write tersely.",
-            END_OF_PROJECT_INSTRUCTIONS,
-        ] {
-            assert!(prefix.contains(needle), "{needle}: {prefix}");
-        }
-        assert!(!prefix.contains("2026-10-1"), "{prefix}");
-        assert!(
-            two.ends_with("- Workspace: repo (git: branch main, 4 changed files)\n\nMemory: tea.")
+        assert_eq!(system(&monday), system(&tuesday));
+        let one = volatile_context(&environment::current(&monday), &[], "Memory: tea.", NONCE);
+        let two = volatile_context(
+            &environment::current(&tuesday),
+            &skill,
+            "Memory: cake.",
+            NONCE,
         );
+        assert_ne!(one, two);
+        assert!(!system(&monday).contains("2026-10-1"));
+        assert!(two.starts_with(environment::CURRENT_HEADING), "{two}");
+        assert!(two.ends_with("\n\nMemory: cake."), "{two}");
     }
 
     #[test]

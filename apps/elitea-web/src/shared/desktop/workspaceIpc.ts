@@ -14,6 +14,7 @@ import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 import type { ThreadForkRequest } from './threadForkIpc';
+import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 
 export type { ContextMeter } from './contextMeter';
 export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnStartRequest } from './turnStart';
@@ -174,8 +175,9 @@ export type AgentEvent =
   | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
-  /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
-  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number; context?: ContextMeter } })
+  /** One of the turn's model calls (`turnUsage.ts`): `prompt_tokens` is what it sent (the context in use); `context` its request occupancy (the composer's meter). Absent when the gateway reports no usage. */
+  | (EventBase & { kind: 'usage'; payload: UsagePayload })
+  | (EventBase & { kind: 'usage_total'; payload: UsageTotalPayload })
   /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
   | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })

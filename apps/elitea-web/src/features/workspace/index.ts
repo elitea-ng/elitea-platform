@@ -12,6 +12,7 @@ import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
+import { sumUsage } from './model/turnUsage';
 import { ApprovalCard } from './ui/ApprovalCard';
 import { ApprovalDialog } from './ui/ApprovalDialog';
 import { ImageStrip } from './ui/ImageStrip';
@@ -32,7 +33,7 @@ export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
 
-/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip and its image strip (also under a sent prompt), as one bundle. */
+/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip, its image strip (also under a sent prompt) and its usage sum (a thread's tokens), as one bundle. */
 export const composer = {
   activeToken,
   mentionText,
@@ -47,6 +48,7 @@ export const composer = {
   skillToken,
   ModelChip,
   ImageStrip,
+  sumUsage,
 };
 
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */

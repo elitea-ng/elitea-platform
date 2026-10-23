@@ -125,6 +125,82 @@ pub struct TurnEvents {
     seq: Mutex<u64>,
     clock: Mutex<Clock>,
     context: Mutex<Option<ContextMeter>>,
+    usage: Mutex<Ledger>,
+}
+
+/// One model call's token usage as the gateway reported it (#1227).
+/// `cached` and `cache_write` are parts of `prompt` (the gateway counts a
+/// cache read or write among the prompt tokens and bills it at the input
+/// price), `reasoning` a part of `completion`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CallUsage {
+    pub prompt: u64,
+    pub completion: u64,
+    pub total: u64,
+    /// `prompt_tokens_details.cached_tokens`: read from the provider's cache.
+    pub cached: Option<u64>,
+    /// `prompt_tokens_details.cache_write_tokens`: written to it (Anthropic).
+    pub cache_write: Option<u64>,
+    /// `completion_tokens_details.reasoning_tokens`.
+    pub reasoning: Option<u64>,
+}
+
+/// Whose model call it was. Every call goes to the gateway on the turn's
+/// execution id, so every one counts toward the turn's `usage_total`;
+/// only the turn's own calls send a `usage` event each.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UsageLane {
+    /// The agent's own model step.
+    #[default]
+    Turn,
+    /// A context compaction's summary call (quiet).
+    Summary,
+    /// A sub-agent's model step (#1226, quiet): also counted apart.
+    SubAgent,
+}
+
+/// What the calls of one lane, or of the whole turn, added up to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Totals {
+    prompt: u64,
+    completion: u64,
+    cached: u64,
+    cache_write: u64,
+    reasoning: u64,
+    calls: u64,
+}
+
+impl Totals {
+    fn add(&mut self, usage: &CallUsage) {
+        self.prompt = self.prompt.saturating_add(usage.prompt);
+        self.completion = self.completion.saturating_add(usage.completion);
+        self.cached = self.cached.saturating_add(usage.cached.unwrap_or(0));
+        self.cache_write = self
+            .cache_write
+            .saturating_add(usage.cache_write.unwrap_or(0));
+        self.reasoning = self.reasoning.saturating_add(usage.reasoning.unwrap_or(0));
+        self.calls += 1;
+    }
+
+    fn payload(&self) -> Value {
+        json!({
+            "prompt": self.prompt,
+            "completion": self.completion,
+            "cached": self.cached,
+            "cache_write": self.cache_write,
+            "reasoning": self.reasoning,
+            "calls": self.calls,
+        })
+    }
+}
+
+/// The turn's usage so far.
+#[derive(Default)]
+struct Ledger {
+    all: Totals,
+    subagents: Totals,
+    /// The turn's own model calls so far (the `usage` events' `step`).
+    steps: u64,
 }
 
 /// The request occupancy the next `usage` event carries (#1217), and a
@@ -146,10 +222,19 @@ pub struct ContextMeter {
 }
 
 impl ContextMeter {
+    /// The share of the window in use, 0 to 100 (the meter's figure).
+    fn percent(&self) -> u64 {
+        if self.window_tokens == 0 {
+            return 0;
+        }
+        (self.used_tokens.saturating_mul(100) / u64::from(self.window_tokens)).min(100)
+    }
+
     fn payload(&self) -> Value {
         let mut value = json!({
             "used_tokens": self.used_tokens,
             "window_tokens": self.window_tokens,
+            "percent": self.percent(),
             "phase": self.phase,
             "compacted": self.compacted_at.is_some(),
             "window_fallback": self.window_fallback,
@@ -180,6 +265,7 @@ impl TurnEvents {
                 tools_ran: false,
             }),
             context: Mutex::new(None),
+            usage: Mutex::new(Ledger::default()),
         }
     }
 
@@ -397,32 +483,73 @@ impl TurnEvents {
         self.send("thinking_end", json!({ "chars": chars }));
     }
 
-    /// One model call's token usage, as the gateway reported it (`prompt_tokens`
-    /// is what that call sent: the context in use; `completion_tokens` what it
-    /// produced). Sent once the call's stream has ended, only when the gateway
-    /// reported usage. `context` is the call's request occupancy when the
-    /// step compaction measured it (#1217): the composer's context meter.
-    /// `reasoning_tokens` (of `completion_tokens`) when the gateway names
-    /// them (`completion_tokens_details.reasoning_tokens`).
-    pub fn usage(
-        &self,
-        prompt_tokens: u32,
-        completion_tokens: u32,
-        total_tokens: u32,
-        reasoning_tokens: Option<u32>,
-    ) {
+    /// One model call's token usage, as the gateway reported it: counted
+    /// toward the turn's total whoever made the call ([`UsageLane`]), and
+    /// for the turn's own calls sent as a `usage` event once the call's
+    /// stream ended: `prompt_tokens` (what the call sent: the context in
+    /// use, cached tokens included), `completion_tokens` (what it produced),
+    /// the cached, cache-write and reasoning parts when the gateway names
+    /// them, the model, the call's `step` in the turn (from 1), and
+    /// `context`, the call's request occupancy as the step compaction
+    /// measured it (#1217): the composer's context meter.
+    pub fn model_usage(&self, lane: UsageLane, model: &str, usage: CallUsage) {
+        let step = {
+            let mut ledger = self
+                .usage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ledger.all.add(&usage);
+            match lane {
+                UsageLane::Turn => {
+                    ledger.steps += 1;
+                    ledger.steps
+                }
+                UsageLane::SubAgent => {
+                    ledger.subagents.add(&usage);
+                    return;
+                }
+                UsageLane::Summary => return,
+            }
+        };
         let mut payload = json!({
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
+            "model": model,
+            "step": step,
+            "prompt_tokens": usage.prompt,
+            "completion_tokens": usage.completion,
+            "total_tokens": usage.total,
         });
-        if let Some(reasoning) = reasoning_tokens {
-            payload["reasoning_tokens"] = json!(reasoning);
+        for (key, value) in [
+            ("cached_tokens", usage.cached),
+            ("cache_write_tokens", usage.cache_write),
+            ("reasoning_tokens", usage.reasoning),
+        ] {
+            if let Some(value) = value.filter(|n| *n > 0) {
+                payload[key] = json!(value);
+            }
         }
         if let Some(context) = self.context_payload() {
             payload["context"] = context;
         }
         self.send("usage", payload);
+    }
+
+    /// `usage_total`, once the turn's run ended (before `done`): every model
+    /// call made on the turn's execution id, the agent's steps, compaction
+    /// summaries and sub-agents together (what the gateway's request log
+    /// holds for it), with the sub-agents' share apart when there was any.
+    pub fn usage_total(&self) {
+        let (all, subagents) = {
+            let ledger = self
+                .usage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (ledger.all, ledger.subagents)
+        };
+        let mut payload = all.payload();
+        if subagents.calls > 0 {
+            payload["subagents"] = subagents.payload();
+        }
+        self.send("usage_total", payload);
     }
 
     pub fn error(&self, code: &str, message: &str) {
@@ -483,7 +610,16 @@ mod tests {
         events.context(meter("compacted", 1_500));
         events.context(meter("compacted", 1_600));
         events.context(meter("measured", 1_700));
-        events.usage(1, 1, 2, None);
+        events.model_usage(
+            UsageLane::Turn,
+            "m",
+            CallUsage {
+                prompt: 1,
+                completion: 1,
+                total: 2,
+                ..CallUsage::default()
+            },
+        );
         let all = emitter.all();
         let sent: Vec<(&str, &str)> = all
             .iter()
@@ -506,6 +642,7 @@ mod tests {
             ]
         );
         assert_eq!(all[0].payload["used_tokens"], 7_000);
+        assert_eq!(all[0].payload["percent"], 85);
         assert_eq!(all[0].payload["compacted"], false);
         assert!(all[1].payload["compacted_at"].is_string());
         assert_eq!(all[2].payload["compacted"], true, "the compaction is kept");
@@ -548,6 +685,45 @@ mod tests {
             phases,
             ["first_token", "tools"],
             "the first token is timed once"
+        );
+    }
+
+    #[test]
+    fn every_call_counts_toward_the_total_and_only_the_turns_own_send_usage() {
+        let emitter = Arc::new(VecEmitter::default());
+        let events = TurnEvents::new("t".into(), emitter.clone());
+        let call = |prompt: u64, cached: Option<u64>| CallUsage {
+            prompt,
+            completion: 10,
+            total: prompt + 10,
+            cached,
+            cache_write: None,
+            reasoning: Some(4),
+        };
+        events.model_usage(UsageLane::Turn, "m", call(1_000, None));
+        events.model_usage(UsageLane::SubAgent, "m", call(300, Some(100)));
+        events.model_usage(UsageLane::Summary, "m", call(500, None));
+        events.model_usage(UsageLane::Turn, "m", call(1_200, Some(900)));
+        events.usage_total();
+        let all = emitter.all();
+        assert_eq!(
+            all.iter().map(|e| e.kind).collect::<Vec<_>>(),
+            ["usage", "usage", "usage_total"]
+        );
+        assert_eq!(all[0].payload["step"], 1);
+        assert!(all[0].payload.get("cached_tokens").is_none());
+        assert_eq!(all[1].payload["step"], 2);
+        assert_eq!(all[1].payload["cached_tokens"], 900);
+        assert_eq!(all[1].payload["reasoning_tokens"], 4);
+        assert_eq!(all[1].payload["model"], "m");
+        assert_eq!(
+            all[2].payload,
+            json!({
+                "prompt": 3_000, "completion": 40, "cached": 1_000, "cache_write": 0,
+                "reasoning": 16, "calls": 4,
+                "subagents": {"prompt": 300, "completion": 10, "cached": 100,
+                    "cache_write": 0, "reasoning": 4, "calls": 1},
+            })
         );
     }
 }

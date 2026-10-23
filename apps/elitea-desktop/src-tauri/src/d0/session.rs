@@ -36,6 +36,10 @@ const CARRIED_ON_SEED: &[&str] = &[MODEL_CHOICE_KEY];
 pub struct SessionPlan {
     pub service: Arc<dyn SessionService>,
     pub session_id: String,
+    /// The thread's framing nonce, as 32 hex digits: the stored one, a new
+    /// one when the session was (re)seeded from the server, and a fresh one
+    /// per turn for the in-memory fallback (`crate::sessions::ThreadNonce`).
+    pub nonce: String,
     /// The durable store behind it; `None` for the in-memory fallback.
     durable: Option<Durable>,
     /// The conversation's group count after this turn's two messages.
@@ -146,18 +150,20 @@ impl SessionPlan {
             Vec::new()
         };
         match durable {
-            Some((state_store, key, _)) => {
+            Some((state_store, key, state)) => {
                 let store = state_store.store().clone();
+                let mut nonce = state.nonce;
                 if needs_seed {
                     // Empty conversation or not, the session now agrees.
-                    if let Err(error) = store.seed(&key, events, cursor_now, CARRIED_ON_SEED).await
-                    {
-                        log::warn!("the session could not be seeded: {error}");
+                    match store.seed(&key, events, cursor_now, CARRIED_ON_SEED).await {
+                        Ok(reseeded) => nonce = reseeded,
+                        Err(error) => log::warn!("the session could not be seeded: {error}"),
                     }
                 }
                 Ok(Self {
                     service: state_store.sessions(),
                     session_id: key.clone(),
+                    nonce: nonce.hex(),
                     durable: Some(Durable { store, key, scope }),
                     cursor_after,
                 })
@@ -184,6 +190,7 @@ impl SessionPlan {
                 Ok(Self {
                     service,
                     session_id,
+                    nonce: super::framing::nonce(),
                     durable: None,
                     cursor_after: None,
                 })

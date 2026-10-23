@@ -556,8 +556,9 @@ instructions, no two skills under one name, the catalogue's bounds; then
 fails the start with `skill_invalid`, naming the skill. All of these after
 the definition is read and before the turn is started on the platform
 (the runtime loads every attached skill, so such a turn could not run).
-The picked skills are appended to the agent's instructions, before the
-AGENTS.md section, as one `## Skill for this turn` section with one
+The picked skills go in the turn's host context message (**Prompt
+layout**, below), after the environment's volatile part and before the
+memory recall, as one `## Skill for this turn` section with one
 `<invoked_skill nonce="…" name="…">` block per skill, ending with
 `## End of skill instructions`; the name is escaped as an attribute value
 and the text is framed as AGENTS.md text is (below). Every attached skill
@@ -645,24 +646,49 @@ mention, the `AGENTS.md` of every folder between it and the root, nearest
 first, deduplicated. Reads go through the confined workspace: a symlinked
 file or folder is not read and a `path_deny` match is refused. All files
 together are capped at 32 KiB; a cut file ends with a truncation note and
-files past the cap are skipped. They are appended to the agent's system
-instructions, after the agent's own instructions and any picked skill
-(which outrank it, as the section's preamble says) and before the memory
-splice, as one `## Project instructions (AGENTS.md)` section with one
+files past the cap are skipped. They end the system instructions, after
+the agent's own instructions and the environment section (which outrank
+them, as does any picked skill, as the section's preamble says), as one
+`## Project instructions (AGENTS.md)` section with one
 `<agents_md nonce="…" path="…">` block per file. The path is escaped as an
 attribute value (`&`, `"`, `<`, `>` and control characters as entities).
 Edits apply from the next turn.
 
 **Nonce framing** (AGENTS.md and skills alike, `src/d0/framing.rs`). Every
-turn draws a fresh random 128-bit nonce `N` (32 hex digits). A block opens
+thread has a random 128-bit nonce `N` (32 hex digits), drawn when its
+session is created in `sessions.sqlite` and again whenever the session is
+re-seeded from the server (a fork is a new conversation, so a new session);
+a turn without the store draws a fresh one. It is kept only in host data,
+never logged, never written into the workspace and sent nowhere but inside
+the prompt to `/llm`; one nonce per thread keeps the system prompt
+byte-identical across turns (#1227). A block opens
 with `<tag nonce="N" …>` and ends only at `</tag nonce="N">`; each section's
 preamble says so, and that everything before that closing tag — including
 text that looks like a closing tag, a heading or the end of the section —
 is the block's content. The text is left byte for byte as written
 (Markdown headings, `Vec<u8>`, `#include`, shell comments and tags of its
 own included), except for the one sequence that could end the block: the
-exact closing tag with this turn's nonce (ASCII case ignored), which the
+exact closing tag with this thread's nonce (ASCII case ignored), which the
 text cannot know in advance; should it occur, its `</` becomes `<\/`.
+
+**Prompt layout** (#1227, `src/d0/turn.rs`, `src/d0/model.rs`). The system
+message is the thread's stable prefix: the agent's instructions, the
+stable part of the environment section (OS, sandbox, network, mode, tools),
+then the AGENTS.md section, plus what the runtime adds (the skill
+catalogue). Tools are sorted by name. Everything that changes every turn
+goes in one host-authored message (`{"role": "user", "name":
+"host_context"}`) placed right before the person's message of the turn, at
+every step of it: `## Environment (this turn)` (the date and the git line),
+the picked skills, then the memory recall, last, by the cloud's splice (its
+text and count are what a web turn receives; only its place moved). The
+message is not stored in the session: the next turn has its own, and no
+recall is reused. Sub-agents keep their own one-shot prompt. On a model the
+catalogue marks `openai_compatible: false` (Anthropic) the body carries
+`cache_control: {type: "ephemeral"}` on the system message (as one text
+part), on the last tool and on the request's last message; the gateway's
+Bifrost core forwards them to Anthropic and reports cache writes as
+`prompt_tokens_details.cache_write_tokens`. A compaction summary call sends
+none.
 
 ```ts
 type FileChange = {
@@ -1494,7 +1520,8 @@ order. Kinds and payloads:
 | `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, reasoning_tokens?: number, context?: ContextMeter}` — `reasoning_tokens` (of `completion_tokens`) when the gateway names them (`completion_tokens_details.reasoning_tokens`); one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
+| `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
+| `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
@@ -1510,8 +1537,8 @@ order. Kinds and payloads:
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`)* →
-`status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
-ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
+`usage_total` → `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
+ends `usage_total` → `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its
 `error` event comes before `status` `error`. `done` ends the turn for the
@@ -1623,6 +1650,7 @@ that does not know the field ignores it). An agent version whose
 type ContextMeter = {
   used_tokens: number;      // the request's estimated input tokens
   window_tokens: number;    // the window the budget uses (the model's, at most 272k)
+  percent: number;          // used of window, 0-100 (the meter's figure; it warns at 80)
   phase: "measured" | "compacting" | "compacted";
   compacted: boolean;       // this turn compacted
   compacted_at?: string;    // when it last did (RFC 3339, UTC)

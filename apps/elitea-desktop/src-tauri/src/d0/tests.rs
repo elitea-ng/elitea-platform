@@ -513,6 +513,7 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
             "tool_result:call-remote",
             "text_delta",
             "text_delta",
+            "usage_total",
             "status:done",
             "done",
         ]
@@ -598,9 +599,12 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         system.starts_with("Be brief.\n\n## Environment\n"),
         "{system}"
     );
+    // The recall is the turn's: in the host message before the person's,
+    // its text as the server answered it (#1227).
+    assert!(!system.contains("Memory: the user likes tea."), "{system}");
     assert!(
-        system.find("\n\nMemory: the user likes tea.") > system.find("## Environment"),
-        "{system}"
+        host_context(&first).ends_with("\n\nMemory: the user likes tea."),
+        "{first}"
     );
     assert!(system.contains("Available skill: Style."), "{system}");
     let tools: Vec<&str> = first["tools"]
@@ -618,9 +622,22 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         .iter()
         .map(|m| m["role"].as_str().unwrap())
         .collect();
+    // The turn's host context, then the person's message (#1227).
     assert_eq!(
         roles,
-        ["system", "user", "assistant", "tool", "assistant", "tool"]
+        [
+            "system",
+            "user",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool"
+        ]
+    );
+    assert_eq!(
+        third["messages"][1]["name"],
+        crate::d0::model::HOST_CONTEXT_NAME
     );
 
     // The remote call: 409, then the approved call with a new key.
@@ -1847,16 +1864,19 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
+    // The system prompt is the thread's; the skill and the recall are this
+    // turn's, in the host message before the person's (#1227).
     let agent = system.find("Be brief.").unwrap();
-    let skill = system
+    let project = system.find("Run task test.").unwrap();
+    assert!(agent < project, "{system}");
+    let tail = host_context(&first);
+    let skill = tail
         .find("name=\"Style\">\nWrite tersely.\n</invoked_skill nonce=\"")
         .unwrap();
-    let project = system.find("Run task test.").unwrap();
-    let memory = system.find("Memory: the user likes tea.").unwrap();
-    assert!(
-        agent < skill && skill < project && project < memory,
-        "{system}"
-    );
+    let memory = tail.find("Memory: the user likes tea.").unwrap();
+    assert!(skill < memory, "{tail}");
+    assert!(!system.contains("Write tersely."), "{system}");
+    assert!(!system.contains("Memory: the user likes tea."), "{system}");
     // It stays in the runtime's catalogue as well; the prompt is as typed.
     assert!(system.contains("Available skill: Style."), "{system}");
     let start = &seen(
@@ -1915,24 +1935,30 @@ async fn system_prompt_order_env_before_untrusted() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
-    let at = |needle: &str| {
-        system
-            .find(needle)
-            .unwrap_or_else(|| panic!("{needle}: {system}"))
+    let tail = host_context(&first);
+    let at = |text: &str, needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {text}"))
     };
     let order = [
-        at("Be brief."),
-        at("## Environment\n"),
-        at("name=\"Style\">\nWrite tersely."),
-        at("Run task test."),
-        at("## Environment (this turn)\n"),
-        at("Memory: the user likes tea."),
+        at(system, "Be brief."),
+        at(system, "## Environment\n"),
+        at(system, "Run task test."),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+    let tail_order = [
+        at(&tail, "## Environment (this turn)\n"),
+        at(&tail, "name=\"Style\">\nWrite tersely."),
+        at(&tail, "Memory: the user likes tea."),
+    ];
+    assert!(tail_order.windows(2).all(|w| w[0] < w[1]), "{tail}");
     let environment = &system[order[1]..];
     let environment = &environment[..environment.find("\n\n## ").unwrap()];
-    // The volatile lines (date, git) come last, after AGENTS.md (#1314).
-    let current = &system[order[4]..order[5]];
+    // The volatile lines (date, git) are the turn's, out of the system
+    // prompt (#1314, #1227).
+    let current = &tail[tail_order[0]..];
+    let current = &current[..current.find("\n\n## ").unwrap()];
+    assert!(!system.contains(environment::CURRENT_HEADING), "{system}");
     let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
     assert!(
         current.contains(&format!(
@@ -2190,9 +2216,10 @@ async fn project_skill_is_fetched_by_host_not_ui() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
+    let tail = host_context(&first);
     assert!(
-        system.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
-        "{system}"
+        tail.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
+        "{tail}"
     );
     // Applied to this turn only: the load_skill catalogue stays the version's.
     assert!(system.contains("Available skill: Style."), "{system}");
@@ -3451,13 +3478,37 @@ fn seed_requests(server: &MockServer) -> usize {
         .count()
 }
 
-/// `(role, content text, tool names)` of a request body, without the system message.
+/// The turn's host context message of a request body (#1227): the
+/// environment's volatile part, the turn's skills and the recall.
+fn host_context(body: &Value) -> String {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The person's messages of a request body (not the host's context).
+fn person_messages(body: &Value) -> Vec<&Value> {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "user" && m["name"] != crate::d0::model::HOST_CONTEXT_NAME)
+        .collect()
+}
+
+/// `(role, content text, tool names)` of a request body, without the system
+/// message and the turn's host context message.
 fn shape(body: &Value) -> Vec<(String, String, Vec<String>)> {
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|m| m["role"] != "system")
+        .filter(|m| m["role"] != "system" && m["name"] != crate::d0::model::HOST_CONTEXT_NAME)
         .map(|m| {
             (
                 m["role"].as_str().unwrap().to_owned(),
@@ -7013,12 +7064,7 @@ async fn user_image_is_sent_as_image_url_data_uri() {
     until_done_of(&h, &started.turn_id).await;
 
     let bodies = llm_bodies(&h.server);
-    let user = bodies[0]["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|m| m["role"] == "user")
-        .unwrap();
+    let user = person_messages(&bodies[0])[0];
     let parts = user["content"].as_array().expect("text and image parts");
     assert_eq!(parts.len(), 2, "{parts:?}");
     assert_eq!(parts[0]["type"], "text");
@@ -7067,12 +7113,7 @@ async fn text_only_body_is_unchanged() {
     let started = h.host.start(request(&h.workspace_id)).await.unwrap();
     until_done_of(&h, &started.turn_id).await;
     let bodies = llm_bodies(&h.server);
-    let user = bodies[0]["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|m| m["role"] == "user")
-        .unwrap();
+    let user = person_messages(&bodies[0])[0];
     // A plain string, as before images existed: prompt caches key on it.
     assert_eq!(user["content"], "Write notes and file a bug");
     assert_eq!(
@@ -7464,4 +7505,157 @@ async fn turn_cancel_stops_children() {
     assert_eq!(finished.len(), 1, "{:?}", h.emitter.kinds());
     assert_eq!(finished[0]["status"], "cancelled");
     assert_eq!(events.last().unwrap().payload["committed"], false);
+}
+
+/// The thread's framing nonce, as the system prompt's AGENTS.md block carries it.
+fn framing_nonce(body: &Value) -> String {
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    let at = system
+        .find("<agents_md nonce=\"")
+        .unwrap_or_else(|| panic!("{system}"))
+        + "<agents_md nonce=\"".len();
+    system[at..at + 32].to_owned()
+}
+
+/// #1227: with nothing stable changed, every turn of a thread sends the same
+/// system message and tools (the cacheable prefix); before the per-thread
+/// nonce each turn's AGENTS.md block carried a fresh one.
+#[tokio::test]
+async fn system_prefix_is_stable_across_turns_of_a_thread() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    let (first, last) = (&bodies[0], &bodies[2]);
+    assert_eq!(first["messages"][0], last["messages"][0]);
+    assert_eq!(first["tools"], last["tools"]);
+    // The turns differ after the prefix: the history, the tail, the message.
+    assert_ne!(first["messages"], last["messages"]);
+    assert!(!host_context(last).is_empty());
+}
+
+#[tokio::test]
+async fn nonce_is_per_thread_and_not_in_workspace() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    let nonce = framing_nonce(&bodies[0]);
+    assert_eq!(nonce.len(), 32);
+    assert!(nonce.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(framing_nonce(&bodies[2]), nonce, "one nonce per thread");
+    // Only the prompt to /llm carries it: no other request, no file of the
+    // workspace (the store keeps it as bytes in the app's data).
+    for req in h.server.seen() {
+        if req.path != "/llm/v1/chat/completions" {
+            assert!(!req.body.contains(&nonce), "{}", req.path);
+        }
+    }
+    let mut dirs = vec![h.folder.path().to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains(&nonce),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+    }
+    // A session re-seeded from the server draws a new one.
+    h.host.mark_session_stale(CONVERSATION_UUID).await;
+    run_turn(&h, "and what was in it?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_ne!(framing_nonce(bodies.last().unwrap()), nonce);
+}
+
+/// The memory recall moves from the end of the system prompt to the end of
+/// the turn's host message, its text exactly as the server answered it.
+#[tokio::test]
+async fn recall_moves_to_the_tail_with_identical_text() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let bodies = llm_bodies(&h.server);
+    const RECALL: &str = "Memory: the user likes tea.";
+    for body in &bodies {
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains(RECALL), "{system}");
+        let tail = host_context(body);
+        assert_eq!(tail.matches(RECALL).count(), 1, "{tail}");
+        assert!(tail.ends_with(&format!("\n\n{RECALL}")), "{tail}");
+        // Right before the person's message, every step of the turn.
+        let messages = body["messages"].as_array().unwrap();
+        let at = messages
+            .iter()
+            .position(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
+            .unwrap();
+        assert_eq!(messages[at + 1]["content"], "Write notes and file a bug");
+    }
+}
+
+#[tokio::test]
+async fn usage_event_carries_cached_and_reasoning_tokens() {
+    let usage = |prompt: u64, cached: u64| {
+        json!({"choices": [], "usage": {"prompt_tokens": prompt, "completion_tokens": 12,
+            "total_tokens": prompt + 12,
+            "prompt_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 40},
+            "completion_tokens_details": {"reasoning_tokens": 3}}})
+    };
+    let script: Script = Box::new(move |body: &Value| {
+        if last_message(body)["role"] == "tool" {
+            sse(&[
+                json!({"choices": [{"delta": {"content": "Done."}}]}),
+                json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+                usage(2_100, 1_536),
+            ])
+        } else {
+            sse(&[
+                json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-u",
+                    "type": "function", "function": {"name": "write_file",
+                    "arguments": json!({"path": "u.txt", "content": "u"}).to_string()}}]}}]}),
+                json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+                usage(2_000, 0),
+            ])
+        }
+    });
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let turn_id = run_turn(&h, "write u.txt").await;
+    let events = events_of(&h, &turn_id);
+    let usage = of_kind(&events, "usage");
+    assert_eq!(usage.len(), 2);
+    assert_eq!(usage[0]["step"], 1);
+    assert_eq!(usage[0]["model"], "gpt-test");
+    assert!(usage[0].get("cached_tokens").is_none(), "{:?}", usage[0]);
+    assert_eq!(usage[1]["step"], 2);
+    assert_eq!(usage[1]["prompt_tokens"], 2_100);
+    assert_eq!(usage[1]["cached_tokens"], 1_536);
+    assert_eq!(usage[1]["cache_write_tokens"], 40);
+    assert_eq!(usage[1]["reasoning_tokens"], 3);
+    assert!(usage[1]["context"]["percent"].is_u64(), "{:?}", usage[1]);
+    // The turn's total, before its `done`, which the thread history keeps.
+    let total = of_kind(&events, "usage_total");
+    assert_eq!(
+        total,
+        [json!({"prompt": 4_100, "completion": 24, "cached": 1_536,
+            "cache_write": 80, "reasoning": 6, "calls": 2})]
+    );
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("usage_total") < at("done"));
 }

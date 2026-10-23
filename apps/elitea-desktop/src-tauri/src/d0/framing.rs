@@ -2,16 +2,23 @@
 //! workspace's AGENTS.md, a skill the person picked): one delimited block
 //! per source, which its own text cannot close.
 //!
-//! **Nonce framing.** Every turn draws a fresh 128-bit [`nonce`]. A block
+//! **Nonce framing.** Every thread has its own 128-bit nonce, drawn when
+//! its session is created or re-seeded from the server and kept in the
+//! session store (`crate::sessions::ThreadNonce`; a turn without the store
+//! draws a fresh [`nonce`]), so the system prompt that carries it stays
+//! byte-identical across the thread's turns (#1227). It never leaves the
+//! host except inside the prompt to `/llm`, and is never written into the
+//! workspace or logged. A block
 //! opens with `<tag nonce="N" …>` and ends only at `</tag nonce="N">`, and
 //! the section's preamble tells the model so ([`ends_only_at`]). The text
 //! inside is left byte for byte as written — Markdown headings, `Vec<u8>`,
 //! `#include`, shell comments and tags of its own all pass through — except
 //! for the one sequence that would end the block: the exact closing tag
-//! with this turn's nonce, which the text cannot know in advance. Should it
+//! with this thread's nonce, which the text cannot know in advance. Should it
 //! appear anyway, its `</` becomes `<\/` ([`sealed`]).
 
-/// A fresh 128-bit nonce for one turn's framing, as 32 hex digits.
+/// A fresh 128-bit nonce, as 32 hex digits (a turn that has no stored
+/// session draws one).
 #[must_use]
 pub fn nonce() -> String {
     let bytes: [u8; 16] = rand::random();

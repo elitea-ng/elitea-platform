@@ -24,6 +24,7 @@ import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
+import type { TurnUsage } from './turnUsage';
 
 export type { TranscriptItem } from './transcriptItem';
 
@@ -48,6 +49,8 @@ export interface TurnView {
   commitFailed?: { executionId: string; code: string; message: string; seq: number };
   /** The latest model call's context occupancy (the composer's meter). */
   context?: ContextMeter;
+  /** The turn's tokens: its calls so far, then the host's `usage_total` (#1227). */
+  usage?: TurnUsage;
   /** The agent's checklist as this turn last sent it (`plan_updated`); `null` once deleted, absent when the turn sent none. */
   plan?: PlanView | null;
   /** The plan `exit_plan_mode` proposed, waiting for Accept / Decline. */

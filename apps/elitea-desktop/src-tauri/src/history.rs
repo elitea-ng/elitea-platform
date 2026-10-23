@@ -30,8 +30,9 @@
 //! deletes its rows for every account.
 //!
 //! Bounds: one event's strings are cut at [`MAX_EVENT_STRING`] bytes, a
-//! turn's events at [`MAX_TURN_EVENT_BYTES`] (past it only `status`, `error`
-//! and `done` are kept, and the turn is marked `events_truncated`), its
+//! turn's events at [`MAX_TURN_EVENT_BYTES`] (past it only `status`, `error`,
+//! `usage_total` and `done` are kept, and the turn is marked
+//! `events_truncated`), its
 //! reasoning apart at [`MAX_TURN_THINKING_BYTES`] (past it, dropped), a turn's
 //! stored diffs at [`MAX_DIFF_BYTES`] each and [`MAX_CHANGES_BYTES`] in all,
 //! and a thread keeps its newest [`MAX_TURNS_PER_THREAD`] turns within
@@ -1696,7 +1697,9 @@ impl TurnTap {
             Self::queue(store, recording, op);
             return;
         }
-        let essential = matches!(event.kind, "status" | "error" | "done");
+        // `usage_total` too: the thread's token totals are the sum of its
+        // turns' (#1227), which a long turn's cap must not lose.
+        let essential = matches!(event.kind, "status" | "error" | "done" | "usage_total");
         let payload = bounded(event.payload.clone()).to_string();
         if !essential
             && (recording.capped || recording.bytes + payload.len() > MAX_TURN_EVENT_BYTES)

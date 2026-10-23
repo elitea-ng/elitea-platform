@@ -1205,6 +1205,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			currentConfigurationsConfig.PublicProjectID,
 			currentAuth,
 			currentPermissions,
+			// Gateway catalogue prices on llm items, behind the budget routes'
+			// can_see_amounts rule (#1227).
+			configurationapi.WithModelPrices(dbrepos.NewModelPriceRepository(pool)),
 		)
 		if err != nil {
 			return fmt.Errorf("compose current Configurations model route: %w", err)
