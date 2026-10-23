@@ -218,10 +218,17 @@ Proofs:
 - **Graph Agent call ids** are now `pipeline-v2:<node>:<digest>:<step>` instead of `pipeline:<node>:<step>`. They are
   opaque correlation ids; the projector already understood `pipeline-v2` (`agents/events.rs`) and no Web or Main
   code parses either form (searched `apps/elitea-web/src`, `services/elitea-main`).
-- **A nested Agent whose saved pipeline attachment cannot be run under a graph root** (a static pause, a third
-  ordinary scope, a pause kind the coordinator does not support) now fails the pipeline run at assembly with
-  `native_agent.unsupported_capability`, before any model call. Before this PR the attachment was silently dropped
-  and the Agent ran without it. A named degrade, as the ordinary parent has, is a follow-up (below).
+- **A nested Agent whose saved pipeline attachment the Worker cannot build** (a deleted frozen version, a third
+  ordinary scope, a pause kind the coordinator does not support) is skipped and named in the browser notice, as a
+  root Agent's attachment is (#990); the turn still answers. Review round 1 reverted an earlier draft of this PR that
+  failed every turn at assembly.
+- **Static pause card text** (Web): "Execution paused at static interrupt. Choose the action to proceed or type the
+  continuation message in chat." (was "Execution paused at {{node}}. Choose the action to proceed.").
+- **Typed continuation** (Web): a message typed in the chat input while a static pause is current continues that pause
+  with the text (`agent.continue.static.v1`; every paused pipeline of a saved-pipeline set), instead of starting a new
+  turn that paused again. `ChatBox.tsx` routes `onSendNow` to `StaticPipelineContinueControls.tsx` `onSendText`;
+  proven by `useStaticPipelineContinuation.test.tsx` "continues every paused leaf with a message typed in the chat
+  input".
 - **One extra bounded `SELECT`** per non-fresh resume (the root checkpoint read that decides the continuation).
 
 ## Tests
@@ -229,8 +236,8 @@ Proofs:
 Counts are from `cargo test --offline --locked --no-fail-fast --all-targets --all-features` in
 `services/elitea-worker-rust` against a disposable `postgres:18` with the CI environment
 (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`).
-**2602 passed, 0 failed, 103 ignored** across all targets on the head that merges `main` `d5e966074` (with #1321),
-no PostgreSQL skips. The ignored tests are the
+**2608 passed, 0 failed, 103 ignored** across all targets after review round 1 (2602 before it; the six new tests are
+listed in the recovery rows), on the head that merges `main` `d5e966074` (with #1321), no PostgreSQL skips. The ignored tests are the
 supervisor, preparation and hydration `#[ignore]` suites CI runs separately; this PR does not touch them, so they
 were not run. `ELITEA_REQUIRE_NATS_SECURE_TEST` was not set locally (the secured-NATS permission test needs
 `natstest-serve`), which CI provides.
@@ -347,8 +354,15 @@ Logs and errors: no prompt, argument, token or URL is added to any log or error;
 | Worker × same, after the recorded outcome | R (the recorded result is served) | #1321 journal | `postgres_worker_replaced_after_the_recorded_outcome_resumes_with_it` |
 | Worker × same, the dispatch record cannot be written | F (`agent.dispatch_unrecorded`, nothing ran) | `scoped_runtime.rs:401-425,576-600` | `postgres_failed_dispatch_record_ends_the_run_typed_and_never_runs_the_call` |
 | Worker × same, a late duplicate decision | I (stale, no effect) | `graph/resume.rs:651` + #1321 `continuation_pause` | `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale` |
-| Worker × P12, conversation paused by an older Worker | R (continues on the resolver that paused it) | `pipeline.rs:1854` | PG `postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts` |
+| Worker × P12, conversation paused by an older Worker | R (continues on the resolver that paused it) | `pipeline.rs:1859` `continuation_for_checkpoint` | PG `postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts` |
+| Worker × P12, older-Worker conversation, Worker killed **mid-continuation** (or an old Worker killed during the deploy) | R (the re-claimed start reads its resolver from the checkpoint: no receipt + application frontier → the older resolver; no fresh `Started` receipt, the child is not re-run from its task input) | `pipeline.rs:1843` `resumes_a_stored_conversation`, `pipeline.rs:1859` | PG `postgres_older_conversation_recovers_mid_continuation_on_its_own_resolver` (start → crash with `ExitProcess` inside the continuation → re-claim answers once, 0 receipt rows; red when the recovery start is forced scoped); `a_recovery_start_reads_its_resolver_from_the_checkpoint`. An application frontier is never a model-checkpoint or node recovery (`inspect_checkpoint` refuses it), so the re-claim is the only recovery path |
+| Worker × P12, older conversation beyond the hop or version-byte budget (> 25 application hops, > 4 MiB of frozen versions) | F (`InvalidConfiguration`, refused before any model call or effect; partial results stay in the stored conversation). Justified: the budgets bound untrusted, stored nesting and now apply to every conversation; such a conversation could not have been built through the current editor limits | `application_tools/materialization.rs:123-150` | `the_application_hop_budget_admits_the_limit_and_refuses_one_more`, `the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte` |
+| Worker × assembly, a nested Agent's attached pipeline the Worker cannot build (deleted frozen version, unresumable pause kind, > 3 scopes) | R for every turn that never calls it (named skip in the browser notice, as for a root Agent's attachment, #990); the call is not offered | `application_tools.rs:3377-3430`, `:3175` | `an_unbuildable_pipeline_of_a_nested_agent_is_skipped_and_the_root_still_answers` (red on the old `UnsupportedCapability` assembly failure) |
+| Worker × P12, decided card a scoped Agent node's child refuses | F, registered public code per refusal: `pipeline.tool_unavailable` (replay unsupported, nothing ran), `pipeline.input_invalid` (stale / invalid / corrupt decision), `pipeline.input_limit` (exhausted budget), `agent.recovery_refused` / `agent.dispatch_unrecorded` (#1321); a broken scope keeps the scope failure | `scoped_runtime.rs:324-350,588-616` | `every_child_refusal_reports_its_registered_public_code` |
 | Worker × tool call, static pause of a tool-invoked saved pipeline (ordinary Agent) | R: the turn completes with the inventory; a replacement continues once after the tick | `events.rs:2530-2546,3443,3578`, `native_agent_lifecycle.rs:520,605` | lifecycle `static_tool_pause_is_the_acked_completed_terminal_with_its_inventory`; PG `postgres_ordinary_agent_static_saved_pipeline_pause_completes_and_continues_once`; browser journey (c) |
+| Worker × tool call, static pause of a **sub-Agent's** saved pipeline (Agent → sub-Agent → static pipeline, depth 2) | R: the root turn completes with the nested pause in its inventory; one continuation resumes the pipeline, then the sub-Agent and the root answer once | `events.rs:1265-1275,1727-1772` | lifecycle `a_sub_agents_static_pipeline_pause_is_the_acked_completed_terminal`; `a_static_pause_of_a_sub_agents_pipeline_completes_and_continues_once` |
+| Worker × tool call, one model step calls a static-pausing pipeline tool **and** a pause card (`ask_user`, sensitive tool) | R on the card: the turn ends as the acknowledged PAUSED terminal with one card and no inventory; a static pause recorded beside a card can never be published as half a result (typed `UnsupportedCapability`, settled and acknowledged) | `native_agent_lifecycle.rs:517-525` | lifecycle `a_step_calling_a_static_pipeline_and_ask_user_pauses_once_on_the_card` |
+| Worker/Main × output delivery + ACK of the COMPLETED static-pause terminal (Worker crash after publish, before ACK) | I: the terminal is an ordinary bound `full_message` artifact; recovery reopens and replays the exact durable frame (same event id, payload digest and artifact), Main persists it idempotently and refuses a changed replay; a static inventory mixed with pause authority is refused by Main | Worker spool replay (`agent_output` recovery); Main `agent_execution_results` static persistence | Worker `uncertain_live_progress_reopens_and_replays_the_exact_durable_frame`, `restored_full_message_ack_retains_the_same_terminal_artifact_authority`, `changed_durable_progress_is_rejected_before_a_replay_session_starts`; Main `TestStaticFullMessagePreservesTheValidatedPauseAndRejectsMixedTerminal`, `TestStaticFullMessagePersistenceAndOrdinaryCompletionClearing` |
 | Worker × tool call, static pause beneath a graph root | F (typed refusal before any model call; listed as a follow-up) | `pipeline.rs:1816-1829` | `a_graph_root_refuses_a_static_saved_pipeline_tool_before_any_model_call` |
 
 ## #1321 post-merge verification
@@ -427,8 +441,6 @@ Earlier evidence on the previous stack `scoped` (old platform, Worker `2a1-99c90
 - #1084 has merged, so the stale `docs/remaining-gates.md` sentence ("Scoped continuation admission remains
   disabled") is updated here. `docs/testing-gaps.md` has no 2a-1 entry. The historical packets
   `scoped-parallel-authority-20261004.md` and `code-assembled-acceptance-20261002.md` carry a superseded note.
-- A named degrade (skip and say so) for a nested attachment the Worker cannot run under a graph root, instead of failing
-  the run at assembly.
 - Static pause of a tool-invoked saved pipeline beneath a graph root: needs the projector to accept a second checkpoint
   owner; refused today.
 - Main: attaching an Agent or pipeline as a tool (`api/v2/eliteacore/application_relation.go`
@@ -443,7 +455,9 @@ Earlier evidence on the previous stack `scoped` (old platform, Worker `2a1-99c90
 - Web: the answered-question summary shows only the first `ask_user` of a message (EliteaUI parity); a product
   decision whether to list all.
 - FU-226 follow-ups are #1321's (its source mapping). The legacy unscoped resolver still reports a generic node
-  failure for a conversation an older Worker paused.
+  failure for a conversation an older Worker paused (the scoped resolver now sends registered codes).
+- Web: `src/shared/api/themePreference.test.ts` "keeps the mark in memory when storage refuses the write" fails
+  locally on Node 24 (unrelated file, untouched here); CI runs Node 26.
 - Review notes accepted as limits: replay equivalence removes the two routing keys rather than requiring equal presence
   (a presence-preserving form broke the stored-start replay, so it was reverted; the stored row is never rewritten);
   the descendant `full_message` filter relies on the root emitting the static inventory, which a well-formed static
