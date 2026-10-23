@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { EMBEDDINGS_OFF, type EmbeddingsChoice, type EmbedStatus, type IndexIpc, type IndexModels, type RemoteModel } from '@/shared/desktop/indexIpc';
+import { EMBEDDINGS_OFF, type EmbeddingsChoice, type EmbedStatus, type IndexEstimate, type IndexIpc, type IndexModels, type RemoteModel } from '@/shared/desktop/indexIpc';
 
 export const LOCAL_PREFIX = 'local:';
 export const REMOTE_PREFIX = 'remote:';
@@ -34,7 +34,8 @@ type EmbeddingsAction =
   | { kind: 'cancelDownload'; modelId: string }
   | { kind: 'import'; modelId: string }
   | { kind: 'remove'; modelId: string }
-  | { kind: 'rebuild'; full: boolean };
+  | { kind: 'rebuild'; full: boolean }
+  | { kind: 'setCaps'; run: number; day: number };
 
 export interface WorkspaceEmbeddings {
   models: IndexModels | undefined;
@@ -47,6 +48,10 @@ export interface WorkspaceEmbeddings {
   downloadError: { modelId: string; error: string } | null;
   /** The project's embedding models on the deployment (`undefined`: not listed — the person types a name). */
   remoteModels: RemoteModel[] | undefined;
+  /** What embedding would take with the deployment: for the model being considered, else the stored one (`undefined`: not asked, or it failed). */
+  estimate: IndexEstimate | undefined;
+  /** The deployment model being considered (`remote:<model>`), or `null`: the estimate follows the stored choice. */
+  consider: (choice: EmbeddingsChoice | null) => void;
   run: (action: EmbeddingsAction) => void;
   pending: boolean;
   actionError: unknown;
@@ -56,6 +61,7 @@ const modelsKey = ['workspace', 'index', 'models'] as const;
 const choiceKey = (workspaceId: string) => ['workspace', 'index', workspaceId, 'embeddings'] as const;
 const statusKey = (workspaceId: string) => ['workspace', 'index', workspaceId, 'embeddings-status'] as const;
 const remoteModelsKey = (workspaceId: string) => ['workspace', 'index', workspaceId, 'remote-models'] as const;
+const estimateKey = (workspaceId: string, choice: EmbeddingsChoice | null) => ['workspace', 'index', workspaceId, 'estimate', choice] as const;
 
 /** The local model a choice names, if it is one. */
 export function localModelOf(choice: EmbeddingsChoice | undefined): string | null {
@@ -68,6 +74,23 @@ export function remoteModelOf(choice: EmbeddingsChoice | undefined): string | nu
   const rest = choice.slice(REMOTE_PREFIX.length);
   const match = /^\d+:(.+)$/.exec(rest);
   return match?.[1] ?? rest;
+}
+
+/**
+ * What embedding with the deployment would take: for the model the person is
+ * looking at (`consider`), else the one in use. A local model costs nothing,
+ * so it has no estimate.
+ */
+function useEstimate(ipc: IndexIpc, workspaceId: string, enabled: boolean, stored: EmbeddingsChoice | undefined): Pick<WorkspaceEmbeddings, 'estimate' | 'consider'> {
+  const [considered, consider] = useState<EmbeddingsChoice | null>(null);
+  const subject = considered ?? (remoteModelOf(stored) === null ? null : (stored ?? null));
+  const estimate = useQuery({
+    queryKey: estimateKey(workspaceId, subject),
+    queryFn: () => ipc.estimate(workspaceId, subject ?? undefined),
+    enabled: enabled && subject !== null,
+    retry: false,
+  });
+  return { estimate: estimate.data, consider };
 }
 
 /** `enabled`: the folder's index is on (the dialog's embeddings section shows). */
@@ -94,6 +117,7 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
     enabled: enabled && models.data?.remote_allowed === true,
     retry: false,
   });
+  const { estimate, consider } = useEstimate(ipc, workspaceId, enabled, choice.data);
   const [downloads, setDownloads] = useState<DownloadProgress>({});
   const [awaiting, setAwaiting] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<WorkspaceEmbeddings['downloadError']>(null);
@@ -131,7 +155,10 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
       .catch(() => undefined);
     void ipc
       .onEmbeddingsEvent((event) => {
-        if (event.workspace_id === workspaceId) queryClient.setQueryData(statusKey(workspaceId), event.status);
+        if (event.workspace_id !== workspaceId) return;
+        queryClient.setQueryData(statusKey(workspaceId), event.status);
+        // Today's use and what is left change as a run ends, not per batch.
+        if (event.status.state !== 'running' && event.status.state !== 'waiting') void queryClient.invalidateQueries({ queryKey: ['workspace', 'index', workspaceId, 'estimate'] });
       })
       .then(keep)
       .catch(() => undefined);
@@ -197,6 +224,10 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
             queryKey: statusKey(workspaceId),
           });
           return;
+        case 'setCaps':
+          await ipc.setEmbeddingCaps(workspaceId, { run: next.run, day: next.day });
+          await queryClient.invalidateQueries({ queryKey: ['workspace', 'index', workspaceId, 'estimate'] });
+          return;
       }
     },
   });
@@ -209,6 +240,8 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
     awaiting,
     downloadError,
     remoteModels: remoteModels.data !== undefined && remoteModels.data.length > 0 ? remoteModels.data : undefined,
+    estimate,
+    consider,
     run: action.mutate,
     pending: action.isPending || apply.isPending,
     actionError: action.error ?? apply.error,

@@ -97,8 +97,12 @@ export interface RemoteModel {
   display_name: string | null;
 }
 
-/** `paused`: a turn runs, or `held` says why (`turn`, `on_battery`, `low_power`). */
-type EmbedState = 'waiting' | 'running' | 'paused' | 'done' | 'error';
+/**
+ * `paused`: a turn runs, or `held` says why (`turn`, `on_battery`, `low_power`).
+ * `capped`: a token cap stopped the run (`cap` says which); what it embedded is kept.
+ * `budget_exhausted`: the deployment answered 402; nothing more is sent until the person asks again.
+ */
+type EmbedState = 'waiting' | 'running' | 'paused' | 'done' | 'error' | 'capped' | 'budget_exhausted';
 
 export interface EmbedStatus {
   choice: EmbeddingsChoice;
@@ -112,6 +116,41 @@ export interface EmbedStatus {
   forced: boolean;
   /** Seconds left at the pace so far, while it runs; `null` before the first batch. */
   eta_seconds: number | null;
+  /** Estimated tokens this run has embedded. */
+  tokens: number;
+  /** The cap that stopped the run (`state` is `capped`). */
+  cap: 'run' | 'day' | null;
+}
+
+/** A workspace's embedding caps: estimated tokens per run and per UTC day (they hold the deployment's embeddings only). */
+export interface EmbedCaps {
+  run: number;
+  day: number;
+}
+
+/** What embedding a workspace would take (`index_estimate`). Tokens are an estimate: a token per four characters. */
+export interface IndexEstimate {
+  origin: 'local' | 'remote';
+  model: string;
+  /** Distinct chunk texts to embed. */
+  texts: number;
+  tokens: number;
+  caps: EmbedCaps;
+  /** Estimated tokens the deployment took today (UTC). */
+  day_used: number;
+  /** Days the day cap spreads a remote run over (at least 1). */
+  days_needed: number | null;
+  /** The bound project's budget, when the platform answered. */
+  project_budget: {
+    unlimited: boolean;
+    /** `null` when unlimited, or when this person may not see amounts. */
+    remaining_usd: number | null;
+    percent_used: number | null;
+    warning_active: boolean;
+  } | null;
+  /** USD per 1M tokens, when the catalogue prices the model. */
+  price_per_1m_usd: number | null;
+  cost_usd: number | null;
 }
 
 /** A model download's progress (`index://event`, `kind: model`). */
@@ -167,6 +206,14 @@ export interface IndexIpc {
   embeddingsStatus(workspaceId: string): Promise<EmbedStatus | null>;
   /** Embed now whatever the power state; `full` drops the vectors first. */
   rebuildEmbeddings(workspaceId: string, full?: boolean): Promise<void>;
+  /**
+   * What embedding would take, before the person agrees: `choice` is the
+   * one considered (`remote:<model>`, not probed yet), else the stored one.
+   * Rejects `embeddings_off` when nothing is chosen.
+   */
+  estimate(workspaceId: string, choice?: EmbeddingsChoice): Promise<IndexEstimate>;
+  /** Set the caps (estimated tokens per run and per day); answers the stored ones. */
+  setEmbeddingCaps(workspaceId: string, caps: EmbedCaps): Promise<EmbedCaps>;
   onModelEvent(handler: (event: ModelEvent) => void): Promise<() => void>;
   onEmbeddingsEvent(handler: (event: EmbeddingsEvent) => void): Promise<() => void>;
 }
@@ -224,6 +271,10 @@ export function createIndexIpc(hostInvoke: HostInvoke, listen: ListenFn): IndexI
     embeddingsStatus: (workspaceId) => invoke<EmbedStatus | null>('index_embeddings_status', { workspace_id: workspaceId }),
     rebuildEmbeddings: (workspaceId, full) =>
       invoke<void>('index_embeddings_rebuild', full === true ? { workspace_id: workspaceId, full: true } : { workspace_id: workspaceId }),
+    estimate: (workspaceId, choice) =>
+      invoke<IndexEstimate>('index_estimate', choice === undefined ? { workspace_id: workspaceId } : { workspace_id: workspaceId, embeddings: choice }),
+    setEmbeddingCaps: (workspaceId, caps) =>
+      invoke<EmbedCaps>('index_embeddings_caps_set', { workspace_id: workspaceId, run_tokens: caps.run, day_tokens: caps.day }),
     onModelEvent: (handler) =>
       listen(INDEX_EVENT_CHANNEL, (payload) => {
         if (kindOf(payload) === 'model') handler(payload as ModelEvent);

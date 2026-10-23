@@ -467,6 +467,8 @@ pub fn run() {
             models::index_embeddings_set,
             models::index_embeddings_status,
             models::index_embeddings_rebuild,
+            models::index_estimate,
+            models::index_embeddings_caps_set,
             models::index_models,
             models::index_model_download,
             models::index_model_cancel,

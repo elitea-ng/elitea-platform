@@ -64,6 +64,8 @@ fn main() {
             "index_embeddings_set",
             "index_embeddings_status",
             "index_embeddings_rebuild",
+            "index_estimate",
+            "index_embeddings_caps_set",
             "index_models",
             "index_model_download",
             "index_model_cancel",

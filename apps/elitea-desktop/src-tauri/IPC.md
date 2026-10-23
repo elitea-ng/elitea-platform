@@ -1212,6 +1212,8 @@ default**, in one of two ways the policy may allow (both also need
 | `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. `remote:<model>` is probed with one short embedding in the bound project and stored as `remote:<dim>:<model>`. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now), `workspace_unbound`, `embeddings_probe_failed`. `off` is always accepted. |
 | `index_embeddings_status` | `{workspace_id}` | `EmbedStatus \| null` — `null` when the folder does not embed or its index is not open |
 | `index_embeddings_rebuild` | `{workspace_id, full?}` | `null` — embed now whatever the power state (until done); `full` deletes the folder's vectors first. Rejects `embeddings_off`, `index_off` |
+| `index_estimate` | `{workspace_id, embeddings?}` | `IndexEstimate` — what embedding would take, before the person agrees: the distinct chunk texts without a vector and their ESTIMATED tokens (a token per four characters, rounded up), the caps and today's use, and for the deployment the bound project's budget (`GET /api/v2/elitea_core/project_budget/prompt_lib/{project}/budget`) and the model's price. `embeddings` names the choice considered (`remote:<model>` need not be probed yet; `local:<id>`); without it, the stored one. Vectors already stored count only when the choice is the stored one. Rejects `embeddings_off` (nothing chosen), `index_off`, `local_index_disabled` |
+| `index_embeddings_caps_set` | `{workspace_id, run_tokens, day_tokens}` | `{run, day}` — the workspace's caps (estimated tokens per run and per UTC day; defaults 2 000 000 and 200 000; each 1 to 10 000 000 000). They hold the deployment's embeddings only. Wakes the embedder, so a run a cap stopped looks again at once. Rejects `embed_caps_invalid`, `index_off`, `local_index_disabled` |
 | `index_models` | `{}` | `{models: ModelInfo[], local_allowed, remote_allowed, cache_bytes, mirror: string \| null}` — `mirror`: the host downloads come from when the policy names one |
 | `index_remote_models` | `{workspace_id}` | `{name, display_name: string \| null}[]` — the bound project's embedding models (its own and shared: `GET /api/v2/configurations/models/{project_id}?section=embedding&include_shared=true`, client contract 1.9), for the picker. Rejects `embeddings_not_allowed`, `workspace_unbound`, `models_unavailable` (the UI then takes a typed name) |
 | `index_model_download` | `{model_id, confirm: true}` | `ModelInfo` — starts (or resumes) the download in the background; progress on `index://event`. Rejects `confirmation_required` (no `confirm`: the person must have seen the size), `model_unknown`, `embeddings_not_allowed`, `model_busy` |
@@ -1235,13 +1237,47 @@ type ModelInfo = {
 } & ({ state: "missing" } | { state: "partial"; have: number; total: number } | { state: "ready" });
 
 type EmbedStatus = {
-  choice: string; state: "waiting" | "running" | "paused" | "done" | "error";
+  choice: string;
+  state: "waiting" | "running" | "paused" | "done" | "error" | "capped" | "budget_exhausted";
   done: number; total: number;               // distinct chunk texts
   held: "turn" | "on_battery" | "low_power" | null;
   error: string | null; forced: boolean;
   eta_seconds: number | null;                // left at the pace so far, while running
+  tokens: number;                            // estimated tokens this run has embedded
+  cap: "run" | "day" | null;                 // which cap stopped it, when "capped"
+};
+
+type IndexEstimate = {
+  origin: "local" | "remote"; model: string;
+  texts: number; tokens: number;             // to embed; tokens are an estimate
+  caps: { run: number; day: number }; day_used: number;
+  days_needed: number | null;                // remote: tokens over the day cap, at least 1
+  project_budget: {                          // remote, when the platform answered
+    unlimited: boolean;
+    remaining_usd: number | null;            // null when unlimited or amounts are not shown to this caller
+    percent_used: number | null; warning_active: boolean;
+  } | null;
+  price_per_1m_usd: number | null;           // null when the catalogue has no price for the model
+  cost_usd: number | null;                   // tokens at that price
 };
 ```
+
+**Cost control (remote embeddings).** A run is held to the workspace's
+caps: it stops cleanly between texts at the per-run cap (`capped`, `cap:
+"run"`) or the per-day cap (`capped`, `cap: "day"`; counted per UTC day, and
+"Embed now" does not get around it, raise the cap instead). What it embedded
+is kept and the next run continues with the chunks still without a vector. A
+`429` is retried inside the call with exponential backoff (1 s doubling, up
+to a minute a wait, six retries; a query embedding retries once, within
+2 s), waiting the gateway's `Retry-After` (seconds) when it names one, and
+the wait ends at once when a turn starts or the app stops. Past the bound
+the run ends in `error` and tries again after the `Retry-After`. A `402` is
+`budget_exhausted`: the run stops and nothing more is sent, not by the
+clock, a build or the ten-minute sweep, until the person asks again ("Embed
+now" or choosing the embedder anew). Every run is a row in the index's
+`runs` table (`toolkit_id` `embeddings`) with the estimated tokens it used
+in `runs.tokens`; an on-device model is recorded too but never counts against
+the caps.
 
 A pass is resumable: vectors are stored batch by batch, keyed by chunk
 text, so a pass the app quit in the middle of embeds only what is still

@@ -14,13 +14,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 use elitea_local_embed::EmbedError;
 use elitea_local_embed::catalog::{self, HUGGING_FACE, ModelSpec};
 use elitea_local_embed::manager::{ModelState, ModelStore, Progress};
+use elitea_local_index::embed_caps::EmbedCaps;
 use elitea_local_index::embedding::EmbedStatus;
 use serde::Serialize;
 use serde_json::json;
 use tauri::State;
 
 use crate::d0::turn::PolicySource;
-use crate::embeddings::{Allowed, REMOTE, RemoteDeps, embed_remote, valid_model};
+use crate::embeddings::{
+    Allowed, Choice, ProjectBudgetLeft, REMOTE, RemoteDeps, embed_remote, valid_model,
+};
 use crate::local_commands::{IpcError, LocalState};
 
 /// Where index events go (the main window, or nowhere in tests).
@@ -364,6 +367,53 @@ impl ModelHost {
     }
 }
 
+/// `index_estimate`: what embedding the workspace would take, before the
+/// person agrees to it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IndexEstimate {
+    /// `local` (this computer) or `remote` (the deployment, paid per token).
+    pub origin: &'static str,
+    pub model: String,
+    /// Distinct chunk texts to embed.
+    pub texts: u64,
+    /// Their ESTIMATED tokens (a token per four characters).
+    pub tokens: u64,
+    /// The workspace's caps and today's use; they hold remote embedding
+    /// only.
+    pub caps: EmbedCaps,
+    pub day_used: u64,
+    /// Days the day cap spreads a remote run over (at least 1).
+    pub days_needed: Option<u64>,
+    /// The bound project's budget, when the platform answered.
+    pub project_budget: Option<ProjectBudgetLeft>,
+    /// USD per 1M tokens, when the catalogue prices the model and the
+    /// caller may see amounts.
+    pub price_per_1m_usd: Option<f64>,
+    /// `tokens` at that price.
+    pub cost_usd: Option<f64>,
+}
+
+/// The choice an estimate is asked for: a stored value, or a remote model
+/// not probed yet (`remote:<model>`).
+fn estimate_choice(value: &str) -> Option<Choice> {
+    match Choice::parse(value) {
+        Choice::Off | Choice::Unknown => value
+            .strip_prefix(REMOTE)
+            .filter(|model| valid_model(model) && !model.contains(':'))
+            .map(|model| Choice::Remote {
+                model: model.to_owned(),
+                dim: 0,
+            }),
+        known => Some(known),
+    }
+}
+
+/// `tokens` at `price` USD per 1M tokens.
+fn cost_of(tokens: u64, price: Option<f64>) -> Option<f64> {
+    #[allow(clippy::cast_precision_loss)]
+    price.map(|price| tokens as f64 / 1e6 * price)
+}
+
 /// The catalogue, its state on this computer, and what the policy allows.
 #[tauri::command(rename_all = "snake_case")]
 pub fn index_models(host: State<'_, Arc<ModelHost>>) -> Models {
@@ -473,6 +523,88 @@ pub fn index_embeddings_status(
     state.index.embedding_status(&workspace_id)
 }
 
+/// What embedding the workspace would take (IPC.md, "Index embeddings"):
+/// the tokens to embed, the caps, and for the deployment the project's
+/// budget and the price. `embeddings` names the choice being considered
+/// (`remote:<model>`, `local:<id>`); without it, the stored one.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn index_estimate(
+    state: State<'_, LocalState>,
+    host: State<'_, Arc<ModelHost>>,
+    workspace_id: String,
+    embeddings: Option<String>,
+) -> Result<IndexEstimate, IpcError> {
+    let stored = state.index.embeddings(&workspace_id).await;
+    let asked = embeddings.unwrap_or_else(|| stored.clone());
+    let choice = estimate_choice(&asked).ok_or_else(|| {
+        error(
+            "embeddings_off",
+            "Choose how to embed this workspace to see an estimate.",
+        )
+    })?;
+    // Vectors already stored count only for the embedder that made them.
+    let stamp = (Choice::parse(&stored) == Choice::parse(&asked))
+        .then(|| choice.vector_set().map(|set| set.stamp()))
+        .flatten();
+    let basis = state.index.embedding_basis(&workspace_id, stamp).await?;
+    let (origin, model) = match &choice {
+        Choice::Local(spec) => ("local", spec.id.to_owned()),
+        Choice::Remote { model, .. } => ("remote", model.clone()),
+        Choice::Off | Choice::Unknown => ("local", String::new()),
+    };
+    let (mut project_budget, mut price) = (None, None);
+    if origin == "remote"
+        && let Some(deps) = host.remote.as_ref()
+        && let Some(project_id) = state
+            .workspaces
+            .get(&workspace_id)
+            .ok()
+            .flatten()
+            .and_then(|workspace| workspace.project_id)
+    {
+        let (budget, listed) = tokio::join!(
+            crate::embeddings::project_budget(deps, project_id),
+            crate::embeddings::remote_price(deps, project_id, &model)
+        );
+        project_budget = budget.ok();
+        price = listed;
+    }
+    Ok(IndexEstimate {
+        origin,
+        days_needed: (origin == "remote")
+            .then(|| basis.tokens.div_ceil(basis.caps.day.max(1)).max(1)),
+        cost_usd: cost_of(basis.tokens, price),
+        price_per_1m_usd: price,
+        model,
+        texts: basis.texts,
+        tokens: basis.tokens,
+        caps: basis.caps,
+        day_used: basis.day_used,
+        project_budget,
+    })
+}
+
+/// Set the workspace's embedding caps: estimated tokens per run and per
+/// UTC day (they hold the deployment's embeddings only).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn index_embeddings_caps_set(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    run_tokens: u64,
+    day_tokens: u64,
+) -> Result<EmbedCaps, IpcError> {
+    Ok(state
+        .index
+        .set_embedding_caps(
+            &workspace_id,
+            EmbedCaps {
+                run: run_tokens,
+                day: day_tokens,
+            },
+        )
+        .await?)
+}
+
 /// Embed the workspace now whatever the power state (`full`: drop its
 /// vectors and embed everything again).
 #[tauri::command(rename_all = "snake_case")]
@@ -561,6 +693,31 @@ mod tests {
                 .code,
             "embeddings_not_allowed"
         );
+    }
+
+    #[test]
+    fn an_estimate_is_asked_for_a_stored_choice_or_a_model_not_probed_yet() {
+        assert_eq!(estimate_choice("off"), None);
+        assert_eq!(estimate_choice("remote:bad name"), None);
+        assert!(matches!(
+            estimate_choice("remote:text-embedding-3-small"),
+            Some(Choice::Remote { ref model, dim: 0 }) if model == "text-embedding-3-small"
+        ));
+        assert!(matches!(
+            estimate_choice("remote:1536:text-embedding-3-small"),
+            Some(Choice::Remote { dim: 1536, .. })
+        ));
+        assert!(matches!(
+            estimate_choice("local:multilingual-e5-small"),
+            Some(Choice::Local(_))
+        ));
+    }
+
+    #[test]
+    fn the_cost_is_the_tokens_at_the_price_per_million() {
+        assert_eq!(cost_of(2_000_000, Some(0.02)), Some(0.04));
+        assert_eq!(cost_of(0, Some(5.0)), Some(0.0));
+        assert_eq!(cost_of(1_000_000, None), None, "no price: no cost");
     }
 
     #[tokio::test]
