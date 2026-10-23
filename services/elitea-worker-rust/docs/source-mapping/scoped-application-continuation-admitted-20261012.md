@@ -463,6 +463,18 @@ was attached with a **database insert** mirroring Main's insert minus `owner_id`
 `agent_session_terminal_completion_unavailable` WARNs (best-effort enrichment, as before). Gateway: no
 `llm_provider_refusal`.
 
+**Review round 2 re-check** (same stack, Chrome, real models, reload). Worker `elitea-worker-rust:2a1-f707d1b28`
+(binary carries the `pipeline_agent_attachment_skipped` event at `pipeline.rs:2113`), Web `elitea-web:2a1-fdfec820a`;
+`verify-profile` 50 passed, 0 failed.
+
+| Journey | Chat | Execution | Evidence |
+|---|---|---|---|
+| Pipeline 171 (UI-created; one `agent` node → Agent 169, whose only tool is the static pipeline 168, which a graph root cannot project) | 892 | `da8c7dd54043` SUCCEEDED | The run assembles and the node answers ("I don't see a saved pipeline tool available…": the static attachment is not offered); Worker log `pipeline_agent_attachment_skipped skipped=1`; no WARN or ERROR. Before this round the run failed at assembly |
+
+Fixture: pipeline 171 was created in the UI (name, description, YAML typed as one flow-style line); its `agent` node's
+tool (Agent 169) was attached with a database insert (`elitea_tools` 105, `entity_tool_mapping` 124), for the same
+pre-existing attach defect.
+
 ## Follow-ups
 
 - #1084 has merged, so the stale `docs/remaining-gates.md` sentence ("Scoped continuation admission remains
