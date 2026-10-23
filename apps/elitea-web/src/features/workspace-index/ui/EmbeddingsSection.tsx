@@ -36,6 +36,9 @@ const mutedSx = (theme: Theme) => ({
 
 const REMOTE_OPTION = 'remote';
 
+/** How long the model field must rest before its estimate is asked (each one reads the index and the budget). */
+const ESTIMATE_DELAY_MS = 400;
+
 /** `470 MB`, `1.2 GB`. */
 function formatSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -156,13 +159,19 @@ function Remote({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.
   const listed = embeddings.remoteModels;
   const stored = remoteModelOf(embeddings.choice);
   const [model, setModel] = useState(stored ?? listed?.[0]?.name ?? '');
-  // The estimate follows the model being looked at, before it is used.
+  // The estimate follows the model being looked at, before it is used, once
+  // the field rests: not one estimate per keystroke.
   const { consider } = embeddings;
   const trimmed = model.trim();
   useEffect(() => {
-    consider(trimmed === '' ? null : `${REMOTE_PREFIX}${trimmed}`);
-    return () => consider(null);
+    if (trimmed === '') {
+      consider(null);
+      return undefined;
+    }
+    const timer = setTimeout(() => consider(`${REMOTE_PREFIX}${trimmed}`), ESTIMATE_DELAY_MS);
+    return () => clearTimeout(timer);
   }, [consider, trimmed]);
+  useEffect(() => () => consider(null), [consider]);
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 4 }}>
       <Alert severity="warning">{t('workspace.index.embeddings.remoteWarning', 'This folder’s code is sent to your deployment’s embeddings model, paid from the bound project’s budget.')}</Alert>

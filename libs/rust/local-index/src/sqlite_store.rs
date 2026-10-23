@@ -1121,6 +1121,24 @@ impl SqliteGraphStore {
         })
     }
 
+    /// The text hashes of the chunks whose estimated tokens
+    /// ([`crate::embed_caps::estimate_tokens`], counted in SQL) are more
+    /// than `tokens`: texts a token cap that small can never let through.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_hashes_over(&self, tokens: u64) -> Result<HashSet<String>> {
+        let tokens = i64::try_from(tokens).unwrap_or(i64::MAX);
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT DISTINCT text_hash FROM chunks WHERE (length(text) + 3) / 4 > ?1",
+            )?;
+            let rows = statement.query_map([tokens], |row| row.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// The text hashes of the chunks of `paths`, each with the rank of its
     /// path in `paths` (the first a hash is found at): what the embedder
     /// takes first.

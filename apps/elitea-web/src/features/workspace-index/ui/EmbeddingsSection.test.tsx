@@ -235,8 +235,8 @@ describe('EmbeddingsSection', () => {
     const ipc = setup({
       embeddingsAllowed: { remote: true },
       remoteModels: [
-        { name: 'text-embedding-3-small', display_name: 'OpenAI small' },
-        { name: 'nomic-embed', display_name: null },
+        { name: 'text-embedding-3-small', display_name: 'OpenAI small', price_per_1m: null, currency: null },
+        { name: 'nomic-embed', display_name: null, price_per_1m: null, currency: null },
       ],
     });
     const embeddings = await section(user);
@@ -256,35 +256,60 @@ describe('EmbeddingsSection', () => {
     await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));
     expect(within(embeddings).getByRole('textbox', { name: 'Embeddings model' })).toBeInTheDocument();
   });
-  it('shows the estimate for the typed deployment model before it is used, with the budget and the cost', async () => {
+  it('shows the estimate for the deployment model before it is used, with the budget and the cost in their currencies', async () => {
     const user = userEvent.setup();
     const ipc = setup({
       embeddingsAllowed: { remote: true },
+      remoteModels: [{ name: 'm', display_name: null, price_per_1m: 0.02, currency: 'USD' }],
       estimate: {
         tokens: 2_500_000,
         texts: 9_000,
         days_needed: 13,
-        price_per_1m_usd: 0.02,
-        cost_usd: 0.05,
-        project_budget: { unlimited: false, remaining_usd: 0.03, percent_used: 97.4, warning_active: true },
+        project_budget: { unlimited: false, remaining: 0.03, currency: 'USD', percent_used: 97.4, warning_active: true },
       },
     });
     const embeddings = await section(user);
     await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));
-    await user.type(within(embeddings).getByRole('textbox', { name: 'Embeddings model' }), 'm');
     const estimate = await within(embeddings).findByTestId('index-embedding-estimate');
-    expect(estimate).toHaveTextContent('About 2,500,000 tokens to embed (9,000 chunks). This is an estimate. Estimated cost: about $0.05.');
-    expect(estimate).toHaveTextContent('Project budget left this month: $0.03 (97% used).');
+    // The runtime's locale writes USD as `$` or `US$`.
+    expect(estimate).toHaveTextContent(/About 2,500,000 tokens to embed \(9,000 chunks\)\. This is an estimate\. Estimated cost: about (US)?\$0\.05\./);
+    expect(estimate).toHaveTextContent(/Project budget left this month: (US)?\$0\.03 \(97% used\)\./);
     expect(estimate).toHaveTextContent('more than the project has left');
     expect(estimate).toHaveTextContent('A run stops at 2,000,000 tokens and a day at 200,000 (0 used today); this folder needs about 13 day(s)');
     expect(ipc.embeddingCalls.estimates.at(-1)).toEqual({ workspaceId: 'w1', choice: 'remote:m' });
+  });
+
+  it('shows amounts in the currency the platform names, and compares only one currency', async () => {
+    const user = userEvent.setup();
+    setup({
+      embeddingsAllowed: { remote: true },
+      remoteModels: [{ name: 'm', display_name: null, price_per_1m: 0.02, currency: 'EUR' }],
+      estimate: { tokens: 2_500_000, project_budget: { unlimited: false, remaining: 0.03, currency: 'GBP', percent_used: 97.4, warning_active: true } },
+    });
+    const embeddings = await section(user);
+    await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));
+    const estimate = await within(embeddings).findByTestId('index-embedding-estimate');
+    expect(estimate).toHaveTextContent('Estimated cost: about €0.05.');
+    expect(estimate).toHaveTextContent('Project budget left this month: £0.03 (97% used).');
+    expect(estimate).not.toHaveTextContent('more than the project has left');
+  });
+
+  it('asks for the typed model’s estimate once the field rests, not per keystroke', async () => {
+    const user = userEvent.setup();
+    const ipc = setup({ embeddingsAllowed: { remote: true } });
+    ipc.failNext('remoteModels', 'models_unavailable', 'unreachable');
+    const embeddings = await section(user);
+    await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));
+    await user.type(within(embeddings).getByRole('textbox', { name: 'Embeddings model' }), 'text-embedding');
+    await within(embeddings).findByTestId('index-embedding-estimate');
+    expect(ipc.embeddingCalls.estimates).toEqual([{ workspaceId: 'w1', choice: 'remote:text-embedding' }]);
   });
 
   it('says the cost is unknown when the catalogue has no price and keeps the percentage for a member who may not see amounts', async () => {
     const user = userEvent.setup();
     setup({
       embeddingsAllowed: { remote: true },
-      estimate: { project_budget: { unlimited: false, remaining_usd: null, percent_used: 40.2, warning_active: false } },
+      estimate: { project_budget: { unlimited: false, remaining: null, currency: null, percent_used: 40.2, warning_active: false } },
     });
     const embeddings = await section(user);
     await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));

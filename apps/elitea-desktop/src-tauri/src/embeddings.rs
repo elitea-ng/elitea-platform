@@ -503,11 +503,16 @@ pub const MODELS_ROUTE: &str = "/api/v2/configurations/models/";
 
 /// One embedding model the workspace's project can use through the
 /// deployment.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RemoteModel {
     /// What a `remote:<model>` choice names.
     pub name: String,
     pub display_name: Option<String>,
+    /// Price per 1M input tokens in `currency`, when the catalogue prices
+    /// the model and the caller may see amounts (both or neither): what the
+    /// consent UI's estimate costs the tokens at.
+    pub price_per_1m: Option<f64>,
+    pub currency: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -520,10 +525,13 @@ struct ModelListItem {
     name: String,
     #[serde(default)]
     display_name: Option<String>,
-    /// USD per 1M input tokens, when the catalogue prices the model and the
-    /// caller may see amounts (the server serves it for chat models today).
+    /// Price per 1M input tokens, when the catalogue prices the model and
+    /// the caller may see amounts (the server serves it for chat models
+    /// today), in `currency`.
     #[serde(default)]
     input_cost_per_1m_tokens: Option<f64>,
+    #[serde(default)]
+    currency: Option<String>,
 }
 
 /// GET `path` (with `query`) as the signed-in person and read the JSON
@@ -606,36 +614,36 @@ pub async fn remote_models(
         .items
         .into_iter()
         .filter(|item| valid_model(&item.name) && seen.insert(item.name.clone()))
-        .map(|item| RemoteModel {
-            name: item.name,
-            display_name: item.display_name.filter(|name| !name.trim().is_empty()),
+        .map(|item| {
+            // An embedding model usually has no price here (the catalogue
+            // prices chat models today): the estimate then shows tokens and
+            // the budget only.
+            let price = item
+                .input_cost_per_1m_tokens
+                .filter(|price| price.is_finite() && *price >= 0.0)
+                .zip(item.currency.filter(|currency| !currency.trim().is_empty()));
+            RemoteModel {
+                name: item.name,
+                display_name: item.display_name.filter(|name| !name.trim().is_empty()),
+                price_per_1m: price.as_ref().map(|(price, _)| *price),
+                currency: price.map(|(_, currency)| currency),
+            }
         })
         .collect())
-}
-
-/// USD per 1M input tokens of `model`, when the deployment's catalogue
-/// says (it prices chat models today: an embedding model usually has no
-/// price here, and the estimate then shows tokens and the budget only).
-pub async fn remote_price(deps: &RemoteDeps, project_id: i64, model: &str) -> Option<f64> {
-    model_list(deps, project_id)
-        .await
-        .ok()?
-        .items
-        .into_iter()
-        .find(|item| item.name == model)
-        .and_then(|item| item.input_cost_per_1m_tokens)
-        .filter(|price| price.is_finite() && *price >= 0.0)
 }
 
 /// What is left of a project's monthly budget, as the platform tells the
 /// caller: amounts only for a project admin or the owner of a personal
 /// project (`can_see_amounts`); everyone else gets the percentage.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ProjectBudgetLeft {
     /// No enforced ceiling.
     pub unlimited: bool,
-    /// USD left this month (`None`: unlimited, or amounts not shown).
-    pub remaining_usd: Option<f64>,
+    /// What is left this month, in `currency` (`None`: unlimited, or
+    /// amounts not shown).
+    pub remaining: Option<f64>,
+    /// The budget's currency, present exactly when the amounts are.
+    pub currency: Option<String>,
     /// Percent of the ceiling spent (`None`: unlimited).
     pub percent_used: Option<f64>,
     /// The platform's own "close to the limit" flag.
@@ -647,6 +655,8 @@ struct BudgetAnswer {
     limit_source: String,
     #[serde(default)]
     remaining: Option<f64>,
+    #[serde(default)]
+    currency: Option<String>,
     #[serde(default)]
     percent_used: Option<f64>,
     #[serde(default)]
@@ -671,7 +681,8 @@ pub async fn project_budget(
     .await?;
     Ok(ProjectBudgetLeft {
         unlimited: answer.limit_source == "unlimited",
-        remaining_usd: answer.remaining,
+        remaining: answer.remaining,
+        currency: answer.currency,
         percent_used: answer.percent_used,
         warning_active: answer.warning_active,
     })
@@ -1074,11 +1085,15 @@ mod tests {
             [
                 RemoteModel {
                     name: "text-embedding-3-small".into(),
-                    display_name: Some("Small".into())
+                    display_name: Some("Small".into()),
+                    price_per_1m: None,
+                    currency: None,
                 },
                 RemoteModel {
                     name: "nomic-embed".into(),
-                    display_name: None
+                    display_name: None,
+                    price_per_1m: None,
+                    currency: None,
                 },
             ]
         );
@@ -1312,7 +1327,7 @@ mod tests {
                     200,
                     &json!({"limit_source": "explicit", "enabled": true, "warning_pct": 80,
                         "percent_used": 91.5, "warning_active": true, "spend_available": true,
-                        "remaining": 4.25, "can_see_amounts": true}),
+                        "remaining": 4.25, "currency": "EUR", "can_see_amounts": true}),
                 )
             } else if req.path.contains("/project_budget/prompt_lib/8/budget") {
                 // A member who may not see amounts: the cost fields are gone.
@@ -1326,7 +1341,8 @@ mod tests {
                 Res::json(
                     200,
                     &json!({"items": [
-                        {"name": "priced", "input_cost_per_1m_tokens": 0.02},
+                        {"name": "priced", "input_cost_per_1m_tokens": 0.02, "currency": "EUR"},
+                        {"name": "no-currency", "input_cost_per_1m_tokens": 0.02},
                         {"name": "unpriced"}]}),
                 )
             } else {
@@ -1341,17 +1357,31 @@ mod tests {
             budget,
             ProjectBudgetLeft {
                 unlimited: false,
-                remaining_usd: Some(4.25),
+                remaining: Some(4.25),
+                currency: Some("EUR".into()),
                 percent_used: Some(91.5),
                 warning_active: true
             }
         );
         let hidden = project_budget(&deps, 8).await.unwrap();
-        assert!(hidden.unlimited && hidden.remaining_usd.is_none());
+        assert!(hidden.unlimited && hidden.remaining.is_none() && hidden.currency.is_none());
         assert!(project_budget(&deps, 9).await.is_err());
-        assert_eq!(remote_price(&deps, 7, "priced").await, Some(0.02));
-        assert_eq!(remote_price(&deps, 7, "unpriced").await, None);
-        assert_eq!(remote_price(&deps, 7, "absent").await, None);
+        // The price comes with the picker's list, in its currency (both or
+        // neither).
+        let prices: Vec<_> = remote_models(&deps, 7)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|model| (model.name, model.price_per_1m, model.currency))
+            .collect();
+        assert_eq!(
+            prices,
+            [
+                ("priced".to_owned(), Some(0.02), Some("EUR".to_owned())),
+                ("no-currency".to_owned(), None, None),
+                ("unpriced".to_owned(), None, None),
+            ]
+        );
         assert!(
             server
                 .seen()

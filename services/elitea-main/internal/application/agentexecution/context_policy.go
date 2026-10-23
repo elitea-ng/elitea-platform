@@ -146,7 +146,7 @@ func versionSessionCompaction(version json.RawMessage) json.RawMessage {
 	}
 	value := bytes.TrimSpace(details.ContextSettings.SessionCompaction)
 	switch {
-	case len(value) == 0 || bytes.Equal(value, []byte("null")):
+	case len(value) == 0 || isJSONNull(value):
 		return nil
 	case bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("false")):
 		return json.RawMessage(value)
@@ -157,6 +157,11 @@ func versionSessionCompaction(version json.RawMessage) json.RawMessage {
 	}
 	policy := map[string]any{}
 	for key, raw := range fields {
+		if isJSONNull(raw) && (key == "reserve_tokens" || key == "keep_recent_tokens" || key == "fresh_window") {
+			// A null field is that field's default, as the worker's
+			// CompactionPolicy::admit reads it: left out.
+			continue
+		}
 		switch key {
 		case "reserve_tokens", "keep_recent_tokens":
 			// A bare integer only: a quoted or fractional number is malformed.
@@ -180,4 +185,9 @@ func versionSessionCompaction(version json.RawMessage) json.RawMessage {
 		return json.RawMessage("true")
 	}
 	return encoded
+}
+
+// isJSONNull reports whether raw is the JSON literal null.
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }

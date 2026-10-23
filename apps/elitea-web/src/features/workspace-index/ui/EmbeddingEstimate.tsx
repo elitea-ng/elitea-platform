@@ -1,8 +1,10 @@
 /**
  * What embedding with the deployment would take, before the person agrees to
  * it and while it runs: the tokens (an estimate, a token per four characters),
- * the estimated cost when the catalogue prices the model, what is left of the
- * bound project's budget, and the two caps a run is held to (editable).
+ * the estimated cost when the catalogue prices the model (the price comes with
+ * the project's model list the picker already read, in the catalogue's
+ * currency), what is left of the bound project's budget (in its currency), and
+ * the two caps a run is held to (editable).
  */
 import { useState } from 'react';
 
@@ -12,27 +14,39 @@ import Button from '@mui/material/Button';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
-import type { IndexEstimate } from '@/shared/desktop/indexIpc';
+import type { IndexEstimate, RemoteModel } from '@/shared/desktop/indexIpc';
 import { t } from '@/shared/i18n';
+import { formatMoney } from '@/shared/lib/money';
 
 import type { WorkspaceEmbeddings } from '../model/useEmbeddings';
 
 const count = (value: number): string => new Intl.NumberFormat().format(value);
 
-/** `$0.04`, `under $0.01`. */
-function usd(value: number): string {
-  if (value > 0 && value < 0.01) return t('workspace.index.estimate.underCent', 'under $0.01');
-  return `$${value.toFixed(2)}`;
-}
-
 function budgetLine(budget: NonNullable<IndexEstimate['project_budget']>): string {
   if (budget.unlimited) return t('workspace.index.estimate.budgetUnlimited', 'The project has no budget limit.');
   const percent = budget.percent_used === null ? null : String(Math.round(budget.percent_used));
-  if (budget.remaining_usd !== null && percent !== null) {
-    return t('workspace.index.estimate.budgetLeft', 'Project budget left this month: {{left}} ({{percent}}% used).', { left: usd(budget.remaining_usd), percent });
+  if (budget.remaining !== null && budget.currency !== null && percent !== null) {
+    return t('workspace.index.estimate.budgetLeft', 'Project budget left this month: {{left}} ({{percent}}% used).', { left: formatMoney(budget.remaining, budget.currency), percent });
   }
   if (percent !== null) return t('workspace.index.estimate.budgetPercent', '{{percent}}% of the project’s monthly budget is used.', { percent });
   return t('workspace.index.estimate.budgetUnknown', 'The project’s budget is not shown to you.');
+}
+
+interface Cost {
+  amount: number;
+  currency: string;
+}
+
+/** The estimate's tokens at the model's price from the picker's list; `null` when the catalogue prices it not. */
+function costOf(estimate: IndexEstimate, models: readonly RemoteModel[] | undefined): Cost | null {
+  const priced = models?.find((model) => model.name === estimate.model);
+  if (priced?.price_per_1m == null || priced.currency === null) return null;
+  return { amount: (estimate.tokens / 1_000_000) * priced.price_per_1m, currency: priced.currency };
+}
+
+/** Whether the cost is more than the budget has left (compared only in one currency). */
+function isOverBudget(cost: Cost | null, budget: IndexEstimate['project_budget']): boolean {
+  return cost !== null && budget?.remaining != null && budget.currency === cost.currency && cost.amount > budget.remaining;
 }
 
 /** Whole tokens, 1 to 10 billion (the host's range); `null` for anything else. */
@@ -89,14 +103,16 @@ function Caps({ estimate, embeddings }: { estimate: IndexEstimate; embeddings: W
 export function EmbeddingEstimate({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.Element | null {
   const { estimate } = embeddings;
   if (estimate?.origin !== 'remote') return null;
-  const overBudget = estimate.cost_usd !== null && estimate.project_budget?.remaining_usd != null && estimate.cost_usd > estimate.project_budget.remaining_usd;
+  const cost = costOf(estimate, embeddings.remoteModels);
+  const budget = estimate.project_budget;
+  const overBudget = isOverBudget(cost, budget);
   return (
     <Box data-testid="index-embedding-estimate" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
       <Typography variant="bodySmall">
         {t('workspace.index.estimate.tokens', 'About {{tokens}} tokens to embed ({{texts}} chunks). This is an estimate.', { tokens: count(estimate.tokens), texts: count(estimate.texts) })}{' '}
-        {estimate.cost_usd !== null && t('workspace.index.estimate.cost', 'Estimated cost: about {{cost}}.', { cost: usd(estimate.cost_usd) })}
+        {cost !== null && t('workspace.index.estimate.cost', 'Estimated cost: about {{cost}}.', { cost: formatMoney(cost.amount, cost.currency) })}
       </Typography>
-      {estimate.project_budget !== null && <Typography variant="bodySmall">{budgetLine(estimate.project_budget)}</Typography>}
+      {budget !== null && <Typography variant="bodySmall">{budgetLine(budget)}</Typography>}
       {overBudget && (
         <Alert severity="warning">{t('workspace.index.estimate.overBudget', 'The estimate is more than the project has left this month. A run stops when the budget is used up.')}</Alert>
       )}

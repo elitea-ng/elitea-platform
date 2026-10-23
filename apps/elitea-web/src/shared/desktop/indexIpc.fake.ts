@@ -283,8 +283,6 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
         day_used: 0,
         days_needed: remote ? 1 : null,
         project_budget: null,
-        price_per_1m_usd: null,
-        cost_usd: null,
         ...options.estimate,
       });
     },

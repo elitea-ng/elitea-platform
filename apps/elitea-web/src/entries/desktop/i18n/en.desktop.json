@@ -550,7 +550,6 @@
   "workspace.index.embeddings.cappedRun": "Stopped at this run’s token limit ({{done}} of {{total}} chunks). What was embedded is kept; embed now to continue.",
   "workspace.index.embeddings.budgetExhausted": "The project’s budget is used up ({{done}} of {{total}} chunks). Embedding stopped and nothing more is sent until you try again.",
   "workspace.index.embeddings.tryAgain": "Try again",
-  "workspace.index.estimate.underCent": "under $0.01",
   "workspace.index.estimate.budgetUnlimited": "The project has no budget limit.",
   "workspace.index.estimate.budgetLeft": "Project budget left this month: {{left}} ({{percent}}% used).",
   "workspace.index.estimate.budgetPercent": "{{percent}}% of the project’s monthly budget is used.",

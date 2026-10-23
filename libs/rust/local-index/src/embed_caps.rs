@@ -7,7 +7,8 @@
 //! of the workspace's index (`embed_run_cap`, `embed_day_cap`) and apply to
 //! remote embedders only: an on-device model costs nothing. A run stops
 //! cleanly at a cap, between texts, and what it embedded stays; the next
-//! run continues with the chunks that still have no vector.
+//! run (the next UTC day after a day cap, the person's "Embed now" after a
+//! run cap) continues with the chunks that still have no vector.
 //!
 //! Tokens are an ESTIMATE ([`estimate_tokens`]): the embeddings route
 //! reports no usage the index could rely on across models, so a text counts

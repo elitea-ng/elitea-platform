@@ -384,13 +384,10 @@ pub struct IndexEstimate {
     pub day_used: u64,
     /// Days the day cap spreads a remote run over (at least 1).
     pub days_needed: Option<u64>,
-    /// The bound project's budget, when the platform answered.
+    /// The bound project's budget, when the platform answered. The
+    /// model's price is not here: it comes with `index_remote_models`,
+    /// which the consent UI has already read.
     pub project_budget: Option<ProjectBudgetLeft>,
-    /// USD per 1M tokens, when the catalogue prices the model and the
-    /// caller may see amounts.
-    pub price_per_1m_usd: Option<f64>,
-    /// `tokens` at that price.
-    pub cost_usd: Option<f64>,
 }
 
 /// The choice an estimate is asked for: a stored value, or a remote model
@@ -408,10 +405,22 @@ fn estimate_choice(value: &str) -> Option<Choice> {
     }
 }
 
-/// `tokens` at `price` USD per 1M tokens.
-fn cost_of(tokens: u64, price: Option<f64>) -> Option<f64> {
-    #[allow(clippy::cast_precision_loss)]
-    price.map(|price| tokens as f64 / 1e6 * price)
+/// Whether `asked` names the embedder that made the `stored` choice's
+/// vectors: the same on-device model, or the same deployment model (an
+/// asked `remote:<model>` is not probed yet and has no dimension; one that
+/// names a dimension must name the stored one).
+fn same_embedder(stored: &Choice, asked: &Choice) -> bool {
+    match (stored, asked) {
+        (Choice::Local(stored), Choice::Local(asked)) => stored.id == asked.id,
+        (
+            Choice::Remote { model, dim },
+            Choice::Remote {
+                model: asked_model,
+                dim: asked_dim,
+            },
+        ) => model == asked_model && (*asked_dim == 0 || asked_dim == dim),
+        _ => false,
+    }
 }
 
 /// The catalogue, its state on this computer, and what the policy allows.
@@ -525,7 +534,7 @@ pub fn index_embeddings_status(
 
 /// What embedding the workspace would take (IPC.md, "Index embeddings"):
 /// the tokens to embed, the caps, and for the deployment the project's
-/// budget and the price. `embeddings` names the choice being considered
+/// budget (the price is the picker's, from `index_remote_models`). `embeddings` names the choice being considered
 /// (`remote:<model>`, `local:<id>`); without it, the stored one.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn index_estimate(
@@ -542,9 +551,11 @@ pub async fn index_estimate(
             "Choose how to embed this workspace to see an estimate.",
         )
     })?;
-    // Vectors already stored count only for the embedder that made them.
-    let stamp = (Choice::parse(&stored) == Choice::parse(&asked))
-        .then(|| choice.vector_set().map(|set| set.stamp()))
+    // Vectors already stored count only for the embedder that made them
+    // (its stamp is the stored choice's: an asked model is not probed yet).
+    let stored = Choice::parse(&stored);
+    let stamp = same_embedder(&stored, &choice)
+        .then(|| stored.vector_set().map(|set| set.stamp()))
         .flatten();
     let basis = state.index.embedding_basis(&workspace_id, stamp).await?;
     let (origin, model) = match &choice {
@@ -552,7 +563,7 @@ pub async fn index_estimate(
         Choice::Remote { model, .. } => ("remote", model.clone()),
         Choice::Off | Choice::Unknown => ("local", String::new()),
     };
-    let (mut project_budget, mut price) = (None, None);
+    let mut project_budget = None;
     if origin == "remote"
         && let Some(deps) = host.remote.as_ref()
         && let Some(project_id) = state
@@ -562,19 +573,14 @@ pub async fn index_estimate(
             .flatten()
             .and_then(|workspace| workspace.project_id)
     {
-        let (budget, listed) = tokio::join!(
-            crate::embeddings::project_budget(deps, project_id),
-            crate::embeddings::remote_price(deps, project_id, &model)
-        );
-        project_budget = budget.ok();
-        price = listed;
+        project_budget = crate::embeddings::project_budget(deps, project_id)
+            .await
+            .ok();
     }
     Ok(IndexEstimate {
         origin,
         days_needed: (origin == "remote")
             .then(|| basis.tokens.div_ceil(basis.caps.day.max(1)).max(1)),
-        cost_usd: cost_of(basis.tokens, price),
-        price_per_1m_usd: price,
         model,
         texts: basis.texts,
         tokens: basis.tokens,
@@ -714,10 +720,35 @@ mod tests {
     }
 
     #[test]
-    fn the_cost_is_the_tokens_at_the_price_per_million() {
-        assert_eq!(cost_of(2_000_000, Some(0.02)), Some(0.04));
-        assert_eq!(cost_of(0, Some(5.0)), Some(0.0));
-        assert_eq!(cost_of(1_000_000, None), None, "no price: no cost");
+    fn stored_vectors_count_for_the_same_model_asked_before_its_probe() {
+        let stored = Choice::parse("remote:1536:text-embedding-3-small");
+        let asked = |value: &str| estimate_choice(value).unwrap();
+        assert!(same_embedder(
+            &stored,
+            &asked("remote:text-embedding-3-small")
+        ));
+        assert!(same_embedder(
+            &stored,
+            &asked("remote:1536:text-embedding-3-small")
+        ));
+        assert!(!same_embedder(
+            &stored,
+            &asked("remote:768:text-embedding-3-small")
+        ));
+        assert!(!same_embedder(
+            &stored,
+            &asked("remote:text-embedding-3-large")
+        ));
+        assert!(!same_embedder(
+            &stored,
+            &asked("local:multilingual-e5-small")
+        ));
+        let local = Choice::parse("local:multilingual-e5-small");
+        assert!(same_embedder(&local, &asked("local:multilingual-e5-small")));
+        assert!(!same_embedder(
+            &Choice::Off,
+            &asked("local:multilingual-e5-small")
+        ));
     }
 
     #[tokio::test]

@@ -919,7 +919,8 @@ impl IndexRegistry {
             .map_err(IndexError::from)?;
         if let Some(embedding) = &self.embedding {
             embedding.add(&service);
-            embedding.wake_workspace(workspace_id);
+            // The person chose: a spent budget or a run cap is asked again.
+            embedding.ask_again(workspace_id);
         }
         Ok(stored)
     }
@@ -1054,7 +1055,7 @@ impl IndexRegistry {
             .await?
             .map_err(|message| TurnError::new("embed_caps_invalid", message))?;
         if let Some(embedding) = &self.embedding {
-            embedding.wake_workspace(workspace_id);
+            embedding.caps_changed(workspace_id);
         }
         Ok(caps)
     }

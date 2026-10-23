@@ -95,6 +95,9 @@ export interface RemoteModel {
   /** What a `remote:<model>` choice names. */
   name: string;
   display_name: string | null;
+  /** Price per 1M input tokens in `currency` (both or neither): when the catalogue prices the model and the caller may see amounts. */
+  price_per_1m: number | null;
+  currency: string | null;
 }
 
 /**
@@ -144,13 +147,12 @@ export interface IndexEstimate {
   project_budget: {
     unlimited: boolean;
     /** `null` when unlimited, or when this person may not see amounts. */
-    remaining_usd: number | null;
+    remaining: number | null;
+    /** The amounts' currency, present exactly when they are. */
+    currency: string | null;
     percent_used: number | null;
     warning_active: boolean;
   } | null;
-  /** USD per 1M tokens, when the catalogue prices the model. */
-  price_per_1m_usd: number | null;
-  cost_usd: number | null;
 }
 
 /** A model download's progress (`index://event`, `kind: model`). */

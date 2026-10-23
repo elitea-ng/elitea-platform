@@ -663,15 +663,27 @@ async fn a_run_cap_stops_a_metered_run_cleanly_and_a_later_run_continues() {
         s.service.store().embed_tokens_today().unwrap(),
         capped.tokens
     );
-    // The person raises the cap and asks again: the rest is embedded, and
-    // what was embedded is not embedded twice.
+    // The run cap holds until the person continues: not the clock, not a
+    // build's wake, not the sweep.
+    let calls = s.fake.calls.load(Ordering::SeqCst);
+    embedding.wake_workspace("ws");
+    embedding.wake();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        s.fake.calls.load(Ordering::SeqCst),
+        calls,
+        "a run cap restarted on its own"
+    );
+    assert_eq!(s.service.store().embedding_runs().unwrap().len(), 1);
+    // The person raises the cap: the rest is embedded, and what was
+    // embedded is not embedded twice.
     EmbedCaps {
         run: big(),
         day: big(),
     }
     .save(s.service.store())
     .unwrap();
-    embedding.force("ws");
+    embedding.caps_changed("ws");
     let done = wait(&embedding, |st| st.state == EmbedState::Done);
     assert_eq!(s.fake.embedded.load(Ordering::SeqCst) as u64, done.total);
     let runs = s.service.store().embedding_runs().unwrap();
@@ -746,9 +758,11 @@ async fn a_402_stops_the_run_and_nothing_is_sent_until_the_person_asks_again() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].status, "budget_exhausted");
     assert!(runs[0].tokens > 0);
-    // Not retried by the clock, by a build, or by the ten-minute sweep.
+    // Not retried by the clock, by a build, a cap change, or the sweep.
     let calls = s.fake.calls.load(Ordering::SeqCst);
     embedding.wake();
+    embedding.wake_workspace("ws");
+    embedding.caps_changed("ws");
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(s.fake.calls.load(Ordering::SeqCst), calls, "retried a 402");
     assert_eq!(
@@ -758,6 +772,123 @@ async fn a_402_stops_the_run_and_nothing_is_sent_until_the_person_asks_again() {
     // "Embed now" tries again, and the budget is back.
     embedding.force("ws");
     wait(&embedding, |st| st.state == EmbedState::Done);
+}
+
+/// The fake answers 402 at its second call (the first batch goes through).
+fn refuse_the_second_call(fake: &Arc<Fake>) {
+    let outer = fake.clone();
+    *fake.hook.lock().unwrap() = Some(Box::new(move || {
+        let queue = outer.clone();
+        *outer.hook.lock().unwrap() = Some(Box::new(move || {
+            queue
+                .script
+                .lock()
+                .unwrap()
+                .push_back(EmbedError::BudgetExhausted("HTTP 402".into()));
+        }));
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_402_ends_a_forced_run_too_and_it_is_not_sent_again() {
+    let s = setup().await;
+    s.service
+        .store()
+        .set_setting(SETTING, "remote:fake")
+        .unwrap();
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    refuse_the_second_call(&s.fake);
+    // "Embed now" before the run: the run is forced when the 402 comes.
+    embedding.force("ws");
+    embedding.add(&s.service);
+    let stopped = wait(&embedding, |st| st.state == EmbedState::BudgetExhausted);
+    assert!(!stopped.forced);
+    let calls = s.fake.calls.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        s.fake.calls.load(Ordering::SeqCst),
+        calls,
+        "a forced run looped on 402"
+    );
+    assert_eq!(s.service.store().embedding_runs().unwrap().len(), 1);
+    assert_eq!(
+        embedding.status("ws").unwrap().state,
+        EmbedState::BudgetExhausted
+    );
+    // Choosing the embedder anew asks again.
+    embedding.ask_again("ws");
+    wait(&embedding, |st| st.state == EmbedState::Done);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_does_not_cut_a_retry_after_short() {
+    let s = setup().await;
+    s.service
+        .store()
+        .set_setting(SETTING, "remote:fake")
+        .unwrap();
+    s.fake
+        .script
+        .lock()
+        .unwrap()
+        .push_back(EmbedError::RateLimited {
+            retry_after: Duration::from_secs(60),
+        });
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    embedding.add(&s.service);
+    wait(&embedding, |st| st.state == EmbedState::Error);
+    let calls = s.fake.calls.load(Ordering::SeqCst);
+    embedding.wake_workspace("ws");
+    embedding.wake();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        s.fake.calls.load(Ordering::SeqCst),
+        calls,
+        "the Retry-After was cut short"
+    );
+    // The person's "Embed now" does.
+    embedding.force("ws");
+    wait(&embedding, |st| st.state == EmbedState::Done);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_text_larger_than_the_cap_is_skipped_and_holds_nothing_back() {
+    let s = setup().await;
+    // One long line: the chunker cuts it at 1 024 characters (256 tokens),
+    // one piece larger than the cap below, the rest smaller.
+    let long = "x".repeat(1400);
+    write(
+        s.folder.path(),
+        "src/long.py",
+        &format!("BLOB = \"{long}\"\n"),
+    );
+    s.service.refresh(false).await.unwrap();
+    let over = s.service.store().chunk_hashes_over(200).unwrap();
+    assert_eq!(over.len(), 1, "one piece is over the cap");
+    let embedding = metered(
+        &s,
+        EmbedCaps {
+            run: 200,
+            day: big(),
+        },
+    );
+    // The first run stops at its cap with progress; the next one (the
+    // person's) embeds the rest, past the piece no run could hold.
+    wait(&embedding, |st| st.state == EmbedState::Capped);
+    embedding.force("ws");
+    let done = wait(&embedding, |st| st.state == EmbedState::Done);
+    assert_eq!(done.total, done.done + 1, "{done:?}");
+    let piece = "x".repeat(1000);
+    assert!(
+        s.fake
+            .texts
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|text| !text.contains(&piece)),
+        "the oversized text was sent"
+    );
+    assert_eq!(s.fake.embedded.load(Ordering::SeqCst) as u64, done.done);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

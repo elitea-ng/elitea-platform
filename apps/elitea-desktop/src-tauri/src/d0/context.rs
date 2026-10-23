@@ -18,7 +18,8 @@
 //!   sends ([`super::model::request_body_in`]), not an estimate of the adk
 //!   contents.
 //! * **Summary model.** The project's low-tier default model when the
-//!   catalogue lists one whose described window is at least the agent's
+//!   catalogue lists one whose described input window (its context window,
+//!   or its `max_input_tokens` when smaller) is at least the agent's
 //!   ([`ModelFacts::summary_model`]), else the agent's own model; either
 //!   through the same `/llm` transport and execution id (spend is the
 //!   turn's), bound quiet: the webview sees no text or usage of it. No
@@ -97,16 +98,26 @@ pub struct LowTierModel {
 
 impl ModelFacts {
     /// The compaction's summary model other than the agent's own: the
-    /// low-tier default when its window is described and at least the
-    /// agent's `limits` (the summary request is sized to the agent's
-    /// window); `None`: the agent's own model.
+    /// low-tier default when its window is described and its input window
+    /// is at least the agent's `limits`' (the summary request is sized to
+    /// what the agent's model takes in); `None`: the agent's own model.
     #[must_use]
     pub fn summary_model(&self, limits: &ModelContextLimits) -> Option<&LowTierModel> {
         self.low_tier.as_ref().filter(|model| {
             !model.limits.context_window_fallback
-                && model.limits.context_window_tokens >= limits.context_window_tokens
+                && input_window(&model.limits) >= input_window(limits)
         })
     }
+}
+
+/// What a model takes in: its context window, or its `max_input_tokens`
+/// when smaller.
+fn input_window(limits: &ModelContextLimits) -> u32 {
+    limits
+        .max_input_tokens
+        .map_or(limits.context_window_tokens, |input| {
+            input.min(limits.context_window_tokens)
+        })
 }
 
 /// The facts of the turn's model (module docs), with at most one catalogue
@@ -561,6 +572,27 @@ mod tests {
             ..facts.limits
         };
         assert!(smaller.summary_model(&frozen).is_some());
+        // The same window but a smaller input limit is too small; the
+        // agent's own input limit counts the same way.
+        let capped = Catalogue::from_body(
+            &json!({
+                "items": [
+                    {"name": "agent", "project_id": 1, "context_window": 200_000, "max_output_tokens": 32_000},
+                    {"name": "small", "project_id": 1, "context_window": 200_000,
+                     "max_output_tokens": 8_000, "max_input_tokens": 64_000},
+                ],
+                "low_tier_default_model_name": "small",
+                "low_tier_default_model_project_id": 1,
+            }),
+            1,
+        );
+        let capped = facts_of(&capped, "agent");
+        assert!(capped.summary_model(&capped.limits).is_none());
+        let agent_input = ModelContextLimits {
+            max_input_tokens: Some(64_000),
+            ..capped.limits
+        };
+        assert!(capped.summary_model(&agent_input).is_some());
         // No low-tier default configured.
         let none = facts_of(&Catalogue::default(), "agent");
         assert!(none.summary_model(&FALLBACK_LIMITS).is_none());
