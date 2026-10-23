@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	call "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	call "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 type CurrentAuthoritativeInputResolver struct {

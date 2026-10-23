@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // Recorder is an audit.Recorder that keeps what it is given.

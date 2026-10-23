@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/azure"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/gcs"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/s3"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/azure"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/gcs"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/s3"
 )
 
 // unwrapObjectStore undoes storage.Instrument's wrapping (S18) so a test can

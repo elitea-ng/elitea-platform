@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 // TestMain compiles PDFium once, before any test runs, as the composition

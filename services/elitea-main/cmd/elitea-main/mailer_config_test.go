@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
 )
 
 func lookupOf(values map[string]string) func(string) (string, bool) {

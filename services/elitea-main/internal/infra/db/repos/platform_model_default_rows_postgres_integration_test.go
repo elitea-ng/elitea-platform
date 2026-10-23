@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // The two reads the platform default model release takes (#6826), against a

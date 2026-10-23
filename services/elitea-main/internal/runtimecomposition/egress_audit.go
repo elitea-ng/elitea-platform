@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/egressaudit"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/egressaudit"
 )
 
 // EgressAuditClientsEnv lists the egress proxy's client certificate

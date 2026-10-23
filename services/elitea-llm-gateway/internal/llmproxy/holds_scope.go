@@ -3,7 +3,7 @@ package llmproxy
 import (
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // DegradedHoldsScope gives each request its set of degraded-mode reservations

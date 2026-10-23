@@ -694,7 +694,7 @@ const file_elitea_subapp_v1_provider_proto_rawDesc = "" +
 	"\x05Slots\x12\x1e.elitea.subapp.v1.SlotsRequest\x1a\x1f.elitea.subapp.v1.SlotsResponse\x12J\n" +
 	"\x06Invoke\x12\x1f.elitea.subapp.v1.InvokeRequest\x1a\x1d.elitea.subapp.v1.InvokeEvent0\x01\x12`\n" +
 	"\rGetInvocation\x12&.elitea.subapp.v1.GetInvocationRequest\x1a'.elitea.subapp.v1.GetInvocationResponse\x12K\n" +
-	"\x06Cancel\x12\x1f.elitea.subapp.v1.CancelRequest\x1a .elitea.subapp.v1.CancelResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1b\x06proto3"
+	"\x06Cancel\x12\x1f.elitea.subapp.v1.CancelRequest\x1a .elitea.subapp.v1.CancelResponseBRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1b\x06proto3"
 
 var (
 	file_elitea_subapp_v1_provider_proto_rawDescOnce sync.Once

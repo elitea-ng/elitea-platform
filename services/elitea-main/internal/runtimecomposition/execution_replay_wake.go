@@ -10,11 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/nats-io/nats.go"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
 // executionReplayWakeSubject is core NATS, not JetStream: the wake-up is

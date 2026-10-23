@@ -994,7 +994,7 @@ const file_elitea_llm_v1_model_proto_rawDesc = "" +
 	"\n" +
 	"Embeddings\x12 .elitea.llm.v1.EmbeddingsRequest\x1a!.elitea.llm.v1.EmbeddingsResponse\x12Z\n" +
 	"\rImageGenerate\x12#.elitea.llm.v1.ImageGenerateRequest\x1a$.elitea.llm.v1.ImageGenerateResponse\x12P\n" +
-	"\tImageEdit\x12\x1f.elitea.llm.v1.ImageEditRequest\x1a .elitea.llm.v1.ImageEditResponse(\x01BKZIgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1b\x06proto3"
+	"\tImageEdit\x12\x1f.elitea.llm.v1.ImageEditRequest\x1a .elitea.llm.v1.ImageEditResponse(\x01BLZJgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1b\x06proto3"
 
 var (
 	file_elitea_llm_v1_model_proto_rawDescOnce sync.Once

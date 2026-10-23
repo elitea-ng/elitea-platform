@@ -10,7 +10,7 @@ import (
 	"io"
 	"strings"
 
-	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	indextypesapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 )
 
 const (

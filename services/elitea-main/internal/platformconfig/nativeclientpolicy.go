@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/clientversion"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/clientversion"
 )
 
 // SectionNativeClientPolicy is the server-driven native client policy

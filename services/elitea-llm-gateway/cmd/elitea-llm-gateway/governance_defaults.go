@@ -13,7 +13,7 @@ package main
 // case — so an authored global ceiling cannot override a per-project one.
 
 import (
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
 )
 
 // policyBudgetDefaults adapts the definition plane to the counter engine's

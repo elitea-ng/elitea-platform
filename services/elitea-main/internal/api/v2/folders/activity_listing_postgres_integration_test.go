@@ -19,7 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 )
 
 // localNoonUTC is the middle of the host's "Today" window, in UTC (see

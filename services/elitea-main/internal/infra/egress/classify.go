@@ -3,8 +3,8 @@ package egress
 import (
 	"net"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/addrcheck"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/addrcheck"
 )
 
 // The address classification and the private-permits grammar live in

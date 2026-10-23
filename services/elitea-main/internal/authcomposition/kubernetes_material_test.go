@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/materialinstall"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/materialinstall"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 // The mode that the kubelet gives each key of a Secret volume when the pod

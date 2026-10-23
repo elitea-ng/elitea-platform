@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/api/openapi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
 	"gopkg.in/yaml.v3"
 )
 

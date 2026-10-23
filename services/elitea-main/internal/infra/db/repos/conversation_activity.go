@@ -9,9 +9,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/conversationactivity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // ConversationActivityRepo reads the committed state a conversation activity

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 const maxRuntimeTLSFileBytes = 1 << 20

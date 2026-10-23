@@ -15,7 +15,7 @@ import (
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 )
 
 // PlatformMaxMessageBytes caps one gRPC message the platform listener

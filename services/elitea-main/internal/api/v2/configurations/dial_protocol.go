@@ -3,7 +3,7 @@ package configurations
 import (
 	"net/http"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // refuseInvalidDialProtocol checks `data.dial_protocol` of an llm_model row

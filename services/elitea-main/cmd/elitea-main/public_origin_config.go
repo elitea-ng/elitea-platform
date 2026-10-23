@@ -4,7 +4,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicorigin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicorigin"
 )
 
 // publicOriginFromEnv resolves the deployment's public origin once, at boot,

@@ -282,7 +282,7 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"*RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED\x10 \x12/\n" +
 	"+RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT\x10\x1f\x12(\n" +
 	"$RUNTIME_ERROR_CODE_V1_RESULT_REFUSED\x10!\x12*\n" +
-	"&RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED\x10\"BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"&RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED\x10\"BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_errors_proto_rawDescOnce sync.Once

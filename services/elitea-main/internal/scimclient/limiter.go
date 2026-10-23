@@ -3,7 +3,7 @@ package scimclient
 import (
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/failurelimit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/failurelimit"
 )
 
 // FailureLimiter counts FAILED client authentications at the SCIM token

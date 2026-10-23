@@ -13,8 +13,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 )
 
 // Agent Evaluation runs, results and the read-only scorecard, against a REAL

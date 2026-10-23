@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"sort"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 	"gopkg.in/yaml.v3"
 )
 

@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/nats-io/nats.go"
 )
 

@@ -21,9 +21,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
-	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // runAnalyticsRepo answers the two run reads for project 7 and records what

@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 
-	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
+	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 )
 
 // The discovery consumer of the native client policy (ADR-0025 WP4), adapted

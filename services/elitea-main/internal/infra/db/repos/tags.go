@@ -9,9 +9,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/entitydiscovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/entitydiscovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type TagsRepo struct {

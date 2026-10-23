@@ -5,7 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
 )
 
 // annotateActivity adds `activity`, `last_activity_at` and `unread` (client

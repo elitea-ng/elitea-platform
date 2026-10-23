@@ -138,7 +138,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -149,7 +149,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The three legal values of `status`. The legacy `ModerationStatus` enum, which

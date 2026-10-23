@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/testpg"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,9 +19,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 // migrations are the DeepWiki engine's migrations that create and extend the

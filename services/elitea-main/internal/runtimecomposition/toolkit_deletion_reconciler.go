@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 )
 
 const (

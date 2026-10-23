@@ -49,8 +49,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	applicationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	applicationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 // TestImportedAgentTagsReachEveryReader posts the `tags` array an export

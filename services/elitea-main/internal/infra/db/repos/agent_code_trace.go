@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 const currentAgentCodeTraceKey = "code_lifecycle_v1"

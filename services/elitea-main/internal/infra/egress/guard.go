@@ -47,8 +47,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/addrcheck"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/addrcheck"
 )
 
 // ErrDestinationRefused is the sentinel every refusal wraps, so a caller can

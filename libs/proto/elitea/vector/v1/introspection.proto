@@ -9,7 +9,7 @@ package elitea.vector.v1;
 
 import "elitea/vector/v1/vector.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
 
 service TokenIntrospectionService {
   // IntrospectToken answers whether a token is usable for vector access, and

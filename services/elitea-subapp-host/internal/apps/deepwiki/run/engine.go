@@ -3,8 +3,8 @@ package run
 import (
 	"context"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // DeepWiki over the engine sidecar (ADR-0023 H2). The analysis engine — the

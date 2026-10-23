@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
 )
 
 type codeContentMemory struct {

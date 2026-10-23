@@ -31,7 +31,7 @@ package addrcheck
 import (
 	"net"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
 )
 
 // Class is what an egress boundary does with one resolved address.

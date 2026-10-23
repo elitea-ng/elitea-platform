@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	identity "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type permissionResolverFunc func(

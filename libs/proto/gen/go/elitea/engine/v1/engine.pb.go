@@ -527,7 +527,7 @@ const file_elitea_engine_v1_engine_proto_rawDesc = "" +
 	"\rEngineService\x12J\n" +
 	"\x06Invoke\x12\x1f.elitea.engine.v1.InvokeRequest\x1a\x1d.elitea.engine.v1.InvokeEvent0\x01\x12E\n" +
 	"\x04Stop\x12\x1d.elitea.engine.v1.StopRequest\x1a\x1e.elitea.engine.v1.StopResponse\x12K\n" +
-	"\x06Health\x12\x1f.elitea.engine.v1.HealthRequest\x1a .elitea.engine.v1.HealthResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1;enginev1b\x06proto3"
+	"\x06Health\x12\x1f.elitea.engine.v1.HealthRequest\x1a .elitea.engine.v1.HealthResponseBRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1;enginev1b\x06proto3"
 
 var (
 	file_elitea_engine_v1_engine_proto_rawDescOnce sync.Once

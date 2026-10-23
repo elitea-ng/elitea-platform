@@ -29,7 +29,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // The four RBAC strings the routes gate on, transcribed verbatim from the

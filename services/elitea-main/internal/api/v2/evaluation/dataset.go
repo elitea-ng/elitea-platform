@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // The RBAC strings the dataset routes gate on, transcribed verbatim from the

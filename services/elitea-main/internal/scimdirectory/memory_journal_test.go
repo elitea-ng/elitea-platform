@@ -3,7 +3,7 @@ package scimdirectory
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 )
 
 // The SCIM setter applies the same guard as the core and admin handlers

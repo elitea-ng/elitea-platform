@@ -9,8 +9,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	enginev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
 )
 
 // healthEngine is an engine on a Unix socket whose Health lists the tools it

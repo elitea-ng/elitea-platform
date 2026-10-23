@@ -9,7 +9,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 // admissionContract is libs/proto/contracts/pipeline-node-admission-v1.json, the

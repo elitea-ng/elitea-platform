@@ -24,11 +24,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
+	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authstatetest"
 )
 
 func TestAnExistingFormSessionStopsAuthorizingWhenFormSignInIsDisabled(t *testing.T) {

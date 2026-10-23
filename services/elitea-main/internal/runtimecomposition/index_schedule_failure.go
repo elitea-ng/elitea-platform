@@ -3,7 +3,7 @@ package runtimecomposition
 import (
 	"context"
 
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
 )
 
 type currentScheduleFailureNotifications interface {

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
 )
 
 // checkconnection_workload_identity.go — keyless PLATFORM credentials on the

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 )

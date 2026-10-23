@@ -38,7 +38,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 // MCPAuthorizationEgressGuard is the SSRF guard of the MCP authorization

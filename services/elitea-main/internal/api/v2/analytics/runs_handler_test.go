@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // runRepo answers the two run reads with fixed values and keeps the ids it

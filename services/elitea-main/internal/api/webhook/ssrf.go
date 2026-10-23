@@ -9,8 +9,8 @@ package webhook
 // every existing caller of the webhook names unchanged.
 
 import (
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 // DestinationAllowlistEnv names the variable an operator sets to permit

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/hop"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
 // Config configures the browser-facing /llm proxy.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 )
 
 // deploymentKindEnv names who operates this deployment (ADR-0025 decision 1):

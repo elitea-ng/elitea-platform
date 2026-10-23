@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 )
 
 // EnvSigningKeyFile names the file that holds the PKCS#8 PEM Ed25519 signing

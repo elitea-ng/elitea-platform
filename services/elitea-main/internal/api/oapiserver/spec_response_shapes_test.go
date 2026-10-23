@@ -22,9 +22,9 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"gopkg.in/yaml.v3"
 
-	generated "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/generated"
-	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	generated "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/generated"
+	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 )
 
 // shapeSpecPath is api/openapi/v2.yaml relative to this package directory.

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // keyless_credentials.go — the write-side rules for `data.auth_mode`.

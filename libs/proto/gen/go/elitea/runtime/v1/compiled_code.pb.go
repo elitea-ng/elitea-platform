@@ -1042,7 +1042,7 @@ const file_elitea_runtime_v1_compiled_code_proto_rawDesc = "" +
 	")RUST_COMPILED_SNAPSHOT_PURPOSE_V1_COMPILE\x10\x01\x12-\n" +
 	")RUST_COMPILED_SNAPSHOT_PURPOSE_V1_PUBLISH\x10\x02\x12*\n" +
 	"&RUST_COMPILED_SNAPSHOT_PURPOSE_V1_READ\x10\x03\x12-\n" +
-	")RUST_COMPILED_SNAPSHOT_PURPOSE_V1_EXECUTE\x10\x04BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	")RUST_COMPILED_SNAPSHOT_PURPOSE_V1_EXECUTE\x10\x04BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_compiled_code_proto_rawDescOnce sync.Once

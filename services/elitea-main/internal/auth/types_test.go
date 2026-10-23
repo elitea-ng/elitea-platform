@@ -3,7 +3,7 @@ package auth_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func TestOwningUserIDDoesNotConfuseLegacyTokenIDWithUserID(t *testing.T) {

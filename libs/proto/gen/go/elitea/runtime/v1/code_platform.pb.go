@@ -887,7 +887,7 @@ const file_elitea_runtime_v1_code_platform_proto_rawDesc = "" +
 	" CodePlatformEffectsDispositionV1\x124\n" +
 	"0CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED\x10\x00\x12-\n" +
 	")CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE\x10\x01\x121\n" +
-	"-CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE\x10\x02BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"-CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE\x10\x02BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_code_platform_proto_rawDescOnce sync.Once

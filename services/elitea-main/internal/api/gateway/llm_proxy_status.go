@@ -47,7 +47,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 // maxStatusBody bounds how much of the gateway's answer is read. The real body

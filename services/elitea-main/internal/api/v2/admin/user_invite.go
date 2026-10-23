@@ -45,8 +45,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // inviteRecordExists is the half of an undelivered-invite explanation that is

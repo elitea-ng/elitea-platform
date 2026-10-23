@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	transport "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mailer"
+	transport "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mailer"
 )
 
 // stubResolver stands in for `internal/emailsettings`'s resolver: it decides

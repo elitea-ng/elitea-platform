@@ -23,7 +23,7 @@ package oapiserver_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
 )
 
 // TestMissingFromSpecIgnoresTheServerBase is the RED case of the defect: this

@@ -3,7 +3,7 @@ package output
 import (
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 )
 
 // The Worker's data-free "node type not available on this deployment" refusal

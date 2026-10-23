@@ -2534,7 +2534,7 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\x1dCodeOwnerRecoverySealNoEffect\x129.elitea.runtime.v1.CodeOwnerRecoverySealNoEffectRequestV1\x1a:.elitea.runtime.v1.CodeOwnerRecoverySealNoEffectResponseV1\x12\xab\x01\n" +
 	"$CodePlatformOwnerReadRetainedRuntime\x12@.elitea.runtime.v1.CodePlatformOwnerReadRetainedRuntimeRequestV1\x1aA.elitea.runtime.v1.CodePlatformOwnerReadRetainedRuntimeResponseV1\x12\x9f\x01\n" +
 	" CodePlatformOwnerReadPendingCall\x12<.elitea.runtime.v1.CodePlatformOwnerReadPendingCallRequestV1\x1a=.elitea.runtime.v1.CodePlatformOwnerReadPendingCallResponseV1\x12\x96\x01\n" +
-	"\x1dCodePlatformOwnerPublishReply\x129.elitea.runtime.v1.CodePlatformOwnerPublishReplyRequestV1\x1a:.elitea.runtime.v1.CodePlatformOwnerPublishReplyResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x1dCodePlatformOwnerPublishReply\x129.elitea.runtime.v1.CodePlatformOwnerPublishReplyRequestV1\x1a:.elitea.runtime.v1.CodePlatformOwnerPublishReplyResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_sandbox_proto_rawDescOnce sync.Once

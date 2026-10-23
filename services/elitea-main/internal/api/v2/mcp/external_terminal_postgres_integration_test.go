@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	agent "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	agent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/stretchr/testify/require"
 )
 

@@ -20,9 +20,9 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/sony/gobreaker/v2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/bifrostlog"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
-	natsinfra "github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/bifrostlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
+	natsinfra "github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
 )
 
 // NATSClient is the budget-path surface the gateway server owns and hands to

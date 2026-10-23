@@ -1,6 +1,6 @@
 package mcp
 
-import skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+import skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 
 const internalSkillsCategory = "elitea_core/skills"
 

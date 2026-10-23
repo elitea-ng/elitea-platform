@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // successfulOnlyRecorder wraps an audit recorder so it drops every event whose

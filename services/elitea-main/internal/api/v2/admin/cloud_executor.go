@@ -3,7 +3,7 @@ package admin
 import (
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // cloudExecutorSection is the platform ceiling of the desktop ⇄ cloud handoff

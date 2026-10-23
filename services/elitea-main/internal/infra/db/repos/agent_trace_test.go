@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 )
 
 func TestDecodeCurrentAgentTraceDeltaPreservesCurrentPartialMessageContract(t *testing.T) {

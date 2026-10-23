@@ -37,7 +37,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // deliveryOutcome is the exit case one delivery attempt sequence lands on. It

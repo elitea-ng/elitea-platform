@@ -10,7 +10,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 )
 
 func TestPipelineRunsRepoRecordsAndClaimsExactlyOnce(t *testing.T) {

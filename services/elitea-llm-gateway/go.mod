@@ -1,11 +1,11 @@
-module github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway
+module github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway
 
 go 1.26.9
 
 require (
 	cel.dev/cel-go v0.32.0
-	github.com/EliteaAI/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
-	github.com/EliteaAI/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.3.2
@@ -28,7 +28,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.2 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0 // indirect
-	github.com/EliteaAI/elitea-platform/libs/proto/gen/go v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/proto/gen/go v0.0.0-00010101000000-000000000000
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
@@ -111,8 +111,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/EliteaAI/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
+replace github.com/elitea-ng/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
 
-replace github.com/EliteaAI/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
+replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
 
-replace github.com/EliteaAI/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
+replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go

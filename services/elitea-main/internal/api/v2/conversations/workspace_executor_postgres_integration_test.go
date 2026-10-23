@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // The conversation details' `workspace_executor` (ADR-0034): `local` on a

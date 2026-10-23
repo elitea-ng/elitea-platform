@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 )
 
 // stubCompleter answers a canned string, or an error, and records what it was

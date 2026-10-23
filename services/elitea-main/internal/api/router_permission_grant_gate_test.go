@@ -59,7 +59,7 @@ import (
 
 // modulePrefix is this service's import path. An import that does not start with
 // it leaves the module, so its constants are out of reach and irrelevant.
-const modulePrefix = "github.com/EliteaAI/elitea-platform/services/elitea-main/"
+const modulePrefix = "github.com/elitea-ng/elitea-platform/services/elitea-main/"
 
 // baseGates maps each middleware constructor in internal/api/middleware/rbac.go
 // to the index of its FIRST permission argument. Every one of them takes the

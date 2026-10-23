@@ -10,7 +10,7 @@ import (
 
 	"sync"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 // fakeWakeBroker is an in-memory core-NATS stand-in: every subscriber on a

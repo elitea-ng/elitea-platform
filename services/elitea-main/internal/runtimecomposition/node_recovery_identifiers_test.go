@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 type runtimeRecoveryStore struct {

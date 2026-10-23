@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // The count covers every capability, both sides of a job, and exactly the

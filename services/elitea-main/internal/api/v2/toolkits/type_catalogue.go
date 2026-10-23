@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 // ToolkitCatalogueSource supplies the SETTINGS schema and the METADATA of every

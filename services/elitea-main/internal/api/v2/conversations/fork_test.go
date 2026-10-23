@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 )
 
 // A create cannot forge a fork marker (a client-side Duplicate copies meta

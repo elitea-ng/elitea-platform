@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 // scaffoldChunk is the header chunk admission wrote, marker intact

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 var fontAssetPath = "/api/v2/branding/assets/font/" + strings.Repeat("cd", 32) + ".woff2"

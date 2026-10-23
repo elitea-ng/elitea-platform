@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
 )
 
 func env(pairs map[string]string) func(string) (string, bool) {

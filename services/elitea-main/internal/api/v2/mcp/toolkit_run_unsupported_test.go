@@ -3,7 +3,7 @@ package mcp
 import (
 	"testing"
 
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // UI-DC-1: both unsupported-toolkit paths read as whole sentences. The

@@ -28,7 +28,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 )
 
 // Tool is one MCP tool descriptor. The JSON tags are the protocol's, including

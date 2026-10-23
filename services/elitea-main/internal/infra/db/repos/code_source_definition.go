@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	httpapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	httpapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"google.golang.org/protobuf/proto"
 )
 

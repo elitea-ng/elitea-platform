@@ -17,7 +17,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 )
 
 func getCapabilities(t *testing.T, opts ...toolkits.Option) toolkits.RuntimeCapabilitiesResponse {

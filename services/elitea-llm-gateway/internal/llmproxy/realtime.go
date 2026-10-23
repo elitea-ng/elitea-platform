@@ -73,7 +73,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
 )
 
 // The operator numbers this route ships with. The config package holds the same

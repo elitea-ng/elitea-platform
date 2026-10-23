@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/cutover"
 )
 
 func TestCurrentIndexV2CutoverRepositoryReadsExactSafeRetainedOutboxPredicate(t *testing.T) {

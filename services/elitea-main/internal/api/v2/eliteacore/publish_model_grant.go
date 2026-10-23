@@ -42,7 +42,7 @@ import (
 	"context"
 	"fmt"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // publishModelGrantSQL reads the grant of the catalogue model a version names.

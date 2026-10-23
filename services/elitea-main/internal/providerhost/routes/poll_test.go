@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/routes"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/routes"
 )
 
 // It replaces the hop on GET-invocation ALONE. The other three routes must

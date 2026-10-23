@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 )
 
 func TestRuntimePresetsIgnoreLegacyNumbersAndPreserveLayerPrecedence(t *testing.T) {

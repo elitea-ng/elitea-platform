@@ -41,7 +41,7 @@ syntax = "proto3";
 
 package elitea.vector.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
 
 // VectorService is served by elitea-vector over mTLS.
 service VectorService {

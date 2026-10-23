@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // Review round 2: attachments land only in a SYSTEM bucket. A person-made

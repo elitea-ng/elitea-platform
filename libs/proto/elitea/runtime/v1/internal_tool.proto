@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package elitea.runtime.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // InternalToolService is served by elitea-main on its platform gRPC listener
 // (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446) and called by the agent worker for

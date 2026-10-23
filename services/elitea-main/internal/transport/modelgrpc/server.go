@@ -41,9 +41,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	llmv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/llm/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	llmv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/llm/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 // The /llm routes each RPC serves. They are fixed: no caller chooses a path.

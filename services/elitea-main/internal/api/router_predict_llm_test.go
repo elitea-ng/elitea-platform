@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	v2predict "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 )
 
 // `POST /api/v2/elitea_core/predict_llm/prompt_lib/{projectID}` is the

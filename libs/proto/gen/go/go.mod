@@ -1,4 +1,4 @@
-module github.com/EliteaAI/elitea-platform/libs/proto/gen/go
+module github.com/elitea-ng/elitea-platform/libs/proto/gen/go
 
 go 1.26.0
 

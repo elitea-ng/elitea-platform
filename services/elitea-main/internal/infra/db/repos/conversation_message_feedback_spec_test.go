@@ -7,8 +7,8 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	specfiles "github.com/EliteaAI/elitea-platform/services/elitea-main/api/openapi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // TestMessageFeedbackSpecDeclaresTheRepositoryNotFound: getMessageFeedback

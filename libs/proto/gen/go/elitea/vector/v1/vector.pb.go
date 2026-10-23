@@ -3375,7 +3375,7 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"ReadMemory\x12#.elitea.vector.v1.ReadMemoryRequest\x1a$.elitea.vector.v1.ReadMemoryResponse\x12l\n" +
 	"\x11SetMemoryMetadata\x12*.elitea.vector.v1.SetMemoryMetadataRequest\x1a+.elitea.vector.v1.SetMemoryMetadataResponse\x12i\n" +
 	"\x10DeleteMemoryUser\x12).elitea.vector.v1.DeleteMemoryUserRequest\x1a*.elitea.vector.v1.DeleteMemoryUserResponse\x12r\n" +
-	"\x13DeleteMemoryToolkit\x12,.elitea.vector.v1.DeleteMemoryToolkitRequest\x1a-.elitea.vector.v1.DeleteMemoryToolkitResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
+	"\x13DeleteMemoryToolkit\x12,.elitea.vector.v1.DeleteMemoryToolkitRequest\x1a-.elitea.vector.v1.DeleteMemoryToolkitResponseBRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 
 var (
 	file_elitea_vector_v1_vector_proto_rawDescOnce sync.Once

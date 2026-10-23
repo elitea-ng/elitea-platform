@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 )
 
 // The classification rule, stated as the cases state it, one example per

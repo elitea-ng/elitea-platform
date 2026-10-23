@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/resolver/manual"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
 )
 
 // countingHealth answers every Check and counts it.

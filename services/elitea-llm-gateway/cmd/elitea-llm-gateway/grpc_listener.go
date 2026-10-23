@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/grpcapi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/grpcapi"
 )
 
 // newGatewayGRPC builds the GatewayService listener. It refuses to build one

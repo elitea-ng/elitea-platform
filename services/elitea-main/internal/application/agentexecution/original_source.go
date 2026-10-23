@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 type RootSourceCaptureRequest struct {

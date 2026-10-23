@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

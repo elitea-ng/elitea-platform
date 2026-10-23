@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 )
 
 const externalSchemaDeadline = 60 * time.Second

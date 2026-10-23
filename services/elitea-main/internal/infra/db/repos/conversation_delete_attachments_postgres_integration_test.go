@@ -23,7 +23,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 )
 
 // attachmentKeys renders reported refs as "bucket/name" for comparison,

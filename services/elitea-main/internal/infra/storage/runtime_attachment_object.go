@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 const (

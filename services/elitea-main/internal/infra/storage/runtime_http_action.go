@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 )

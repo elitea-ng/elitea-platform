@@ -95,7 +95,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         sleep $((attempt * 5)); \
     done; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w -X github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo.Version=${VERSION}" -o /out/elitea-main ./cmd/elitea-main && \
+    go build -trimpath -ldflags="-s -w -X github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo.Version=${VERSION}" -o /out/elitea-main ./cmd/elitea-main && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-migrate ./cmd/elitea-migrate && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \

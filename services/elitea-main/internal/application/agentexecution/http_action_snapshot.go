@@ -3,8 +3,8 @@ package agentexecution
 import (
 	"encoding/json"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 // Admission replaces authored markers with Main-owned immutable request receipts.

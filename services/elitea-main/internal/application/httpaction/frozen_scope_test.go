@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 const scopedHTTPNode = "  - id: send\n    type: http\n    revision: 1\n    request: {method: GET, url: https://api.example.test/items, response: {mode: json}}\n    output: [report]\n    transition: END\n"

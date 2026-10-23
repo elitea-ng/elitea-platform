@@ -3,7 +3,7 @@ package configurations
 import (
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // tenantSchema returns the project's tenant schema as a quoted PostgreSQL

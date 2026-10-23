@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 )
 
 // mustConfigFromEnv is config.FromEnv for tests whose environment is valid.

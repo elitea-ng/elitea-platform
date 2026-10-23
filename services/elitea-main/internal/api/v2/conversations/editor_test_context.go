@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 const EditorTestSource = "editor_test"

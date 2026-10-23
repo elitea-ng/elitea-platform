@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

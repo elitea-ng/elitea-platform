@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
 )
 
 type captured struct {

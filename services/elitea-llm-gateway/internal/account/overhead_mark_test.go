@@ -12,7 +12,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 )
 
 // meterCtx builds the context bifrost/core hands to GetKeysForProvider: a

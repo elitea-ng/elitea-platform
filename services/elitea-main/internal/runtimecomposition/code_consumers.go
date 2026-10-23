@@ -5,13 +5,13 @@ import (
 	"errors"
 	"slices"
 
-	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	toolkitcall "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	toolkitexecution "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
+	toolkitsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	toolkitcall "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitexecution "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 )
 
 // Deployment composition supplies the frozen operator policy and capabilities.

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 // What the Rust worker serves that no SDK toolkit declares (ADR-0032):

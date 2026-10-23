@@ -65,8 +65,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	platformauth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // The two verbs an exception can carry. They are the legacy strings and the

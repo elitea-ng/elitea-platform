@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/stretchr/testify/require"
 )
 

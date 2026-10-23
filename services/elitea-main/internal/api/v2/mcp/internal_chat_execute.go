@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"strconv"
 
-	conversationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	foldersapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	conversationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	foldersapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 

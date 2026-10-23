@@ -45,7 +45,7 @@ import (
 	"strconv"
 	"strings"
 
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 )
 
 // BrandSource is the seam to the resolved brand pack. The bootstrap route's

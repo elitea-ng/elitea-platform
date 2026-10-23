@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 const (

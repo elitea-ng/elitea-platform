@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 // Offline owner fixture. Production reference mint/read remains Main's sole

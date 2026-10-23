@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 var ErrInvalidDelegatedAuthToolkitSettings = errors.New("invalid delegated authorization toolkit settings request")

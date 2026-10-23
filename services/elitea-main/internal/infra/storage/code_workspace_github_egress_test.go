@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 // TestCodeWorkspaceGitHubDialsOnlyThroughTheEgressGuard proves the GitHub

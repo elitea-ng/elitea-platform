@@ -9,7 +9,7 @@ package configurations_test
 import (
 	"testing"
 
-	configurations "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurations "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 func qtestShapedSchema() map[string]any {

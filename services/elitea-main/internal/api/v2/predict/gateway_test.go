@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 func TestCompleteReturnsTheFirstNonEmptyChoiceContent(t *testing.T) {

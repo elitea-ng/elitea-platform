@@ -13,7 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
 )
 
 // EgressRunSummaries is the Postgres application/egressaudit.Store.

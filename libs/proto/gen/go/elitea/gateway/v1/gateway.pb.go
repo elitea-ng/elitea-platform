@@ -2501,7 +2501,7 @@ const file_elitea_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x0fCheckConnection\x12).elitea.gateway.v1.CheckConnectionRequest\x1a*.elitea.gateway.v1.CheckConnectionResponse\x12q\n" +
 	"\x12ListProviderModels\x12,.elitea.gateway.v1.ListProviderModelsRequest\x1a-.elitea.gateway.v1.ListProviderModelsResponse\x12q\n" +
 	"\x12ListProviderVoices\x12,.elitea.gateway.v1.ListProviderVoicesRequest\x1a-.elitea.gateway.v1.ListProviderVoicesResponse\x12k\n" +
-	"\x10GovernanceStatus\x12*.elitea.gateway.v1.GovernanceStatusRequest\x1a+.elitea.gateway.v1.GovernanceStatusResponseBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/gateway/v1;gatewayv1b\x06proto3"
+	"\x10GovernanceStatus\x12*.elitea.gateway.v1.GovernanceStatusRequest\x1a+.elitea.gateway.v1.GovernanceStatusResponseBTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/gateway/v1;gatewayv1b\x06proto3"
 
 var (
 	file_elitea_gateway_v1_gateway_proto_rawDescOnce sync.Once

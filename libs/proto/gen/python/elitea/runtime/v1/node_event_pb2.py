@@ -24,14 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"elitea/runtime/v1/node_event.proto\x12\x11\x65litea.runtime.v1\"\xe5\x03\n\x0bNodeEventV1\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x16\n\tstream_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x17\n\nmessage_id\x18\x03 \x01(\tH\x01\x88\x01\x01\x12\x18\n\x0bquestion_id\x18\x04 \x01(\tH\x02\x88\x01\x01\x12\x0f\n\x07\x63ontent\x18\x05 \x01(\x0c\x12\x15\n\x08thinking\x18\x06 \x01(\tH\x03\x88\x01\x01\x12\x19\n\x11response_metadata\x18\x07 \x01(\x0c\x12\x12\n\nreferences\x18\x08 \x01(\x0c\x12\x16\n\tsio_event\x18\t \x01(\tH\x04\x88\x01\x01\x12\x17\n\ncreated_at\x18\n \x01(\tH\x05\x88\x01\x01\x12\x1e\n\x11parent_message_id\x18\x0b \x01(\tH\x06\x88\x01\x01\x12\x17\n\nagent_name\x18\x0c \x01(\tH\x07\x88\x01\x01\x12!\n\x14\x65xecution_generation\x18\r \x01(\tH\x08\x88\x01\x01\x42\x0c\n\n_stream_idB\r\n\x0b_message_idB\x0e\n\x0c_question_idB\x0b\n\t_thinkingB\x0c\n\n_sio_eventB\r\n\x0b_created_atB\x14\n\x12_parent_message_idB\r\n\x0b_agent_nameB\x17\n\x15_execution_generationJ\x04\x08\x0e\x10 BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"elitea/runtime/v1/node_event.proto\x12\x11\x65litea.runtime.v1\"\xe5\x03\n\x0bNodeEventV1\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x16\n\tstream_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x17\n\nmessage_id\x18\x03 \x01(\tH\x01\x88\x01\x01\x12\x18\n\x0bquestion_id\x18\x04 \x01(\tH\x02\x88\x01\x01\x12\x0f\n\x07\x63ontent\x18\x05 \x01(\x0c\x12\x15\n\x08thinking\x18\x06 \x01(\tH\x03\x88\x01\x01\x12\x19\n\x11response_metadata\x18\x07 \x01(\x0c\x12\x12\n\nreferences\x18\x08 \x01(\x0c\x12\x16\n\tsio_event\x18\t \x01(\tH\x04\x88\x01\x01\x12\x17\n\ncreated_at\x18\n \x01(\tH\x05\x88\x01\x01\x12\x1e\n\x11parent_message_id\x18\x0b \x01(\tH\x06\x88\x01\x01\x12\x17\n\nagent_name\x18\x0c \x01(\tH\x07\x88\x01\x01\x12!\n\x14\x65xecution_generation\x18\r \x01(\tH\x08\x88\x01\x01\x42\x0c\n\n_stream_idB\r\n\x0b_message_idB\x0e\n\x0c_question_idB\x0b\n\t_thinkingB\x0c\n\n_sio_eventB\r\n\x0b_created_atB\x14\n\x12_parent_message_idB\r\n\x0b_agent_nameB\x17\n\x15_execution_generationJ\x04\x08\x0e\x10 BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'elitea.runtime.v1.node_event_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'ZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
+  _globals['DESCRIPTOR']._serialized_options = b'ZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
   _globals['_NODEEVENTV1']._serialized_start=58
   _globals['_NODEEVENTV1']._serialized_end=543
 # @@protoc_insertion_point(module_scope)

@@ -437,7 +437,7 @@ const file_elitea_runtime_v1_common_proto_rawDesc = "" +
 	"\x1eEXECUTION_OUTCOME_V1_SUCCEEDED\x10\x01\x12\x1f\n" +
 	"\x1bEXECUTION_OUTCOME_V1_FAILED\x10\x02\x12\"\n" +
 	"\x1eEXECUTION_OUTCOME_V1_CANCELLED\x10\x03\x12(\n" +
-	"$EXECUTION_OUTCOME_V1_OUTCOME_UNKNOWN\x10\x04BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"$EXECUTION_OUTCOME_V1_OUTCOME_UNKNOWN\x10\x04BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_common_proto_rawDescOnce sync.Once

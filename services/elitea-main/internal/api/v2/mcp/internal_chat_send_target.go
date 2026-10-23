@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strconv"
 
-	conversationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	configurationsapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	conversationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	configurationsapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // internalChatSendTarget contains only the selected participant and model input.

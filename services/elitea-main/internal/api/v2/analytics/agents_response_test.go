@@ -16,7 +16,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 type agentBreakdownRepo struct {

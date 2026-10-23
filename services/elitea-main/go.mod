@@ -1,20 +1,20 @@
-module github.com/EliteaAI/elitea-platform/services/elitea-main
+module github.com/elitea-ng/elitea-platform/services/elitea-main
 
 go 1.26.9
 
-replace github.com/EliteaAI/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
+replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
 
-replace github.com/EliteaAI/elitea-platform/libs/go/observability => ../../libs/go/observability
+replace github.com/elitea-ng/elitea-platform/libs/go/observability => ../../libs/go/observability
 
 require (
 	cel.dev/cel-go v0.32.0
 	cloud.google.com/go/storage v1.66.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
-	github.com/EliteaAI/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
-	github.com/EliteaAI/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
-	github.com/EliteaAI/elitea-platform/libs/go/observability v0.0.0
-	github.com/EliteaAI/elitea-platform/libs/proto/gen/go v0.0.0
+	github.com/elitea-ng/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/observability v0.0.0
+	github.com/elitea-ng/elitea-platform/libs/proto/gen/go v0.0.0
 	github.com/aws/aws-sdk-go-v2 v1.45.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.1
@@ -133,6 +133,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 )
 
-replace github.com/EliteaAI/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
+replace github.com/elitea-ng/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
 
-replace github.com/EliteaAI/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
+replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn

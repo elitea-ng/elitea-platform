@@ -2,7 +2,7 @@
 #
 # Build context is the REPO ROOT (see deploy/docker-compose.yml,
 # docker-bake.hcl, .github/workflows/publish.yml) — issue #250 added a
-# `replace github.com/EliteaAI/elitea-platform/libs/go/observability =>
+# `replace github.com/elitea-ng/elitea-platform/libs/go/observability =>
 # ../../libs/go/observability` to go.mod, which needs that directory reachable
 # from the build context; a context scoped to services/elitea-scheduler alone
 # cannot see it. Mirrors services/elitea-main/Containerfile's builder stage.

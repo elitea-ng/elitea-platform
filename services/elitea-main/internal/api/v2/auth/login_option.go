@@ -21,7 +21,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 // LoginOption is one plane's entry on the sign-in page.

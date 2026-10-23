@@ -42,7 +42,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // applicationEntityName is the `chat_participants.entity_name` an agent

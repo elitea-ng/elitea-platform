@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package elitea.runtime.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // NodeEventV1 is the language-neutral data-plane form of the current
 // legacy indexer NodeEvent consumed by EliteaUI. Field names deliberately match

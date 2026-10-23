@@ -1,4 +1,4 @@
-module github.com/EliteaAI/elitea-platform/libs/go/observability
+module github.com/elitea-ng/elitea-platform/libs/go/observability
 
 go 1.26.0
 

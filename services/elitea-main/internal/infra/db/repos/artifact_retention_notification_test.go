@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
 
 func TestArtifactRetentionNotificationRepositoryResolvesProjectOwner(t *testing.T) {

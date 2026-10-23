@@ -1,7 +1,7 @@
 package main
 
 import (
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // productionAuthenticationComposed reports whether the composition root built

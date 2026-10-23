@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

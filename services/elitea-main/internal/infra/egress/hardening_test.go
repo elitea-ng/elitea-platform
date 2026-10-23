@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
 )
 
 func privateAllowlist(t *testing.T, entries ...string) *egresslib.Allowlist {

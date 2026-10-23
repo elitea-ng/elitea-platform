@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 )
 
 const bootstrapPath = "/api/v2/branding/bootstrap.js"

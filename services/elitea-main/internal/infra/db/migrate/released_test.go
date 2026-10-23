@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"github.com/stretchr/testify/require"
 )
 

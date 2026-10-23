@@ -358,7 +358,7 @@ const file_elitea_runtime_v1_input_proto_rawDesc = "" +
 	"\x16ExecutionInputBundleV1\x12&\n" +
 	"\x0finput_bundle_id\x18\x01 \x01(\tR\rinputBundleId\x12+\n" +
 	"\x11immutable_version\x18\x02 \x01(\tR\x10immutableVersion\x12B\n" +
-	"\aentries\x18\x03 \x03(\v2(.elitea.runtime.v1.ExecutionInputEntryV1R\aentriesJ\x04\b\x04\x10\x10BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\aentries\x18\x03 \x03(\v2(.elitea.runtime.v1.ExecutionInputEntryV1R\aentriesJ\x04\b\x04\x10\x10BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_input_proto_rawDescOnce sync.Once

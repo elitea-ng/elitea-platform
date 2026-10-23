@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"math"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // ProviderAdmission decides the status_ok column for a configuration row this

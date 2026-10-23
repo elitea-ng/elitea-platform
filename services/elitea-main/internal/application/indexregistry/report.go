@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 // ReportVersion is the SDK's REPORT_VERSION

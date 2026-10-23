@@ -25,14 +25,14 @@ _sym_db = _symbol_database.Default()
 from elitea.runtime.v1 import common_pb2 as elitea_dot_runtime_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n elitea/runtime/v1/envelope.proto\x12\x11\x65litea.runtime.v1\x1a\x1e\x65litea/runtime/v1/common.proto\"\x86\x02\n\x1dSignedWorkerCommandEnvelopeV1\x12 \n\x18\x65nvelope_schema_revision\x18\x01 \x01(\t\x12@\n\x11signature_profile\x18\x02 \x01(\x0e\x32%.elitea.runtime.v1.SignatureProfileV1\x12\x0e\n\x06key_id\x18\x03 \x01(\t\x12\x1c\n\x14worker_command_bytes\x18\x04 \x01(\x0c\x12:\n\x15worker_command_digest\x18\x05 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x11\n\tsignature\x18\x06 \x01(\x0cJ\x04\x08\x07\x10\x10\"\x9f\x01\n\x19WorkerExecutionEnvelopeV1\x12H\n\x0esigned_command\x18\x01 \x01(\x0b\x32\x30.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1\x12\x32\n\x05\x66\x65nce\x18\x02 \x01(\x0b\x32#.elitea.runtime.v1.ExecutionFenceV1J\x04\x08\x03\x10\x10*\x8c\x01\n\x12SignatureProfileV1\x12$\n SIGNATURE_PROFILE_V1_UNSPECIFIED\x10\x00\x12.\n*SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256\x10\x01\x12 \n\x1cSIGNATURE_PROFILE_V1_ED25519\x10\x02\x42SZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n elitea/runtime/v1/envelope.proto\x12\x11\x65litea.runtime.v1\x1a\x1e\x65litea/runtime/v1/common.proto\"\x86\x02\n\x1dSignedWorkerCommandEnvelopeV1\x12 \n\x18\x65nvelope_schema_revision\x18\x01 \x01(\t\x12@\n\x11signature_profile\x18\x02 \x01(\x0e\x32%.elitea.runtime.v1.SignatureProfileV1\x12\x0e\n\x06key_id\x18\x03 \x01(\t\x12\x1c\n\x14worker_command_bytes\x18\x04 \x01(\x0c\x12:\n\x15worker_command_digest\x18\x05 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x11\n\tsignature\x18\x06 \x01(\x0cJ\x04\x08\x07\x10\x10\"\x9f\x01\n\x19WorkerExecutionEnvelopeV1\x12H\n\x0esigned_command\x18\x01 \x01(\x0b\x32\x30.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1\x12\x32\n\x05\x66\x65nce\x18\x02 \x01(\x0b\x32#.elitea.runtime.v1.ExecutionFenceV1J\x04\x08\x03\x10\x10*\x8c\x01\n\x12SignatureProfileV1\x12$\n SIGNATURE_PROFILE_V1_UNSPECIFIED\x10\x00\x12.\n*SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256\x10\x01\x12 \n\x1cSIGNATURE_PROFILE_V1_ED25519\x10\x02\x42TZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'elitea.runtime.v1.envelope_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'ZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
+  _globals['DESCRIPTOR']._serialized_options = b'ZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
   _globals['_SIGNATUREPROFILEV1']._serialized_start=515
   _globals['_SIGNATUREPROFILEV1']._serialized_end=655
   _globals['_SIGNEDWORKERCOMMANDENVELOPEV1']._serialized_start=88

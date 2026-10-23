@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
 )
 
 type pki struct {

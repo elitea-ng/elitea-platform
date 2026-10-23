@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"sort"
 	"sync"
@@ -14,8 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 )
 
 func TestNewPostgresRepositoryRequiresPool(t *testing.T) {

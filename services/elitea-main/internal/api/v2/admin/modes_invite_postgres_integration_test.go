@@ -22,9 +22,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */

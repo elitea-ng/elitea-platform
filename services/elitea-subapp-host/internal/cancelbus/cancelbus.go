@@ -24,7 +24,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 )
 
 // ErrInvalidID refuses an invocation id that is not one NATS subject token.

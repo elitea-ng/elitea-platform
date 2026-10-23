@@ -25,7 +25,7 @@ package repos
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // The keys a stored agent carries besides the ones an editor knows about.

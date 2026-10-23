@@ -33,7 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 // SignInClientAddresses resolves the real caller address behind the

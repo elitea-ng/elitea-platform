@@ -37,7 +37,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 )
 
 // ErrNoClients is returned by NewAllowlist for an empty client list. A

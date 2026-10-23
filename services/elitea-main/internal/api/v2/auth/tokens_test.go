@@ -13,7 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	identity "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type tokenRepositoryStub struct {

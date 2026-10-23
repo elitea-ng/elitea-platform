@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 // countingAdmitter admits `limit` attempts per (stage, client) and then

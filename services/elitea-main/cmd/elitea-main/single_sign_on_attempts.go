@@ -6,9 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
+	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
 )
 
 // composeSingleSignOnAttempts puts the OIDC begin/callback and SAML begin/ACS

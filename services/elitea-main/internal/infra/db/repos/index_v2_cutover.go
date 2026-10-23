@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

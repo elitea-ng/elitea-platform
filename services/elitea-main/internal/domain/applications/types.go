@@ -3,7 +3,7 @@ package applications
 import (
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 type Author struct {

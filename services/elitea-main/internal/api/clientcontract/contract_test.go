@@ -16,9 +16,9 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	specfiles "github.com/EliteaAI/elitea-platform/services/elitea-main/api/openapi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/clientcontract"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
+	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/clientcontract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 )
 
 // update rewrites the lock of the current major from the spec. It is the only

@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // InvocationGrantRecorder writes the grant of a freshly minted bearer

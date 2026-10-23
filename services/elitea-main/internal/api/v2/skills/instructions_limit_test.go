@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 func TestSkillRESTWritesEnforceTheInstructionsLimit(t *testing.T) {

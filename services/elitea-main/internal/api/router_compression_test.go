@@ -13,7 +13,7 @@ import (
 
 	"context"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // The API served every JSON answer uncompressed.
