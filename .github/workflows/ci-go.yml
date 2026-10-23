@@ -47,50 +47,13 @@ on:
       - "scripts/contract/generate_proto.sh"
       - "scripts/coverage/**"
       - "Taskfile.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "services/elitea-main/**"
-      - "services/elitea-scheduler/**"
-      - "services/elitea-subapp-host/**"
-      - "services/elitea-egress-proxy/**"
-      - "libs/go/**"
-      - "libs/proto/**"
-      # The native client conformance module (ADR-0025 WP7) is in go.work, so
-      # its helpers' unit tests, vet and lint run here; the suite itself is
-      # behind the `conformance` tag and runs in ci-web-e2e.yml.
-      - "conformance/nativeclient/**"
-      - "go.work"
-      - "go.work.sum"
-      - ".github/workflows/ci-go.yml"
-      - "deploy/helm/elitea-main/**"
-      - "deploy/helm/elitea/**"
-      - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
-      # The secured NATS permission tests (#1076) run elitea-main's and the
-      # scheduler's real NATS paths against the nats.conf the elitea chart's
-      # bundled NATS renders, after the real bootstrap.sh. A change to the permission
-      # table, the bootstrap or the render script must run them.
-      # The bundled NATS server's permission table and the bootstrap script.
-      - "deploy/helm/elitea/values.yaml"
-      - "deploy/helm/elitea/values-nats-ha.yaml"
-      - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/Chart.lock"
-      - "deploy/helm/elitea/build-deps.sh"
-      - "deploy/helm/elitea/files/nats-bootstrap.sh"
-      - "scripts/nats/**"
-      # internal/transport/commandbus pins its constants to the command bus
-      # contract document.
-      - "docs/runtime-command-bus.md"
-      # The vet and test steps below run scripts/go/workspace-run.sh. A change
-      # to that script, or to the Taskfile that calls it, must run this
-      # workflow. A gate that does not trigger on the file it guards is the
-      # same false green in another costume (#409).
-      - "scripts/go/**"
-      - "scripts/contract/check_compiled_snapshots_postgres.sh"
-      - "scripts/contract/generate_proto.sh"
-      - "scripts/coverage/**"
-      - "Taskfile.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "7 0 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

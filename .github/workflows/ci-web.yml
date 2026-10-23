@@ -47,24 +47,12 @@ on:
       # so a table-only edit does not start this pipeline.
       - "libs/ts/client-core/**"
       - ".github/workflows/ci-web.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/elitea-web/**"
-      - "services/elitea-main/**"
-      - "deploy/**"
-      # The shared client package the app compiles from source. The client
-      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
-      # so a table-only edit does not start this pipeline.
-      - "libs/ts/client-core/**"
-      - ".github/workflows/ci-web.yml"
-    # NO `tags: v*` — issue #309, Gate 2. publish.yml cuts release tags with
-    # `secrets.GITHUB_TOKEN`, and GitHub does not start workflow runs for refs
-    # created by GITHUB_TOKEN. Measured: `gh api .../actions/runs` returns zero
-    # runs on any `v1.*` ref, for any workflow. A tag trigger here was never a
-    # release gate, only the appearance of one.
-    # scripts/check-ci-dormancy.mjs fails the build if one is added back.
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "15 0 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

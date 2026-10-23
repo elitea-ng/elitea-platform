@@ -147,69 +147,12 @@ on:
       - "scripts/ci/check-workflow-cache-writes.mjs"
       - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/elitea-web/**"
-      # The shared client package the web image compiles from source.
-      - "libs/ts/client-core/**"
-      - "services/elitea-main/**"
-      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
-      # its fixture runner).
-      - "services/elitea-deepwiki-engine/**"
-      - "libs/rust/**"
-      - "services/elitea-subapp-host/**"
-      # The `chat-stream-rust` job runs the journeys against the native Rust
-      # runtime, so a change to it can break a browser journey while touching
-      # nothing under apps/elitea-web. Without this path the job that exists to
-      # catch that drift would not start on the change that caused it.
-      - "services/elitea-worker-rust/**"
-      # The `index-stream-rust` job (ADR-0030 Verification 3) runs the index
-      # journey on the Rust-only path: vectors in Qdrant behind elitea-vector,
-      # documents read by the extractor sidecar. Same reasoning as above.
-      - "services/elitea-vector/**"
-      - "services/elitea-doc-extractor/**"
-      # The real-model lane's own subjects: the gateway's SSE relay, the
-      # Rust worker's model path, and the shared build action every stack
-      # job here uses. The `model-path-changes` job names these; a prefix it
-      # names must also START this workflow, or the lane silently never runs
-      # for the change it exists to catch.
-      - "services/elitea-llm-gateway/**"
-      - ".github/actions/**"
-      - "deploy/**"
-      - "docker-bake.hcl"
-      # The `native-client-conformance` job's own subject: the black-box
-      # ADR-0025 suite it runs against the stack.
-      - "conformance/nativeclient/**"
-      # The lane filter the `model-path-changes` job runs, and its test.
-      - "scripts/ci/e2e-lane-filter.sh"
-      - "scripts/ci/e2e-lane-filter-test.sh"
-      # The rest of what the stack images COPY and what this workflow runs:
-      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
-      # files' Containerfiles and this workflow's `scripts/` calls (with what
-      # each .mjs one imports), and fails
-      # when this list stops covering it (the scheduler, the inventory engine,
-      # the shared Go libraries and the protos were missing until it ran).
-      - "services/elitea-scheduler/**"
-      - "services/elitea-inventory-engine/**"
-      - "libs/go/**"
-      - "libs/proto/**"
-      - "scripts/ci/stack-images.mjs"
-      - "scripts/ci/py-compat.mjs"
-      - "scripts/ci/ci-compat.mjs"
-      - "scripts/ci/package.json"
-      - "scripts/ci/package-lock.json"
-      - "scripts/ci/pull-third-party-images.sh"
-      - "scripts/ci/check-ci-image-references.mjs"
-      - "scripts/ci/check-workflow-cache-writes.mjs"
-      - "scripts/ci/check-e2e-paths.mjs"
-      - ".github/workflows/ci-web-e2e.yml"
-    # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.
-    # A GITHUB_TOKEN-created tag starts no workflow run, so this arm has never
-    # fired. Both jobs below reach every PR, every push to main and
-    # workflow_dispatch on their own, which is what has actually been running
-    # them; removing the dead arm changes no execution, only the claim.
+  # No push arm: a merge starts no run (no-binaries.yml's workflow-triggers).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "7 1 * * *"
 
 # A newer push cancels a pull request's run; main runs finish, because a
 # main run is the only writer of the build caches the next runs read (a
@@ -262,7 +205,7 @@ jobs:
     permissions: &build-once-permissions
       contents: read
       # The ONLY jobs in this workflow that write packages: they push the
-      # CI-only `ghcr.io/elitea-ng/ci-<image>` and, on a push to main, the
+      # CI-only `ghcr.io/elitea-ng/ci-<image>` and, on a run on main, the
       # `ci-cache-<image>` layer cache. Nothing that ships references either
       # (scripts/ci/check-ci-image-references.mjs).
       packages: write
@@ -885,7 +828,7 @@ jobs:
     #     surface, the E2E harness or the stack itself changes. A pull request
     #     that touches none of those gets the mock lanes and skips this one.
     #
-    # Every push to main and every dispatch reaches everything, so the mount
+    # The nightly run on main and every dispatch reach everything, so the mount
     # cache writers (`index-stream-rust`, `visual`) still run on main.
     #
     # A skipped job is reported as "skipped", which a required status check
@@ -1822,7 +1765,7 @@ jobs:
     # Manual only — this job re-generates `content/img/*.webp` and uploads
     # them for a human to review and commit, exactly like `visual`'s
     # `update_visual_baselines` mode; it is never part of the signal a PR or
-    # a push to main is judged on, so it has its own `if:` rather than
+    # the nightly run is judged on, so it has its own `if:` rather than
     # sharing `e2e`/`chat-stream`/`visual`'s "runs on everything the `on:`
     # block admits" shape.
     runs-on: ubuntu-latest

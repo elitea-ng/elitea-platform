@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // Fail a workflow cache step that can WRITE from a pull request.
 //
-// THE RULE: pull requests read the Actions cache, only a push to main writes it.
+// THE RULE: pull requests read the Actions cache, only a run on main writes it.
+//
+// A run on main is the nightly schedule (or a dispatch from main): no workflow
+// runs on a push (scripts/ci/check-no-push-triggers.mjs), so the writer gate is
+// `github.ref == 'refs/heads/main' && github.event_name != 'pull_request'`.
 //
 // WHY (measured 2026-10-16). The repository's Actions cache is capped at 10 GB
 // and evicted least-recently-used. It held 10.7 GB in 809 entries. The largest
@@ -21,20 +25,20 @@
 //   actions/cache           (the full action, which saves in a post step) and
 //   actions/cache/save      the step's `if:` holds BOTH
 //                           `github.ref == 'refs/heads/main'` and
-//                           `github.event_name == 'push'`
+//                           `github.event_name != 'pull_request'`
 //   Swatinem/rust-cache     `save-if:` names `github.ref == 'refs/heads/main'`,
 //                           or is a literal false (restore only)
 //   golangci-lint-action    `skip-cache: true`, or `skip-save-cache:` gated on
-//                           a push to main
+//                           a run on main
 //   trivy-action            `cache: "false"` (its DB cache is a full actions/cache)
 //   cache-to (BuildKit)     on docker/build-push-action, as a bake-action `set`
 //                           line, or in a `docker buildx bake` run line: empty
-//                           unless a push to main, i.e. an expression holding the
-//                           main ref, `github.event_name == 'push'` and an
+//                           unless a run on main, i.e. an expression holding the
+//                           main ref, `github.event_name != 'pull_request'` and an
 //                           `|| ''` fallback. A `docker buildx bake` run that
 //                           builds (not `--print`) must clear `*.cache-to=`,
 //                           because docker-bake.hcl declares mode=max exports.
-//   build-stack-images      its `cache-write` default is a push to main, and no
+//   build-stack-images      its `cache-write` default is a run on main, and no
 //                           caller passes anything but "false"; `mount-cache-writer`
 //                           is "true" or "false", "true" on at most ONE job per
 //                           mount-cache-suffix across ALL workflows (the key is
@@ -47,9 +51,10 @@
 //                           counts as one writer of that leg's suffix.
 //   deploy/ci/*.hcl         declares no cache-to (it is merged into every bake)
 //
-// A workflow whose ONLY trigger is a push to main/next (publish.yml, the release)
-// is exempt from the cache-to, actions/cache and trivy rules: it cannot run for
-// a pull request. Every other rule still applies to it.
+// A workflow with no pull_request, pull_request_target, push or merge_group
+// trigger (publish.yml, the nightlies) is exempt from the cache-to,
+// actions/cache and trivy rules: it cannot run for a pull request. Every other
+// rule still applies to it.
 //
 // This reads YAML with the `yaml` package the way PyYAML read it before the
 // port (./ci-compat.mjs; `npm ci --prefix scripts/ci`), and runs with the
@@ -72,8 +77,9 @@ export const MINIMUM_WORKFLOWS = 10;
 export const MINIMUM_CACHE_STEPS = 20;
 
 const MAIN_REF = "github.ref == 'refs/heads/main'";
-const PUSH_EVENT = "github.event_name == 'push'";
-const RELEASE_BRANCHES = new Set(["main", "next"]);
+const WRITER_EVENT = "github.event_name != 'pull_request'";
+// The triggers that can run a workflow for a pull request, or for a branch push.
+const PR_TRIGGERS = ["pull_request", "pull_request_target", "push", "merge_group"];
 
 const isDict = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date);
 // dict.get(key, default)
@@ -92,15 +98,15 @@ function norm(value) {
 
 const isFalse = (value) => value === false || pyStr(value).trim().toLowerCase() === "false";
 
-function gatedOnMainPush(expr) {
+function gatedOnMainRun(expr) {
   const text = norm(expr);
-  return text.includes(MAIN_REF) && text.includes(PUSH_EVENT);
+  return text.includes(MAIN_REF) && text.includes(WRITER_EVENT);
 }
 
-/** `!(main && push)` — the skip-side spelling of the same gate. */
-function negatedMainPush(expr) {
+/** `!(main && not a pull request)` — the skip-side spelling of the same gate. */
+function negatedMainRun(expr) {
   const text = norm(expr).replaceAll(" ", "");
-  return gatedOnMainPush(expr) && text.includes("!(");
+  return gatedOnMainRun(expr) && text.includes("!(");
 }
 
 const MATRIX_REF = /^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$/;
@@ -119,12 +125,12 @@ function includeOnlyLegs(job) {
   return include;
 }
 
-/** A cache-to that is empty unless a push to main. */
+/** A cache-to that is empty unless a run on main. */
 function cacheToGated(value) {
   const text = norm(value).trim();
   if (text === "") return true;
   if (!text.includes("${{")) return false;
-  return gatedOnMainPush(text) && /\|\|\s*''/.test(text);
+  return gatedOnMainRun(text) && /\|\|\s*''/.test(text);
 }
 
 function triggers(doc) {
@@ -135,14 +141,9 @@ function triggers(doc) {
   return orDict(on);
 }
 
-function releaseOnly(doc) {
-  const on = triggers(doc);
-  const keys = Object.keys(on);
-  if (keys.length !== 1 || keys[0] !== "push") return false;
-  const push = orDict(on.push);
-  const branches = new Set(pyTruthy(get(push, "branches")) ? get(push, "branches") : []);
-  if (!branches.size && !pyTruthy(get(push, "tags"))) return false; // every branch
-  return [...branches].every((b) => RELEASE_BRANCHES.has(b));
+function noPullRequestTrigger(doc) {
+  const keys = Object.keys(triggers(doc));
+  return keys.length > 0 && !keys.some((k) => PR_TRIGGERS.includes(k));
 }
 
 /** [job id, step] for a workflow; ["<action>", step] for a composite. */
@@ -182,7 +183,7 @@ export class Report {
 
 export function checkDocument(name, doc, report) {
   const isAction = Object.hasOwn(doc, "runs");
-  const release = isAction ? false : releaseOnly(doc);
+  const release = isAction ? false : noPullRequestTrigger(doc);
   for (const [jobId, step] of steps(doc)) {
     if (!isDict(step)) continue;
     const action = actionOf(step);
@@ -208,8 +209,8 @@ export function checkDocument(name, doc, report) {
       if (has("cache")) report.fail(where, "actions/setup-python `cache:` saves from every ref, pull requests included");
     } else if (action === "actions/cache" || action === "actions/cache/save") {
       report.cacheSteps += 1;
-      if (!release && !gatedOnMainPush(cond)) {
-        report.fail(where, `${action} saves the cache; its \`if:\` must require ${MAIN_REF} && ${PUSH_EVENT} (use actions/cache/restore to read)`);
+      if (!release && !gatedOnMainRun(cond)) {
+        report.fail(where, `${action} saves the cache; its \`if:\` must require ${MAIN_REF} && ${WRITER_EVENT} (use actions/cache/restore to read)`);
       }
     } else if (action === "actions/cache/restore") {
       report.cacheSteps += 1;
@@ -222,8 +223,8 @@ export function checkDocument(name, doc, report) {
     } else if (action === "golangci/golangci-lint-action") {
       report.cacheSteps += 1;
       const skipAll = pyStr(get(with_, "skip-cache", "")).trim().toLowerCase() === "true";
-      if (!skipAll && !negatedMainPush(get(with_, "skip-save-cache"))) {
-        report.fail(where, "golangci-lint-action saves its cache from every ref; set `skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}`");
+      if (!skipAll && !negatedMainRun(get(with_, "skip-save-cache"))) {
+        report.fail(where, "golangci-lint-action saves its cache from every ref; set `skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}`");
       }
     } else if (action === "aquasecurity/trivy-action") {
       report.cacheSteps += 1;
@@ -233,7 +234,7 @@ export function checkDocument(name, doc, report) {
     } else if (action.endsWith("/build-stack-images")) {
       report.cacheSteps += 1;
       if (has("cache-write") && !isFalse(with_["cache-write"])) {
-        report.fail(where, 'build-stack-images `cache-write` may only be omitted (a push to main writes) or "false"');
+        report.fail(where, 'build-stack-images `cache-write` may only be omitted (a run on main writes) or "false"');
       }
       const writer = pyStr(get(with_, "mount-cache-writer", "false")).trim().toLowerCase();
       const job = orDict(get(orDict(get(doc, "jobs")), jobId));
@@ -273,7 +274,7 @@ export function checkDocument(name, doc, report) {
       if (has("cache-to")) {
         report.cacheSteps += 1;
         if (!cacheToGated(with_["cache-to"])) {
-          report.fail(where, `cache-to must be empty unless a push to main (\`\${{ ${MAIN_REF} && ${PUSH_EVENT} && '<spec>' || '' }}\`); got ${pyRepr(with_["cache-to"])}`);
+          report.fail(where, `cache-to must be empty unless a run on main (\`\${{ ${MAIN_REF} && ${WRITER_EVENT} && '<spec>' || '' }}\`); got ${pyRepr(with_["cache-to"])}`);
         }
       }
       if (action.startsWith("docker/bake-action")) {
@@ -283,7 +284,7 @@ export function checkDocument(name, doc, report) {
         for (const s of cacheSets) {
           report.cacheSteps += 1;
           if (!cacheToGated(s.slice(s.indexOf("=") + 1))) {
-            report.fail(where, `bake \`set\` ${pyRepr(s)} writes the layer cache from every run; make it empty unless a push to main`);
+            report.fail(where, `bake \`set\` ${pyRepr(s)} writes the layer cache from every run; make it empty unless a run on main`);
           }
         }
         if (files.includes("docker-bake.hcl")) {
@@ -291,7 +292,7 @@ export function checkDocument(name, doc, report) {
           const coveredTargets = new Set(cacheSets.map((s) => s.split(".cache-to=", 1)[0]));
           for (const t of targets) {
             if (!coveredTargets.has(t) && !coveredTargets.has("*")) {
-              report.fail(where, `bake target ${pyRepr(t)} from docker-bake.hcl keeps its mode=max cache-to; override \`${t}.cache-to=\` gated on a push to main`);
+              report.fail(where, `bake target ${pyRepr(t)} from docker-bake.hcl keeps its mode=max cache-to; override \`${t}.cache-to=\` gated on a run on main`);
             }
           }
         }
@@ -312,8 +313,8 @@ export function checkDocument(name, doc, report) {
   // The composite action's own write default.
   if (isAction && name.endsWith("build-stack-images/action.yml")) {
     const dflt = get(orDict(get(orDict(get(doc, "inputs")), "cache-write")), "default");
-    if (!gatedOnMainPush(dflt)) {
-      report.fail(name, `the \`cache-write\` default must be ${MAIN_REF} && ${PUSH_EVENT}; got ${pyRepr(dflt)}`);
+    if (!gatedOnMainRun(dflt)) {
+      report.fail(name, `the \`cache-write\` default must be ${MAIN_REF} && ${WRITER_EVENT}; got ${pyRepr(dflt)}`);
     }
   }
 }

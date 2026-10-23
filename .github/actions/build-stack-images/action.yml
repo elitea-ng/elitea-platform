@@ -90,17 +90,17 @@ inputs:
   cache-write:
     description: >-
       Whether this run may WRITE caches: export every layer (mode=max) and save
-      the cargo/Go/pip mounts. Defaults to "a push to main"; every other run
+      the cargo/Go/pip mounts. Defaults to "a run on main" (the nightly); every other run
       (a pull request, a schedule or a dispatch on the main ref) reads main's
       caches and writes none. A caller may pass "false" to state that intent
       itself; scripts/ci/check-workflow-cache-writes.mjs fails a caller that
       passes anything else.
     required: false
-    default: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    default: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
   mount-cache-writer:
     description: >-
       "true" on the ONE job per mount-cache-suffix that saves the cargo/Go/pip
-      mounts on a push to main; every other caller leaves it unset. Measured
+      mounts on a run on main; every other caller leaves it unset. Measured
       2026-10-20: six main jobs baked the same rust mounts, all six tried to
       save the same run-scoped key, five failed with "Unable to reserve" after
       ~5.7 min each extracting ~3.5 GB out of the builder. A non-writer skips
@@ -305,7 +305,7 @@ runs:
       # The ref/event half restates the cache-write default literally, so a
       # caller that passed `cache-write: true` from a pull request still
       # cannot save (scripts/ci/check-workflow-cache-writes.mjs reads it).
-      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
       id: mounts-rw
       uses: actions/cache@v6
       with:
@@ -430,7 +430,7 @@ runs:
         if [ "$MODE" = "none" ]; then
           # A reader. The scopes were still counted, so a file that declares
           # none fails above as before; the overlay then writes nothing.
-          printf '%s\n' "// read-only run: no cache-to (only a push to main writes the layer cache)" > "$out"
+          printf '%s\n' "// read-only run: no cache-to (only a run on main writes the layer cache)" > "$out"
           echo "layer cache: read-only, ${n_from} scope(s) read, none written"
           echo "file=$out" >> "$GITHUB_OUTPUT"
           exit 0

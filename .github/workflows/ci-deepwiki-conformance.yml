@@ -24,17 +24,6 @@ on:
       # serves.
       - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
       - ".github/workflows/ci-deepwiki-conformance.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "conformance/provider/**"
-      - "libs/provider/**"
-      - "scripts/provider/**"
-      # The descriptor guard compares the fixture with the copy the Go host
-      # serves.
-      - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
-      - ".github/workflows/ci-deepwiki-conformance.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

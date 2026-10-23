@@ -52,29 +52,13 @@ on:
       - "libs/proto/gen/go/**"
       # The shipped DDL the gateway's Postgres integration tests apply.
       - "services/elitea-main/migrations/shared/**"
-  push:
-    branches:
-      - main
-    paths:
-      - "services/elitea-llm-gateway/**"
-      # This workflow's own file. The pull_request arm above names it and this
-      # arm did not, so a push that edited only the gate could not start the
-      # gate it edited (#518).
-      - ".github/workflows/ci-gateway.yml"
-      - "scripts/ci/check-gateway-toolchain.sh"
-      - "libs/go/natsconn/**"
-      # The bundled NATS server's permission table and the bootstrap script.
-      - "deploy/helm/elitea/values.yaml"
-      - "deploy/helm/elitea/values-nats-ha.yaml"
-      - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/Chart.lock"
-      - "deploy/helm/elitea/build-deps.sh"
-      - "deploy/helm/elitea/files/nats-bootstrap.sh"
-      - "scripts/nats/**"
-      - "libs/proto/contracts/**"
-      - "libs/proto/elitea/gateway/**"
-      - "libs/proto/gen/go/**"
-      - "services/elitea-main/migrations/shared/**"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "11 0 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -135,9 +119,9 @@ jobs:
           # unknown linter or formatter); ci-go.yml's workspace lint applies
           # the same file without the schema step.
           verify: false
-          # Reads the lint cache everywhere, saves it only on a push to main
+          # Reads the lint cache everywhere, saves it only on a run on main
           # (the rule in .github/actions/main-write-cache).
-          skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}
+          skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
           working-directory: services/elitea-llm-gateway
 
   test:

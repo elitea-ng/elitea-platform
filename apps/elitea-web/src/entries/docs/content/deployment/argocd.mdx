@@ -123,7 +123,7 @@ In an air-gapped cluster, mirror the published OCI chart instead: it already car
 
 ## Image tag promotion
 
-Every first-party image and every chart is stamped with the same release version by `.github/workflows/publish.yml`'s semantic-release run — one tag for the whole platform, because a per-component tag could only ever express a mistake. Promoting a release is changing the chart version an `Application` pulls:
+Every first-party image and every chart is stamped with the same release version by `.github/workflows/publish.yml` (a stable release you dispatch from `main`, or a `-nightly.`/`-dev.` pre-release, which never moves `latest`) — one tag for the whole platform, because a per-component tag could only ever express a mistake. Promoting a release is changing the chart version an `Application` pulls:
 
 ```bash
 argocd app set elitea --revision <new-version>   # an OCI chart source

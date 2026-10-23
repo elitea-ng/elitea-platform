@@ -13,14 +13,14 @@ import { test } from "node:test";
 
 import * as checker from "./check-workflow-cache-writes.mjs";
 
-const PR_AND_PUSH = "on:\n  pull_request:\n  push:\n    branches: [main]\n";
-const MAIN_PUSH = "github.ref == 'refs/heads/main' && github.event_name == 'push'";
+const PR_AND_NIGHTLY = "on:\n  pull_request:\n  schedule:\n    - cron: \"0 0 * * *\"\n";
+const MAIN_RUN = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'";
 const FILLER = "- uses: actions/cache/restore@v6\n  with: {path: x, key: k}\n- uses: actions/cache/restore@v6\n  with: {path: x, key: k}\n";
 
 // textwrap.indent: the prefix on every line that is not blank.
 const indent = (text, prefix) => text.replace(/^(?=.*\S)/gm, prefix);
 
-function workflow(steps, on = PR_AND_PUSH) {
+function workflow(steps, on = PR_AND_NIGHTLY) {
   return on + "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n" + indent(steps, "      ");
 }
 
@@ -48,7 +48,7 @@ function runChecker(argv) {
   return [code, lines.join("\n")];
 }
 
-function check(steps, { on = PR_AND_PUSH, hcl = "", action = null } = {}) {
+function check(steps, { on = PR_AND_NIGHTLY, hcl = "", action = null } = {}) {
   const root = tree(workflow(steps, on), { hcl, action });
   try {
     return runChecker(["--root", root]);
@@ -97,7 +97,7 @@ test("full actions cache without condition is refused", () => {
 });
 
 test("actions cache gated on ref only is refused", () => {
-  // A schedule or dispatch on main is not a push to main.
+  // A pull_request run of a PR whose head is named `main` would hold it.
   assertWrites("- uses: actions/cache@v6\n  if: github.ref == 'refs/heads/main'\n  with: {path: x, key: k}\n", "actions/cache saves the cache");
 });
 
@@ -105,15 +105,15 @@ test("actions cache save without condition is refused", () => {
   assertWrites("- uses: actions/cache/save@v6\n  with: {path: x, key: k}\n", "actions/cache/save saves the cache");
 });
 
-test("actions cache gated on main push passes", () => {
-  assertClean(`- uses: actions/cache@v6\n  if: ${MAIN_PUSH}\n  with: {path: x, key: k}\n`);
+test("actions cache gated on a main run passes", () => {
+  assertClean(`- uses: actions/cache@v6\n  if: ${MAIN_RUN}\n  with: {path: x, key: k}\n`);
 });
 
-test("actions cache in release only workflow passes", () => {
-  assertClean("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", { on: "on:\n  push:\n    branches: [main, next]\n" });
+test("actions cache in a workflow no pull request can start passes", () => {
+  assertClean("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", { on: "on:\n  workflow_dispatch:\n  schedule:\n    - cron: \"7 2 * * *\"\n" });
 });
 
-test("actions cache in push to any branch is refused", () => {
+test("actions cache in a push workflow is refused", () => {
   assertWrites("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", "actions/cache saves", { on: "on:\n  push:\n" });
 });
 
@@ -121,7 +121,7 @@ test("actions cache in push to any branch is refused", () => {
 test("cache to min on pull request is refused", () => {
   // The ci-image-scan shape this change replaced.
   assertWrites(
-    "- uses: docker/build-push-action@v7\n  with:\n    cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=s\n",
+    "- uses: docker/build-push-action@v7\n  with:\n    cache-to: type=gha,mode=${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=s\n",
     "cache-to must be empty",
   );
 });
@@ -132,7 +132,7 @@ test("cache to literal is refused", () => {
 
 test("cache to gated passes", () => {
   assertClean(
-    "- uses: docker/build-push-action@v7\n  with:\n    cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=s' || '' }}\n",
+    "- uses: docker/build-push-action@v7\n  with:\n    cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=s' || '' }}\n",
   );
 });
 
@@ -151,7 +151,7 @@ test("bake of docker bake hcl without override is refused", () => {
 test("bake set gated passes", () => {
   assertClean(
     "- uses: docker/bake-action@v7\n  with:\n    files: docker-bake.hcl\n    targets: a\n    set: |\n" +
-      "      a.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=a' || '' }}\n",
+      "      a.cache-to=${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=a' || '' }}\n",
   );
 });
 
@@ -167,8 +167,12 @@ test("buildx bake print passes", () => {
   assertClean("- run: docker buildx bake --print > /dev/null\n");
 });
 
-test("cache to in release only workflow passes", () => {
-  assertClean("- uses: docker/build-push-action@v7\n  with: {cache-to: 'type=gha,mode=max,scope=s'}\n", { on: "on:\n  push:\n    branches: [main]\n" });
+test("cache to in a workflow no pull request can start passes", () => {
+  assertClean("- uses: docker/build-push-action@v7\n  with: {cache-to: 'type=gha,mode=max,scope=s'}\n", { on: "on:\n  workflow_dispatch:\n" });
+});
+
+test("cache to in a pull_request_target workflow is refused", () => {
+  assertWrites("- uses: docker/build-push-action@v7\n  with: {cache-to: 'type=gha,mode=max,scope=s'}\n", "cache-to must be empty", { on: "on:\n  pull_request_target:\n  workflow_dispatch:\n" });
 });
 
 test("cache to in ci hcl is refused", () => {
@@ -193,7 +197,7 @@ test("golangci lint default cache is refused", () => {
 });
 
 test("golangci lint skip save gated passes", () => {
-  assertClean(`- uses: golangci/golangci-lint-action@v9\n  with:\n    skip-save-cache: \${{ !(${MAIN_PUSH}) }}\n`);
+  assertClean(`- uses: golangci/golangci-lint-action@v9\n  with:\n    skip-save-cache: \${{ !(${MAIN_RUN}) }}\n`);
 });
 
 test("setup node cache npm is refused", () => {
@@ -230,15 +234,15 @@ test("stack images default ref only is refused", () => {
   assertWrites("- run: 'true'\n", "`cache-write` default", { action });
 });
 
-test("stack images default main push passes", () => {
-  const action = `inputs:\n  cache-write:\n    default: \${{ ${MAIN_PUSH} }}\nruns:\n  using: composite\n  steps: []\n`;
+test("stack images default main run passes", () => {
+  const action = `inputs:\n  cache-write:\n    default: \${{ ${MAIN_RUN} }}\nruns:\n  using: composite\n  steps: []\n`;
   assertClean("- uses: ./.github/actions/build-stack-images\n  with: {cache-write: 'false'}\n", { action });
 });
 
 // ── the floors ────────────────────────────────────────────────────────────
 test("stack images two mount writers for one suffix are refused", () => {
   const two =
-    PR_AND_PUSH +
+    PR_AND_NIGHTLY +
     [
       "jobs:",
       "  a:",
@@ -260,7 +264,7 @@ test("stack images two mount writers for one suffix are refused", () => {
 
 test("stack images one mount writer per suffix passes", () => {
   const ok =
-    PR_AND_PUSH +
+    PR_AND_NIGHTLY +
     [
       "jobs:",
       "  a:",
@@ -287,7 +291,7 @@ test("stack images one mount writer per suffix passes", () => {
 test("stack images mount writers in two workflows for one suffix are refused", () => {
   // The cache key is repository-wide, so a second writer in ANOTHER file races too.
   const one =
-    PR_AND_PUSH +
+    PR_AND_NIGHTLY +
     [
       "jobs:",
       "  a:",
@@ -305,7 +309,7 @@ test("stack images mount writers in two workflows for one suffix are refused", (
 
 test("stack images mount writer on a matrix job is refused", () => {
   const matrix =
-    PR_AND_PUSH +
+    PR_AND_NIGHTLY +
     [
       "jobs:",
       "  a:",
@@ -338,7 +342,7 @@ function legs(entries, axis = "") {
     "          mount-cache-suffix: ${{ matrix.mount-suffix }}",
     "          mount-cache-writer: ${{ matrix.mount-writer }}",
   ];
-  return PR_AND_PUSH + lines.join("\n") + "\n";
+  return PR_AND_NIGHTLY + lines.join("\n") + "\n";
 }
 
 test("stack images one writer leg per suffix passes", () => {

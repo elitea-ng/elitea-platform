@@ -544,8 +544,10 @@ curl -s -H "Authorization: Bearer $ADMIN_PAT" \
 
 ## Distribution — the charts are published to GHCR as OCI artifacts
 
-Every chart in the table above is packaged and pushed on each release by the
-`chart` job in `.github/workflows/publish.yml`, next to the images:
+Every chart in the table above is packaged and pushed on each release (and
+each nightly or dev pre-release, at its own version) by the `chart` job in
+`.github/workflows/publish.yml`, next to the images. A merge publishes nothing:
+a release is dispatched (`gh workflow run publish.yml --ref main -f channel=release`).
 
 ```
 oci://ghcr.io/elitea-ng/charts/<chart>

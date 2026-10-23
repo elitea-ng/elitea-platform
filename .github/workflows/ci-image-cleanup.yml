@@ -2,7 +2,7 @@ name: CI Image Cleanup
 
 # Prunes the CI-only `ci-*` container packages ci-web-e2e.yml pushes: one
 # `ci-<image>:<sha>` version per image per commit, and the untagged manifests
-# each main push strands in `ci-cache-<image>`. The policy, and the rule that
+# each nightly run on main strands in `ci-cache-<image>`. The policy, and the rule that
 # no other package is ever touched, live in scripts/ci/prune-ci-images.mjs,
 # run through actions/github-script.
 #

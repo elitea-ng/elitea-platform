@@ -44,35 +44,6 @@ on:
       - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
       - "services/elitea-llm-gateway/internal/infra/nats/**"
       - "services/elitea-scheduler/internal/budgetwriteback/**"
-  push:
-    branches:
-      - main
-    paths:
-      - "deploy/helm/**"
-      - "deploy/argocd/**"
-      - "deploy/scripts/drain-workers.sh"
-      - "deploy/tests/**"
-      - "scripts/ci/check-chart-deps.mjs"
-      - "services/elitea-main/internal/runtimecomposition/**"
-      - "deploy/docker-compose.standalone-full.yml"
-      - "deploy/docker-compose.code-consumers.yml"
-      - "deploy/runtime/install-material.sh"
-      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
-      - "deploy/runtime/worker-runtime.rust.json"
-      - "deploy/runtime/worker-runtime.rust-validate.json"
-      - "deploy/scripts/render-validate-worker-runtime.py"
-      - "scripts/runtime/*code*"
-      - "services/elitea-code-runner/Containerfile.code-platform"
-      - ".github/workflows/publish.yml"
-      - "libs/go/natsconn/**"
-      - "services/elitea-main/cmd/elitea-main/event_stream_nats*.go"
-      - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
-      - "services/elitea-llm-gateway/internal/infra/nats/**"
-      - "services/elitea-scheduler/internal/budgetwriteback/**"
-      # This workflow's own file. The pull_request arm above names it and this
-      # arm did not, so a push that edited only the gate could not start the
-      # gate it edited (#518).
-      - ".github/workflows/helm-lint.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

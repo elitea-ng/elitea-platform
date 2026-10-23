@@ -44,10 +44,8 @@ name: CI — DeepWiki real engine
 #
 #   gh workflow run deepwiki-real-engine.yml --ref <branch>
 #
-# There is no push arm at all, which the workflow-branch-coverage gate
-# (scripts/ci/check-workflow-branch-coverage.mjs) requires to be a recorded
-# decision rather than a silence — the entry for this file is in that script's
-# EXEMPT_WORKFLOWS table.
+# There is no push arm, as in every workflow here
+# (scripts/ci/check-no-push-triggers.mjs).
 
 on:
   schedule:

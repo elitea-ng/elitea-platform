@@ -44,27 +44,12 @@ on:
       - "conformance/provider/fixtures/inventory/**"
       - ".github/workflows/ci-inventory-engine.yml"
       - "scripts/go/declared-skips.txt"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-inventory-engine/**"
-      - "libs/rust/**"
-      # The build.rs of the gRPC crates compile these contracts (#1359):
-      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
-      # the artifact and internal-tool services of elitea.runtime.v1.
-      - "libs/proto/elitea/engine/**"
-      - "libs/proto/elitea/llm/**"
-      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
-      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
-      - "services/elitea-subapp-host/internal/engine/**"
-      - "services/elitea-subapp-host/internal/apps/inventory/**"
-      - "conformance/provider/fixtures/inventory/**"
-      - ".github/workflows/ci-inventory-engine.yml"
-      - "scripts/go/declared-skips.txt"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "31 0 * * *"
   workflow_dispatch:
 
 concurrency:
