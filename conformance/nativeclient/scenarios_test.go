@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/client"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/client"
 )
 
 // ── 3. Refresh rotation, re-delivery and reuse ───────────────────────────────

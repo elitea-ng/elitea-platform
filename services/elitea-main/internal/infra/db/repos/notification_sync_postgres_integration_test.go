@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
 )
 
 func TestNotificationChangesArePerUserAndCarryMarkSeenAndDeletes(t *testing.T) {
@@ -21,7 +21,7 @@ func TestNotificationChangesArePerUserAndCarryMarkSeenAndDeletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// A row inserted without updated_at — the pylon writers' shape — still
+	// A row inserted without updated_at — the legacy writers' shape — still
 	// gets a stamp, and an old one is backdated past the settle window.
 	insert := func(user int, message string) int64 {
 		var id int64

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	configapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	configapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type typedConfigurationFixture struct {

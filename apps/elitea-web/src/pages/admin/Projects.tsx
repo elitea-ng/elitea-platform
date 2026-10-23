@@ -85,6 +85,7 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminProjectCloudExecutorDialog } from './AdminProjectCloudExecutorDialog';
 import { AdminProjectCreateDialog } from './AdminProjectCreateDialog';
 import { AdminProjectDeleteDialog } from './AdminProjectDeleteDialog';
 import { AdminProjectsTable } from './AdminProjectsTable';
@@ -248,6 +249,7 @@ export function AdminProjects() {
             onToggleSuspended={state.onToggleSuspended}
             onOpenMembers={state.onOpenMembers}
             onOpenActivity={state.onOpenActivity}
+            onOpenCloudExecutor={state.onOpenCloudExecutor}
             pendingIds={state.pendingIds}
             selectedIds={provisioning.selectedIds}
             onSelectionChange={provisioning.onSelectionChange}
@@ -279,6 +281,11 @@ export function AdminProjects() {
 
       <ProjectMemberDialog project={state.memberProject} onClose={state.onCloseMembers} />
       <ProjectActivityDrawer project={state.activityProject} onClose={state.onCloseActivity} />
+      <AdminProjectCloudExecutorDialog
+        project={state.cloudExecutorProject}
+        canEdit={state.canEditProjects}
+        onClose={state.onCloseCloudExecutor}
+      />
 
       <AdminProjectCreateDialog
         open={provisioning.isCreateOpen}

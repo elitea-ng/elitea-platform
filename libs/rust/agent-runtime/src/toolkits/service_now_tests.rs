@@ -151,7 +151,7 @@ impl ServiceNowApi for FixtureApi {
 fn configuration_is_claim_scoped_bounded_and_redacted() {
     let parsed = ServiceNowToolkitConfig::parse(&settings())
         .expect("valid materialized ServiceNow settings parse");
-    assert!(parsed.selected_tools().is_empty());
+    assert_eq!(parsed.selected_tools(), []);
 
     let short = json!({
         "servicenow_configuration": {
@@ -549,7 +549,7 @@ async fn selection_and_arguments_fail_closed_before_client_use() {
             .expect("blocked ServiceNow tools resolve")
             .is_empty()
     );
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 }
 
 #[test]

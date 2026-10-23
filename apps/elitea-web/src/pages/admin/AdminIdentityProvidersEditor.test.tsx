@@ -274,6 +274,18 @@ describe('Admin › Authentication › identity providers', () => {
     // between a documented limit and a screen that looks broken.
     expect(await screen.findByTestId('admin-identity-providers-restart-note')).toBeInTheDocument();
   });
+
+  it('offers the SAML NameID format as a select, opening on the stored default', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Legacy SAML');
+
+    const select = await screen.findByRole('combobox', { name: /NameID format/ });
+    expect(select).toHaveTextContent('Not requested (identity provider default)');
+    await user.click(select);
+    await user.click(await screen.findByRole('option', { name: 'Email address' }));
+    expect(select).toHaveTextContent('Email address');
+  });
 });
 
 /* ── the two pure rules, asserted directly ─────────────────────────────── */

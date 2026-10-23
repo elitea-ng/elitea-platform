@@ -24,6 +24,8 @@ export interface AppPlatform {
 /** One `app://command` payload. `open_folder` is never sent: Open Folder… runs host-side and sends `workspace_opened`. */
 export type AppCommand =
   | { id: 'new_thread' | 'settings' | 'command_palette' | 'toggle_sidebar' | 'toggle_changes' | 'back' | 'forward'; args?: undefined }
+  /** Thread / Folder menu: act on the thread on screen (no-ops without one). */
+  | { id: 'send_to_cloud' | 'open_in_chat' | 'toggle_plan' | 'choose_agent' | 'index_settings' | 'handoff_settings'; args?: undefined }
   /** Help › Run Diagnostics…: open the Doctor. Sent live, never queued for `ready`. */
   | { id: 'run_diagnostics'; args?: undefined }
   /** The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside). Sent live. */
@@ -32,7 +34,7 @@ export type AppCommand =
   | { id: 'workspace_open_failed'; args: { message: string } }
   /** Absolute paths of files (not folders) dropped on the window. */
   | { id: 'files_dropped'; args: { paths: string[] } }
-  /** Reserved: not sent yet (no notification click callback on desktop). */
+  /** A turn was chosen in the menu-bar item's menu: show its folder. */
   | { id: 'focus_turn'; args: { workspace_id: string; turn_id: string } };
 
 export type AppCommandId = AppCommand['id'];
@@ -58,11 +60,47 @@ export interface AppIpc {
    * (`core:window:allow-set-theme`).
    */
   setWindowTheme(theme: NativeWindowTheme): Promise<void>;
+  /**
+   * Bring one of the app's own windows to the front: an inspector tab's
+   * window (`panelWindows.ts`), by its label. Tauri's own
+   * `plugin:window|set_focus`, granted alone (`core:window:allow-set-focus`).
+   */
+  focusWindow(label: string): Promise<void>;
+  /**
+   * Pop the OS's own context menu at the cursor. Resolves with the id of the
+   * item chosen, or `null` when the menu was dismissed.
+   */
+  contextMenu(items: readonly ContextMenuItem[]): Promise<string | null>;
+  /**
+   * Tell the host a cloud turn of this window is streaming (`running`) and/or
+   * waits on the person (`waiting`: an approval): the menu-bar item and the Dock
+   * badge show it like a local turn. Both false ends it (completion and errors
+   * both end it). The stream runs in the page, so the host cannot see it.
+   */
+  cloudRun(run: { conversationUuid: string; running: boolean; waiting: boolean; workspaceId?: string; workspaceName?: string }): Promise<void>;
 }
+
+/** One entry of a native context menu (`context_menu_show`). A separator carries no id or label; a submenu holds one level of entries. */
+export type ContextMenuItem =
+  | { id: string; label: string; enabled?: boolean }
+  | { separator: true }
+  | { label: string; enabled?: boolean; children: readonly ContextMenuLeaf[] };
+
+/** An entry of a submenu. */
+type ContextMenuLeaf = { id: string; label: string; enabled?: boolean };
 
 export type NativeWindowTheme = 'light' | 'dark' | null;
 
 export const APP_COMMAND_CHANNEL = 'app://command';
+export const CONTEXT_MENU_CHANNEL = 'app://context-menu';
+let contextMenuRequests = 0;
+
+/** A request id for one context menu: the host echoes it on `app://context-menu`, so only that call is answered. */
+function nextContextMenuRequestId(): string {
+  contextMenuRequests += 1;
+  const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : String(Date.now());
+  return `${random}-${String(contextMenuRequests)}`;
+}
 
 /** What a plain browser tab (no host) reports. */
 export const BROWSER_PLATFORM: AppPlatform = { os: 'linux', titlebar_overlay: false, traffic_light_inset_px: 0, vibrancy: false };
@@ -79,6 +117,35 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     onCommand: (handler) => listen(APP_COMMAND_CHANNEL, (payload) => handler(payload as AppCommand)),
     ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
+    focusWindow: (label) => invoke<void>('plugin:window|set_focus', { label }),
+    cloudRun: ({ conversationUuid, running, waiting, workspaceId, workspaceName }) =>
+      invoke<void>('activity_cloud_run', {
+        conversation_uuid: conversationUuid,
+        running,
+        waiting,
+        ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }),
+        ...(workspaceName === undefined ? {} : { workspace_name: workspaceName }),
+      }),
+    contextMenu: async (items) => {
+      const requestId = nextContextMenuRequestId();
+      let settle: (id: string | null) => void = () => undefined;
+      const outcome = new Promise<string | null>((resolve) => {
+        settle = resolve;
+      });
+      // Listening first: the outcome event can arrive before the command returns.
+      const off = await listen(CONTEXT_MENU_CHANNEL, (payload) => {
+        const event = payload as { request_id?: unknown; id?: unknown } | null;
+        if (event?.request_id !== requestId) return;
+        settle(typeof event.id === 'string' ? event.id : null);
+      });
+      try {
+        await invoke<void>('context_menu_show', { request_id: requestId, items });
+        // The host answers every shown menu: with the choice, or with `null` once it was dismissed.
+        return await outcome;
+      } finally {
+        off();
+      }
+    },
   };
 }
 

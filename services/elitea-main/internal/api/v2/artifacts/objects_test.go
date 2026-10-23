@@ -14,9 +14,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func newObjectTestRouter(h *artifacts.Handler) chi.Router {
@@ -393,6 +393,10 @@ func TestDownloadObject_FullAndRange(t *testing.T) {
 
 	if got := fullRR.Header().Get("Accept-Ranges"); got != "bytes" {
 		t.Errorf("full download Accept-Ranges = %q, want %q", got, "bytes")
+	}
+	// The version a pinning reader keeps, on the download itself.
+	if fullRR.Header().Get("Last-Modified") == "" {
+		t.Error("full download carries no Last-Modified")
 	}
 
 	// DEFECT: the 206 branch set Content-Length and nothing else. RFC 7233

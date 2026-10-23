@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 // CurrentContinuationFanoutWake is the continuation Main admits by itself

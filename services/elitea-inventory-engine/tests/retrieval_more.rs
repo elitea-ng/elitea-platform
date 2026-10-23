@@ -1,5 +1,6 @@
 //! The semantic search tool against the Python engine's own answers, over
-//! entities ranked in PostgreSQL.
+//! entities ranked in elitea-vector (faked in process: exact float32
+//! cosine, as the Inventory collections are searched).
 //!
 //! A deleted generator (`fixtures/PROVENANCE.md`) built `graph.json` (and
 //! the bare `bare.json`) with the Python `KnowledgeGraph`, loaded them back
@@ -34,7 +35,10 @@ fn view_of(document: &str) -> GraphView {
 
 /// `GRAPH` saved to a fresh database (`None` without one), to rank in
 /// PostgreSQL.
-async fn stored(name: &str) -> Option<(sqlx::PgPool, GraphKey)> {
+/// The bearer the fake elitea-vector admits for project 1.
+const BEARER: &str = "inventory-callback";
+
+async fn stored(name: &str) -> Option<(sqlx::PgPool, GraphKey, store::vectors::EntityVectors)> {
     let pool = common::database(name).await?;
     let key = GraphKey::new(1, 1).expect("key");
     let document: Value = serde_json::from_str(GRAPH).expect("graph json");
@@ -45,7 +49,10 @@ async fn stored(name: &str) -> Option<(sqlx::PgPool, GraphKey)> {
     )
     .await
     .expect("save");
-    Some((pool, key))
+    // Saved without vector access: the first ranking publishes the vectors
+    // (the backfill an upgraded database takes), then ranks in elitea-vector.
+    let (_fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    Some((pool, key, common::entity_vectors(&origin, BEARER)))
 }
 
 async fn rank(
@@ -53,8 +60,9 @@ async fn rank(
     key: GraphKey,
     vector: &[f64],
     min_score: f64,
+    access: &store::vectors::EntityVectors,
 ) -> vectors::Ranking {
-    vectors::rank(pool, key, vector, min_score)
+    vectors::rank(pool, key, vector, min_score, Some(access))
         .await
         .expect("rank")
 }
@@ -73,7 +81,7 @@ fn opt<'a>(case: &'a Value, key: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn semantic_search_answers_as_the_python_wrapper() {
-    let Some((pool, key)) = stored("semantic_goldens").await else {
+    let Some((pool, key, access)) = stored("semantic_goldens").await else {
         return;
     };
     let view = view_of(GRAPH);
@@ -99,7 +107,7 @@ async fn semantic_search_answers_as_the_python_wrapper() {
                 .and_then(Value::as_f64)
                 .unwrap_or(semantic::DEFAULT_MIN_SCORE),
         };
-        let ranking = rank(&pool, key, &vector, query.min_score).await;
+        let ranking = rank(&pool, key, &vector, query.min_score, &access).await;
         assert_eq!(
             semantic::semantic_search_text(&view, &query, &ranking),
             text(&case["text"]),
@@ -123,7 +131,7 @@ async fn semantic_search_answers_as_the_python_wrapper() {
 
 #[tokio::test]
 async fn the_semantic_tool_checks_the_space_and_caps_top_k() {
-    let Some((pool, key)) = stored("semantic_tool").await else {
+    let Some((pool, key, access)) = stored("semantic_tool").await else {
         return;
     };
     let view = view_of(GRAPH);
@@ -133,6 +141,7 @@ async fn the_semantic_tool_checks_the_space_and_caps_top_k() {
         key,
         &[1.0, 0.0, 0.0, 0.0],
         semantic::DEFAULT_MIN_SCORE,
+        &access,
     )
     .await;
     let refused = semantic::semantic_search_tool(
@@ -156,7 +165,7 @@ async fn the_semantic_tool_checks_the_space_and_caps_top_k() {
     )
     .expect("same space");
     assert!(answered.starts_with("# Semantic Search Results for 'auth'"));
-    let everything = rank(&pool, key, &[1.0, 0.0, 0.0, 0.0], 0.0).await;
+    let everything = rank(&pool, key, &[1.0, 0.0, 0.0, 0.0], 0.0, &access).await;
     let hits = semantic::semantic_search(
         &view,
         &semantic::SemanticQuery {
@@ -175,10 +184,13 @@ async fn the_semantic_tool_checks_the_space_and_caps_top_k() {
 
     // Another width than the graph's is numpy's error, and the zero vector
     // ranks nothing.
-    let wider = rank(&pool, key, &[1.0, 0.0, 0.0, 0.0, 0.0], 0.0).await;
+    let wider = rank(&pool, key, &[1.0, 0.0, 0.0, 0.0, 0.0], 0.0, &access).await;
     assert_eq!(
         wider,
         Err("shapes (5,) and (4,) not aligned: 5 (dim 0) != 4 (dim 0)".to_owned())
     );
-    assert_eq!(rank(&pool, key, &[0.0; 4], 0.0).await, Ok(Vec::new()));
+    assert_eq!(
+        rank(&pool, key, &[0.0; 4], 0.0, &access).await,
+        Ok(Vec::new())
+    );
 }

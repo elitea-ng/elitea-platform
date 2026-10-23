@@ -18,7 +18,7 @@ import type { ConfigurationTypeDescriptor } from '../api/configurations';
  * `getAvailableConfigurationsType`, API-145, wrapped in a plain TanStack
  * `useQuery`) — one call site, same eventual shape.
  */
-const ALL_SECTIONS = ['credentials', 'ai_credentials', 'llm', 'embedding', 'vectorstorage', 'image_generation', 'storage', 'asr', 'tts'] as const;
+const ALL_SECTIONS = ['credentials', 'ai_credentials', 'llm', 'embedding', 'image_generation', 'storage', 'asr', 'tts'] as const;
 
 export interface UseConfigurationsAsSchemaParams {
   readonly skip?: boolean;

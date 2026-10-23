@@ -5,6 +5,19 @@ import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+import type { StaticPauseBinding } from '../../lib/staticPipelinePause.types';
+
+/**
+ * The current authored pause of this answer and its continue action. The
+ * owning widget holds the durable REST state; the cards render inline.
+ */
+export interface ApplicationAnswerStaticPause {
+  readonly pause: StaticPauseBinding;
+  readonly busy: boolean;
+  readonly error?: string | undefined;
+  /** `pauseId` names the `tools` leaf; `undefined` continues a root pause. */
+  readonly onContinue: (pauseId: string | undefined) => void;
+}
 
 /**
  * Type module for `ApplicationAnswer.tsx`, split out purely to keep that
@@ -29,6 +42,8 @@ export interface ApplicationAnswerActionHandlers {
   readonly onCopy?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
+  /** "Fork from here": a new conversation up to and including this answer. */
+  readonly onFork?: (() => void) | undefined;
   readonly shouldDisableRegenerate?: boolean;
   /**
    * Opens the canvas editor for a `canvas_message` item in this answer — the
@@ -88,6 +103,8 @@ export interface ApplicationAnswerHitl {
   /** HITL interrupts for resume (parallel-fan-out shape). */
   readonly hitlInterrupts?: readonly unknown[] | undefined;
   readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
+  /** The authored (static) pause this answer is parked on, if any. */
+  readonly staticPause?: ApplicationAnswerStaticPause | undefined;
 }
 
 /** Caption-line identity: who answered, and whether this row is a sub-agent's. Grouped to stay under the §3.5 component-props budget. */

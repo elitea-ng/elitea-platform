@@ -29,7 +29,13 @@ var databasePoolEnvironment = []struct {
 // VectorIntrospection sizes a seventh pool, opened only when
 // ELITEA_VECTOR_INTROSPECTION_CLIENTS is set: elitea-vector's token
 // introspection (one claim-token read per uncached token) runs on it, so a
-// burst of introspection calls cannot starve the lease/control pool.
+// burst of introspection calls cannot starve the lease/control pool. Two
+// connections: elitea-vector caches every answer it may (auth.rs), so only
+// uncached tokens and project-scope writes reach it, each a short indexed
+// read (a memory write adds a transaction-scoped advisory lock); one
+// connection more than the minimum keeps one such lock from queueing every
+// other introspection. Larger would cost every elitea-main replica server
+// connections it does not use (the chart's validateConnectionBudget).
 type DatabasePoolLimits struct {
 	AdmissionPublisher  int32
 	Control             int32
@@ -48,7 +54,7 @@ func PhaseOneDatabasePoolLimits() DatabasePoolLimits {
 		Replay:              4,
 		TerminalEffects:     2,
 		Content:             4,
-		VectorIntrospection: 8,
+		VectorIntrospection: 2,
 	}
 }
 

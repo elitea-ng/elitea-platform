@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
 )
 
 func TestCurrentNotificationRepositoryPostgresPreservesGenericUserContract(t *testing.T) {

@@ -6,11 +6,12 @@ package mcpregistry
 //
 // # What this replaces
 //
-// pylon keeps the catalogue in the `mcp_servers` block of the indexer_worker
-// plugin's YAML descriptor. `indexer_worker/methods/indexer_mcp_prebuilt_config.py`
-// reads that block and emits `application_mcp_prebuilt_config_collected` on the
-// Arbiter event bus; `elitea_core` caches the payload in module state and serves
-// it through `get_mcp_prebuilt_config()` and `resolve_mcp_prebuilt_settings()`
+// The legacy runtime keeps the catalogue in the `mcp_servers` block of the
+// indexer_worker plugin's YAML descriptor.
+// `indexer_worker/methods/indexer_mcp_prebuilt_config.py` reads that block and
+// emits `application_mcp_prebuilt_config_collected` on the Arbiter event bus;
+// `elitea_core` caches the payload in module state and serves it through
+// `get_mcp_prebuilt_config()` and `resolve_mcp_prebuilt_settings()`
 // (`elitea_core/methods/mcp_prebuilt_config.py`).
 //
 // This service loads no plugins, has no descriptor to patch and speaks no
@@ -20,18 +21,19 @@ package mcpregistry
 //
 // # One behaviour is deliberately better than the reference
 //
-// pylon reads the catalogue into module state at plugin load, which is why the
-// admin field carries `requires_restart: true`. This reads rows per request, so
-// an operator's edit takes effect on the next call. That is the same correction
-// `internal/platformconfig` records for the flags on the same admin page.
+// The legacy runtime reads the catalogue into module state at plugin load,
+// which is why the admin field carries `requires_restart: true`. This reads
+// rows per request, so an operator's edit takes effect on the next call. That
+// is the same correction `internal/platformconfig` records for the flags on the
+// same admin page.
 //
 // # The catalogue holds no secret
 //
 // `ClientSecretRef` NAMES an entry in the global secret vault; the value is
 // sealed there by the admin write path and read back only at resolution time.
-// pylon's own example block carries `client_secret` in clear text in a YAML
-// file, which is exactly what `internal/api/v2/admin/config_values.go` refuses
-// for a platform-configuration row.
+// The legacy runtime's own example block carries `client_secret` in clear text
+// in a YAML file, which is exactly what
+// `internal/api/v2/admin/config_values.go` refuses for a platform-configuration row.
 
 import (
 	"fmt"
@@ -43,8 +45,8 @@ import (
 // PrebuiltServer is one catalogue entry.
 //
 // Key is the normalised lookup key (see NormalizeCatalogueKey). DisplayName is
-// the operator's original spelling — pylon carries the same distinction as
-// `original_name` alongside the normalised dictionary key.
+// the operator's original spelling — the legacy runtime carries the same
+// distinction as `original_name` alongside the normalised dictionary key.
 type PrebuiltServer struct {
 	Key             string
 	DisplayName     string
@@ -64,11 +66,11 @@ type PrebuiltServer struct {
 // PrebuiltToolkitTypePrefix is the marker that makes a toolkit type a pre-built
 // MCP toolkit.
 //
-// pylon gates the whole resolution on it — `resolve_mcp_prebuilt_settings`
-// returns `raw_data` untouched unless the type starts with `mcp_`. That gate is
-// reproduced exactly, because it is what stops a toolkit that merely shares a
-// name with a catalogue entry from silently acquiring the catalogue's
-// credentials.
+// The legacy runtime gates the whole resolution on it —
+// `resolve_mcp_prebuilt_settings` returns `raw_data` untouched unless the type
+// starts with `mcp_`. That gate is reproduced exactly, because it is what stops
+// a toolkit that merely shares a name with a catalogue entry from silently
+// acquiring the catalogue's credentials.
 const PrebuiltToolkitTypePrefix = "mcp_"
 
 // NormalizeCatalogueKey reduces a catalogue name or a toolkit type to the key
@@ -80,9 +82,9 @@ const PrebuiltToolkitTypePrefix = "mcp_"
 // go through it, so "Epam Presales" (the operator's spelling) and
 // "mcp_epam_presales" (the toolkit type) both reduce to "epam_presales".
 //
-// The order matters and is pylon's: the prefix is stripped AFTER the
-// lower-casing and the space substitution, so "MCP Epam Presales" reduces to
-// "epam_presales" too.
+// The order matters and is the legacy runtime's: the prefix is stripped AFTER
+// the lower-casing and the space substitution, so "MCP Epam Presales" reduces
+// to "epam_presales" too.
 func NormalizeCatalogueKey(name string) string {
 	if name == "" {
 		return ""
@@ -92,11 +94,11 @@ func NormalizeCatalogueKey(name string) string {
 }
 
 // IsPrebuiltToolkitType reports whether a toolkit type names a pre-built MCP
-// toolkit, which is pylon's `toolkit_type.startswith('mcp_')`.
+// toolkit, which is the legacy `toolkit_type.startswith('mcp_')`.
 //
 // The comparison is on the RAW type, not the normalised key, because that is
-// what pylon tests. A type that is already normalised carries no prefix and is
-// not a pre-built toolkit as far as this gate is concerned.
+// what the legacy runtime tests. A type that is already normalised carries no
+// prefix and is not a pre-built toolkit as far as this gate is concerned.
 func IsPrebuiltToolkitType(toolkitType string) bool {
 	return strings.HasPrefix(toolkitType, PrebuiltToolkitTypePrefix)
 }
@@ -113,22 +115,22 @@ type ResolvedSecretLookup func(reference string) (string, error)
 
 // Resolve merges a catalogue entry into a toolkit's settings.
 //
-// This is `resolve_mcp_prebuilt_settings`. The priority order is pylon's, and
-// it is the important part: a value the CALLER supplied always wins. The
-// catalogue fills a field only when the caller left it absent or empty, so an
-// operator's default can never overwrite a toolkit's own configuration.
+// This is `resolve_mcp_prebuilt_settings`. The priority order is the legacy
+// runtime's, and it is the important part: a value the CALLER supplied always
+// wins. The catalogue fills a field only when the caller left it absent or
+// empty, so an operator's default can never overwrite a toolkit's own configuration.
 //
-// The fillable set is pylon's list minus one entry:
+// The fillable set is the legacy list minus one entry:
 //
 //	url, headers, timeout, client_id, client_secret, base_url
 //
-// `ssl_verify` is pylon's seventh and is NOT filled here. This service verifies
-// TLS unconditionally — `MCPSyncTools` already documents that it reads and
-// ignores the caller's `ssl_verify` for that reason — so injecting a catalogue
-// value for it would write a setting that nothing honours, which reads as a
-// working control and is not one.
+// `ssl_verify` is the legacy runtime's seventh and is NOT filled here. This
+// service verifies TLS unconditionally — `MCPSyncTools` already documents that
+// it reads and ignores the caller's `ssl_verify` for that reason — so injecting
+// a catalogue value for it would write a setting that nothing honours, which
+// reads as a working control and is not one.
 //
-// settings is not mutated. The caller gets a fresh map, matching pylon's
+// settings is not mutated. The caller gets a fresh map, matching the legacy
 // `result = dict(raw_data)`, so a stored toolkit configuration is never
 // rewritten as a side effect of a discovery.
 func Resolve(
@@ -202,12 +204,12 @@ func ResolveReport(
 
 // isBlank reports whether a settings value counts as "not supplied".
 //
-// pylon's test is `not result.get(field)`, Python truthiness: absent, None, "",
-// 0, an empty dict and an empty list are all falsy and all get filled. This
-// reproduces that rather than testing only for absence, because the case that
-// actually occurs is a form that posts `"url": ""` for an untouched field —
-// treating that as supplied would leave the URL empty and the discovery would
-// fail with the catalogue entry sitting right there unused.
+// The legacy runtime's test is `not result.get(field)`, Python truthiness:
+// absent, None, "", 0, an empty dict and an empty list are all falsy and all
+// get filled. This reproduces that rather than testing only for absence,
+// because the case that actually occurs is a form that posts `"url": ""` for an
+// untouched field — treating that as supplied would leave the URL empty and the
+// discovery would fail with the catalogue entry sitting right there unused.
 func isBlank(value any) bool {
 	switch typed := value.(type) {
 	case nil:

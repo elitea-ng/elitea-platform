@@ -1,53 +1,43 @@
-# THE GATEWAY-API BROWSER EDGE (#568).
+# THE GATEWAY-API BROWSER EDGE (#568, one route since #1359 P3).
 #
 # WHAT THIS FILE IS.
 #
-# The cluster does not run traefik. Its browser edge is a Gateway API
-# HTTPRoute, and until now that HTTPRoute existed only in the deployment
-# repository. No file here described it, so no gate read it, and the two edges
-# drifted apart with CI green.
+# The reviewed HTTPRoute for a cluster whose Gateway is managed outside the
+# chart. The chart renders the same shape itself when
+# `main.ingress.gatewayApi: true` (templates/main/ingress.yaml); use this copy
+# only when the route has to live with the Gateway rather than with the
+# release.
 #
-# The drift was measured. PR #564 added `/icons/`, `/avatars/`,
-# `/app/application_icon/` and `/app/application_tool_icon/` to the compose
-# edge. The cluster edge never got them. `/icons/1/a.png` answered the
-# Gateway's own 404 and `/app/application_icon/1` answered the SPA shell, so
-# every project icon and every author avatar stayed broken in the cluster for
-# the whole 1.20.1 window.
+# ONE RULE, ONE BACKEND.
 #
-# This file is now the REVIEWED SOURCE of that edge. The deployment repository
-# holds a copy of it. Edit this file first, then copy it.
+# Everything a browser requests goes to elitea-main on `/`. elitea-main is the
+# browser edge (internal/api/webedge, turned on by ELITEA_WEB_UPSTREAM, which
+# the chart sets to the elitea-web Service): it redirects `/` to `/app/`,
+# relays `/app…` and `/docs…` to elitea-web, keeps the MCP server at
+# `/app/<numeric project id>/mcp[/…]` and its own `/app` file servers, and
+# refuses `/readyz` and `/startupz` to anything but a loopback probe.
+#
+# This file used to be a rule per root-mounted Go route plus a second route for
+# the SPA, and it could not carry the MCP carve-out at all: that needs a path
+# regular expression, which Gateway API leaves implementation-specific. Twice a
+# route family reached one edge and not the other (#568). The decision now
+# lives in Go, in one place, and services/elitea-main/tests/deployedge drives
+# it through the real router.
 #
 # WHAT GATES IT.
 #
 # services/elitea-main/tests/deployedge/edge_gateway_api_test.go reads this
-# file. It walks the real Go router and it fails when a root-mounted route
-# matches no rule below and carries no written reason. A new root-mounted
-# family therefore cannot ship until EVERY edge routes it — this one included.
-# The same gate reads the RequestHeaderModifier filter below, because that
-# filter is the only thing between the cluster and caller-chosen identity.
-#
-# WHAT IT DOES NOT GATE.
-#
-# The copy in the deployment repository. Nothing in this repository can read
-# the cluster, so a copy that stops tracking this file still deploys. Issue
-# #568 names the second control for that: a post-deploy check that requests the
-# root-mounted paths against the deployed host. `vary: Origin` discriminates —
-# elitea-main sets it, and the Gateway's own 404 does not.
+# file. It fails unless there is exactly one rule, a PathPrefix `/` to
+# elitea-main, with no RegularExpression match, no SPA backend and the
+# identity-header removal below.
 #
 # HOW TO APPLY IT.
 #
 # Set the `parentRefs` name to the Gateway of the cluster, and add the
 # `hostnames` of that deployment. Both are deployment-local, so this copy
-# leaves them minimal on purpose. The backend names need no edit: the chart
-# names both Services release-independently (templates/main/_helpers.tpl and
-# templates/web/_helpers.tpl), because the runtime certificates carry them as
-# DNS SANs.
-#
-# THIS IS NOT THE CHART'S HTTPRoute. `main.ingress.gatewayApi: true` renders a
-# DIFFERENT shape: one `/` rule, elitea-main as the only backend, no SPA
-# backend at all. That shape suits an install that publishes elitea-main alone.
-# It does not describe the cluster, which serves the SPA from `/app` and needs
-# every rule below to carve the Go routes back out of that prefix.
+# leaves them minimal on purpose. The backend name needs no edit: the chart
+# names the Service release-independently (templates/main/_helpers.tpl),
+# because the runtime certificates carry it as a DNS SAN.
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -64,99 +54,21 @@ spec:
   # `hostnames:` is deployment-local and stays out of this copy. An HTTPRoute
   # with no hostname attaches to every hostname the Gateway listener serves.
   rules:
-    # ONE rule, MANY matches. Gateway API treats the matches of a rule as a
-    # disjunction, so this rule is the equivalent of the `api` router rule in
-    # deploy/traefik/dynamic.yml. Keep the two lists in step: the gate that
-    # reads this file reads that file as well, and it fails when a route the Go
-    # router serves is missing from either one.
-    #
-    # PathPrefix here is NOT a string prefix. Gateway API matches it on path
-    # element boundaries, so `/icons` matches `/icons/1/a.png` and never
-    # matches `/iconsfoo`. Trailing slashes are left off for that reason.
-    #
-    # `/app/application_icon` and `/app/application_tool_icon` are longer than
-    # the SPA's `/app` prefix below, and Gateway API ranks a longer path match
-    # first. The two Go file servers therefore win that prefix back with no
-    # priority field. The traefik edge ranks by whole-rule length instead, which
-    # is why its MCP router states `priority: 100`.
     - matches:
-        # The v2 API surface.
         - path:
             type: PathPrefix
-            value: /api
-        # The browser authentication routes (internal/api/auth_paths.go):
-        # the sign-in page, session, OIDC and SAML endpoints under /auth/, and
-        # the edge auth check at /auth itself. PathPrefix matches
-        # on path element boundaries, so this one match covers both.
-        - path:
-            type: PathPrefix
-            value: /auth
-        # The liveness endpoint. It is PUBLIC on both layers (#569): this
-        # match forwards it, and internal/api/main_public_rules.go admits it
-        # with no session (go.health.healthz). The deployment's copy of this
-        # rule carries the edge-auth ExtensionRef, and that filter asks the
-        # policy before it forwards, so a routed-but-not-public /healthz
-        # answered every probe with a 302 to the login form. The body is the
-        # minimal {"status":"ok"}. `/readyz` and `/startupz` are deliberately
-        # absent: their bodies name each dependency's state, and no caller
-        # reaches them through an edge. The probes reach the pod directly.
-        - path:
-            type: Exact
-            value: /healthz
-        # The discovery document (ADR-0025 decision 1), public on both layers
-        # (go.discovery.well_known): a native client reads it from an origin
-        # alone, before any credential exists. Exact, so the rest of
-        # /.well-known/ (an ACME http-01 challenge) is not sent here.
-        - path:
-            type: Exact
-            value: /.well-known/elitea-client
-        # Public project icons and author avatars (router.go: DownloadIcon and
-        # DownloadAvatar). A browser <img src> carries no Authorization header,
-        # so both reads are public by design. These two prefixes are the ones
-        # #568 measured missing here.
-        - path:
-            type: PathPrefix
-            value: /icons
-        - path:
-            type: PathPrefix
-            value: /avatars
-        # The artifacts download family.
-        - path:
-            type: PathPrefix
-            value: /artifacts
-        # The admin SPA, which elitea-main serves itself.
-        - path:
-            type: PathPrefix
-            value: /admin/app
-        # Go file servers under the SPA prefix, not SPA paths. The web app
-        # builds these URLs in entities/toolkit/model/toolForm.ts. These two
-        # prefixes are the other half of what #568 measured missing.
-        - path:
-            type: PathPrefix
-            value: /app/application_icon
-        - path:
-            type: PathPrefix
-            value: /app/application_tool_icon
-        # The OpenAI-compatible surface. The settings page shows
-        # `<origin>/llm/v1` for the user to copy, so the edge must forward it.
-        - path:
-            type: PathPrefix
-            value: /llm
-      # REMOVE CALLER-SUPPLIED IDENTITY (#326, gated by #368).
+            value: /
+      # DEFENCE IN DEPTH, NOT THE CONTROL.
       #
-      # elitea-main accepts X-Auth-Type + X-Auth-ID as a finished identity from
-      # any source inside trusted_proxy_cidrs
-      # (internal/api/middleware/auth.go, tryTrustedProxyHeaders), and the pod
-      # network the Gateway sits on is inside them. Without this filter a
-      # caller with no credential picks its own user id. Measured on a live
-      # stack before the fix: `curl -H 'X-Auth-ID: 4'` answered 200 with that
-      # user's record.
+      # elitea-main deletes these names itself, before any route runs
+      # (apimw.StripClientIdentityHeaders, #1359; X-Elitea-Execution-Id is the
+      # one exception, below), and no code reads X-Auth-* as an identity any
+      # more. The removal stays because it costs
+      # nothing and keeps a caller-chosen value out of anything that sits
+      # between this Gateway and elitea-main.
       #
-      # RequestHeaderModifier acts on the REQUEST going in. It removes what the
-      # CLIENT sent. It does not touch what an authenticating edge adds later.
-      #
-      # Names must be enumerated. Gateway API has no prefix wildcard, exactly
-      # as traefik has none. Extend this list; never shorten it.
+      # Names must be enumerated. Gateway API has no prefix wildcard. Extend
+      # this list; never shorten it.
       #
       # X-Elitea-Llm-Hop IS DELIBERATELY ABSENT, and the gate fails if it
       # appears. It is the LLM gateway's hop marker (#164). The gateway stamps
@@ -166,8 +78,8 @@ spec:
       # this very edge, so an edge that deleted the marker would leave hop
       # detection armed in the code and dead on the wire. The marker is not
       # identity: it grants nothing, and recognising it only REFUSES a request.
-      # deploy/traefik/dynamic.yml carries the same exception, and
-      # edge_identity_strip_test.go holds the two edges to it together.
+      # elitea-main's own strip (apimw.ClientIdentityHeaders) carries the same
+      # exception, and tests/deployedge holds the two edges to it together.
       filters:
         - type: RequestHeaderModifier
           requestHeaderModifier:
@@ -188,57 +100,10 @@ spec:
               - X-Elitea-Tenant-Id
               # The runtime execution a /llm call was made from. Legitimate from
               # the runtime worker, which does not pass this edge; never from a
-              # browser. elitea-main re-signs whatever survives into the v2
-              # identity tuple, so a value left here would attribute the call to
-              # an agent the caller chose.
+              # browser. elitea-main itself KEEPS this one name (the desktop
+              # sends it on /llm; see apimw.StripClientIdentityHeaders), so
+              # this removal is the only one here that changes behaviour.
               - X-Elitea-Execution-Id
       backendRefs:
         - name: elitea-main
           port: 8080
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: elitea-web
-  labels:
-    app.kubernetes.io/name: elitea-web
-    app.kubernetes.io/component: browser-edge
-spec:
-  parentRefs:
-    - name: elitea
-  rules:
-    # The single-page app. Every rule in the elitea-main route above is either
-    # outside this prefix or longer than it, so each one keeps its traffic.
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /app
-        # The embedded docs SPA (embedded-docs programme decision 5): the
-        # same elitea-web backend serves it, from its own `/docs/` nginx
-        # location (apps/elitea-web/nginx/spa.conf) — a second match on the
-        # SAME rule, not a new rule, since both prefixes route to the
-        # identical backend with no filter difference between them.
-        - path:
-            type: PathPrefix
-            value: /docs
-      backendRefs:
-        - name: elitea-web
-          port: 80
-    # The root redirect. The SPA container's nginx does not serve `/`.
-    #
-    # This is a different mechanism from the traefik edge's `redirectRegex`, so
-    # TestRootRedirectKeepsTheQueryString does not read it: that test asserts a
-    # regular expression against a whole request URI, and there is no regular
-    # expression here. Check the query string against the Gateway
-    # implementation before you rely on it.
-    - matches:
-        - path:
-            type: Exact
-            value: /
-      filters:
-        - type: RequestRedirect
-          requestRedirect:
-            path:
-              type: ReplaceFullPath
-              replaceFullPath: /app/
-            statusCode: 302

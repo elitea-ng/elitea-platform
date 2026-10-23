@@ -3,7 +3,7 @@ package output
 import (
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 )
 
 // TestBudgetRefusalScopeMapsToPublicCode pins #6732: the scope that refused a

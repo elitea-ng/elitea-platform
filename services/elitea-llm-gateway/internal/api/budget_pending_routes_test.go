@@ -22,7 +22,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 // countingRouter counts every provider dispatch, whatever the dialect.
@@ -128,9 +128,9 @@ func pendingRouteRequests(t *testing.T) map[string]func() *http.Request {
 			return multipartRequest(t, path, map[string]string{"model": "openai/whisper-1"}, "file")
 		}
 	}
-	upgrade := func(method string) func() *http.Request {
+	upgrade := func() func() *http.Request {
 		return func() *http.Request {
-			req := httptest.NewRequest(method, "/llm/v1/realtime?model=gpt-4o-realtime-preview", nil)
+			req := httptest.NewRequest(http.MethodGet, "/llm/v1/realtime?model=gpt-4o-realtime-preview", nil)
 			req.Header.Set("Upgrade", "websocket")
 			req.Header.Set("Connection", "Upgrade")
 			req.Header.Set("Sec-WebSocket-Version", "13")
@@ -177,8 +177,7 @@ func pendingRouteRequests(t *testing.T) map[string]func() *http.Request {
 			return jsonRequest(http.MethodPost, "/llm/v1/responses",
 				`{"model":"openai/gpt-4o","input":"hi"}`)
 		},
-		"GET /llm/v1/realtime":  upgrade(http.MethodGet),
-		"POST /llm/v1/realtime": upgrade(http.MethodPost),
+		"GET /llm/v1/realtime": upgrade(),
 	}
 }
 

@@ -1,0 +1,218 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// ArtifactObjectService is served by elitea-main on its platform gRPC listener
+// (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446) and called by the agent worker (the
+// Office toolkits' object host, the indexing artifact source), the DeepWiki
+// and Inventory engines (artifact-folder ingest) and the sub-application host
+// (generated wiki and graph uploads). It replaced their HTTP calls to the
+// /api/v2/artifacts routes (#1359 U5). The browser's artifact routes and the
+// external S3-style /artifacts/s3/* API stay HTTP.
+//
+// WHAT RUNS. Each RPC is one artifact route, run in process through the same
+// handler, authentication and authorization a browser request takes: the
+// bearer is authenticated, the project's artifact permission
+// (configuration.artifacts.artifacts.view/create/delete) is resolved for its
+// principal, and the per-bucket access list and the system-bucket rules
+// apply. The project is the request's, never inferred, so a bearer of one
+// project cannot reach another's bucket.
+//
+// WHO MAY CALL. The listener requires a runtime-CA client certificate, and only
+// the workload identities in ELITEA_ARTIFACT_SERVICE_CLIENTS are admitted
+// (grpcauth). The credential the call is made under travels as
+// `authorization: Bearer <token>` metadata: the worker's claim token, or the
+// callback bearer a sub-application invocation was handed.
+//
+// ERRORS. A refusal the artifact routes decide (401 bearer, 403 permission or
+// bucket access, 404 bucket or object, 409 exists, 413 too large, 400 invalid
+// name) ends the call with a gRPC status mapped from the HTTP status, as
+// elitea.llm.v1.ModelRefusal maps it, and carries the refusal itself in the
+// `elitea-artifact-refusal-bin` trailer (ArtifactRefusalV1). A status WITHOUT
+// that trailer is the hop failing (an unadmitted peer, a malformed call).
+//
+// BYTES. Object bodies travel as chunks of at most 1 MiB in the streaming RPCs,
+// so no message approaches the listener's 16 MiB cap.
+//
+// CANCELLATION. Cancelling a call cancels the request the handler serves; a
+// cancelled PutObject stores nothing.
+service ArtifactObjectService {
+  // ListBuckets is GET /api/v2/artifacts/buckets/{project}.
+  rpc ListBuckets(ArtifactListBucketsRequestV1) returns (ArtifactListBucketsResponseV1);
+  // CreateBucket is POST /api/v2/artifacts/buckets/{project}.
+  rpc CreateBucket(ArtifactCreateBucketRequestV1) returns (ArtifactCreateBucketResponseV1);
+  // ListObjects is GET /api/v2/artifacts/objects/{project}/{bucket}: one
+  // response per page, the cursor followed server side until the listing ends
+  // or `max_pages` is reached.
+  rpc ListObjects(ArtifactListObjectsRequestV1) returns (stream ArtifactListObjectsResponseV1);
+  // Stat is HEAD /api/v2/artifacts/objects/{project}/{bucket}/{key}.
+  rpc Stat(ArtifactStatRequestV1) returns (ArtifactStatResponseV1);
+  // GetObject is GET /api/v2/artifacts/objects/{project}/{bucket}/{key}: the
+  // object's info first, then its bytes in chunks.
+  rpc GetObject(ArtifactGetObjectRequestV1) returns (stream ArtifactGetObjectResponseV1);
+  // PutObject is POST /api/v2/artifacts/objects/{project}/{bucket}: a head
+  // naming the object first, then its bytes in chunks.
+  rpc PutObject(stream ArtifactPutObjectRequestV1) returns (ArtifactPutObjectResponseV1);
+  // Delete is DELETE /api/v2/artifacts/objects/{project}/{bucket}/{key}.
+  rpc Delete(ArtifactDeleteRequestV1) returns (ArtifactDeleteResponseV1);
+  // DeleteBatch is POST /api/v2/artifacts/objects/{project}/{bucket}:batchDelete:
+  // several keys in one request, each key's outcome reported.
+  rpc DeleteBatch(ArtifactDeleteBatchRequestV1) returns (ArtifactDeleteBatchResponseV1);
+}
+
+// ArtifactRuntimeClaimV1 is the execution claim a worker call is made under,
+// as the X-Elitea-Execution-Id / -Execution-Generation / -Claim-Id / -Fence
+// headers carried it: the system-bucket rules let a live claim reach its own
+// conversation's attachment bucket. Absent on calls not made for a claim.
+message ArtifactRuntimeClaimV1 {
+  string execution_id = 1;
+  uint64 generation = 2;
+  string claim_id = 3;
+  string fence = 4;
+}
+
+// ArtifactRefusalV1 is the `elitea-artifact-refusal-bin` trailer of a refused
+// call: the HTTP status the artifact route answered and its error body's code
+// and message ({"error": {"code", "message"}}).
+message ArtifactRefusalV1 {
+  int32 http_status = 1;
+  string code = 2;
+  string message = 3;
+}
+
+message ArtifactListBucketsRequestV1 {
+  int64 project_id = 1;
+}
+
+message ArtifactBucketV1 {
+  string name = 1;
+  // retention_days is absent for a bucket kept forever.
+  optional int32 retention_days = 2;
+  int64 size_bytes = 3;
+  int64 object_count = 4;
+}
+
+message ArtifactListBucketsResponseV1 {
+  repeated ArtifactBucketV1 buckets = 1;
+}
+
+message ArtifactCreateBucketResponseV1 {
+  ArtifactBucketV1 bucket = 1;
+}
+
+message ArtifactCreateBucketRequestV1 {
+  int64 project_id = 1;
+  // name follows the platform's rule, ^[a-z][a-z0-9-]{1,62}$.
+  string name = 2;
+  optional int32 retention_days = 3;
+}
+
+message ArtifactListObjectsRequestV1 {
+  int64 project_id = 1;
+  string bucket = 2;
+  string prefix = 3;
+  string delimiter = 4;
+  // page_size is the route's `limit`; 0 is the server's default page.
+  int32 page_size = 5;
+  // cursor resumes a listing a previous call stopped (its last next_cursor).
+  string cursor = 6;
+  // max_pages bounds the pages this call streams; 0 is one page.
+  int32 max_pages = 7;
+  ArtifactRuntimeClaimV1 claim = 8;
+}
+
+message ArtifactObjectInfoV1 {
+  string key = 1;
+  int64 size_bytes = 2;
+  string media_type = 3;
+  string etag = 4;
+  // modified_at is RFC 3339 (UTC), as the listing route renders it; empty
+  // when the store does not know it.
+  string modified_at = 5;
+}
+
+message ArtifactListObjectsResponseV1 {
+  repeated ArtifactObjectInfoV1 objects = 1;
+  repeated string common_prefixes = 2;
+  // next_cursor is set while the listing continues past this page.
+  string next_cursor = 3;
+}
+
+// ArtifactObjectRefV1 names one object of a project's bucket.
+message ArtifactObjectRefV1 {
+  int64 project_id = 1;
+  string bucket = 2;
+  string key = 3;
+  ArtifactRuntimeClaimV1 claim = 4;
+}
+
+message ArtifactStatRequestV1 {
+  ArtifactObjectRefV1 object = 1;
+}
+
+message ArtifactStatResponseV1 {
+  ArtifactObjectInfoV1 info = 1;
+}
+
+message ArtifactGetObjectRequestV1 {
+  ArtifactObjectRefV1 object = 1;
+}
+
+message ArtifactDeleteRequestV1 {
+  ArtifactObjectRefV1 object = 1;
+}
+
+message ArtifactGetObjectResponseV1 {
+  oneof frame {
+    // info is the first frame: the object's size, type and etag.
+    ArtifactObjectInfoV1 info = 1;
+    // data is the next chunk of the object's bytes.
+    bytes data = 2;
+  }
+}
+
+message ArtifactPutObjectHeadV1 {
+  int64 project_id = 1;
+  string bucket = 2;
+  string key = 3;
+  // media_type empty derives the type from the key's extension, as the
+  // multipart upload without a part Content-Type does.
+  string media_type = 4;
+  // overwrite replaces an existing object; false refuses it (409).
+  bool overwrite = 5;
+  ArtifactRuntimeClaimV1 claim = 6;
+}
+
+message ArtifactPutObjectRequestV1 {
+  oneof frame {
+    ArtifactPutObjectHeadV1 head = 1;
+    bytes data = 2;
+  }
+}
+
+message ArtifactPutObjectResponseV1 {
+  ArtifactObjectInfoV1 info = 1;
+}
+
+message ArtifactDeleteResponseV1 {}
+
+message ArtifactDeleteBatchRequestV1 {
+  int64 project_id = 1;
+  string bucket = 2;
+  repeated string keys = 3;
+  ArtifactRuntimeClaimV1 claim = 4;
+}
+
+// ArtifactDeleteFailureV1 is one key the batch could not remove.
+message ArtifactDeleteFailureV1 {
+  string key = 1;
+  string code = 2;
+  string message = 3;
+}
+
+message ArtifactDeleteBatchResponseV1 {
+  repeated string deleted = 1;
+  repeated ArtifactDeleteFailureV1 failed = 2;
+}

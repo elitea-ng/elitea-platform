@@ -9,7 +9,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	specfiles "github.com/EliteaAI/elitea-platform/services/elitea-main/api/openapi"
+	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
 )
 
 // TestListPublicApplicationsSpecAdmitsTheQueryRefusal: contract 1.3 locks

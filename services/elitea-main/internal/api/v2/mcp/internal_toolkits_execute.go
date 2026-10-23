@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	toolkitsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type internalToolkitExecutor interface {

@@ -204,7 +204,7 @@ async fn a_publish_queues_for_a_slot() {
     });
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(!publish.is_finished(), "the publish waits for the slot");
-    assert!(live_nodes(&pool, wiki).await.is_empty());
+    assert_eq!(live_nodes(&pool, wiki).await, [] as [String; 0]);
     holder.commit().await.expect("free the slot");
     let published = tokio::time::timeout(Duration::from_mins(1), publish)
         .await

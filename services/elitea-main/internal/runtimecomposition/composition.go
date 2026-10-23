@@ -9,46 +9,49 @@ import (
 	"path/filepath"
 	"time"
 
-	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	egressaudit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
-	recoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
-	toolkitcallapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/currentcore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+
+	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
+	egressaudit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	recoveryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
+	toolkitcallapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/extract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/workloadauth"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 const (
@@ -177,6 +180,12 @@ type Dependencies struct {
 	// Config.EgressAuditClients is set: the summaries are never held in a
 	// replica's memory.
 	EgressAuditStore egressaudit.Store
+	// ConversationActivity publishes the conversation activity frames
+	// (client contract 1.12) when a turn is admitted, its result projects,
+	// it settles or it is stopped (conversation_activity.go). nil (no
+	// live-update plane) publishes none; the list rows still carry the
+	// state.
+	ConversationActivity *conversationactivity.Notifier
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -363,6 +372,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime configuration targets: %w", err)
 	}
+	// Every dispatch policy above admits under config.MaxOutstanding; say so
+	// next to what is persisted before the first start can meet a mismatch.
+	logAdmissionCaps(ctx, dependencies.Logger, dependencies.AdmissionPool, config.MaxOutstanding)
 	bundles, err := executionapp.NewValidationInputBundleFactory(executionapp.ValidationInputProfile{
 		SemanticRole:          "configuration.settings",
 		Classification:        inputClassification,
@@ -630,8 +642,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if inputErr != nil {
 			return nil, fmt.Errorf("construct agent execution input bundle factory: %w", inputErr)
 		}
+		var agentAdmissionStore agentexecutionapp.AtomicAdmissionStore = agentJobs
+		if dependencies.ConversationActivity != nil {
+			agentAdmissionStore = activityAdmissionStore{next: agentJobs, activity: dependencies.ConversationActivity}
+		}
 		agentAdmissions, admissionErr := agentexecutionapp.NewAdmissionService(
-			agentJobs,
+			agentAdmissionStore,
 			agentInputs,
 			nil,
 			currentRuntimeID,
@@ -676,7 +692,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation repository: %w", cancelErr)
 		}
-		agentCancel, cancelErr = agentexecutionapp.NewCurrentAgentCancellationService(agentCancellation)
+		var agentCancellationStore agentexecutionapp.CurrentAgentCancellationStore = agentCancellation
+		if dependencies.ConversationActivity != nil {
+			agentCancellationStore = activityCancellationStore{next: agentCancellation, activity: dependencies.ConversationActivity}
+		}
+		agentCancel, cancelErr = agentexecutionapp.NewCurrentAgentCancellationService(agentCancellationStore)
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation service: %w", cancelErr)
 		}
@@ -712,9 +732,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct nested application version reader: %w", targetErr)
 		}
+		// The internal MCP builders are addressed at InternalToolOrigin, a
+		// name the worker resolves to InternalToolService on the platform
+		// gRPC listener (#1359 U5), never to an HTTP origin.
 		agentPrebuiltMCP, prebuiltErr := newCurrentAgentRuntimePrebuiltMCP(
 			mcpregistry.NewPrebuiltStore(dependencies.AdmissionPool),
-			config.CurrentMainBaseURL,
 			dependencies.ActorTokenIssuer,
 		)
 		if prebuiltErr != nil {
@@ -728,20 +750,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
 		}
-		// The runtime CA: the same bundle the private listeners verify
-		// worker client certificates against.
-		currentMainClient, targetErr := currentcore.NewTLSClient(config.ControlTLS.ClientCAPath)
-		if targetErr != nil {
-			return nil, fmt.Errorf("construct current Main policy client: %w", targetErr)
-		}
-		nextInputSuggestionResolver, targetErr := currentcore.NewNextInputSuggestionResolver(
-			config.CurrentMainBaseURL,
-			dependencies.ActorTokenIssuer,
-			currentMainClient,
-		)
-		if targetErr != nil {
-			return nil, fmt.Errorf("construct next-input-suggestion policy resolver: %w", targetErr)
-		}
 		agentGuardrails, targetErr := platformconfig.NewGuardrailPolicyAdapter(dependencies.AdmissionPool)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent guardrail policy source: %w", targetErr)
@@ -751,7 +759,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			agentTargets,
 			agentTargets,
 			agentTargets,
-			nextInputSuggestionResolver,
 			agentGuardrails,
 			agentVersions,
 			agentAdmissions,
@@ -1136,6 +1143,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			executionapp.WithAfterSettleHooks(pipelineruns.NewSettlementHook(dependencies.PipelineRuns, dependencies.DomainEvents)))
 	}
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
+	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err
@@ -1460,7 +1468,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// "secret" (#408). The worker asks for it with its bearer token and
 		// puts it on every call it makes back to this service, so the
 		// version-details route can refuse a project that has no value instead
-		// of accepting a value printed in the pylon source.
+		// of accepting a value printed in the legacy source.
 		projectSecretsHeader := secretsapi.NewHandler(dependencies.ContentPool)
 		if projectSystemTokens != nil {
 			runtimeToken, err = storage.NewEliteaClientTokenServiceWithSchedules(
@@ -2077,18 +2085,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		OutputMaxResponseBytes:          maxGRPCResponseBytes,
 		ControlGRPC:                     phaseOneGRPCPolicy(16),
 		OutputGRPC:                      phaseOneGRPCPolicy(4),
-		ContentMaxConnections:           64,
-		ContentMaxStreams:               maxContentRequests,
-		ContentReadTimeout:              10 * time.Second,
-		ContentWriteTimeout:             30 * time.Second,
-		ContentIdleTimeout:              time.Minute,
-		ContentMaxHeaderBytes:           16 * 1024,
+		ContentGRPC:                     contentGRPCPolicy(),
 		ShutdownTimeout:                 15 * time.Second,
 	}, runtimegrpc.PrivateServices{
-		Control:             controlServer,
-		Output:              outputServer,
-		Content:             contentServer.Routes(),
-		VectorIntrospection: vectorIntrospection,
+		Control: controlServer,
+		Output:  outputServer,
+		Content: []runtimegrpc.PlatformService{{
+			Name: runtimev1.RuntimeContentService_ServiceDesc.ServiceName,
+			// Every RPC binds its own authority: an execution claim and fence in
+			// metadata, or a signed sandbox grant naming this exact peer.
+			Clients:  grpcauth.AnyVerifiedPeer(),
+			Register: contentServer.Register,
+		}},
+		VectorIntrospection: vectorIntrospectionOrNil(vectorIntrospection),
 		Workspace:           workspaceServer,
 		EgressAudit:         egressAuditServerOrNil(egressAuditServer),
 	})
@@ -2156,6 +2165,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if clientApplicationVersions != nil {
 		publicRoutes.ClientApplicationVersions = clientApplicationVersions
 	}
+	if attachmentObjects != nil {
+		publicRoutes.AttachmentExtraction = attachmentObjects
+	}
 
 	closeNATS = false
 	return &Runtime{
@@ -2167,6 +2179,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		publicRoutes:           publicRoutes,
 		configurationValidator: currentSDKConfigurationValidator,
 		egressAudit:            egressAuditMerger,
+		vectorIntrospection:    vectorIntrospection,
 	}, nil
 }
 
@@ -2180,4 +2193,13 @@ func phaseOneGRPCPolicy(maxConcurrentStreams uint32) runtimegrpc.GRPCServerPolic
 		MaxConnectionAge:      30 * time.Minute,
 		MaxConnectionAgeGrace: 30 * time.Second,
 	}
+}
+
+// contentGRPCPolicy bounds the RuntimeContentService listener. Content calls
+// are short except input and bundle streams, which the per-route slots bound.
+func contentGRPCPolicy() runtimegrpc.GRPCServerPolicy {
+	policy := runtimegrpc.DefaultPlatformGRPCPolicy()
+	policy.MaxConnections = 64
+	policy.MaxConcurrentStreams = uint32(maxContentRequests)
+	return policy
 }

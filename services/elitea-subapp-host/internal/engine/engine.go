@@ -1,19 +1,22 @@
 // Package engine is the host's client for an engine sidecar (ADR-0023 H2).
 //
-// An application whose engine cannot be Go — a dependency closure that stays
-// in Python — runs it as a sidecar next to this host and speaks NDJSON to it
-// over a Unix socket. The host keeps the SPI, admission, the parameter
+// An application whose engine is not Go runs it as a sidecar next to this
+// host and reaches it over a Unix socket the two containers share:
+// elitea.engine.v1.EngineService (libs/proto/elitea/engine/v1), gRPC over
+// the socket (#1359, which replaced the NDJSON-over-HTTP protocol). No TLS:
+// the socket directory is the only way in (the pod-local Unix-socket
+// exception, AGENTS.md). The host keeps the SPI, admission, the parameter
 // merge, composition and upload; the sidecar runs one tool at a time:
 //
-//	POST /engine/invoke                 {invocation_id, tool, arguments}
-//	  → NDJSON: {"thinking": "…"} and {"token": "…"} interleaved, then
-//	    {"result": {…}} | {"error": {…}}
-//	POST /engine/invocations/{id}/stop  requests a cooperative stop
+//	Invoke(invocation_id, tool, arguments_json)
+//	  → stream: thinking and token events interleaved, then result | error
+//	Stop(invocation_id)  requests a cooperative stop
+//	Health()             status, runner, active, tools
 //
-// Progress lines become the invocation's thinking events as they arrive and
-// token lines become its answer events, IN THE ORDER THEY ARRIVE: they share
+// Progress events become the invocation's thinking events as they arrive and
+// token events become its answer events, IN THE ORDER THEY ARRIVE: they share
 // one event list, so a poll shows the answer growing between the steps that
-// produced it. Two keys rather than one because the two are different things
+// produced it. Two kinds rather than one because the two are different things
 // and a reader must not have to guess which (issue #701; the envelope is
 // conformance/provider/fixtures/deepwiki/stream/token_events.json).
 //
@@ -21,34 +24,36 @@
 // stop is forwarded to the sidecar — which terminates the engine's worker
 // subprocess — before this side gives up on the stream.
 //
-// It was DeepWiki's (internal/apps/deepwiki/run/engine.go) until ADR-0023
-// stage H4c and moved unchanged; the only application-specific thing in it
-// was the word "DeepWiki" in the messages a caller reads, which is now the
-// Label a client is built with. Which tools a sidecar serves, and how its
-// result dict is composed, stay with the application.
+// Which tools a sidecar serves, and how its result dict is composed, stay
+// with the application; the Label a client is built with names the engine in
+// the messages a caller reads.
 package engine
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 const (
-	// MaxStreamLineBytes is the longest NDJSON line the host reads from a
-	// sidecar stream. A result line carries every artifact inline, so it
-	// bounds what one tool can return: the Inventory engine's export_graph
-	// returns the whole graph.json, JSON-escaped, in artifacts[].data.
+	// MaxStreamLineBytes is the largest event the host reads from a sidecar
+	// stream, as JSON. A result carries every artifact inline, so it bounds
+	// what one tool can return: the Inventory engine's export_graph returns
+	// the whole graph.json, JSON-escaped, in artifacts[].data. The DeepWiki
+	// engine's MAX_RESULT_LINE (src/runner/native.rs) is pinned to it by a
+	// test that reads this file.
 	MaxStreamLineBytes = 64 << 20
 	// MaxExportDocumentBytes mirrors the Inventory engine's
 	// MAX_EXPORT_DOCUMENT_BYTES (services/elitea-inventory-engine/src/lib.rs):
@@ -56,11 +61,23 @@ const (
 	// engine refuses with a ValueError that names its export-graph command.
 	// TestExportBoundMirrorsTheEngine reads the Rust constant and pins this
 	// value to it, and pins MaxStreamLineBytes above it with headroom
-	// (streamLineOverhead) for the line's envelope and the export summary.
+	// (streamLineOverhead) for the result's envelope and the export summary.
 	MaxExportDocumentBytes = 60 << 20
 	// streamLineOverhead is the headroom MaxStreamLineBytes keeps above
 	// MaxExportDocumentBytes.
 	streamLineOverhead = 1 << 20
+	// eventFraming is what one gRPC message adds around the largest event:
+	// the field tags and lengths of InvokeEvent.
+	eventFraming = 64
+	// MaxInvokeBytes is the largest Invoke the host sends: the Inventory
+	// engine's MAX_INVOKE_BYTES (import_graph carries a graph document of up
+	// to 64 MiB, JSON-escaped once in the arguments).
+	MaxInvokeBytes = 96 << 20
+	// healthTimeout bounds one Health call: the list is read in the
+	// background, and an engine that does not answer must not stall a caller.
+	healthTimeout = 3 * time.Second
+	// stopTimeout bounds the Stop a cancelled invocation sends.
+	stopTimeout = 5 * time.Second
 )
 
 // ErrUnknownTool is what errors.Is finds in an error when the engine answered
@@ -72,47 +89,40 @@ type unknownToolError struct{ error }
 func (e unknownToolError) Unwrap() error      { return e.error }
 func (unknownToolError) Is(target error) bool { return target == ErrUnknownTool }
 
-// line is one NDJSON line of the sidecar's stream.
-type line struct {
-	Thinking *string        `json:"thinking,omitempty"`
-	Token    *string        `json:"token,omitempty"`
-	Result   map[string]any `json:"result,omitempty"`
-	Error    *lineError     `json:"error,omitempty"`
-}
-
-type lineError struct {
-	Message       string `json:"message"`
-	ErrorType     string `json:"error_type"`
-	ErrorCategory string `json:"error_category"`
-	// Code is the engine's machine-readable code (spi.CodeBusy, say);
-	// absent on most lines.
-	Code string `json:"code"`
-}
-
-// Client speaks the sidecar protocol over a Unix socket.
+// Client speaks elitea.engine.v1 over a Unix socket.
 type Client struct {
 	Socket string
 	// Label names the engine in the messages a caller reads ("The DeepWiki
 	// engine is not reachable at …"). Empty is "The engine".
 	Label      string
-	HTTP       *http.Client
 	StopPeriod time.Duration
 
-	caps capabilities
+	rpc enginev1.EngineServiceClient
+	// dialErr is a target the gRPC client could not even parse; every call
+	// reports it.
+	dialErr error
+	caps    capabilities
 }
 
-// NewClient dials the socket for every request; the URL host is a
-// placeholder the transport ignores.
+// NewClient builds the client; nothing is dialled until the first call, and a
+// failed dial is retried on the next. The connection is shared by every call
+// (HTTP/2 streams), and a generation can run for an hour: no call here has a
+// deadline the caller did not set.
 func NewClient(socket, label string) *Client {
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, "unix", socket)
-		},
-		// A generation can run for an hour; nothing here may time it out.
-		ResponseHeaderTimeout: 0,
+	client := &Client{Socket: socket, Label: label, StopPeriod: 250 * time.Millisecond}
+	conn, err := grpc.NewClient("unix:"+socket,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(MaxStreamLineBytes+eventFraming),
+			grpc.MaxCallSendMsgSize(MaxInvokeBytes),
+		),
+	)
+	if err != nil {
+		client.dialErr = err
+		return client
 	}
-	return &Client{Socket: socket, Label: label, HTTP: &http.Client{Transport: transport}, StopPeriod: 250 * time.Millisecond}
+	client.rpc = enginev1.NewEngineServiceClient(conn)
+	return client
 }
 
 // subject is how the engine is named in a message.
@@ -128,31 +138,18 @@ func (c *Client) subject() string {
 // failed result — or an error for a transport failure, a refusal the
 // sidecar reported, or a stop.
 func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
-	body, err := json.Marshal(map[string]any{"invocation_id": tc.InvocationID(), "tool": tool, "arguments": arguments})
+	if c.dialErr != nil {
+		return nil, spi.Failf(spi.KindRuntime, "%s is not reachable at %s: %v", c.subject(), c.Socket, c.dialErr)
+	}
+	body, err := json.Marshal(arguments)
 	if err != nil {
 		return nil, spi.Failf(spi.KindRuntime, "encode the engine request: %v", err)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://engine/engine/invoke", bytes.NewReader(body))
+	stream, err := c.rpc.Invoke(ctx, &enginev1.InvokeRequest{InvocationId: tc.InvocationID(), Tool: tool, ArgumentsJson: body})
 	if err != nil {
-		return nil, spi.Failf(spi.KindRuntime, "%v", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.HTTP.Do(request)
-	if err != nil {
-		return nil, spi.Failf(spi.KindRuntime, "%s is not reachable at %s: %v", c.subject(), c.Socket, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		text, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		refusal := fmt.Errorf("%s refused the invocation: HTTP %d %s", c.subject(), response.StatusCode, strings.TrimSpace(string(text)))
-		if response.StatusCode == http.StatusBadRequest && strings.Contains(string(text), "Unknown tool") {
-			// An engine of an older release does not serve this tool (a
-			// rolling deploy: the host is newer than the engine).
-			refusal = unknownToolError{refusal}
-		}
-		return nil, spi.NewFailure(spi.KindRuntime, refusal)
+		return nil, c.refused(err, false)
 	}
 
 	// The stop watcher: the host's checkpoint is the only place a stop is
@@ -179,40 +176,48 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 	}()
 	defer func() { cancel(); <-watcherDone }()
 
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), MaxStreamLineBytes)
-	for scanner.Scan() {
-		raw := bytes.TrimSpace(scanner.Bytes())
-		if len(raw) == 0 {
-			continue
+	received := false
+	for {
+		event, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		var next line
-		if err := json.Unmarshal(raw, &next); err != nil {
-			return nil, spi.Failf(spi.KindRuntime, "%s sent a line this host cannot read: %.120s", c.subject(), raw)
+		if err != nil {
+			select {
+			case <-stopped:
+				return nil, spi.ErrCancelled
+			default:
+			}
+			if tc.Checkpoint() != nil {
+				return nil, spi.ErrCancelled
+			}
+			return nil, c.refused(err, received)
 		}
-		switch {
-		case next.Thinking != nil:
-			if err := tc.Thinking(ctx, *next.Thinking); err != nil {
+		received = true
+		switch next := event.GetEvent().(type) {
+		case *enginev1.InvokeEvent_Thinking:
+			if err := tc.Thinking(ctx, next.Thinking); err != nil {
 				return nil, err
 			}
-		case next.Token != nil:
-			// Before the error and result cases for the same reason
-			// Thinking is: a line is exactly one of these, and the order
-			// only records which key is read first.
-			if err := tc.Token(ctx, *next.Token); err != nil {
+		case *enginev1.InvokeEvent_Token:
+			if err := tc.Token(ctx, next.Token); err != nil {
 				return nil, err
 			}
-		case next.Error != nil:
-			failure := fmt.Errorf("%s", next.Error.Message)
-			if next.Error.ErrorType == "KeyError" && strings.HasPrefix(next.Error.Message, "Unknown tool:") {
+		case *enginev1.InvokeEvent_Error:
+			failure := fmt.Errorf("%s", next.Error.GetMessage())
+			if next.Error.GetErrorType() == "KeyError" && strings.HasPrefix(next.Error.GetMessage(), "Unknown tool:") {
 				failure = unknownToolError{failure}
 			}
-			if next.Error.Code != "" {
-				return nil, spi.NewCodedFailure(KindOf(next.Error.ErrorType), next.Error.Code, failure)
+			if code := next.Error.GetCode(); code != "" {
+				return nil, spi.NewCodedFailure(KindOf(next.Error.GetErrorType()), code, failure)
 			}
-			return nil, spi.NewFailure(KindOf(next.Error.ErrorType), failure)
-		case next.Result != nil:
-			return next.Result, nil
+			return nil, spi.NewFailure(KindOf(next.Error.GetErrorType()), failure)
+		case *enginev1.InvokeEvent_ResultJson:
+			var result map[string]any
+			if err := json.Unmarshal(next.ResultJson, &result); err != nil || result == nil {
+				return nil, spi.Failf(spi.KindRuntime, "%s sent a result this host cannot read: %.120s", c.subject(), next.ResultJson)
+			}
+			return result, nil
 		}
 	}
 	select {
@@ -220,31 +225,40 @@ func (c *Client) Invoke(ctx context.Context, tool string, arguments map[string]a
 		return nil, spi.ErrCancelled
 	default:
 	}
-	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
-		return nil, spi.Failf(spi.KindRuntime, "%s sent a result line over this host's %d MiB limit", c.subject(), MaxStreamLineBytes>>20)
-	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		return nil, spi.Failf(spi.KindRuntime, "%s's stream ended in error: %v", c.subject(), err)
-	}
 	if tc.Checkpoint() != nil {
 		return nil, spi.ErrCancelled
 	}
 	return nil, spi.Failf(spi.KindRuntime, "%s closed the stream without a result", c.subject())
 }
 
-// stop asks the sidecar to stop one invocation. Best effort: the stream
-// is cancelled either way, and the sidecar terminates its worker on its
-// own checkpoint.
+// refused is the error for a call that failed: a refusal the sidecar
+// reported, a sidecar that cannot be reached, a result over the limit, or a
+// stream that broke after it had started (streaming).
+func (c *Client) refused(err error, streaming bool) error {
+	st, _ := status.FromError(err)
+	switch {
+	case st.Code() == codes.InvalidArgument && strings.HasPrefix(st.Message(), "Unknown tool:"):
+		// An engine of an older release does not serve this tool (a
+		// rolling deploy: the host is newer than the engine).
+		return spi.NewFailure(spi.KindRuntime, unknownToolError{fmt.Errorf("%s refused the invocation: %s", c.subject(), st.Message())})
+	case st.Code() == codes.ResourceExhausted && strings.Contains(st.Message(), "received message larger than max"):
+		return spi.Failf(spi.KindRuntime, "%s sent a result over this host's %d MiB limit", c.subject(), MaxStreamLineBytes>>20)
+	case streaming:
+		return spi.Failf(spi.KindRuntime, "%s's stream ended in error: %v", c.subject(), st.Message())
+	case st.Code() == codes.Unavailable:
+		return spi.Failf(spi.KindRuntime, "%s is not reachable at %s: %v", c.subject(), c.Socket, st.Message())
+	default:
+		return spi.Failf(spi.KindRuntime, "%s refused the invocation: %s %s", c.subject(), st.Code(), st.Message())
+	}
+}
+
+// stop asks the sidecar to stop one invocation. Best effort: the stream is
+// cancelled either way, and the sidecar terminates its worker on its own
+// checkpoint.
 func (c *Client) stop(invocationID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://engine/engine/invocations/"+invocationID+"/stop", nil)
-	if err != nil {
-		return
-	}
-	if response, err := c.HTTP.Do(request); err == nil {
-		_ = response.Body.Close()
-	}
+	_, _ = c.rpc.Stop(ctx, &enginev1.StopRequest{InvocationId: invocationID})
 }
 
 // KindOf maps the sidecar's error_type — the Python exception class name —

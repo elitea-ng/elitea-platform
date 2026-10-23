@@ -9,7 +9,7 @@ package hopmarker
 // module does not compile:
 //
 //	gateway → provider (= the platform's own /llm)
-//	        → traefik edge   (deploy/traefik/*.yml)
+//	        → browser edge   (elitea-main itself in compose; deploy/gateway-api in a cluster)
 //	        → elitea-main    (services/elitea-main/internal/llmproxy)
 //	        → gateway
 //
@@ -53,7 +53,7 @@ const edgeForwardGateFunc = "func TestBrowserEdgesForwardTheHopMarker("
 
 // headerRemovalLine matches the shapes a YAML header-removal entry takes:
 //
-//	X-Elitea-Llm-Hop: ""      (traefik customRequestHeaders — empty deletes)
+//	X-Elitea-Llm-Hop: ""      (a proxy's header map — empty deletes)
 //	X-Elitea-Llm-Hop: ''
 //	X-Elitea-Llm-Hop:
 //	- X-Elitea-Llm-Hop        (a chart's list of names to strip)
@@ -86,10 +86,11 @@ func repoRoot(t *testing.T) string {
 // deploy/ and requires that none of them deletes the marker.
 //
 // It covers the whole directory, not a named list, because the edge is not one
-// file: deploy/traefik/dynamic.yml and dynamic.e2e.yml front the browser,
-// deploy/runtime/platform-edge-dynamic.yml fronts the runtime plane, and
-// deploy/helm/elitea/values.yaml carries the chart's own strip list. A gate
-// that named three of the four would go quiet the day a fourth appeared.
+// file: deploy/gateway-api/httproute.yaml fronts the cluster browser, and
+// deploy/helm/elitea/values.yaml carries the chart's own strip list. (No
+// compose stack runs a proxy edge any more, #1359: elitea-main is the compose
+// browser edge, strips in Go and keeps this marker.) A gate that named
+// some of the files would go quiet the day another appeared.
 func TestHopMarker_NoDeployConfigurationStripsIt(t *testing.T) {
 	root := repoRoot(t)
 	deployDir := filepath.Join(root, "deploy")
@@ -255,9 +256,9 @@ func TestHeaderRemovalLine(t *testing.T) {
 		line    string
 		removal bool
 	}{
-		// deploy/traefik/dynamic.yml — customRequestHeaders, empty deletes.
-		{"traefik empty double quotes", `          X-Elitea-Llm-Hop: ""`, true},
-		{"traefik empty single quotes", `          X-Elitea-Llm-Hop: ''`, true},
+		// A proxy header map (the shape the retired compose edge used) — empty deletes.
+		{"header map, empty double quotes", `          X-Elitea-Llm-Hop: ""`, true},
+		{"header map, empty single quotes", `          X-Elitea-Llm-Hop: ''`, true},
 		{"bare key, no value", `          X-Elitea-Llm-Hop:`, true},
 		// deploy/helm/elitea/values.yaml — a list of names to strip.
 		{"chart list entry", `      - X-Elitea-Llm-Hop`, true},

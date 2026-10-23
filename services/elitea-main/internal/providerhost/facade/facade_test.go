@@ -2,18 +2,19 @@ package facade_test
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
 )
 
 var names = facade.EnvNames{
 	Enabled:        "P_ENABLED",
-	BaseURL:        "P_BASE_URL",
+	Target:         "P_TARGET",
+	RetiredBaseURL: "P_BASE_URL",
 	ClientCertFile: "P_CERT",
 	ClientKeyFile:  "P_KEY",
 	CAFile:         "P_CA",
@@ -50,9 +51,21 @@ func TestEveryMissingVariableIsNamedAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("an enabled facade with nothing configured was accepted")
 	}
-	for _, want := range []string{"P_BASE_URL", "P_CERT", "P_KEY", "P_CA", "P_SECRET"} {
+	for _, want := range []string{"P_TARGET", "P_CERT", "P_KEY", "P_CA", "P_SECRET"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message does not name %s: %v", want, err)
+		}
+	}
+}
+
+// The retired HTTPS origin is refused by name, with the variable that
+// replaced it, whether the facade is on or off: an operator who set it meant
+// it, and reading it as nothing leaves them guessing why nothing answers.
+func TestTheRetiredBaseURLIsRefusedByName(t *testing.T) {
+	for _, enabled := range []string{"true", "false"} {
+		_, err := facade.ConfigFromEnv(names, env(map[string]string{"P_ENABLED": enabled, "P_BASE_URL": "https://provider:8080"}))
+		if err == nil || !strings.Contains(err.Error(), "P_BASE_URL") || !strings.Contains(err.Error(), "P_TARGET") {
+			t.Errorf("enabled=%s: %v", enabled, err)
 		}
 	}
 }
@@ -84,13 +97,13 @@ func TestValidProjectID(t *testing.T) {
 // authenticate, and that is invisible at runtime.
 func TestComposableRefusesAnIncompleteAuthConfig(t *testing.T) {
 	complete := apimw.AuthConfig{
-		PrincipalValidator:        stubPrincipal{},
-		ForwardedIdentityVerifier: stubForwarded{},
+		PrincipalValidator: stubPrincipal{},
+		FormSessions:       authtest.FormSessions{},
 	}
 	if !facade.Composable(complete, stubResolver{}) {
 		t.Fatal("a complete configuration was refused")
 	}
-	if facade.Composable(apimw.AuthConfig{ForwardedIdentityVerifier: stubForwarded{}}, stubResolver{}) {
+	if facade.Composable(apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, stubResolver{}) {
 		t.Error("a nil PrincipalValidator was accepted")
 	}
 	if facade.Composable(apimw.AuthConfig{PrincipalValidator: stubPrincipal{}}, stubResolver{}) {
@@ -114,10 +127,6 @@ type stubPrincipal struct{}
 func (stubPrincipal) ValidatePrincipal(_ context.Context, u auth.User) (auth.User, error) {
 	return u, nil
 }
-
-type stubForwarded struct{}
-
-func (stubForwarded) VerifyForwardedIdentityPeer(*http.Request) error { return nil }
 
 type stubResolver struct{}
 

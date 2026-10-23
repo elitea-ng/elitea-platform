@@ -16,10 +16,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const (
@@ -51,8 +51,8 @@ type Route struct {
 }
 
 func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (*Route, error) {
-	// No ForwardedIdentityVerifier requirement: only a token caller is ever
-	// served (see caller), and an OIDC-only deployment's group has none.
+	// No Form-plane requirement: only a token caller is ever served (see
+	// caller), and an OIDC-only deployment's group has no Form plane.
 	if useCase == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidRoute
 	}
@@ -101,6 +101,8 @@ type commitBody struct {
 		Content string `json:"content"`
 		IsError bool   `json:"is_error"`
 		Error   string `json:"error"`
+		// ModelName is the model the turn ran on (#1228).
+		ModelName string `json:"model_name"`
 	} `json:"assistant_message"`
 	ToolCalls     json.RawMessage            `json:"tool_calls"`
 	ThinkingSteps []json.RawMessage          `json:"thinking_steps"`
@@ -220,6 +222,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		AssistantMessage: body.AssistantMessage.Content,
 		AssistantIsError: body.AssistantMessage.IsError,
 		AssistantError:   body.AssistantMessage.Error,
+		ModelName:        body.AssistantMessage.ModelName,
 		ToolCalls:        body.ToolCalls, ThinkingSteps: body.ThinkingSteps,
 		HITLExchanges: body.HITLExchanges, Report: report, AuditRoute: CommitPath,
 	})

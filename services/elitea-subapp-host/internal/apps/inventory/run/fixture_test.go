@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // fixtureHarness is the shared harness driving the fixture table rather than
@@ -535,4 +535,27 @@ func contains(list []string, want string) bool {
 func toString(value any) string {
 	text, _ := value.(string)
 	return text
+}
+
+// A fixture host stores no graph, so deleting a toolkit's or a project's
+// graph removes nothing and is complete. It must ANSWER (not refuse as an
+// engine-less host would): elitea-main's project deprovisioning and toolkit
+// deletion reach the fixture host in the E2E stack, and a refusal there
+// leaves the project stuck in deprovisioning.
+func TestTheFixtureAnswersGraphDeletionsWithNothingRemoved(t *testing.T) {
+	runner := run.NewFixtureRunner(spi.Settings{}, 0)
+	toolkit, err := runner.DeleteToolkit(context.Background(), 7, 11)
+	if err != nil {
+		t.Fatalf("DeleteToolkit: %v", err)
+	}
+	if toolkit.Deleted || toolkit.Removed != (spi.GraphDeletion{}) {
+		t.Fatalf("DeleteToolkit = %+v, want nothing deleted", toolkit)
+	}
+	project, err := runner.DeleteProject(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if project.Incomplete || len(project.GraphToolkits) != 0 || len(project.BusyToolkits) != 0 || project.Graphs != (spi.GraphDeletion{}) {
+		t.Fatalf("DeleteProject = %+v, want a complete deletion of nothing", project)
+	}
 }

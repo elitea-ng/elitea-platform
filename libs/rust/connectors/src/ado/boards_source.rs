@@ -2118,7 +2118,7 @@ mod tests {
         let reason = |status| async move {
             let (batch, _) = pictured(TWICE_HTML, status).await;
             let batch = batch.expect("a counted skip");
-            assert!(batch.pictures.is_empty());
+            assert_eq!(batch.pictures, []);
             let json = String::from_utf8(
                 // The text stays as it was fetched.
                 batch.template.clone().into_bytes(),

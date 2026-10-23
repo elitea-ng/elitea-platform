@@ -44,8 +44,8 @@ import (
 	"strings"
 	"time"
 
-	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
+	subappv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -165,6 +165,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	}
 	conn, err := grpc.NewClient(cfg.Target,
 		grpc.WithTransportCredentials(creds),
+		mtlsclient.Balanced(),
 		// A response is counts and ids; nothing legitimate is larger.
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20)),
 	)

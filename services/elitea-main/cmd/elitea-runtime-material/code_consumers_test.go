@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 func codeMaterialDeployment(t *testing.T) deployment {
@@ -19,7 +19,6 @@ func codeMaterialDeployment(t *testing.T) deployment {
 	fixture.keys["agent-checkpoint-connection"] = []byte("postgres://fixture-only\n")
 	pod := newDeployment(t, fixture, secretVolumeMode)
 	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	pod.environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
 	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	pod.environment["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = "spiffe://elitea/supervisor/one"
 	pod.environment["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED"] = "true"

@@ -45,8 +45,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // The budgets, in characters. Total across the block, and per document.

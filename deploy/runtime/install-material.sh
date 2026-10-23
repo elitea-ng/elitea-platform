@@ -106,14 +106,36 @@ install_files "$WORKER" 10001:10001 0600 \
   worker-output-spool-key \
   agent-checkpoint-connection
 
-# ── platform-edge (traefik, root) ────────────────────────────────────────────
-# Only the edge certificate and its key. The edge terminates TLS for the
-# worker's platform_origin and has no part in the runtime's own trust decisions,
-# so it must not hold the runtime CA key, the signing key or any password.
-EDGE=/dst/edge
-mkdir -p "$EDGE"; chown 0:0 "$EDGE"; chmod 755 "$EDGE"
-install_files "$EDGE" 0:0 0644 platform-edge.crt
-install_files "$EDGE" 0:0 0600 platform-edge.key
+# ── the DeepWiki / Inventory engines (uid 10001) ─────────────────────────────
+# Their model calls go over elitea.llm.v1.ModelService on elitea-main's
+# platform listener (#1359 U2): they trust the runtime CA and present the
+# sub-application callback identity (DNS:elitea-subapp-callback). Only those
+# three files. A bind mount would hand the 0600 key to container uid 0 under
+# rootless podman, unreadable by the engines' uid. Installed only when the
+# compose file mounts the volume.
+SUBAPP=/dst/subapp
+if [ -d "$SUBAPP" ]; then
+  chown 10001:10001 "$SUBAPP"; chmod 700 "$SUBAPP"
+  install_files "$SUBAPP" 10001:10001 0644 runtime-ca.crt subapp-callback-client.crt
+  install_files "$SUBAPP" 10001:10001 0600 subapp-callback-client.key
+fi
+
+# ── the DeepWiki / Inventory HOSTS (distroless nonroot, uid 65532) ─────────
+# The same three files for the hosts' artifact calls over
+# elitea.runtime.v1.ArtifactObjectService on the platform listener (#1359 U5),
+# in a volume of their own: the engines' copy above is owned by 10001 with a
+# 0600 key, which uid 65532 cannot read. Installed only when the compose file
+# mounts the volume.
+SUBAPP_HOST=/dst/subapp-host
+if [ -d "$SUBAPP_HOST" ]; then
+  chown 65532:65532 "$SUBAPP_HOST"; chmod 700 "$SUBAPP_HOST"
+  install_files "$SUBAPP_HOST" 65532:65532 0644 runtime-ca.crt subapp-callback-client.crt
+  install_files "$SUBAPP_HOST" 65532:65532 0600 subapp-callback-client.key
+fi
+
+# There is no platform-edge volume any more (#1359): elitea-main serves the
+# worker's platform_origin itself, on its mTLS platform listener (:9446), with
+# the content listener's keypair above.
 
 if [ "$COMPILED_ENABLED" = true ]; then
   install_files "$MAIN" 65532:65532 0644 rust-compiled-profiles.json

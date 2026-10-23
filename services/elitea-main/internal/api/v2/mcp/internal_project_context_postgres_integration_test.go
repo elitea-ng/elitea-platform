@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	eliteacoreapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	eliteacoreapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 type projectContextResponse struct {

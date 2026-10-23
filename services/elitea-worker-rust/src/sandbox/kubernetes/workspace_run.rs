@@ -6,6 +6,7 @@
 //! a label).
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -14,6 +15,7 @@ use kube::Api;
 use kube::api::{AttachParams, DeleteParams, ListParams, PostParams};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
+use super::runtime_class::{self, RuntimeClassRefusal};
 use crate::sandbox::workspace_run::{
     ACTIVATION_BINDING, CONTAINER_NAME, EXPIRES_BINDING, KIND_LABEL, KIND_WORKSPACE_RUN,
     REQUEST_BINDING,
@@ -26,13 +28,45 @@ const API_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a new Pod may take to run (image pull included).
 const READY_TIMEOUT: Duration = Duration::from_mins(3);
 const MAX_STDERR_BYTES: usize = 8 * 1024;
+/// How long a verified `RuntimeClass` is trusted before it is read again. A
+/// `RuntimeClass`'s handler is immutable, but the object can be deleted and
+/// recreated with another one; a run never starts on a verdict older than
+/// this.
+const RUNTIME_CLASS_TTL: Duration = Duration::from_mins(1);
+/// How long a refusal is reused before the `RuntimeClass` is read again: long
+/// enough that a burst of runs against a broken class makes one API call, short
+/// enough that a fixed class is picked up within seconds.
+const REFUSAL_TTL: Duration = Duration::from_secs(5);
+
+/// One `RuntimeClass` verdict and when it was reached.
+struct Verdict {
+    at: tokio::time::Instant,
+    outcome: Result<(), RuntimeClassRefusal>,
+}
+
+impl Verdict {
+    fn fresh(&self) -> bool {
+        let ttl = if self.outcome.is_ok() {
+            RUNTIME_CLASS_TTL
+        } else {
+            REFUSAL_TTL
+        };
+        self.at.elapsed() < ttl
+    }
+}
 
 /// The Kubernetes backend of one workspace profile.
 pub struct KubernetesWorkspaceRuns {
+    client: kube::Client,
     pods: Api<Pod>,
     namespace: String,
     runtime_class: String,
     node_selector: BTreeMap<String, String>,
+    tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+    /// The current `RuntimeClass` check. Callers share one in-flight read
+    /// through the `OnceCell` (single-flight) and the std mutex is held only
+    /// to swap a stale cell, never across the API call.
+    verdict: std::sync::Mutex<Arc<tokio::sync::OnceCell<Verdict>>>,
 }
 
 impl KubernetesWorkspaceRuns {
@@ -44,10 +78,87 @@ impl KubernetesWorkspaceRuns {
         node_selector: BTreeMap<String, String>,
     ) -> Self {
         Self {
-            pods: Api::namespaced(client, &namespace),
+            pods: Api::namespaced(client.clone(), &namespace),
+            client,
             namespace,
             runtime_class,
             node_selector,
+            tolerations: Vec::new(),
+            verdict: std::sync::Mutex::new(Arc::new(tokio::sync::OnceCell::new())),
+        }
+    }
+
+    /// The sandbox nodes' taints every run Pod tolerates.
+    #[must_use]
+    pub fn with_tolerations(
+        mut self,
+        tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+    ) -> Self {
+        self.tolerations = tolerations;
+        self
+    }
+
+    /// The backend, its `RuntimeClass` checked once up front. A refusal is a
+    /// warning, not a startup failure: the supervisor (and every other
+    /// profile it serves) stays up, and each workspace run is refused,
+    /// fail-closed, until the check passes.
+    pub async fn connect(
+        client: kube::Client,
+        namespace: String,
+        runtime_class: String,
+        node_selector: BTreeMap<String, String>,
+    ) -> Self {
+        let backend = Self::new(client, namespace, runtime_class, node_selector);
+        if let Err(refusal) = backend.isolating().await {
+            tracing::warn!(
+                event = "workspace_run_runtime_class_unverified",
+                runtime_class = %backend.runtime_class,
+                error = %refusal,
+                "Starting without a verified workspace RuntimeClass; workspace runs are refused until it isolates"
+            );
+        }
+        backend
+    }
+
+    /// Verify the profile's `RuntimeClass`, from a verdict at most
+    /// [`RUNTIME_CLASS_TTL`] old (a success) or [`REFUSAL_TTL`] old (a
+    /// refusal), so a fixed `RuntimeClass` is picked up without a restart and
+    /// a broken one is never trusted. Concurrent callers share one read.
+    async fn isolating(&self) -> Result<(), RuntimeClassRefusal> {
+        let cell = {
+            let mut current = self.verdict.lock().unwrap_or_else(PoisonError::into_inner);
+            if current.get().is_some_and(|verdict| !verdict.fresh()) {
+                *current = Arc::new(tokio::sync::OnceCell::new());
+            }
+            Arc::clone(&current)
+        };
+        cell.get_or_init(|| self.verify()).await.outcome.clone()
+    }
+
+    async fn verify(&self) -> Verdict {
+        let outcome = match runtime_class::verify(self.client.clone(), &self.runtime_class).await {
+            Ok(handler) => {
+                tracing::info!(
+                    event = "workspace_run_runtime_class_verified",
+                    runtime_class = %self.runtime_class,
+                    handler = %handler,
+                    "The workspace RuntimeClass isolates"
+                );
+                Ok(())
+            }
+            Err(refusal) => {
+                tracing::error!(
+                    event = "workspace_run_runtime_class_refused",
+                    runtime_class = %self.runtime_class,
+                    error = %refusal,
+                    "Refusing workspace runs: the RuntimeClass does not isolate"
+                );
+                Err(refusal)
+            }
+        };
+        Verdict {
+            at: tokio::time::Instant::now(),
+            outcome,
         }
     }
 
@@ -57,12 +168,17 @@ impl KubernetesWorkspaceRuns {
     ///
     /// As `WorkspaceRunContainer::kubernetes_pod`.
     pub fn pod(&self, launch: &WorkspaceRunLaunch) -> Result<serde_json::Value, BackendError> {
-        render_pod(
+        let mut pod = render_pod(
             launch,
             &self.namespace,
             &self.runtime_class,
             &self.node_selector,
-        )
+        )?;
+        if !self.tolerations.is_empty() {
+            pod["spec"]["tolerations"] =
+                serde_json::to_value(&self.tolerations).map_err(|_| BackendError::Refused)?;
+        }
+        Ok(pod)
     }
 
     async fn running(&self, name: &str) -> Result<(), BackendError> {
@@ -139,6 +255,8 @@ fn binding_of(pod: &Pod) -> Option<RunBinding> {
 #[async_trait]
 impl WorkspaceRunBackend for KubernetesWorkspaceRuns {
     async fn start(&self, launch: &WorkspaceRunLaunch) -> Result<bool, BackendError> {
+        // Fail-closed, before any Pod exists: never a run on runc.
+        self.isolating().await.map_err(|_| BackendError::Refused)?;
         let pod: Pod =
             serde_json::from_value(self.pod(launch)?).map_err(|_| BackendError::Refused)?;
         let created =
@@ -293,11 +411,11 @@ impl WorkspaceRunBackend for KubernetesWorkspaceRuns {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::sandbox::workspace_run::WorkspaceRunContainer;
 
-    fn launch() -> WorkspaceRunLaunch {
+    pub(crate) fn launch() -> WorkspaceRunLaunch {
         WorkspaceRunLaunch {
             container: WorkspaceRunContainer {
                 name: "elitea-ws-0123456789abcdef01234567".into(),
@@ -316,6 +434,218 @@ mod tests {
                 expires_at: 1_700_000_720,
             },
         }
+    }
+
+    /// What the fake API server's `RuntimeClass` `gvisor` is: its handler,
+    /// or `None` for a 404.
+    pub(crate) type Class = Arc<std::sync::Mutex<Option<&'static str>>>;
+
+    /// A fake API server: the `RuntimeClass` `gvisor` with `handler`, and a
+    /// Pod that is Running as soon as it is created. Counts `RuntimeClass`
+    /// reads and Pod creations.
+    fn api(
+        handler: &'static str,
+    ) -> (
+        kube::Client,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        api_with(
+            Arc::new(std::sync::Mutex::new(Some(handler))),
+            Duration::ZERO,
+        )
+    }
+
+    /// [`api`] with a mutable `RuntimeClass` and a delay on each of its reads.
+    pub(crate) fn api_with(
+        class: Class,
+        delay: Duration,
+    ) -> (
+        kube::Client,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let reads = Arc::new(AtomicUsize::new(0));
+        let creates = Arc::new(AtomicUsize::new(0));
+        let (seen_reads, seen_creates) = (reads.clone(), creates.clone());
+        let client = kube::Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                let path = request.uri().path().to_owned();
+                let mut wait = Duration::ZERO;
+                let (status, body) = if path == "/apis/node.k8s.io/v1/runtimeclasses/gvisor" {
+                    seen_reads.fetch_add(1, Ordering::SeqCst);
+                    wait = delay;
+                    match *class.lock().unwrap() {
+                        Some(handler) => (
+                            200,
+                            serde_json::json!({"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass",
+                                "metadata":{"name":"gvisor"},"handler":handler}),
+                        ),
+                        None => (
+                            404,
+                            serde_json::json!({"apiVersion":"v1","kind":"Status","status":"Failure",
+                                "message":"runtimeclasses \"gvisor\" not found","reason":"NotFound","code":404}),
+                        ),
+                    }
+                } else {
+                    assert!(
+                        path.starts_with("/api/v1/namespaces/elitea-execution/pods"),
+                        "{path}"
+                    );
+                    if request.method() == http::Method::POST {
+                        seen_creates.fetch_add(1, Ordering::SeqCst);
+                    }
+                    (
+                        200,
+                        serde_json::json!({"apiVersion":"v1","kind":"Pod",
+                            "metadata":{"name":launch().container.name,"namespace":"elitea-execution"},
+                            "status":{"phase":"Running"}}),
+                    )
+                };
+                async move {
+                    if !wait.is_zero() {
+                        tokio::time::sleep(wait).await;
+                    }
+                    Ok::<_, std::convert::Infallible>(
+                        http::Response::builder()
+                            .status(status)
+                            .body(http_body_util::Full::new(bytes::Bytes::from(
+                                serde_json::to_vec(&body).unwrap(),
+                            )))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "elitea-execution",
+        );
+        (client, reads, creates)
+    }
+
+    fn backend(client: kube::Client) -> KubernetesWorkspaceRuns {
+        KubernetesWorkspaceRuns::new(
+            client,
+            "elitea-execution".into(),
+            "gvisor".into(),
+            BTreeMap::from([("elitea.ai/sandbox".to_owned(), "true".to_owned())]),
+        )
+    }
+
+    /// A `RuntimeClass` on runc (or crun) refuses before any Pod exists, at
+    /// startup and on every run; runsc starts the run, and the verdict is
+    /// cached, not read per run.
+    #[tokio::test]
+    async fn a_non_isolating_runtime_class_refuses_before_any_pod() {
+        use std::sync::atomic::Ordering;
+        for handler in ["runc", "crun"] {
+            let (client, _, creates) = api(handler);
+            let runs = backend(client.clone());
+            assert!(matches!(
+                runs.isolating().await,
+                Err(RuntimeClassRefusal::NotIsolating { .. })
+            ));
+            assert!(matches!(
+                runs.start(&launch()).await,
+                Err(BackendError::Refused)
+            ));
+            assert!(matches!(
+                backend(client).start(&launch()).await,
+                Err(BackendError::Refused)
+            ));
+            assert_eq!(creates.load(Ordering::SeqCst), 0, "{handler}");
+        }
+        let (client, reads, creates) = api("runsc");
+        let runs = backend(client);
+        assert!(runs.start(&launch()).await.expect("starts"));
+        assert!(runs.start(&launch()).await.expect("starts"));
+        assert_eq!(creates.load(Ordering::SeqCst), 2);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    /// Concurrent runs share one `RuntimeClass` read: the check is
+    /// single-flight, and no caller waits behind a lock held across the API
+    /// call. A refusal is shared the same way.
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_callers_make_one_runtime_class_read() {
+        use std::sync::atomic::Ordering;
+        for handler in [Some("runsc"), None] {
+            let (client, reads, _) = api_with(
+                Arc::new(std::sync::Mutex::new(handler)),
+                Duration::from_secs(2),
+            );
+            let runs = Arc::new(backend(client));
+            let mut callers = tokio::task::JoinSet::new();
+            for _ in 0..16 {
+                let runs = Arc::clone(&runs);
+                callers.spawn(async move { runs.isolating().await });
+            }
+            let started = tokio::time::Instant::now();
+            while let Some(outcome) = callers.join_next().await {
+                assert_eq!(outcome.expect("joined").is_ok(), handler.is_some());
+            }
+            assert_eq!(reads.load(Ordering::SeqCst), 1, "{handler:?}");
+            // One 2 s read, not sixteen in a row.
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+    }
+
+    /// A refusal is reused for [`REFUSAL_TTL`], then read again, so a
+    /// `RuntimeClass` created after the supervisor started is picked up
+    /// without a restart.
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_is_cached_briefly_then_rechecked() {
+        use std::sync::atomic::Ordering;
+        let class: Class = Arc::new(std::sync::Mutex::new(None));
+        let (client, reads, creates) = api_with(class.clone(), Duration::ZERO);
+        let runs = KubernetesWorkspaceRuns::connect(
+            client,
+            "elitea-execution".into(),
+            "gvisor".into(),
+            BTreeMap::from([("a".to_owned(), "b".to_owned())]),
+        )
+        .await;
+        assert!(matches!(
+            runs.isolating().await,
+            Err(RuntimeClassRefusal::Missing(_))
+        ));
+        assert!(matches!(
+            runs.start(&launch()).await,
+            Err(BackendError::Refused)
+        ));
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "the refusal is reused");
+        *class.lock().unwrap() = Some("runsc");
+        tokio::time::advance(REFUSAL_TTL + Duration::from_millis(1)).await;
+        assert!(runs.start(&launch()).await.expect("starts"));
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert_eq!(creates.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_pod_tolerates_the_sandbox_taint() {
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::convert::Infallible>(http::Response::new(http_body_util::Full::new(
+                    bytes::Bytes::new(),
+                )))
+            }),
+            "elitea-execution",
+        );
+        let toleration: k8s_openapi::api::core::v1::Toleration = serde_json::from_value(
+            serde_json::json!({"key":"elitea.ai/sandbox","operator":"Equal","value":"true","effect":"NoSchedule"}),
+        )
+        .expect("toleration");
+        let pod = backend(client.clone())
+            .with_tolerations(vec![toleration])
+            .pod(&launch())
+            .expect("pod");
+        assert_eq!(pod["spec"]["tolerations"][0]["key"], "elitea.ai/sandbox");
+        assert_eq!(pod["spec"]["tolerations"][0]["effect"], "NoSchedule");
+        assert_eq!(pod["spec"]["runtimeClassName"], "gvisor");
+        assert!(
+            backend(client).pod(&launch()).expect("pod")["spec"]
+                .get("tolerations")
+                .is_none()
+        );
     }
 
     /// Item 5 on Kubernetes: the declared workspace is the `emptyDir`

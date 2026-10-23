@@ -32,10 +32,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/azure"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/gcs"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/s3"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/azure"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/gcs"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/s3"
 )
 
 // conformanceBucket is the single physical bucket/container every backend's

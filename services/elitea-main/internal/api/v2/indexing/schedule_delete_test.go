@@ -8,10 +8,11 @@ import (
 	"reflect"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentScheduleDeleterStub struct {
@@ -148,11 +149,7 @@ func newCurrentScheduleDeleteRoute(
 			) (auth.User, error) {
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(
-				*http.Request,
-			) error {
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -164,8 +161,7 @@ func newCurrentScheduleDeleteRoute(
 
 func currentScheduleDeleteRequest(path string) *http.Request {
 	request := httptest.NewRequest(http.MethodDelete, path, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

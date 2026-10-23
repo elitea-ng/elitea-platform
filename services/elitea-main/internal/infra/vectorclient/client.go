@@ -65,11 +65,11 @@ import (
 	"strings"
 	"time"
 
-	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	vectorv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mtlsclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -184,6 +184,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	}
 	conn, err := grpc.NewClient(cfg.Target,
 		grpc.WithTransportCredentials(creds),
+		mtlsclient.Balanced(),
 		// A response is a collection count; nothing legitimate is larger. The
 		// calls FAIL FAST: a call made while the connection is down (the
 		// route's best-effort attempt, a sweep during an outage) returns

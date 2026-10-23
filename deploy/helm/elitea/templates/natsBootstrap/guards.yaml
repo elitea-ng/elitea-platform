@@ -1,0 +1,42 @@
+{{- if .Values.natsBootstrap.enabled }}
+{{- /*
+Render-time refusals (#1076). The NATS server requires a client certificate
+mapped to a user, so a plaintext or credential-bearing URL here is not a
+weaker posture — it is a Job that fails on every sync with a TLS or
+authorization error.
+*/ -}}
+{{- $b := .Values.natsBootstrap -}}
+{{- /* A plaintext client posture is refused (or acknowledged) by
+       templates/natsClient.yaml and templates/nats/guards.yaml, which name the
+       client settings; this file speaks only once that posture is settled. */ -}}
+{{- if or .Values.natsClient.tls.enabled (and .Values.natsClient.tls.allowPlaintext (not .Values.nats.enabled)) -}}
+{{- if not .Values.natsClient.tls.enabled -}}
+{{- fail "natsBootstrap.enabled is true and NATS is plaintext (natsClient.tls.allowPlaintext). The bootstrap connects to each account as that account's certificate identity and has no plaintext mode in a cluster; set natsBootstrap.enabled=false and create the JetStream assets yourself (deploy/helm/elitea/files/nats-bootstrap.sh is the reference)." -}}
+{{- end -}}
+{{- $url := include "nats-bootstrap.natsUrl" . | toString -}}
+{{- if not $url -}}
+{{- fail "natsBootstrap.enabled is true and no NATS is named: set natsBootstrap.natsUrl, or natsClient.service (nats.enabled names the bundled elitea-nats)." -}}
+{{- end -}}
+{{- range $one := splitList "," $url -}}
+{{- $one = trim $one -}}
+{{- if not (hasPrefix "tls://" $one) -}}
+{{- fail (printf "natsBootstrap.natsUrl %q is not tls://. The NATS server requires TLS with a client certificate; the bootstrap Job presents one client certificate per account." $one) -}}
+{{- end -}}
+{{- if contains "@" $one -}}
+{{- fail "natsBootstrap.natsUrl carries user information. The client certificate is the identity, and a credential in a value is rendered into the Job spec." -}}
+{{- end -}}
+{{- end -}}
+{{- if ne ($b.accounts | default list | join ",") "main,gateway,runtime,worker" -}}
+{{- fail (printf "natsBootstrap.accounts is [%s], and must be [main, gateway, runtime, worker]. The NATS server has one account per plane and each plane's assets are created by that account's own bootstrap identity (#1076); an account left out is an account whose streams nobody creates." ($b.accounts | default list | join ", ")) -}}
+{{- end -}}
+{{- if and $b.tls.certificate.create (gt (int ($b.connectWait | default 0)) (sub (int $b.activeDeadlineSeconds) 60)) -}}
+{{- fail (printf "natsBootstrap.connectWait (%vs) leaves the Job under a minute of its %vs activeDeadlineSeconds to reconcile the assets." $b.connectWait $b.activeDeadlineSeconds) -}}
+{{- end -}}
+{{- if and (not $b.tls.certificate.create) (ne (len ($b.tls.secretNames | default dict)) 4) -}}
+{{- fail "natsBootstrap.tls.certificate.create is false, so natsBootstrap.tls.secretNames must name an existing certificate Secret for each of main, gateway, runtime and worker." -}}
+{{- end -}}
+{{- if and .Values.nats.enabled (ne (int $b.replicas) (int (dig "config" "cluster" "replicas" 1 .Values.nats))) (dig "config" "cluster" "enabled" false .Values.nats) -}}
+{{- fail (printf "natsBootstrap.replicas is %v and the bundled NATS cluster runs %v nodes. Create the assets at the cluster's replica count, or they have no quorum (values-nats-ha.yaml sets both)." $b.replicas (dig "config" "cluster" "replicas" 1 .Values.nats)) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

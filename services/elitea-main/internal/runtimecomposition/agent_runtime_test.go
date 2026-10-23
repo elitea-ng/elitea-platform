@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 type currentAgentToolkitSettingsResolverStub struct {
@@ -248,12 +248,11 @@ func TestCurrentAgentPrebuiltMCPMaterializesDeclaredProjectParameters(t *testing
 func TestCurrentAgentPrebuiltMCPInjectsActorPATOnlyIntoTrustedInternalOrigin(t *testing.T) {
 	entry := enabledPrebuiltMCPEntry()
 	entry.Key = "elitea_applications"
-	entry.ServerURL = "https://main.example.test/app/{project_id}/mcp/elitea_core/applications"
+	entry.ServerURL = InternalToolOrigin + "/app/{project_id}/mcp/elitea_core/applications"
 	entry.Headers = map[string]string{"Authorization": "Bearer {personal_token}"}
 	issuer := &currentActorTokenIssuerStub{token: "ephemeral-actor-token"}
 	resolver, err := newCurrentAgentRuntimePrebuiltMCP(
 		&currentPrebuiltMCPStoreStub{entry: entry},
-		"https://main.example.test",
 		issuer,
 	)
 	if err != nil {
@@ -266,7 +265,7 @@ func TestCurrentAgentPrebuiltMCPInjectsActorPATOnlyIntoTrustedInternalOrigin(t *
 	if err != nil || !found {
 		t.Fatalf("found=%v error=%v", found, err)
 	}
-	if resolved["url"] != "https://main.example.test/app/7/mcp/elitea_core/applications" {
+	if resolved["url"] != InternalToolOrigin+"/app/7/mcp/elitea_core/applications" {
 		t.Fatalf("resolved=%#v", resolved)
 	}
 	headers := resolved["headers"].(map[string]any)
@@ -285,7 +284,6 @@ func TestCurrentAgentPrebuiltMCPNeverSendsActorPATToAnotherOrigin(t *testing.T) 
 	issuer := &currentActorTokenIssuerStub{token: "must-not-leave"}
 	resolver, err := newCurrentAgentRuntimePrebuiltMCP(
 		&currentPrebuiltMCPStoreStub{entry: entry},
-		"https://main.example.test",
 		issuer,
 	)
 	if err != nil {

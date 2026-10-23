@@ -1,6 +1,6 @@
 {
   "provenance": {
-    "source": "centry/pylon_main/plugins/elitea_core/rpc/index_scheduling.py and utils/cron_utils.py",
+    "source": "centry/legacy_main/plugins/elitea_core/rpc/index_scheduling.py and utils/cron_utils.py",
     "contract": "enabled and croniter(cron, last_run, ret_type=datetime).get_next() <= now in schedule timezone",
     "observed_croniter_version": "1.4.1"
   },

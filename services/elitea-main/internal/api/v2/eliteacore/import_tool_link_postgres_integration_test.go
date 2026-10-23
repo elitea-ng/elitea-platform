@@ -22,7 +22,7 @@ package eliteacore_test
 //
 // That adjustment is not convenience. The bootstrap table declares
 // `owner_id INTEGER NOT NULL` (internal/infra/db/migrations/001_initial.sql:434-447)
-// and the DEPLOYED pylon table has no `owner_id` column at all — see
+// and the DEPLOYED legacy table has no `owner_id` column at all — see
 // internal/db/schema/toolkit_baseline.sql:8-20, the sqlc projection of the shape
 // production runs. The import path's own toolkit INSERT
 // (handler.go, phase 2) names neither `owner_id` nor a value for it, so on a
@@ -43,7 +43,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,11 +51,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -649,7 +649,7 @@ WHERE attrelid = 'p_1.entity_tool_mapping'::regclass AND attname = $1 AND NOT at
 
 // relaxImportLinkToolkitOwner brings the corpus-built toolkit table to the
 // deployed shape in the one respect that blocks this path. See the file header:
-// the bootstrap declares `owner_id INTEGER NOT NULL`, the deployed pylon table
+// the bootstrap declares `owner_id INTEGER NOT NULL`, the deployed legacy table
 // has no such column, and the import's toolkit INSERT names no value for it. It
 // is written to tolerate a future migration that removes the divergence, so that
 // the repair of that separate defect does not fail these tests.

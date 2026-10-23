@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"math"
 
-	executionsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

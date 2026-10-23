@@ -477,6 +477,9 @@ async fn serve_engine() -> ExitCode {
     let Some(settings) = settings() else {
         return ExitCode::FAILURE;
     };
+    let Some(drain_timeout) = drain_timeout() else {
+        return ExitCode::FAILURE;
+    };
     let runner = match build_runner(&settings) {
         Ok(runner) => runner,
         Err(error) => {
@@ -496,11 +499,34 @@ async fn serve_engine() -> ExitCode {
         }
     };
     tracing::info!(socket = %settings.engine_socket.display(), runner = runner.name(), "engine sidecar listening");
-    match server::serve(listener, runner, shutdown_signal()).await {
+    let options = server::ServeOptions {
+        drain_timeout,
+        ..server::ServeOptions::default()
+    };
+    match server::serve_with_options(listener, runner, options, shutdown_signal()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "engine sidecar stopped");
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// How long the sidecar continues to serve after SIGTERM while an invocation
+/// runs: the host's own `ELITEA_DEEPWIKI_DRAIN_TIMEOUT_SECONDS`, which the
+/// chart gives to both containers, so that the engine does not stop while
+/// the host drains. `None` (logged) for a value that is not valid.
+fn drain_timeout() -> Option<Duration> {
+    let name = format!(
+        "{}DRAIN_TIMEOUT_SECONDS",
+        elitea_deepwiki_engine::config::ENV_PREFIX
+    );
+    let value = std::env::var(&name).ok();
+    match server::parse_drain_timeout(value.as_deref()) {
+        Ok(timeout) => Some(timeout),
+        Err(error) => {
+            tracing::error!(%error, "{name} is not valid");
+            None
         }
     }
 }

@@ -295,7 +295,7 @@ impl AuthorizedModelCheckpoint {
 /// Failed or uncertain authorization cannot be retried through this value.
 #[allow(dead_code)]
 pub(crate) struct ModelCheckpointAuthorizationFailure {
-    claim: InspectedModelCheckpointClaim,
+    claim: Box<InspectedModelCheckpointClaim>,
     error: super::AgentControlError,
 }
 
@@ -321,7 +321,7 @@ impl InspectedModelCheckpointClaim {
             self.claim.identity.generation,
         ) {
             return Err(ModelCheckpointAuthorizationFailure {
-                claim: self,
+                claim: Box::new(self),
                 error: ControlSemanticError::AuthorizationFailed(
                     "the checkpoint belongs to another execution",
                 )
@@ -345,7 +345,7 @@ impl InspectedModelCheckpointClaim {
             Ok(response) => response,
             Err(error) => {
                 return Err(ModelCheckpointAuthorizationFailure {
-                    claim: self,
+                    claim: Box::new(self),
                     error: error.into(),
                 });
             }
@@ -374,7 +374,7 @@ impl InspectedModelCheckpointClaim {
                     ),
                 };
                 Err(ModelCheckpointAuthorizationFailure {
-                    claim: self,
+                    claim: Box::new(self),
                     error: error.into(),
                 })
             }
@@ -668,7 +668,9 @@ mod tests {
             .find(|(key, _)| *key == name)
             .expect("fixture");
         hex.as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 u8::from_str_radix(std::str::from_utf8(pair).expect("hex"), 16).expect("byte")
             })

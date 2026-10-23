@@ -21,6 +21,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
 // ErrConfig is the class of every settings refusal.
@@ -42,38 +44,75 @@ type Settings struct {
 	MaxParallelWorkers         int
 	Namespace                  string
 	InvocationRetentionSeconds int
+	// DrainTimeoutSeconds is how long a terminating replica lets its
+	// in-flight invocations finish before it cancels them
+	// (<PREFIX>DRAIN_TIMEOUT_SECONDS, default 30; 0 cancels at once). An
+	// invocation runs on the replica that accepted it, so a scale-in that
+	// cancels at once ends work nobody else will finish. The pod's
+	// terminationGracePeriodSeconds must cover it plus the gRPC stop (10 s).
+	DrainTimeoutSeconds int
 
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
+	// ArtifactServiceURL is where the CALLBACK hop goes: elitea-main's
+	// platform gRPC listener serving elitea.runtime.v1.ArtifactObjectService
+	// (<PREFIX>ARTIFACT_SERVICE_URL, e.g. https://elitea-main:9446; #1359
+	// U5). Empty stores nothing: an invocation that carries a transport then
+	// fails its uploads with a refusal naming the variable.
+	ArtifactServiceURL string
 	// CallbackCAFile is the bundle trusted on the CALLBACK hop — the
-	// artifact uploads to `llm_settings.api_base` — when that hop is TLS
-	// through platform-edge (ADR-0027), whose certificate the runtime CA
-	// signs. It is separate from TLSCAFile, which is the client CA of this
-	// process's own mTLS listener. Empty keeps the old behaviour: the
-	// callback trusts TLSCAFile (see CallbackCA).
+	// artifact calls to elitea-main's platform listener (#1359), whose
+	// certificate the runtime CA signs. It is separate from TLSCAFile, which
+	// is the client CA of this process's own mTLS listener. Empty keeps the
+	// old behaviour: the callback trusts TLSCAFile (see CallbackCA).
 	CallbackCAFile string
-	IdentitySecret string
+	// CallbackCertFile and CallbackKeyFile are the client certificate the
+	// callback hop presents (<PREFIX>CALLBACK_CERT_FILE / _KEY_FILE). The
+	// hop's TLS origin is elitea-main's platform listener (#1359), which
+	// requires a client certificate the runtime CA signed. Both or neither.
+	CallbackCertFile string
+	CallbackKeyFile  string
+	IdentitySecret   string
 	// PlatformClients are the certificate identities (common name or DNS
-	// SAN) allowed to call the platform gRPC service (platform.go), from
-	// <PREFIX>PLATFORM_CLIENTS. Empty keeps the service off: no listener is
-	// opened for it.
+	// SAN) allowed to call the host's gRPC listener — the provider service
+	// and the platform operations — from <PREFIX>PLATFORM_CLIENTS. The host
+	// refuses to start without one: a listener that admits nobody serves
+	// nothing, and one that admits anyone the CA signed is not authorised.
 	PlatformClients []string
-	// PlatformGRPCAddr is where the platform gRPC service listens
-	// (<PREFIX>PLATFORM_GRPC_ADDR). It is a listener of its own, separate
-	// from ListenAddr, behind the same TLS configuration. Empty means the
-	// default (DefaultPlatformGRPCAddr) when PlatformClients is set.
+	// PlatformGRPCAddr is where the host's one listener (gRPC over mutual
+	// TLS) listens (<PREFIX>PLATFORM_GRPC_ADDR); empty is
+	// DefaultPlatformGRPCAddr. Since #1359 it is the only listener: the
+	// SPI's HTTP listener (<PREFIX>LISTEN_ADDR) is gone.
 	PlatformGRPCAddr string
-	GitAllowlist     string
-	ListenAddr       string
+	// AdminAddr is where the admin port (AdminHandler: /healthz, /readyz)
+	// listens (<PREFIX>ADMIN_ADDR); empty is DefaultAdminAddr. Plain HTTP,
+	// for the kubelet and the container probe only.
+	AdminAddr    string
+	GitAllowlist string
+	// NATSURL is the NATS server the host fans cancels out over
+	// (<PREFIX>NATS_URL, cancelbus.go); its TLS material is
+	// <PREFIX>NATS_TLS_{CA,CERT,KEY}_FILE (libs/go/natsconn). Empty keeps
+	// cancels local to the replica they land on, which is right for one
+	// replica and wrong for more.
+	NATSURL string
 	// DatabaseURL selects the durable invocation store (ADR-0023 H2b); empty
 	// keeps invocations in memory, and /health says so.
 	DatabaseURL string
+	// DatabaseMaxConns sizes the store's pool (<PREFIX>DATABASE_MAX_CONNS,
+	// 1..64). Zero keeps the pgx default, max(4, numCPU), which depends on
+	// the node. The owner claim holds one more connection outside the pool,
+	// so one replica uses DatabaseMaxConns + 1.
+	DatabaseMaxConns int
 	// EngineSocket is the Unix socket a sidecar engine listens on, for an
 	// application whose runner reaches its engine out of process (ADR-0023
 	// H2). Empty when the application has no such engine.
 	EngineSocket string
 }
+
+// DefaultDrainTimeoutSeconds is <PREFIX>DRAIN_TIMEOUT_SECONDS when unset:
+// with the 10 s gRPC stop it fits the chart's 60 s grace period.
+const DefaultDrainTimeoutSeconds = 30
 
 // legacyAliases are the pre-prefix names the Python shell also read.
 var legacyAliases = map[string]string{
@@ -142,14 +181,29 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		TLSCertFile:        raw("TLS_CERTFILE", ""),
 		TLSKeyFile:         raw("TLS_KEYFILE", ""),
 		TLSCAFile:          raw("TLS_CA_FILE", ""),
+		ArtifactServiceURL: raw("ARTIFACT_SERVICE_URL", ""),
 		CallbackCAFile:     raw("CALLBACK_CA_FILE", ""),
+		CallbackCertFile:   raw("CALLBACK_CERT_FILE", ""),
+		CallbackKeyFile:    raw("CALLBACK_KEY_FILE", ""),
 		IdentitySecret:     raw("IDENTITY_SECRET", ""),
 		PlatformClients:    PlatformClients(raw("PLATFORM_CLIENTS", "")),
 		PlatformGRPCAddr:   raw("PLATFORM_GRPC_ADDR", ""),
+		AdminAddr:          strings.TrimSpace(raw("ADMIN_ADDR", "")),
 		GitAllowlist:       raw("GIT_ALLOWLIST", ""),
-		ListenAddr:         raw("LISTEN_ADDR", ":8080"),
+		NATSURL:            strings.TrimSpace(raw("NATS_URL", "")),
 		EngineSocket:       raw("ENGINE_SOCKET", ""),
 		DatabaseURL:        raw("DATABASE_URL", ""),
+	}
+	if _, set := lookup(prefix + "LISTEN_ADDR"); set {
+		// A setting silently ignored is worse than a refusal: an operator
+		// who set it expects a listener there.
+		return Settings{}, fmt.Errorf("%w: %sLISTEN_ADDR is retired (#1359): the host serves gRPC only, on %sPLATFORM_GRPC_ADDR (default %s); unset it", ErrConfig, prefix, prefix, DefaultPlatformGRPCAddr)
+	}
+	if s.PlatformGRPCAddr == "" {
+		s.PlatformGRPCAddr = DefaultPlatformGRPCAddr
+	}
+	if s.AdminAddr == "" {
+		s.AdminAddr = DefaultAdminAddr
 	}
 	var err error
 	if s.JobsEnabled, err = boolean("SLOTS_MODE", false); err != nil {
@@ -164,8 +218,20 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	if s.InvocationRetentionSeconds, err = integer("INVOCATION_RETENTION_SECONDS", 3600, 1); err != nil {
 		return Settings{}, err
 	}
+	if s.DrainTimeoutSeconds, err = integer("DRAIN_TIMEOUT_SECONDS", DefaultDrainTimeoutSeconds, 0); err != nil {
+		return Settings{}, err
+	}
+	if s.DatabaseMaxConns, err = integer("DATABASE_MAX_CONNS", 0, 1); err != nil {
+		return Settings{}, err
+	}
+	if s.DatabaseMaxConns > maxDatabaseConns {
+		return Settings{}, fmt.Errorf("%w: %sDATABASE_MAX_CONNS must be <= %d, got %d", ErrConfig, prefix, maxDatabaseConns, s.DatabaseMaxConns)
+	}
 	if (s.TLSCertFile == "") != (s.TLSKeyFile == "") {
 		return Settings{}, fmt.Errorf("%w: %sTLS_CERTFILE and %sTLS_KEYFILE must be set together", ErrConfig, prefix, prefix)
+	}
+	if (s.CallbackCertFile == "") != (s.CallbackKeyFile == "") {
+		return Settings{}, fmt.Errorf("%w: %sCALLBACK_CERT_FILE and %sCALLBACK_KEY_FILE must be set together", ErrConfig, prefix, prefix)
 	}
 	if s.TLSCAFile != "" && s.TLSCertFile == "" {
 		return Settings{}, fmt.Errorf("%w: %sTLS_CA_FILE needs a server certificate to require client ones", ErrConfig, prefix)
@@ -173,16 +239,13 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	return s, nil
 }
 
-// TerminatesMTLS reports whether this process is the mutual-TLS terminus: a
-// server certificate and a client CA, which is the condition under which the
-// listener requires and verifies a client certificate at the handshake.
+// TerminatesMTLS reports whether this process can be the mutual-TLS
+// terminus its listener must be: a server certificate and a client CA, the
+// condition under which the listener requires and verifies a client
+// certificate at the handshake. The host refuses to start otherwise.
 func (s Settings) TerminatesMTLS() bool {
 	return s.TLSCertFile != "" && s.TLSKeyFile != "" && s.TLSCAFile != ""
 }
-
-// MTLSRequired reports whether the SPI routes refuse a hop that is not
-// mutually authenticated — on whenever a client CA is configured.
-func (s Settings) MTLSRequired() bool { return s.TLSCAFile != "" }
 
 // CallbackCA is the bundle the callback hop trusts: CALLBACK_CA_FILE when
 // set, else TLS_CA_FILE, which is what the hop trusted before the two were
@@ -192,4 +255,13 @@ func (s Settings) CallbackCA() string {
 		return s.CallbackCAFile
 	}
 	return s.TLSCAFile
+}
+
+// Callback is the callback hop: the artifact service's address, CallbackCA,
+// and the client certificate it presents to the platform listener.
+func (s Settings) Callback() artifacts.Callback {
+	return artifacts.Callback{
+		Target: s.ArtifactServiceURL, TargetEnv: s.Prefix + "ARTIFACT_SERVICE_URL",
+		CAFile: s.CallbackCA(), CertFile: s.CallbackCertFile, KeyFile: s.CallbackKeyFile,
+	}
 }

@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 // The `admin/system_info` surface (#219), asserted on the ROUTER.
@@ -92,10 +92,11 @@ func TestSystemInfoReportsNoFabricatedPluginsOverTheRouter(t *testing.T) {
 }
 
 // TestSystemInfoAdministrationModeKeepsItsGate — `/system_info/{mode}` declares
-// `["runtime.plugins"]` in pylon and the router gates it on that permission.
-// Answering 501 from the handler must not become a reason to drop the gate: the
-// refusal is a statement about this platform's architecture, and an unprivileged
-// caller has no business learning it from an administration-mode route.
+// `["runtime.plugins"]` in the legacy runtime and the router gates it on that
+// permission. Answering 501 from the handler must not become a reason to drop
+// the gate: the refusal is a statement about this platform's architecture, and
+// an unprivileged caller has no business learning it from an
+// administration-mode route.
 func TestSystemInfoAdministrationModeKeepsItsGate(t *testing.T) {
 	status := serveStatus(t, newSystemInfoTestRouter(t), http.MethodGet, "/api/v2/admin/system_info/administration")
 

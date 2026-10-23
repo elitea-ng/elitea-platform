@@ -1,14 +1,14 @@
 /**
- * The thread's right-hand panel (toggle ⌘⌥\, resizable): what the thread's
- * turns changed, newest first — diff, Reveal in Finder / Open, and for a
- * turn the host still keeps per-file revert and undo — and the
- * approvals of this thread (the one being asked is a modal dialog; the panel
- * shows the queue behind it and what was decided).
+ * The thread's tabs in the frame's inspector (toggle ⌘⌥\): Changes — what
+ * the thread's turns changed, newest first: diff, Reveal in Finder / Open,
+ * and for a turn the host still keeps per-file revert and undo; Approvals —
+ * the approvals of this thread (the one being asked is a modal dialog; the
+ * tab shows the queue behind it and what was decided); Plan — the agent's
+ * checklist (offered once it keeps one, or in plan mode); Index — the folder's
+ * local code index.
  */
-import { useState } from 'react';
-import type { KeyboardEvent, PointerEvent } from 'react';
+import { Suspense, useState } from 'react';
 
-import CloseIcon from '@mui/icons-material/Close';
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import LaunchOutlinedIcon from '@mui/icons-material/LaunchOutlined';
 import Box from '@mui/material/Box';
@@ -17,11 +17,14 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { ChangedFilesCard } from '@/features/workspace';
+import { ChangedFilesCard, plan } from '@/features/workspace';
 import type { AppIpc } from '@/shared/desktop/appEvents';
+import { InspectorTab } from '@/shared/desktop/inspectorSlot';
+import type { PlanView } from '@/shared/desktop/planIpc';
 import type { ApprovalDecision, ApprovalRequestPayload, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { CHANGES_WIDTH, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
+import { IndexPanelHost } from '@/features/workspace-index';
+import { copyText, useContextMenu } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
 
@@ -29,6 +32,10 @@ export interface SessionPanelProps {
   ipc: WorkspaceIpc;
   appIpc: AppIpc | undefined;
   workspaceId: string;
+  /** What the tabs show (the thread's title, or the folder's name): a tab's own window is named after it. */
+  subject: string;
+  /** The host has a local index to show in the Index tab. */
+  hasIndex: boolean;
   /** Every turn of the thread that changed files, newest first. */
   changeSets: readonly ChangeSet[];
   /** The turn `/undo` asks to undo (the last one, when it changed files). */
@@ -36,6 +43,10 @@ export interface SessionPanelProps {
   undoRequest: number;
   waiting: readonly ApprovalRequestPayload[];
   decided: readonly DecidedApproval[];
+  /** The agent's checklist (the Plan tab); `null` when it keeps none. */
+  plan: PlanView | null;
+  /** The thread is in plan mode: the Plan tab is offered even before a plan exists. */
+  planMode: boolean;
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
@@ -46,51 +57,17 @@ function decisionLabel(decision: ApprovalDecision): string {
       return t('workspace.panel.allowedAlways', 'Always allowed');
     case 'deny':
       return t('workspace.panel.denied', 'Denied');
+    case 'deny_with_feedback':
+      return t('workspace.panel.deniedWithFeedback', 'Denied, with a reason');
+    case 'accept':
+      return t('workspace.panel.accepted', 'Accepted');
+    case 'decline':
+      return t('workspace.panel.declined', 'Declined');
+    case 'continue':
+      return t('workspace.panel.continued', 'Continued');
+    case 'cancel':
+      return t('workspace.panel.cancelled', 'Cancelled');
   }
-}
-
-function ResizeHandle(): React.JSX.Element {
-  const width = useDesktopLayout((state) => state.changesWidth);
-  const setWidth = useDesktopLayout((state) => state.setChangesWidth);
-  const [drag, setDrag] = useState<{ x: number; width: number } | null>(null);
-  const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({ x: event.clientX, width });
-  };
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
-    // The panel is on the right: dragging left widens it.
-    if (drag !== null) setWidth(drag.width + (drag.x - event.clientX));
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'ArrowLeft') setWidth(width + 16);
-    else if (event.key === 'ArrowRight') setWidth(width - 16);
-  };
-  return (
-    <Box
-      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a focusable, draggable splitter (WAI-ARIA window splitter); an <hr> takes neither
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t('workspace.panel.resize', 'Resize changes panel')}
-      aria-valuemin={CHANGES_WIDTH.min}
-      aria-valuemax={CHANGES_WIDTH.max}
-      aria-valuenow={width}
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => setDrag(null)}
-      onKeyDown={onKeyDown}
-      sx={(theme: Theme) => ({
-        width: '0.3125rem',
-        marginRight: '-0.1875rem',
-        flexShrink: 0,
-        cursor: 'col-resize',
-        position: 'relative',
-        zIndex: 1,
-        borderLeft: `1px solid ${theme.vars.palette.divider}`,
-        '&:hover, &:focus-visible': { borderLeftColor: theme.vars.palette.primary.main, outline: 'none' },
-      })}
-    />
-  );
 }
 
 function SectionTitle({ children }: { children: string }): React.JSX.Element {
@@ -143,89 +120,120 @@ function TurnLabel({ text }: { text: string }): React.JSX.Element {
   );
 }
 
-export function SessionPanel({ ipc, appIpc, workspaceId, changeSets, undoTurnId, undoRequest, waiting, decided }: SessionPanelProps): React.JSX.Element {
-  const width = useDesktopLayout((state) => state.changesWidth);
+function ChangesPane({ ipc, appIpc, workspaceId, changeSets, undoTurnId, undoRequest }: Pick<SessionPanelProps, 'ipc' | 'appIpc' | 'workspaceId' | 'changeSets' | 'undoTurnId' | 'undoRequest'>): React.JSX.Element {
+  const showMenu = useContextMenu();
+  const fileMenu = (file: { path: string }, event: React.MouseEvent): void =>
+    showMenu(event, [
+      { id: 'reveal', label: t('workspace.panel.reveal', 'Reveal in Finder'), enabled: appIpc !== undefined, run: () => void appIpc?.revealPath(workspaceId, file.path).catch(() => undefined) },
+      { id: 'open', label: t('workspace.panel.open', 'Open'), enabled: appIpc !== undefined, run: () => void appIpc?.openPath(workspaceId, file.path).catch(() => undefined) },
+      { separator: true },
+      { id: 'copy', label: t('workspace.path.copy', 'Copy Path'), run: () => copyText(file.path) },
+    ]);
+  if (changeSets.length === 0) {
+    return (
+      <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+        {t('workspace.panel.noChanges', 'No changes yet. The files the agent changes in this thread show up here.')}
+      </Typography>
+    );
+  }
   return (
     <>
-      <ResizeHandle />
-      <Box
-        component="aside"
-        data-testid="session-panel"
-        aria-label={t('workspace.panel.label', 'Changes and approvals')}
-        sx={(theme: Theme) => ({
-          width: `${String(width / 16)}rem`,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          background: theme.vars.palette.background.default,
-        })}
-      >
-        <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-        <TitleBarSpacer
-          logo={false}
-          trailing={
-            <Tooltip title={t('workspace.panel.hide', 'Hide panel')}>
-              <IconButton size="small" aria-label={t('workspace.panel.hide', 'Hide panel')} onClick={() => useDesktopLayout.getState().setChangesOpen(false)}>
-                <CloseIcon fontSize="inherit" />
-              </IconButton>
-            </Tooltip>
-          }
-        >
-          <Typography variant="labelMedium" component="span">
-            {t('workspace.panel.changes', 'Changes')}
-          </Typography>
-        </TitleBarSpacer>
+      {changeSets.map((set) => (
+        <Box key={set.turnId} component="section" data-testid="panel-turn-changes" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          {changeSets.length > 1 && set.label !== '' && <TurnLabel text={set.label} />}
+          <ChangedFilesCard
+            ipc={ipc}
+            turnId={set.turnId}
+            files={set.files}
+            undoRequest={set.turnId === undoTurnId ? undoRequest : 0}
+            variant="panel"
+            onFileContextMenu={fileMenu}
+            fileActions={appIpc === undefined ? undefined : (file) => <PathActions appIpc={appIpc} workspaceId={workspaceId} path={file.path} />}
+          />
         </Box>
-        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {changeSets.length === 0 ? (
-            <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
-              {t('workspace.panel.noChanges', 'No changes yet. The files the agent changes in this thread show up here.')}
+      ))}
+    </>
+  );
+}
+
+function ApprovalsPane({ waiting, decided }: Pick<SessionPanelProps, 'waiting' | 'decided'>): React.JSX.Element {
+  if (waiting.length === 0 && decided.length === 0) {
+    return (
+      <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+        {t('workspace.panel.noApprovals', 'Nothing was asked of you in this thread yet.')}
+      </Typography>
+    );
+  }
+  return (
+    <Box component="section" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }} data-testid="panel-approvals">
+      <SectionTitle>{t('workspace.panel.approvals', 'Approvals')}</SectionTitle>
+      <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
+        {waiting.map((request) => (
+          <Box component="li" key={request.request_id} sx={{ display: 'flex', gap: 1, paddingY: 0.25 }}>
+            <Typography variant="bodySmall" sx={{ flex: 1, minWidth: 0 }}>
+              {request.title}
             </Typography>
-          ) : (
-            changeSets.map((set) => (
-              <Box key={set.turnId} component="section" data-testid="panel-turn-changes" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                {changeSets.length > 1 && set.label !== '' && <TurnLabel text={set.label} />}
-                <ChangedFilesCard
-                  ipc={ipc}
-                  turnId={set.turnId}
-                  files={set.files}
-                  undoRequest={set.turnId === undoTurnId ? undoRequest : 0}
-                  variant="panel"
-                  fileActions={appIpc === undefined ? undefined : (file) => <PathActions appIpc={appIpc} workspaceId={workspaceId} path={file.path} />}
-                />
-              </Box>
-            ))
-          )}
-          {(waiting.length > 0 || decided.length > 0) && (
-            <Box component="section" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }} data-testid="panel-approvals">
-              <SectionTitle>{t('workspace.panel.approvals', 'Approvals')}</SectionTitle>
-              <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                {waiting.map((request) => (
-                  <Box component="li" key={request.request_id} sx={{ display: 'flex', gap: 1, paddingY: 0.25 }}>
-                    <Typography variant="bodySmall" sx={{ flex: 1, minWidth: 0 }}>
-                      {request.title}
-                    </Typography>
-                    <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.warning.main })}>
-                      {t('workspace.panel.waiting', 'Waiting')}
-                    </Typography>
-                  </Box>
-                ))}
-                {decided.map((entry) => (
-                  <Box component="li" key={entry.requestId} sx={{ display: 'flex', gap: 1, paddingY: 0.25 }}>
-                    <Typography variant="bodySmall" sx={{ flex: 1, minWidth: 0 }}>
-                      {entry.title}
-                    </Typography>
-                    <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
-                      {decisionLabel(entry.decision)}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          )}
-        </Box>
+            <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.warning.main })}>
+              {t('workspace.panel.waiting', 'Waiting')}
+            </Typography>
+          </Box>
+        ))}
+        {decided.map((entry) => (
+          <Box component="li" key={entry.requestId} sx={{ display: 'flex', gap: 1, paddingY: 0.25 }}>
+            <Typography variant="bodySmall" sx={{ flex: 1, minWidth: 0 }}>
+              {entry.title}
+            </Typography>
+            <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+              {decisionLabel(entry.decision)}
+            </Typography>
+          </Box>
+        ))}
       </Box>
+    </Box>
+  );
+}
+
+/** A tab's body: scrolls on its own, padded like the rest of the inspector. */
+function TabBody({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</Box>;
+}
+
+/**
+ * The thread's tabs in the frame's inspector: Changes, Approvals (its chip
+ * counts the approvals waiting) and, when the host keeps a local index,
+ * Index. Each is a tab of its own, so it can share a group with the others,
+ * sit in the other group, or open in a window of its own.
+ */
+export function SessionInspector(props: SessionPanelProps): React.JSX.Element {
+  const { subject } = props;
+  return (
+    <>
+      <InspectorTab id="changes" title={t('workspace.panel.changes', 'Changes')} subject={subject}>
+        <TabBody>
+          <ChangesPane {...props} />
+        </TabBody>
+      </InspectorTab>
+      <InspectorTab id="approvals" title={t('workspace.panel.approvals', 'Approvals')} subject={subject} attention={props.waiting.length}>
+        <TabBody>
+          <ApprovalsPane waiting={props.waiting} decided={props.decided} />
+        </TabBody>
+      </InspectorTab>
+      {(props.plan !== null || props.planMode) && (
+        <InspectorTab id="plan" title={t('workspace.panel.plan', 'Plan')} subject={subject}>
+          <TabBody>
+            <Suspense fallback={null}>
+              <plan.TodoPane plan={props.plan} />
+            </Suspense>
+          </TabBody>
+        </InspectorTab>
+      )}
+      {props.hasIndex && (
+        <InspectorTab id="index" title={t('workspace.panel.index', 'Index')} subject={subject}>
+          <TabBody>
+            <IndexPanelHost workspaceId={props.workspaceId} />
+          </TabBody>
+        </InspectorTab>
+      )}
     </>
   );
 }

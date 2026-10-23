@@ -30,8 +30,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,14 +44,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2applications "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	applicationskills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	v2applications "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (
@@ -355,7 +355,7 @@ func TestAttachWritesTheRowAndBothReadersSeeIt(t *testing.T) {
 		t.Fatalf("attach answered %d, want 201: %s", recorder.Code, recorder.Body.String())
 	}
 
-	// The response is pylon's four-key attachment, and its values come from
+	// The response is the legacy four-key attachment, and its values come from
 	// the rows, not from an echo of the request.
 	var attachment handler.SkillAttachment
 	if err := json.Unmarshal(recorder.Body.Bytes(), &attachment); err != nil {
@@ -433,7 +433,8 @@ func TestDetachRemovesOnlyTheNamedRow(t *testing.T) {
 	}
 }
 
-// TestDetachOfAnUnattachedSkillIsRefused holds pylon's SkillNotAttachedError.
+// TestDetachOfAnUnattachedSkillIsRefused holds the legacy
+// SkillNotAttachedError.
 //
 // The old app's version selector changes a version by detaching and then
 // re-attaching, and it re-attaches ONLY when the detach reports success
@@ -463,7 +464,7 @@ func TestDetachOfAnUnattachedSkillIsRefused(t *testing.T) {
 
 // ── Refusals, each one asserted against the stored rows ──────────────────────
 
-// TestDuplicateAttachIsRefusedAndWritesNoSecondRow holds pylon's
+// TestDuplicateAttachIsRefusedAndWritesNoSecondRow holds the legacy
 // SkillAlreadyAttachedError, which the old app depends on.
 func TestDuplicateAttachIsRefusedAndWritesNoSecondRow(t *testing.T) {
 	fixture := newRelationFixture(t)
@@ -542,13 +543,13 @@ func TestAttachRefusesAPublishedVersion(t *testing.T) {
 	}
 }
 
-// TestAttachRefusesAnUnknownAgentVersion is the one departure from pylon, and
-// this test is the record of it.
+// TestAttachRefusesAnUnknownAgentVersion is the one departure from the legacy
+// runtime, and this test is the record of it.
 //
-// Pylon writes `if agent_version and ...`, so an unknown version id falls
-// through its guard and the attach answers 201. entity_version_id carries no
-// foreign key, so that row is an orphan no reader can reach and no cascade
-// removes. Attach refuses it here.
+// The legacy runtime writes `if agent_version and ...`, so an unknown version
+// id falls through its guard and the attach answers 201. entity_version_id
+// carries no foreign key, so that row is an orphan no reader can reach and no
+// cascade removes. Attach refuses it here.
 func TestAttachRefusesAnUnknownAgentVersion(t *testing.T) {
 	fixture := newRelationFixture(t)
 
@@ -564,7 +565,7 @@ func TestAttachRefusesAnUnknownAgentVersion(t *testing.T) {
 		t.Errorf("a refused attach still wrote %d orphan rows", total)
 	}
 
-	// Detach keeps pylon's fall-through, so an orphan an earlier write left
+	// Detach keeps the legacy fall-through, so an orphan an earlier write left
 	// behind can still be removed.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

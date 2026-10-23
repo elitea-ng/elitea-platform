@@ -25,7 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"os"
 	"sort"
@@ -37,11 +37,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -464,7 +464,8 @@ func TestPermissionMatrixSeparatesTheFourScopes(t *testing.T) {
 	}
 
 	// The public project has no overrides, so it INHERITS central default — the
-	// pylon fallback. It must therefore match `standard`, not `administration`.
+	// legacy fallback. It must therefore match `standard`, not
+	// `administration`.
 	if public.granted(t, "admin.auth.users", "admin") {
 		t.Fatalf("public scope reported the ADMINISTRATION matrix: admin.auth.users is granted")
 	}
@@ -774,8 +775,8 @@ func TestPermissionMatrixSaveRejectsUnknownNames(t *testing.T) {
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("PUT status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
 			}
-			// Pylon answers {"ok": true} and drops the row. The point of the 400
-			// is that nothing was written, so assert that too.
+			// The legacy runtime answers {"ok": true} and drops the row. The
+			// point of the 400 is that nothing was written, so assert that too.
 			if got := grantsSQL(t, pool, "default", "admin"); !equalStrings(got, baseline) {
 				t.Fatalf("a rejected save still changed the matrix: %v → %v", baseline, got)
 			}

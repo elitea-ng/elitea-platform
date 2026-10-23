@@ -8,10 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentConfigurationTypesReaderStub struct {
@@ -46,11 +47,10 @@ func TestCurrentConfigurationTypesRouteBindsExactCurrentContract(t *testing.T) {
 
 	reader := &currentConfigurationTypesReaderStub{}
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
-	authConfig := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	authConfig := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}
 
 	for name, test := range map[string]struct {
 		reader      handler.CurrentConfigurationTypesReader
@@ -58,7 +58,7 @@ func TestCurrentConfigurationTypesRouteBindsExactCurrentContract(t *testing.T) {
 		permissions auth.PermissionResolver
 	}{
 		"missing reader":       {authConfig: authConfig, permissions: permissions},
-		"missing principal":    {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":    {reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"no credential reader": {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions":  {reader: reader, authConfig: authConfig},
 	} {
@@ -130,7 +130,7 @@ func TestCurrentConfigurationTypesRouteAuthenticatesAndAuthorizesBeforeService(t
 		wantStatus int
 	}{
 		{name: "missing authentication", method: http.MethodGet, path: "/api/v2/configurations/types/7", remoteAddr: "10.0.0.8:43120", wantStatus: http.StatusUnauthorized},
-		{name: "untrusted forwarded identity", method: http.MethodGet, path: "/api/v2/configurations/types/7", remoteAddr: "192.0.2.9:443", auth: true, allowed: true, wantStatus: http.StatusUnauthorized},
+		{name: "forged X-Auth-* identity without a session", method: http.MethodGet, path: "/api/v2/configurations/types/7", remoteAddr: "192.0.2.9:443", allowed: true, wantStatus: http.StatusUnauthorized},
 		{name: "permission denied", method: http.MethodGet, path: "/api/v2/configurations/types/7", remoteAddr: "10.0.0.8:43120", auth: true, wantStatus: http.StatusForbidden},
 		{name: "invalid project", method: http.MethodGet, path: "/api/v2/configurations/types/not-an-id", remoteAddr: "10.0.0.8:43120", auth: true, allowed: true, wantStatus: http.StatusForbidden},
 		{name: "post is not exposed", method: http.MethodPost, path: "/api/v2/configurations/types/7", remoteAddr: "10.0.0.8:43120", auth: true, allowed: true, wantStatus: http.StatusMethodNotAllowed},
@@ -150,8 +150,11 @@ func TestCurrentConfigurationTypesRouteAuthenticatesAndAuthorizesBeforeService(t
 			request := httptest.NewRequest(test.method, test.path, nil)
 			request.RemoteAddr = test.remoteAddr
 			if test.auth {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
+			} else {
+				// No credential, but the forged X-Auth-* identity the
+				// retired edge projection used (#1359).
+				authtest.ForgeXAuth(request, "11")
 			}
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
@@ -209,15 +212,9 @@ func newCurrentConfigurationTypesRoute(
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := currentReadPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	route, err := handler.NewCurrentConfigurationTypesRoute(
 		reader,
-		apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
 	)
 	if err != nil {

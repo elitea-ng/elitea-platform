@@ -37,7 +37,7 @@ syntax = "proto3";
 
 package elitea.extract.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/extract/v1;extractv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/extract/v1;extractv1";
 
 // DocumentExtractService is served by elitea-doc-extractor on its socket.
 service DocumentExtractService {

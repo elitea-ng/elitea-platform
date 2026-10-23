@@ -1,0 +1,54 @@
+{{- if and .Values.natsBootstrap.enabled .Values.natsBootstrap.tls.certificate.create }}
+{{- range $acct := .Values.natsBootstrap.accounts }}
+---
+# The {{ $acct }} account's bootstrap identity (#1076): a client certificate
+# from the NATS CA whose URI SAN the server maps to the one user in
+# that account that may create streams and consumers.
+#
+# It exists only while an install or upgrade runs. It is a hook in the Job's
+# own phase, ordered before it (weight -10 < the Job's 0), and deleted with
+# the Job once the phase succeeds — so cert-manager stops renewing it. The
+# certificate itself lives one hour (natsBootstrap.tls.certificate.duration). cert-manager
+# leaves the Secret behind unless it runs with --enable-certificate-owner-ref;
+# what is left holds a certificate that expires an hour after the install and
+# is never renewed, and the next install re-issues it before the Job dials.
+#
+# Not a pre-install hook: Helm treats a hook that is not a Job or Pod as done
+# the moment it is created, and would delete a pre-install Certificate at the
+# end of the pre-install phase — possibly before cert-manager issued it, and
+# always before the post-install Job mounts it.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nats-bootstrap.fullname" $ }}-{{ $acct }}-nats-client
+  labels:
+    {{- include "nats-bootstrap.labels" $ | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    # Argo CD: a Sync hook in the Job's wave (job.yaml says why not PostSync).
+    # Not an earlier wave: the NATS CA Issuer that signs it is in wave -10
+    # too, and a hook ahead of its issuer would never become Ready. Argo CD
+    # deletes succeeded hooks when the whole sync operation ends, so the
+    # Certificate outlives the Job's run here as well.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-10"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+spec:
+  secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
+  duration: {{ $.Values.natsBootstrap.tls.certificate.duration }}
+  renewBefore: {{ $.Values.natsBootstrap.tls.certificate.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  commonName: elitea-nats-bootstrap-{{ $acct }}
+  uris:
+    - spiffe://{{ include "nats-bootstrap.trustDomain" $ }}/nats/elitea-nats-bootstrap-{{ $acct }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    {{- include "nats-bootstrap.issuerRef" $ | nindent 4 }}
+{{- end }}
+{{- end }}

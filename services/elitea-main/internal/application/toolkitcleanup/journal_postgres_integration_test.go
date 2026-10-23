@@ -11,7 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"log/slog"
 	"os"
@@ -20,10 +20,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (

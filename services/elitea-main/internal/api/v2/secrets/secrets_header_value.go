@@ -14,7 +14,7 @@ import (
 // SecretsHeaderValueName is the project-vault secret the `X-SECRET` request
 // header is compared against.
 //
-// pylon's `check_secret_header` reads
+// The legacy `check_secret_header` reads
 // `secrets.get("secrets_header_value", "secret")`
 // (legacy/plugins/elitea_core/utils/secrets.py:4-9). A project whose vault
 // holds no value under this name therefore accepts the literal string
@@ -40,8 +40,8 @@ const secretsHeaderValueBytes = 32
 // cryptographically secure source.
 //
 // The text is base64url with no padding. A header value must survive the SDK,
-// Traefik and pylon unchanged, so the alphabet holds no character that any of
-// them quotes, folds or strips.
+// edge and the backend unchanged, so the alphabet holds no character that any
+// of them quotes, folds or strips.
 func NewSecretsHeaderValue() (string, error) {
 	raw := make([]byte, secretsHeaderValueBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -59,8 +59,8 @@ func NewSecretsHeaderValue() (string, error) {
 // reports `false, nil`, and so does a project whose owner set the value by
 // hand.
 //
-// The vault must exist. This function does not create one, for the reason
-// StoreProjectSecrets does not: an absent vault means the caller ran before
+// The vault must exist. This function does not create one: an absent vault
+// means the caller ran before
 // the project_secrets provisioning step, and minting a vault here would put a
 // second minter beside EnsureProjectVault. The provisioning step calls
 // EnsureProjectVault first, and the backfill reads the vault table to find its
@@ -115,7 +115,7 @@ func (h *Handler) EnsureProjectSecretsHeaderValue(ctx context.Context, projectID
 //
 // It is the runtime's reader (storage.ProjectSecretsHeaderReader): the
 // worker gets the value with its claim-bound bearer token and puts it on every
-// SDK call, so the SDK stops sending the pylon literal "secret" (#408).
+// SDK call, so the SDK stops sending the legacy literal "secret" (#408).
 //
 // It refuses a non-positive id rather than building a vault name from it. The
 // caller is the runtime, whose project id comes from an authorized claim, so a

@@ -33,7 +33,7 @@ package migrations_test
 // legacyrbac's central default-mode fallback entirely and supply the permission
 // directly. So the whole end-to-end suite passed against a database that
 // already granted what a real deployment lacked. The seed hid the defect. A
-// pylon-backed database and a legacy dump have that same per-project shape,
+// legacy dump has that same per-project shape,
 // which is why only a clean Go bootstrap breaks.
 //
 // So this file asserts against the corpus a real deployment applies, and
@@ -60,9 +60,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 // The default-mode roles 001_initial.sql seeds. The legacy matrix
@@ -168,7 +168,7 @@ func TestAProjectMemberPassesBothChatGatesOnACleanDatabase(t *testing.T) {
 //
 // Without this case a gate that admitted every caller would pass the positive
 // test unchanged. This case also pins the migration's blast radius: it is the
-// shape of every pylon-backed database, every legacy dump and the end-to-end
+// shape of every legacy dump and the end-to-end
 // stack, so the migration cannot change what their members can do.
 func TestACallerWithoutTheGrantIsRefusedAtBothChatGates(t *testing.T) {
 	pool := newMigratedPool(t)

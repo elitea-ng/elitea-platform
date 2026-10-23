@@ -7,9 +7,9 @@ package eliteacore
 // what makes a definition do something, by filling the fields a pre-built MCP
 // toolkit leaves for the platform to supply.
 //
-// # The call sites are pylon's, and two of the five have a Go counterpart
+// # The call sites are the legacy runtime's, and two of the five have a Go counterpart
 //
-// pylon resolves in five places. Two are wired here:
+// The legacy runtime resolves in five places. Two are wired here:
 //
 //	mcp_sync_tools.py:81   → MCPSyncTools    (fills url, headers, timeout)
 //	mcp_oauth_proxy.py:112 → MCPOAuthProxy   (fills client_id, client_secret)
@@ -17,8 +17,8 @@ package eliteacore
 // The other three are NOT wired, and neither is an omission:
 //
 //   - `toolkit_discover_tools.py:72` injects a catalogue URL into an OUTBOUND
-//     discovery, because pylon's route dispatches `discover_mcp_tools` over RPC
-//     to indexer_worker. The Go route of that name is a different thing
+//     discovery, because the legacy route dispatches `discover_mcp_tools` over
+//     RPC to indexer_worker. The Go route of that name is a different thing
 //     entirely: `toolkits.pgRepo.DiscoverTools` is a SELECT over the project's
 //     own `elitea_tools` rows of a given type. It makes no outbound call, so
 //     there is nothing for a URL to point at, and injecting one would be a
@@ -45,7 +45,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // PrebuiltSecretReader reads a catalogue client secret out of the platform
@@ -111,8 +111,8 @@ func (h *Handler) resolvePrebuiltSettingsReport(
 
 	entry, err := h.prebuiltMCP.Lookup(ctx, toolkitType)
 	if errors.Is(err, mcpregistry.ErrPrebuiltNotFound) {
-		// pylon logs and carries on here, and so does this: a toolkit type that
-		// merely starts with `mcp_` need not be catalogued, and refusing it
+		// The legacy runtime logs and carries on here, and so does this: a toolkit
+		// type that merely starts with `mcp_` need not be catalogued, and refusing it
 		// would break every hand-configured remote MCP toolkit whose type
 		// happens to carry the prefix.
 		return settings, prebuiltResolution{}, nil
@@ -169,7 +169,7 @@ func (h *Handler) prebuiltURLFor(ctx context.Context, toolkitType string) (strin
 	return entry.ServerURL, nil
 }
 
-// The settings map is `map[string]any` because that is the shape pylon's
+// The settings map is `map[string]any` because that is the shape the legacy
 // resolution works on and the shape the OAuth proxy already holds. These four
 // helpers move a typed request body in and out of it without letting a wrong
 // type silently become a zero value.

@@ -762,6 +762,7 @@ nodes:
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Approve, repeat and stale resumes of one checkpoint, in order.
 async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_after_approval() {
     const ROOT: &str = "pipeline-root";
     const THREAD: &str = "sensitive-toolkit-thread";
@@ -804,7 +805,13 @@ async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_afte
         THREAD,
     ))
     .expect("bounded wrong call")
-    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(
+        session.as_ref(),
+        checkpointer.as_ref(),
+        ROOT,
+        THREAD,
+        &test_owner(),
+    )
     .await;
     let Err(wrong_call) = wrong_call else {
         panic!("wrong call must be stale");
@@ -818,7 +825,13 @@ async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_afte
         THREAD,
     ))
     .expect("approved Toolkit decision")
-    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(
+        session.as_ref(),
+        checkpointer.as_ref(),
+        ROOT,
+        THREAD,
+        &test_owner(),
+    )
     .await
     .expect("checkpoint-bound Toolkit resume")
     .into_parts()
@@ -857,7 +870,13 @@ async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_afte
         THREAD,
     ))
     .expect("same decision")
-    .resolve(completed.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(
+        completed.as_ref(),
+        checkpointer.as_ref(),
+        ROOT,
+        THREAD,
+        &test_owner(),
+    )
     .await;
     let Err(replay) = replay else {
         panic!("completed call cannot replay");
@@ -1026,7 +1045,7 @@ async fn direct_delegated_authorization_skip_reaches_end_with_sdk_terminal_state
             .await
             .expect("load terminal checkpoint")
             .expect("terminal checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         assert_eq!(checkpoint.state.get("report"), Some(&Value::Null));
         assert!(
             checkpoint
@@ -1231,7 +1250,7 @@ async fn resolve_routed_continuation(
         .unwrap_or_else(|error| panic!("routing refused the continuation: {error:?}"))
     {
         PipelineNativeStart::Hitl(decision) => decision
-            .resolve(session, checkpointer, root, thread)
+            .resolve(session, checkpointer, root, thread, &test_owner())
             .await
             .map(|resolved| {
                 let (resume, application) = resolved.into_parts();
@@ -1374,7 +1393,7 @@ async fn main_wire_mcp_authorization_resumes_direct_pipeline_node_through_routin
             .await
             .expect("load terminal checkpoint")
             .expect("terminal checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         if action == "authorize" {
             assert_eq!(
                 checkpoint.state.get("report"),
@@ -1517,7 +1536,7 @@ async fn sensitive_approval_then_mcp_authorization_on_same_direct_node() {
             .await
             .expect("load terminal checkpoint")
             .expect("terminal checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         let expected_report = if action == "authorize" {
             json!({"authorized": true})
         } else {
@@ -1738,7 +1757,7 @@ async fn assert_whole_pipeline_stopped(
         .await
         .expect("load terminal checkpoint")
         .expect("terminal checkpoint");
-    assert!(checkpoint.pending_nodes.is_empty());
+    assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
     assert!(
         checkpoint
             .state
@@ -1794,7 +1813,13 @@ async fn blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_re
         THREAD,
     ))
     .expect("reject decision")
-    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(
+        session.as_ref(),
+        checkpointer.as_ref(),
+        ROOT,
+        THREAD,
+        &test_owner(),
+    )
     .await
     .expect("checkpoint-bound reject")
     .into_parts()
@@ -1856,4 +1881,9 @@ async fn skipped_effectful_authorization_stops_the_whole_pipeline_under_node_rec
     run_direct_graph(resumed, sessions, THREAD, "continue").await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_whole_pipeline_stopped(&checkpointer, THREAD, "was skipped").await;
+}
+
+/// The execution these single-process tests run as.
+fn test_owner() -> crate::agents::dispatch_journal::DispatchOwner {
+    crate::agents::dispatch_journal::DispatchOwner::new("execution-test", 1)
 }

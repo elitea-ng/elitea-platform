@@ -28,7 +28,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 )
 
 // TWO CONCURRENT CALLS FOR ONE USER GET ONE ATTEMPT AND BOTH WAIT FOR IT.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 )
 
 // The internal-tool catalogue is written in TWO places and has to say one thing.

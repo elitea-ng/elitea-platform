@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	controltransport "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	controltransport "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -161,11 +161,11 @@ func (c *recoveryClaims) VerifyActive(_ context.Context, fence runtimedomain.Fen
 	return nil
 }
 
-func (c *recoveryClaims) ObserveDesiredState(_ context.Context, fence runtimedomain.Fence) (runtimedomain.DesiredState, error) {
+func (c *recoveryClaims) ObserveDesiredState(_ context.Context, fence runtimedomain.Fence) (runtimedomain.ObservedExecution, error) {
 	if fence != c.decision.Lease.Fence {
-		return "", runtimedomain.ErrStaleFence
+		return runtimedomain.ObservedExecution{}, runtimedomain.ErrStaleFence
 	}
-	return c.decision.Lease.DesiredState, nil
+	return runtimedomain.ObservedExecution{DesiredState: c.decision.Lease.DesiredState, CapabilityID: c.decision.Lease.CapabilityID}, nil
 }
 
 type recoveryInputs struct {

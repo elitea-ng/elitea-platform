@@ -1,41 +1,40 @@
-// The Gateway-API browser edge (#568).
+// The Gateway-API browser edge (#568; one route since #1359 P3).
 //
 // WHAT WAS MISSING.
 //
-// edge_root_routes_test.go walks the real Go router and fails when a
-// root-mounted route matches no rule at the browser edge. It read TWO files,
-// both of them traefik, both of them compose-only. The cluster runs neither.
-// Its edge is a Gateway API HTTPRoute, it lived in the deployment repository
-// alone, and no file here described it. So the walk could not reach it,
-// `requiredWalkedFamilies` proved nothing about the cluster, and a green run
-// was fully compatible with the cluster edge being a release behind.
+// The cluster's edge was a Gateway API HTTPRoute that lived in the deployment
+// repository alone, so no gate here could read it. PR #564 added four path
+// prefixes to the compose edge; the cluster edge never got them, and project
+// icons and author avatars stayed broken there for the whole 1.20.1 window.
+// deploy/gateway-api/httproute.yaml became the reviewed source of that edge,
+// with a rule per root-mounted Go route, and this file walked the Go router
+// against it.
 //
-// It was. PR #564 added four path prefixes to the compose edge. The cluster
-// edge never got them, and project icons and author avatars stayed broken
-// there for the whole 1.20.1 window. `/icons/1/a.png` answered the Gateway's
-// own 404, byte-identical to an unrouted path.
+// WHAT CHANGED.
 //
-// WHAT THIS FILE ADDS.
+// elitea-main is now the browser edge in every deployment
+// (internal/api/webedge): the chart sets ELITEA_WEB_UPSTREAM, and the
+// HTTPRoute is ONE `/` rule to elitea-main. A per-route rule list is gone, so
+// there is no second list to drift; the MCP carve-out, which Gateway API could
+// only express with an implementation-specific RegularExpression, is decided in
+// Go. edge_root_routes_test.go and edge_services_test.go classify every route
+// through the real router with the relay on, and that classification now
+// covers the cluster as well.
 //
-// deploy/gateway-api/httproute.yaml is now the reviewed source of that edge,
-// and this file holds it to the same two rules the traefik edges answer to:
+// WHAT THIS FILE HOLDS.
 //
-//  1. every root-mounted Go route is forwarded, or excluded with a reason;
-//  2. every rule that reaches elitea-main removes the caller's identity
-//     headers, and none of them removes the LLM gateway's hop marker.
-//
-// The classification uses assertPatternsClassified and assertNoStaleExclusions
-// from edge_root_routes_test.go. Sharing them is the point: ONE definition of
-// "classified" now covers all three edges, so widening it cannot reach the
-// compose edges and leave the cluster behind — which is this defect.
+//  1. the manifest is that one rule, and nothing has crept back: no second
+//     rule, no SPA backend, no RegularExpression, no narrower match;
+//  2. the rule still removes the caller's identity headers (defence in depth:
+//     elitea-main strips them itself), and never the LLM gateway's hop marker;
+//  3. the chart's own HTTPRoute list obeys the same floor.
 //
 // WHAT IT STILL DOES NOT COVER.
 //
-// The copy in the deployment repository. Nothing here reads the cluster, so a
-// copy that stops tracking the file still deploys. Issue #568 names the second
-// control for that gap: a post-deploy check of the root-mounted paths against
-// the deployed host, discriminating on `vary: Origin`, which elitea-main sets
-// and the Gateway's own 404 does not.
+// A copy of the manifest in a deployment repository. Nothing here reads the
+// cluster. A post-deploy check that requests the root-mounted paths against the
+// deployed host, discriminating on `vary: Origin` (elitea-main sets it), is the
+// control for that gap (#568).
 //
 // RUN IT WITH -count=1, for the reason edge_middlewares_test.go gives: the
 // files this gate reads live in deploy/, outside this module, so the test
@@ -48,12 +47,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // gatewayAPIEdgeFiles are the checked-in Gateway-API manifests that serve a
@@ -63,24 +63,10 @@ var gatewayAPIEdgeFiles = []string{
 	"deploy/gateway-api/httproute.yaml",
 }
 
-// chartValuesFile holds the chart's own HTTPRoute posture. The chart renders a
-// DIFFERENT topology from the manifest above — one `/` rule with elitea-main as
-// the only backend — so the route classification does not apply to it. Its
-// header-strip list is a third copy of the same security control, and
-// TestChartHTTPRouteStripsClientIdentity holds that copy to the same floor.
+// chartValuesFile holds the chart's own HTTPRoute posture. The chart renders
+// the same one-rule shape as the manifest above from a values list, and
+// TestChartHTTPRouteStripsClientIdentity holds that list to the same floor.
 const chartValuesFile = "deploy/helm/elitea/values.yaml"
-
-// notAtTheGatewayAPIEdge names the router patterns the GATEWAY-API edge alone
-// does not carry. notAtTheBrowserEdge in edge_root_routes_test.go holds what is
-// true of every edge; an entry here is true of this edge only, and the gate
-// fails when this edge does forward it after all.
-var notAtTheGatewayAPIEdge = map[string]string{
-	"/app/{projectID}/mcp": "the MCP server shares the SPA prefix and needs a path REGULAR EXPRESSION to be carved back out of it. " +
-		"The traefik edges use PathRegexp. Gateway API v1 has Exact and PathPrefix as its portable path matches, and support for " +
-		"RegularExpression is implementation-specific, so this copy does not claim it. An MCP client on this edge reaches the SPA " +
-		"backend and gets its 404. Add a RegularExpression match when the Gateway of the deployment supports one, and delete this entry",
-	"/app/{projectID}/mcp/*": "the same route, wildcard form",
-}
 
 // gatewayRoute is the subset of an HTTPRoute this gate reads.
 type gatewayRoute struct {
@@ -201,122 +187,51 @@ func mainBackendRules(routes []gatewayRoute) []gatewayRule {
 	return reaching
 }
 
-// gatewayPathPrefixMatches implements the Gateway API PathPrefix match, which
-// is NOT a string prefix: it matches on path element boundaries, so `/icons`
-// matches `/icons/1/a.png` and never matches `/iconsfoo`. A gate that used
-// strings.HasPrefix here would report a route as covered that the cluster
-// answers with its own 404.
-func gatewayPathPrefixMatches(prefix, requestPath string) bool {
-	prefix = strings.TrimSuffix(prefix, "/")
-	if prefix == "" {
-		return true
-	}
-	return requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/")
-}
-
-// gatewayRulesForward answers whether any rule matches requestPath.
-func gatewayRulesForward(t *testing.T, relative string, rules []gatewayRule, requestPath string) bool {
-	t.Helper()
-	for _, rule := range rules {
-		for _, match := range rule.Matches {
-			if len(match.Headers) > 0 || len(match.QueryParams) > 0 || match.Method != "" {
-				t.Fatalf(
-					"%s: a match on path %q also requires a header, a method or a query parameter.\n"+
-						"This gate reads the path alone, so it would report the route as covered while the edge "+
-						"forwards a narrower set. Teach the gate that field, or split the match.",
-					relative, match.Path.Value,
-				)
-			}
-			if match.Path.Value == "" {
-				t.Fatalf(
-					"%s: a match declares no path value.\n"+
-						"Gateway API defaults an absent path to PathPrefix `/`, which forwards everything — "+
-						"including /readyz and /startupz. Write the path out.",
-					relative,
-				)
-			}
-			switch match.Path.Type {
-			case "Exact":
-				if requestPath == match.Path.Value {
-					return true
-				}
-			case "PathPrefix":
-				if gatewayPathPrefixMatches(match.Path.Value, requestPath) {
-					return true
-				}
-			case "RegularExpression":
-				pattern, err := regexp.Compile(match.Path.Value)
-				if err != nil {
-					t.Fatalf("%s: the path regular expression %q does not compile: %v", relative, match.Path.Value, err)
-				}
-				if pattern.MatchString(requestPath) {
-					return true
-				}
-			default:
-				t.Fatalf(
-					"%s: path match type %q is one this gate cannot read. Gateway API defines Exact, PathPrefix "+
-						"and RegularExpression; an unread type makes this gate answer \"no match\" for a path the "+
-						"edge does forward.",
-					relative, match.Path.Type,
-				)
-			}
-		}
-	}
-	return false
-}
-
-// TestGatewayAPIEdgeClassifiesEveryRootMountedGoRoute is the gate #568 asked
-// for. It walks the real Go router and fails when a root-mounted route reaches
-// no rule of the Gateway-API edge and carries no written reason.
-func TestGatewayAPIEdgeClassifiesEveryRootMountedGoRoute(t *testing.T) {
-	// The floor on this gate's own input. An empty list makes every loop below
-	// iterate zero times and the whole gate report a clean tree.
+// TestGatewayAPIEdgeIsOneRouteToMain holds the manifest to the #1359 P3 shape:
+// one rule, PathPrefix `/`, elitea-main as the only backend.
+//
+// Each refusal below is a way the old split edge could come back. A second
+// rule or a second backend is a path decision made outside Go again, the shape
+// that let #568 ship. A RegularExpression match is what the MCP carve-out
+// needed before the relay took it over; Gateway API leaves its support to the
+// implementation, so a manifest that leans on one routes differently per
+// Gateway. A match narrowed by a header, method or query parameter forwards
+// less than its path says.
+func TestGatewayAPIEdgeIsOneRouteToMain(t *testing.T) {
 	if len(gatewayAPIEdgeFiles) == 0 {
 		t.Fatal("gatewayAPIEdgeFiles is empty, so this gate checked nothing. It must name the checked-in Gateway-API edge.")
 	}
-
-	patterns := walkRootMountedGoRoutes(t)
 	root := repoRoot(t)
-
-	// The union of the two exclusion lists. The shared one holds what is true
-	// of every edge; the second holds what is true of this edge only.
-	excluded := map[string]string{}
-	for pattern, why := range notAtTheBrowserEdge {
-		excluded[pattern] = why
-	}
-	for pattern, why := range notAtTheGatewayAPIEdge {
-		excluded[pattern] = why
-	}
-
 	for _, relative := range gatewayAPIEdgeFiles {
 		t.Run(relative, func(t *testing.T) {
 			routes := parseGatewayAPIEdge(t, root, relative)
-			rules := mainBackendRules(routes)
-			if len(rules) == 0 {
-				t.Fatalf(
-					"%s has no rule with a backendRef to %q, so this gate checked nothing.\n"+
-						"Either the Service was renamed or the file changed shape; update protectedService in "+
-						"edge_identity_strip_test.go.",
-					relative, protectedService,
-				)
+			if len(routes) != 1 {
+				t.Fatalf("%s holds %d HTTPRoutes; the browser edge is ONE route to %s, which relays the SPA itself", relative, len(routes), protectedService)
 			}
-			forwards := func(t *testing.T, requestPath string) bool {
-				return gatewayRulesForward(t, relative, rules, requestPath)
+			rules := routes[0].Spec.Rules
+			if len(rules) != 1 {
+				t.Fatalf("%s: the route has %d rules; want one `/` rule. A per-path rule list is a second copy of the Go router's routing that drifts (#568)", relative, len(rules))
 			}
-			assertPatternsClassified(t, relative, patterns, forwards, excluded)
-			assertNoStaleExclusions(t, relative, patterns, forwards, excluded)
-
-			// The two lists edge_root_routes_test.go states by hand. They are a
-			// readable floor under the walk, and they carry the reason each
-			// path is public.
-			for requestPath, why := range rootMountedGoPaths {
-				if !forwards(t, requestPath) {
-					t.Errorf("%s: no rule forwards %s (%s); the Gateway answers its own 404 for it", relative, requestPath, why)
-				}
+			rule := rules[0]
+			if len(rule.BackendRefs) != 1 || rule.BackendRefs[0].Name != protectedService || rule.BackendRefs[0].Port != 8080 {
+				t.Errorf("%s: the rule's backends are %+v; want exactly %s:8080. elitea-main relays /app and /docs to elitea-web itself (ELITEA_WEB_UPSTREAM)", relative, rule.BackendRefs, protectedService)
 			}
-			for requestPath, why := range notForwardedGoPaths {
-				if forwards(t, requestPath) {
-					t.Errorf("%s: a rule forwards %s (%s); this edge serves browsers and must not publish it", relative, requestPath, why)
+			if len(rule.Matches) != 1 {
+				t.Fatalf("%s: the rule has %d matches; want the single PathPrefix `/`", relative, len(rule.Matches))
+			}
+			match := rule.Matches[0]
+			if match.Path.Type == "RegularExpression" {
+				t.Errorf("%s: a RegularExpression match (%q). The MCP carve-out is decided by internal/api/webedge now; a regular expression here is implementation-specific and routes differently per Gateway", relative, match.Path.Value)
+			}
+			if match.Path.Type != "PathPrefix" || match.Path.Value != "/" {
+				t.Errorf("%s: the match is %s %q; want PathPrefix `/`, so every path reaches the Go edge", relative, match.Path.Type, match.Path.Value)
+			}
+			if len(match.Headers) > 0 || len(match.QueryParams) > 0 || match.Method != "" {
+				t.Errorf("%s: the match also requires a header, a method or a query parameter, so it forwards less than `/`", relative)
+			}
+			for _, filter := range rule.Filters {
+				if filter.Type != "RequestHeaderModifier" {
+					t.Errorf("%s: the rule carries a %s filter. A redirect or rewrite here pre-empts the Go edge (which owns `/` → `/app/`), and an ExtensionRef in front of /healthz answers probes with a login redirect (#569)", relative, filter.Type)
 				}
 			}
 		})
@@ -367,11 +282,10 @@ func containsFold(names []string, wanted string) bool {
 // TestGatewayAPIEdgeStripsClientIdentity carries #326 and #368 onto the cluster
 // edge.
 //
-// elitea-main accepts X-Auth-Type + X-Auth-ID as a finished identity from any
-// source inside trusted_proxy_cidrs, and the pod network the Gateway sits on is
-// inside them. The RequestHeaderModifier filter is the single file standing
-// between the cluster and caller-chosen identity, and until #568 nothing read
-// it.
+// The removal is defence in depth since #1359: elitea-main deletes the same
+// names itself (apimw.StripClientIdentityHeaders) and reads no X-Auth-* name as
+// an identity. The floor stays, so the list cannot be shortened by accident
+// while something between the Gateway and elitea-main could still read one.
 func TestGatewayAPIEdgeStripsClientIdentity(t *testing.T) {
 	root := repoRoot(t)
 
@@ -398,9 +312,8 @@ func TestGatewayAPIEdgeStripsClientIdentity(t *testing.T) {
 				if len(missing) > 0 {
 					t.Errorf(
 						"%s: rule %d reaches %q and does not remove %s.\n"+
-							"elitea-main reads those names as a finished identity from a trusted-proxy source, and "+
-							"the Gateway's pod network is one. Every name left in place is one a caller chooses for "+
-							"itself (#326).",
+							"elitea-main strips them as well, but this list is the floor every edge is held to: "+
+							"extend it, never shorten it (#326).",
 						relative, index, protectedService, strings.Join(missing, ", "),
 					)
 				}
@@ -422,9 +335,10 @@ func TestGatewayAPIEdgeStripsClientIdentity(t *testing.T) {
 // applied to the identity strip rather than to the routes.
 //
 // PR #564 widened the compose edge and the cluster edge stayed behind, and that
-// went unnoticed because nothing compared the two. A header name added to the
-// traefik files alone would repeat it exactly, and the cost would be higher: an
-// identity header the compose stacks delete and the cluster forwards.
+// went unnoticed because nothing compared the two. The compose edge's strip is
+// elitea-main's own list now (apimw.ClientIdentityHeaders, #1359 P2). A name
+// added there alone would repeat #568 exactly, and the cost would be higher:
+// an identity header the compose stacks delete and the cluster forwards.
 //
 // The check is a SUPERSET, not equality. A name this edge deletes and the
 // compose edges do not is safe, and the hop-marker exception is what makes the
@@ -433,21 +347,11 @@ func TestGatewayAPIEdgeStripsAtLeastWhatTheComposeEdgesStrip(t *testing.T) {
 	root := repoRoot(t)
 
 	composeStripped := map[string]string{}
-	for _, relative := range browserEdgeFiles {
-		definition, defined := parseEdgeWithHeaders(t, filepath.Join(root, relative)).HTTP.Middlewares[stripMiddlewareName]
-		if !defined {
-			// TestBrowserEdgesStripClientIdentity reports this, and it reports
-			// it as the more serious fault.
-			continue
-		}
-		for name, value := range definition.Headers.CustomRequestHeaders {
-			if value == "" {
-				composeStripped[name] = relative
-			}
-		}
+	for _, name := range apimw.ClientIdentityHeaders {
+		composeStripped[name] = "apimw.ClientIdentityHeaders"
 	}
 	if len(composeStripped) == 0 {
-		t.Fatal("the compose edges strip no header at all, so this comparison read nothing")
+		t.Fatal("the compose edge strips no header at all, so this comparison read nothing")
 	}
 
 	for _, relative := range gatewayAPIEdgeFiles {
@@ -479,7 +383,7 @@ func TestGatewayAPIEdgeStripsAtLeastWhatTheComposeEdgesStrip(t *testing.T) {
 }
 
 // TestGatewayAPIEdgeForwardsTheHopMarker points the OPPOSITE way, and it is the
-// same exception edge_identity_strip_test.go carves for the traefik edges
+// same exception edge_identity_strip_test.go carves for the compose edge
 // (#164). The two must stay consistent: the marker survives EVERY edge, or the
 // anti-circular-routing mechanism breaks on the edge that deletes it.
 //
@@ -523,7 +427,7 @@ func TestGatewayAPIEdgeForwardsTheHopMarker(t *testing.T) {
 								"elitea-main -> gateway — is contained on its first re-entry. An edge that deletes "+
 								"it leaves the gateway unable to recognise its own traffic, with every unit test "+
 								"still green.\n"+
-								"deploy/traefik/dynamic.yml carries the same exception. Keep the edges consistent: "+
+								"The compose edge carries the same exception. Keep the edges consistent: "+
 								"the marker survives all of them, or none of them protects the loop.",
 							relative, index, forwarded,
 						)
@@ -557,11 +461,10 @@ type chartIngressValues struct {
 // the HTTPRoute the chart renders itself, from
 // deploy/helm/elitea/templates/main/ingress.yaml.
 //
-// That template renders a different topology from the checked-in manifest — one
-// `/` rule with elitea-main as the only backend — so the route classification
-// above does not apply to it. Its RequestHeaderModifier is built from a values
-// list, and that list is a copy of the same security control. Nothing read it
-// before #568, so a shortened list would have shipped with `helm lint` green.
+// That template renders the same one-rule shape as the checked-in manifest, but
+// its RequestHeaderModifier is built from a values list, and that list is a copy
+// of the same control. Nothing read it before #568, so a shortened list would
+// have shipped with `helm lint` green.
 func TestChartHTTPRouteStripsClientIdentity(t *testing.T) {
 	root := repoRoot(t)
 	raw, err := os.ReadFile(filepath.Join(root, chartValuesFile))
@@ -580,9 +483,9 @@ func TestChartHTTPRouteStripsClientIdentity(t *testing.T) {
 	if len(stripped) == 0 {
 		t.Fatalf(
 			"%s: main.ingress.stripIdentityHeaders is empty or absent.\n"+
-				"The rendered HTTPRoute then removes nothing, and a caller inside the pod network chooses its "+
-				"own user id (#326). The key may also have been renamed, in which case this gate reads a path "+
-				"that no longer exists — check the template before you change this test.",
+				"The rendered HTTPRoute then removes nothing, and only elitea-main's own strip is left (#326). "+
+				"The key may also have been renamed, in which case this gate reads a path that no longer "+
+				"exists — check the template before you change this test.",
 			chartValuesFile,
 		)
 	}

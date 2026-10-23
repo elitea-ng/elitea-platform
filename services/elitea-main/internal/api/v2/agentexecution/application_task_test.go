@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentAgentTaskStatusStub struct {
@@ -369,13 +370,12 @@ func TestCurrentApplicationTaskRouteRejectsOtherMethods(t *testing.T) {
 func TestCurrentApplicationTaskRouteRejectsIncompleteComposition(t *testing.T) {
 	principal := currentStartPrincipalValidatorFunc(
 		func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentStartPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentStartPermissionResolverFunc(func(
 		context.Context, auth.User, string, string,
 	) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
-	complete := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	complete := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}
 	for name, test := range map[string]struct {
 		reader      CurrentAgentTaskStatusReader
 		canceller   CurrentAgentCanceller
@@ -390,7 +390,7 @@ func TestCurrentApplicationTaskRouteRejectsIncompleteComposition(t *testing.T) {
 		},
 		"missing principal": {
 			reader: &currentAgentTaskStatusStub{}, canceller: &currentAgentCancellerStub{},
-			authConfig:  apimw.AuthConfig{ForwardedIdentityVerifier: peer},
+			authConfig:  apimw.AuthConfig{FormSessions: authtest.FormSessions{}},
 			permissions: permissions,
 		},
 		"missing peer": {
@@ -426,12 +426,7 @@ func newCurrentApplicationTaskRoute(
 		apimw.AuthConfig{
 			PrincipalValidator: currentStartPrincipalValidatorFunc(
 				func(_ context.Context, user auth.User) (auth.User, error) { return user, nil }),
-			ForwardedIdentityVerifier: currentStartPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -447,8 +442,7 @@ func currentApplicationTaskRequest(method, projectID, responseID, query string) 
 		target += "?" + query
 	}
 	request := httptest.NewRequest(method, target, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

@@ -31,7 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,10 +43,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/budgets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
-	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/budgets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
+	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 const (

@@ -10,7 +10,7 @@ use adk_rust::{Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use http::{Request, Response, StatusCode, Version};
+use http::Response;
 use http_body_util::Full;
 use serde_json::{Value, json};
 use tonic::body::Body;
@@ -37,24 +37,31 @@ use crate::toolkits::{
     McpConnector, McpMaterializationError, RemoteMcpConfig, ToolAdmissionPolicy,
     mcp_authorization_required_fixture,
 };
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::model_facade::ModelFacade;
 use crate::transport::openai_compatible_facade::{
     CapturedModelRequests, TestModelGatewayOutcome, test_model_gateway_client,
     test_model_gateway_config, test_model_gateway_response,
 };
 use crate::transport::platform_client::PlatformClient;
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 
 #[path = "pipeline_artifact_tests.rs"]
 mod artifact_tests;
 #[path = "pipeline_fanout_effect_pg_tests.rs"]
 mod fanout_effect_pg_tests;
+#[path = "pipeline_effect_pg_tests.rs"]
+mod effect_pg_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
 #[path = "pipeline_restart_pg_tests.rs"]
-mod restart_pg_tests;
+pub(super) mod restart_pg_tests;
+#[path = "pipeline_scoped_pg_tests.rs"]
+mod scoped_pg_tests;
+#[path = "pipeline_scoped_tests.rs"]
+pub(crate) mod scoped_tests;
 
 const PIPELINE: &str = r"
 state:
@@ -388,42 +395,37 @@ fn agent_pipeline_request(
     request
 }
 
+type RuntimeReply = Result<ContextAnswer, tonic::Status>;
+
+/// Answers runtime-context calls in order and records each call's route.
 struct PipelineRuntimeContextFixture {
-    responses: Mutex<VecDeque<Response<Body>>>,
+    responses: Mutex<VecDeque<RuntimeReply>>,
     calls: Arc<AtomicUsize>,
     paths: Arc<Mutex<Vec<String>>>,
 }
 
-#[async_trait]
-impl RuntimeContextRpc for PipelineRuntimeContextFixture {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
+#[tonic::async_trait]
+impl ContextRoutes for PipelineRuntimeContextFixture {
+    async fn answer(&self, call: ContextCall) -> RuntimeReply {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.paths
             .lock()
-            .map_err(|_| RuntimeContextTransportError::Unavailable)?
-            .push(request.uri().path().to_owned());
+            .map_err(|_| tonic::Status::unavailable("paths"))?
+            .push(call.route);
         self.responses
             .lock()
-            .map_err(|_| RuntimeContextTransportError::Unavailable)?
+            .map_err(|_| tonic::Status::unavailable("responses"))?
             .pop_front()
-            .ok_or(RuntimeContextTransportError::Unavailable)
+            .unwrap_or_else(|| Err(tonic::Status::unavailable("no response")))
     }
 }
 
-fn runtime_response(value: &Value) -> Response<Body> {
-    let raw = value.to_string();
-    Response::builder()
-        .status(StatusCode::OK)
-        .version(Version::HTTP_2)
-        .header("content-type", "application/json")
-        .header("cache-control", "private, no-cache, no-store")
-        .header("pragma", "no-cache")
-        .header("content-length", raw.len())
-        .body(Body::new(Full::new(Bytes::from(raw))))
-        .expect("runtime-context fixture response")
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a fixture reply is the Result the fake service answers with"
+)]
+fn runtime_response(value: &Value) -> RuntimeReply {
+    Ok(ContextAnswer::from(value))
 }
 
 type PipelineChildRuntime = (
@@ -536,7 +538,18 @@ fn direct_agent_pipeline_runtime() -> PipelineChildRuntime {
 }
 
 fn sensitive_direct_agent_pipeline_runtime() -> PipelineChildRuntime {
-    pipeline_runtime_cycles(
+    sensitive_direct_agent_pipeline_runtime_with(vec![
+        TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+        TestModelGatewayOutcome::Response(pipeline_text_response("child resumed summary")),
+    ])
+    .0
+}
+
+/// The sensitive MCP release agent with this process's model script.
+fn sensitive_direct_agent_pipeline_runtime_with(
+    outcomes: Vec<TestModelGatewayOutcome>,
+) -> (PipelineChildRuntime, CapturedModelRequests) {
+    pipeline_runtime_cycles_with_capture(
         &json!({
             "agent_type": "agent",
             "instructions": "Read the release evidence and summarize it.",
@@ -568,10 +581,7 @@ fn sensitive_direct_agent_pipeline_runtime() -> PipelineChildRuntime {
                 "openai_compatible": true
             }
         }),
-        vec![
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("child resumed summary")),
-        ],
+        outcomes,
         2,
     )
 }
@@ -625,17 +635,17 @@ fn pipeline_runtime_cycles_with_capture(
 }
 
 fn pipeline_runtime_from_responses_with_capture(
-    responses: VecDeque<Response<Body>>,
+    responses: VecDeque<RuntimeReply>,
     outcomes: Vec<TestModelGatewayOutcome>,
     calls: Arc<AtomicUsize>,
     paths: Arc<Mutex<Vec<String>>>,
 ) -> (PipelineChildRuntime, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
-        PipelineRuntimeContextFixture {
+        Routes(PipelineRuntimeContextFixture {
             responses: Mutex::new(responses),
             calls: Arc::clone(&calls),
             paths: Arc::clone(&paths),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -945,7 +955,7 @@ fn application_runtime_response(
     application_id: u64,
     version_id: u64,
     version_details: &Value,
-) -> Response<Body> {
+) -> RuntimeReply {
     runtime_response(&json!({
         "schema_version": "elitea.runtime.application-version.v1",
         "project_id": 17,
@@ -1296,6 +1306,21 @@ fn private_pipeline_session_id(request: &super::request::AgentExecutionRequest) 
     .expect("pipeline plan")
     .session_id()
     .to_owned()
+}
+
+/// The deterministic id of the graph call that `node` of `request` makes at `step`.
+fn graph_call_id(
+    request: &super::request::AgentExecutionRequest,
+    node: &str,
+    step: usize,
+) -> String {
+    let profile = PipelineExecutionProfile::validate(request, false).expect("pipeline profile");
+    super::pipeline::scoped_applications::scoped_graph_call_id(
+        &private_pipeline_session_id(request),
+        node,
+        step,
+        profile.definition().definition_digest(),
+    )
 }
 
 fn resume_request(interrupt_id: &str) -> super::request::AgentExecutionRequest {
@@ -1735,7 +1760,7 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
         assert!(
             path[0]["call_id"]
                 .as_str()
-                .is_some_and(|call_id| call_id.starts_with("pipeline:Agent1:"))
+                .is_some_and(|call_id| call_id.starts_with("pipeline-v2:Agent1:"))
         );
     }
     for event in &browser {
@@ -1759,10 +1784,7 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
-        [
-            "/executions/execution-one/generations/2/runtime-context/elitea-client-token",
-            "/executions/execution-one/generations/2/runtime-context/applications/3/versions/4"
-        ]
+        ["elitea-client-token", "applications/3/versions/4"]
     );
 }
 
@@ -1798,7 +1820,7 @@ async fn direct_saved_agent_node_resumes_exact_descendant_confirmation_from_grap
         public["response_metadata"]["parent_agent_path"],
         json!([{
             "name": "release-agent",
-            "call_id": "pipeline:delegate:0",
+            "call_id": graph_call_id(&request, "delegate", 0),
             "sibling_ordinal": 1,
         }])
     );
@@ -1811,7 +1833,10 @@ async fn direct_saved_agent_node_resumes_exact_descendant_confirmation_from_grap
         pipeline_application_event_binding(&graph_interrupt, "elitea-agent", &private_thread)
             .expect("pipeline Application checkpoint binding");
     assert_eq!(binding.node_name(), "delegate");
-    assert_eq!(binding.application_call_id(), "pipeline:delegate:0");
+    assert_eq!(
+        binding.application_call_id(),
+        graph_call_id(&request, "delegate", 0)
+    );
     assert_eq!(binding.interrupt_ids(), [interrupt_id.as_str()]);
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
 
@@ -1865,11 +1890,11 @@ async fn pipeline_agent_node_resumes_parallel_nested_confirmations_without_ident
         paths,
         HashSet::from([
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_first", "sibling_ordinal": 1},
             ]),
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_last", "sibling_ordinal": 2},
             ]),
         ])
@@ -2142,11 +2167,11 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
         paths,
         HashSet::from([
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_first", "sibling_ordinal": 1},
             ]),
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_last", "sibling_ordinal": 2},
             ]),
         ])
@@ -2167,7 +2192,10 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
     let binding =
         pipeline_application_event_binding(&graph_interrupt, "elitea-agent", &private_thread)
             .expect("pipeline Application authorization checkpoint binding");
-    assert_eq!(binding.application_call_id(), "pipeline:delegate:0");
+    assert_eq!(
+        binding.application_call_id(),
+        graph_call_id(&request, "delegate", 0)
+    );
     assert_eq!(
         binding
             .interrupt_ids()
@@ -2285,14 +2313,14 @@ async fn pipeline_agent_node_resumes_parallel_mixed_sensitive_and_authorization_
     assert_eq!(
         sensitive["response_metadata"]["parent_agent_path"],
         json!([
-            {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+            {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
             {"name": "sensitive-resolver", "call_id": "call_sensitive_child", "sibling_ordinal": 1},
         ])
     );
     assert_eq!(
         authorization["response_metadata"]["parent_agent_path"],
         json!([
-            {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+            {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
             {"name": "auth-resolver", "call_id": "call_auth_child", "sibling_ordinal": 2},
         ])
     );
@@ -2506,7 +2534,7 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
         .expect("saved-pipeline wrapper start");
     assert_eq!(
         wrapper_start["response_metadata"]["parent_agent_call_id"],
-        "pipeline:delegate:0"
+        graph_call_id(&request, "delegate", 0)
     );
     assert_eq!(
         wrapper_start["response_metadata"]["metadata"]["toolkit_type"],
@@ -2523,13 +2551,13 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
         child_model["response_metadata"]["parent_agent_path"],
         json!([{
             "name": "release-agent",
-            "call_id": "pipeline:delegate:0",
+            "call_id": graph_call_id(&request, "delegate", 0),
             "sibling_ordinal": 1,
         }])
     );
     assert!(browser.iter().any(|event| {
         event["type"] == "agent_tool_end"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == graph_call_id(&request, "delegate", 0)
     }));
     assert!(
         browser
@@ -2539,10 +2567,7 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
-        [
-            "/executions/execution-one/generations/2/runtime-context/applications/3/versions/4",
-            "/executions/execution-one/generations/2/runtime-context/elitea-client-token"
-        ]
+        ["applications/3/versions/4", "elitea-client-token"]
     );
     assert!(
         checkpointer
@@ -2571,12 +2596,12 @@ async fn saved_data_pipeline_emits_wrapper_progress_without_an_llm_node() {
     let browser = collect_pipeline_completion(invocation).await;
     assert!(browser.iter().any(|event| {
         event["type"] == "agent_tool_start"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == graph_call_id(&request, "delegate", 0)
             && event["response_metadata"]["metadata"]["toolkit_type"] == "pipeline"
     }));
     assert!(browser.iter().any(|event| {
         event["type"] == "agent_tool_end"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == graph_call_id(&request, "delegate", 0)
     }));
     assert!(
         browser
@@ -2598,6 +2623,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
     .with_runtime_clients(platform, model_facade);
     let mut request = agent_pipeline_request("release-agent", "pipeline");
     let private_thread = private_pipeline_session_id(&request);
+    let delegate_call_id = graph_call_id(&request, "delegate", 0);
     let invocation = assembler
         .assemble(authorized(&request))
         .await
@@ -2609,7 +2635,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
         .expect("nested pipeline HITL card");
     let expected_path = json!([{
         "name": "release-agent",
-        "call_id": "pipeline:delegate:0",
+        "call_id": delegate_call_id,
         "sibling_ordinal": 1,
     }]);
     assert_eq!(
@@ -2618,7 +2644,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
     );
     assert_eq!(
         interrupt["response_metadata"]["parent_agent_call_id"],
-        "pipeline:delegate:0"
+        delegate_call_id
     );
     assert_eq!(
         interrupt["response_metadata"]["hitl_interrupts"][0]["parent_agent_path"],
@@ -2660,7 +2686,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
     );
     assert!(resumed.iter().any(|event| {
         event["type"] == "agent_tool_end"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == delegate_call_id
     }));
     assert_eq!(calls.load(Ordering::Acquire), 4);
 }
@@ -2699,7 +2725,7 @@ async fn saved_pipeline_sensitive_llm_keeps_call_identity_and_wrapper_hierarchy(
         .expect("nested sensitive-tool card");
     let expected_path = json!([{
         "name": "release-agent",
-        "call_id": "pipeline:delegate:0",
+        "call_id": graph_call_id(&request, "delegate", 0),
         "sibling_ordinal": 1,
     }]);
     assert_eq!(
@@ -3443,11 +3469,11 @@ async fn pipeline_instruction_pause_proof(instructions: bool) {
         }))
     };
     let runtime = RuntimeContextClient::with_rpc(
-        PipelineRuntimeContextFixture {
+        Routes(PipelineRuntimeContextFixture {
             responses: Mutex::new(VecDeque::from([token_response(), token_response()])),
             calls: Arc::new(AtomicUsize::new(0)),
             paths: Arc::new(Mutex::new(Vec::new())),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -3784,11 +3810,11 @@ fn delegated_authorization_llm_assembler(
         }))
     };
     let runtime = RuntimeContextClient::with_rpc(
-        PipelineRuntimeContextFixture {
+        Routes(PipelineRuntimeContextFixture {
             responses: Mutex::new(VecDeque::from([token_response(), token_response()])),
             calls: Arc::new(AtomicUsize::new(0)),
             paths: Arc::new(Mutex::new(Vec::new())),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -4042,11 +4068,11 @@ fn sensitive_llm_node_assembler() -> (
         }))
     };
     let runtime = RuntimeContextClient::with_rpc(
-        PipelineRuntimeContextFixture {
+        Routes(PipelineRuntimeContextFixture {
             responses: Mutex::new(VecDeque::from([token_response(), token_response()])),
             calls: Arc::new(AtomicUsize::new(0)),
             paths: Arc::new(Mutex::new(Vec::new())),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -4393,14 +4419,14 @@ async fn pipeline_regeneration_restarts_paused_and_completed_graphs() {
             .expect("new resume assembly");
         let (mut run, _, _) = resumed.start().expect("new resume start");
         while run.next_event().await.expect("new resume event").is_some() {}
-        assert!(
+        assert_eq!(
             checkpointer
                 .load(&private_thread)
                 .await
                 .expect("load final")
                 .expect("final checkpoint")
-                .pending_nodes
-                .is_empty()
+                .pending_nodes,
+            [] as [String; 0]
         );
     }
 }

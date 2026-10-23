@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 type authorizationRow struct {
@@ -133,7 +133,7 @@ func TestPublicAuthorizerAcceptsVerifiedForwardedMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := auth.ContextWithAuthenticatedUser(context.Background(), auth.User{ID: "17"}, auth.AuthenticationSourceForwarded)
+	ctx := auth.ContextWithAuthenticatedUser(context.Background(), auth.User{ID: "17"}, auth.AuthenticationSourceSession)
 	identity, err := authorizer.AuthorizeValidation(ctx, "42", "revision-1")
 	if err != nil {
 		t.Fatal(err)

@@ -4,7 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/sandbox.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // The cloud executor's workspace runs on the sandbox supervisor (ADR-0034
 // decision 9).

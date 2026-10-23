@@ -240,7 +240,7 @@ fn non_ascii_text_is_sliced_by_byte_offsets() {
 fn a_missing_file_is_an_error_result() {
     let results = TypeScriptParser.parse_files(&["/nonexistent/dwts/x.ts".to_owned()]);
     let result = &results["/nonexistent/dwts/x.ts"];
-    assert!(result.symbols.is_empty());
+    assert_eq!(result.symbols, []);
     assert_eq!(result.errors.len(), 1);
     assert!(result.errors[0].starts_with("Parse error: "));
 }

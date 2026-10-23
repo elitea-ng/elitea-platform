@@ -10,12 +10,12 @@ package toolkits
 // nothing, so deleting an index appeared to work and the row was still there
 // on reload.
 //
-// The behaviour implemented here is taken from the legacy pylon handlers that
+// The behaviour implemented here is taken from the legacy handlers that
 // own this contract today — `legacy/plugins/elitea_core/api/v2/index_meta.py`
 // and `.../index_cancel.py` — reduced to the columns this generation's
 // `p_<project>.index_meta` table actually has (id, toolkit_id, name, status,
 // progress, meta, created_at; see internal/infra/db/migrations/001_initial.sql).
-// Legacy keeps the same records as rows in the per-toolkit PgVector
+// The legacy runtime keeps the same records as rows in the per-toolkit PgVector
 // `langchain_pg_embedding` table keyed by `cmetadata->>'collection'`; the
 // column names differ, the semantics below do not.
 //
@@ -48,11 +48,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
-// defaultScheduleUserID is legacy's "this schedule applies to every user"
+// defaultScheduleUserID is the legacy runtime's "this schedule applies to every user"
 // bucket (`UpdateIndexingSchedule.user_id` defaults to -1, and the web client
 // never sends a user_id at all). `resolveScheduleData` in IndexActions.tsx
 // falls back to exactly this key when the caller has no per-user entry.
@@ -221,8 +221,9 @@ type indexScheduleUpdate struct {
 	Credentials any     `json:"credentials"`
 	Timezone    string  `json:"timezone"`
 	// UserID selects the schedule bucket. The web client never sends it;
-	// legacy defaults it to -1 ("all users") and only resolves it to the
-	// caller for toolkits with a private pgvector configuration.
+	// legacy defaults it to -1 ("all users"); it resolved -1 to the caller
+	// only for a toolkit with a private pgvector configuration, a setting
+	// that is retired, so the registry runtime keeps -1.
 	UserID *int `json:"user_id"`
 }
 
@@ -239,7 +240,7 @@ type indexScheduleUpdate struct {
 // and still leave the modal showing its hardcoded default — a silent version
 // of the same bug this issue is about.
 //
-// Responds with the whole `indexes_meta` object, as legacy does.
+// Responds with the whole `indexes_meta` object, as the legacy runtime does.
 func (h *Handler) IndexMetaUpdate(w http.ResponseWriter, r *http.Request) {
 	target, ok := resolveIndexWriteTarget(w, r)
 	if !ok {
@@ -386,7 +387,7 @@ func (h *Handler) writeIndexSchedule(
 //     index task registry to signal: index runs are dispatched through
 //     `test_toolkit_tool` → indexersvc, whose only cancel RPC
 //     (`pipeline_cancel`) belongs to the pipelines runner, and this handler's
-//     dependencies are a pool and a ToolTester. Legacy's equivalent calls
+//     dependencies are a pool and a ToolTester. The legacy runtime's equivalent calls
 //     `self.module.task_node.stop_task(task_id)` — best-effort even there,
 //     and there is no such node here.
 //

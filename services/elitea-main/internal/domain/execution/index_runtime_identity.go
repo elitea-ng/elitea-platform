@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 const (

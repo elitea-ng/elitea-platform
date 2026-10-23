@@ -16,6 +16,7 @@ describe('createWorkspaceIpc', () => {
     await ipc.bindProject('w1', 7);
     await ipc.files('w1', 'main');
     await ipc.files('w1', '', 10);
+    await ipc.commands('w1');
     await ipc.startTurn({
       workspace_id: 'w1',
       project_id: 7,
@@ -32,6 +33,7 @@ describe('createWorkspaceIpc', () => {
     await ipc.cancelTurn('t1');
     await ipc.turnStatus('t1');
     await ipc.respondApproval('r1', 'allow_always');
+    await ipc.respondApproval('r2', 'decline', 'Keep the old name');
     await ipc.turnChanges('t1');
     await ipc.restore('t1');
     await ipc.restore('t1', 'a/b.txt');
@@ -45,6 +47,7 @@ describe('createWorkspaceIpc', () => {
       ['workspace_bind_project', { id: 'w1', project_id: 7 }],
       ['workspace_files', { workspace_id: 'w1', query: 'main' }],
       ['workspace_files', { workspace_id: 'w1', query: '', limit: 10 }],
+      ['commands_list', { workspace_id: 'w1' }],
       [
         'agent_turn_start',
         { workspace_id: 'w1', project_id: 7, conversation_id: 'c1', application_id: 3, version_id: 9, prompt: 'hi', plan_mode: true, mentions: ['src/main.rs', 'docs/'], skills: ['Style'] },
@@ -54,6 +57,7 @@ describe('createWorkspaceIpc', () => {
       ['agent_turn_cancel', { turn_id: 't1' }],
       ['agent_turn_status', { turn_id: 't1' }],
       ['approval_respond', { request_id: 'r1', decision: 'allow_always' }],
+      ['approval_respond', { request_id: 'r2', decision: 'decline', feedback: 'Keep the old name' }],
       ['turn_changes', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1', path: 'a/b.txt' }],
@@ -71,6 +75,19 @@ describe('createWorkspaceIpc', () => {
     expect(invoke.mock.calls).toEqual([
       ['thread_history', { workspace_id: 'w1', conversation_id: '42' }],
       ['thread_history_delete', { workspace_id: 'w1', conversation_id: '42' }],
+    ]);
+  });
+
+  it('copies a thread into a fork, with or without a fork point turn', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce({ copied: 2 }).mockResolvedValueOnce({ copied: 3 });
+    const ipc = createWorkspaceIpc(invoke, noListen);
+    const request = { workspaceId: 'w1', sourceConversationId: '42', targetConversationId: '88', targetConversationUuid: 'u-88' };
+    expect(await ipc.forkThreadHistory({ ...request, upToTurnId: 't2' })).toBe(2);
+    expect(await ipc.forkThreadHistory({ ...request, messageIds: { 'q-a': 'q-b' } })).toBe(3);
+    const args = { workspace_id: 'w1', source_conversation_id: '42', target_conversation_id: '88', target_conversation_uuid: 'u-88' };
+    expect(invoke.mock.calls).toEqual([
+      ['thread_history_fork', { ...args, up_to_turn_id: 't2' }],
+      ['thread_history_fork', { ...args, message_ids: { 'q-a': 'q-b' } }],
     ]);
   });
 

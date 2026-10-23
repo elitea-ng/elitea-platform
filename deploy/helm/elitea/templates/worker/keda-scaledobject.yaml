@@ -20,22 +20,22 @@
   the same way and worse — the API rejects an unknown kind, or, if a stale CRD
   is present, the object is created and no controller ever reads it.
 
-  `.Capabilities.APIVersions` is the cluster's OWN list of served API groups.
-  Asking it turns "KEDA is not installed" from a silent no-op into a failed
-  install with a message. For `helm template`, which has no cluster to ask,
-  pass `--api-versions keda.sh/v1alpha1` — deploy/helm/tests/render-worker-
-  autoscaling.sh does exactly that, and also checks that WITHOUT it the render
-  is refused.
+  KEDA counts as present from any of three sources (elitea.scaling.kedaServed):
+  this release installs it (keda.enabled); the cluster already serves
+  keda.sh/v1alpha1 (`.Capabilities.APIVersions`, the cluster's OWN list of
+  served API groups); or the operator says it is there
+  (scaling.keda.clusterInstalled), for `helm template` and Argo CD renders
+  that cannot ask. Anything else is a failed install with a message.
+  deploy/helm/tests/render-worker-autoscaling.sh and render-scaling.sh check
+  each source and the refusal without one.
 */}}
-{{- if not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
-{{- fail "worker.autoscaling.enabled=true needs KEDA, and this cluster does not serve keda.sh/v1alpha1. The worker scales on JetStream consumer lag, which no native HorizontalPodAutoscaler can read, so there is no degraded mode to fall back to: a ScaledObject applied without KEDA is an object no controller reads. Install KEDA (https://keda.sh), or set worker.autoscaling.enabled=false and size worker.replicaCount by hand. For `helm template`, pass --api-versions keda.sh/v1alpha1." }}
-{{- end }}
+{{- if eq (include "elitea.scaling.workerSource" . | trim) "keda" }}
 {{- $a := .Values.worker.autoscaling }}
 {{- if lt (int $a.maxReplicas) (int $a.minReplicas) }}
 {{- fail (printf "worker.autoscaling.maxReplicas (%d) is below minReplicas (%d)." (int $a.maxReplicas) (int $a.minReplicas)) }}
 {{- end }}
 {{- /*
-  The monitoring endpoint defaults to the NATS chart's HEADLESS service. On a
+  The monitoring endpoint defaults to the NATS server's HEADLESS service. On a
   single server either name works. On the HA cluster the scaler must reach the
   CONSUMER LEADER's /jsz (a follower reports its own, stale view): it reads
   /varz connect_urls and queries each advertised node, and when a server
@@ -43,7 +43,7 @@
   name that resolves only under the headless service (KEDA
   pkg/scalers/nats_jetstream_scaler.go getNATSJetStreamMonitoringNodeURLByNode).
 */}}
-{{- $headless := dict "service" (printf "%s-headless" .Values.nats.service) "namespace" .Values.nats.namespace -}}
+{{- $headless := dict "service" (printf "%s-headless" .Values.natsClient.service) "namespace" .Values.natsClient.namespace -}}
 {{- $endpoint := $a.natsMonitoringEndpoint | default (printf "%s:8222" (include "elitea.serviceHost" (dict "svc" $headless "ctx" .))) }}
 {{- /*
   The target per replica. KEDA's metric is num_pending + num_ack_pending of
@@ -85,6 +85,7 @@ metadata:
   # applies built-in kinds (the Deployment) before custom resources.
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    {{- include "elitea.scaling.kedaAnnotations" . | nindent 4 }}
 spec:
   scaleTargetRef:
     name: {{ include "elitea-worker.fullname" . }}
@@ -108,8 +109,8 @@ spec:
     # The worker's own durable consumer on the command bus
     # (docs/runtime-command-bus.md). The scaler reads /jsz (and, on a
     # cluster, /varz) on the NATS monitoring port — plain HTTP, no credential, so no
-    # TriggerAuthentication; deploy/helm/nats admits the KEDA operator there
-    # (networkPolicy.monitoringFrom).
+    # TriggerAuthentication; the bundled NATS admits the KEDA operator there
+    # (nats.networkPolicy.monitoringFrom).
     - type: nats-jetstream
       metadata:
         natsServerMonitoringEndpoint: {{ $endpoint | quote }}
@@ -123,7 +124,11 @@ spec:
         # AND commands a replica holds (running, or in its small prefetch).
         # The threshold is one replica's in-flight capacity (see above).
         lagThreshold: {{ $lag | toString | quote }}
-        activationLagThreshold: {{ $a.activationLagThreshold | quote }}
+        activationLagThreshold: {{ include "elitea.integer" (dict "field" "worker.autoscaling.activationLagThreshold" "value" $a.activationLagThreshold "min" 0) | quote }}
         useHttps: "false"
+    # CPU next to the lag: the HPA takes the higher of the two, so the fleet
+    # still scales when the scaler cannot read /jsz (elitea.scaling.kedaCpuTrigger).
+    {{- include "elitea.scaling.kedaCpuTrigger" $a | nindent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}

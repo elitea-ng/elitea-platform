@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 )
 
 // Recovery of a run that a deployment interrupted (demo issue 4: a run sat at

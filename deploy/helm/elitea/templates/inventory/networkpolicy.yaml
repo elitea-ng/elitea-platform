@@ -8,5 +8,5 @@
       "title" "Inventory"
       "key" "inventory"
       "grpcPort" (.Values.inventory.platformGrpc | default dict).port
-      "platformGrpc" (include "elitea-inventory.platformGrpc" .)) }}
+      "adminPort" (.Values.inventory.admin | default dict).port) }}
 {{- end }}

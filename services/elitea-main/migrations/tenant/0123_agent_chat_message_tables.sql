@@ -5,11 +5,11 @@
 -- internal/db/schema/agent_chat_baseline.sql declares it for the sqlc
 -- compiler and says why it is not a migration: "These tables already exist in
 -- each p_<project_id> schema and remain owned by the current tenant-schema
--- lifecycle." That lifecycle is pylon's. The assumption holds in
--- deploy/centry-hybrid, which still runs pylon_main; it does not hold in a
--- deployment built to drop pylon, where an authenticated agent turn fails with
--- `relation "chat_messages_text" does not exist` (SQLSTATE 42P01) before it
--- can dispatch. See #287.
+-- lifecycle." That lifecycle is the legacy runtime's. The assumption holds in
+-- deploy/centry-hybrid, which still runs the main legacy runtime; it does not
+-- hold in a deployment built to drop the legacy runtime, where an authenticated
+-- agent turn fails with `relation "chat_messages_text" does not exist`
+-- (SQLSTATE 42P01) before it can dispatch. See #287.
 --
 -- This migration owns the WHOLE graph, not just the three leaf tables the
 -- 42P01 named. An earlier revision created only chat_messages_text,
@@ -18,18 +18,19 @@
 -- chat_participant_mapping, chat_message_group, chat_message_items — as
 -- pre-existing. Nothing in this repository creates those either, so the
 -- omission failed twice over: the leaves' REFERENCES clauses had no target, so
--- the tenant chain could not apply to a clean database at all, and a pylon-free
--- deployment that got past that would still have met the same 42P01 one table
--- further in. It was invisible during the first round because the only stack it
--- was verified against restores a staging dump (deploy/scripts/load-staging-dump.sh),
--- where pylon had already created all eight.
+-- the tenant chain could not apply to a clean database at all, and a
+-- legacy-free deployment that got past that would still have met the same 42P01
+-- one table further in. It was invisible during the first round because the
+-- only stack it was verified against restores a staging dump
+-- (deploy/scripts/load-staging-dump.sh), where the legacy runtime had already
+-- created all eight.
 --
--- Every statement is IF NOT EXISTS because in a mixed deployment pylon has
--- already created these tables and owns their shape: there this migration must
--- record itself and change nothing. It becomes the definition only where
--- nothing else defines them. That is also why the parents are added to this
--- migration rather than a later one — 0123 must not reference a table that a
--- higher version number has yet to create, and it has never been applied
+-- Every statement is IF NOT EXISTS because in a mixed deployment the legacy
+-- runtime has already created these tables and owns their shape: there this
+-- migration must record itself and change nothing. It becomes the definition
+-- only where nothing else defines them. That is also why the parents are added
+-- to this migration rather than a later one — 0123 must not reference a table
+-- that a higher version number has yet to create, and it has never been applied
 -- anywhere durable, only to local clean-slate stacks.
 --
 -- The column lists mirror agent_chat_baseline.sql exactly, with two corrections

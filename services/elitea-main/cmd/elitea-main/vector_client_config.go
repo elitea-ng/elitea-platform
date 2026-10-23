@@ -44,8 +44,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 )
 
 const (
@@ -165,4 +165,24 @@ func vectorCleanupAbandonSwitch(logger *slog.Logger, lookup func(string) (string
 	logger.Warn("vector cleanup is ABANDONED by the operator: a deleted project's pending vector_data step is closed without deleting anything, and whatever vectors it had stay in the abandoned store",
 		"set", vectorCleanupAbandonEnv)
 	return true, nil
+}
+
+// projectVectorStepRecorded decides whether a project delete decided on this
+// replica records the journal's vector step (RouterConfig.
+// ProjectVectorDataRecorded).
+//
+//   - Rust indexing: always, with or without a client. Toolkit indexes are in
+//     elitea-vector whatever this replica was given, so a replica without a
+//     client records the step and leaves it pending for one that has it (or for
+//     the operator's abandon switch).
+//   - Inventory: only beside a client. Without one the replica composed an
+//     Inventory whose graphs have no vectors it could reach (the chart refuses
+//     a native engine without a vector store; the fixture runner writes none),
+//     and a recorded step would keep every project delete pending for ever with
+//     nothing to delete. DeepWiki, whose native engine writes into the same
+//     store, never records the step on its own either; the toolkit leg follows
+//     the same rule (api.WithInventoryGraphVectors wraps nothing without a
+//     client).
+func projectVectorStepRecorded(rustIndexing, holdsInventory, clientWired bool) bool {
+	return rustIndexing || (holdsInventory && clientWired)
 }

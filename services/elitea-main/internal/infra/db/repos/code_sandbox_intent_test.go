@@ -7,16 +7,17 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	httpapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
-	recoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	httpapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
+	recoveryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/protobuf/proto"
@@ -208,6 +209,47 @@ func TestOriginalCodeDispatchMigrationUsesSavedPolicyPresence(t *testing.T) {
 	explicit := storage.SavedCodeDeclaration{Recovery: json.RawMessage(`{"max_attempts":1}`)}
 	if matchOriginalCodeDispatch(storage.SavedCodeDeclaration{}, activation, 1, legacy) != nil || matchOriginalCodeDispatch(storage.SavedCodeDeclaration{}, activation, 2, legacy) == nil || matchOriginalCodeDispatch(explicit, activation, 1, legacy) == nil || matchOriginalCodeDispatch(explicit, activation, 1, code.DispatchActivation(activation, 1)) != nil {
 		t.Fatal("default Stop/explicit policy dispatch contract changed")
+	}
+}
+func TestOriginalCodeDispatchAdmitsBoundedLostRuntimeRerunsOfADefaultPolicyNode(t *testing.T) {
+	activation := strings.Repeat("1", 64)
+	legacy := strings.Repeat("a", 64)
+	none := storage.SavedCodeDeclaration{}
+	for attempt := uint16(2); attempt <= 1+MaxRuntimeLostRetries; attempt++ {
+		if matchOriginalCodeDispatch(none, activation, attempt, code.DispatchActivation(activation, attempt)) != nil {
+			t.Fatalf("lost-runtime re-run %d refused", attempt)
+		}
+		// The re-run never reuses the sealed first identity or another ordinal.
+		if matchOriginalCodeDispatch(none, activation, attempt, legacy) == nil || matchOriginalCodeDispatch(none, activation, attempt, code.DispatchActivation(activation, attempt-1)) == nil {
+			t.Fatalf("lost-runtime re-run %d admitted a foreign identity", attempt)
+		}
+	}
+	over := uint16(2 + MaxRuntimeLostRetries)
+	if matchOriginalCodeDispatch(none, activation, over, code.DispatchActivation(activation, over)) == nil || matchOriginalCodeDispatch(none, activation, 0, legacy) == nil {
+		t.Fatal("a default-policy node exceeded its lost-runtime allowance")
+	}
+	broker := storage.SavedCodeDeclaration{PlatformClient: true}
+	if matchOriginalCodeDispatch(broker, activation, 1, legacy) != nil || matchOriginalCodeDispatch(broker, activation, 2, code.DispatchActivation(activation, 2)) == nil {
+		t.Fatal("a default-policy platform-client node was admitted a re-run")
+	}
+	null := storage.SavedCodeDeclaration{Recovery: json.RawMessage(` null `)}
+	if matchOriginalCodeDispatch(null, activation, 2, code.DispatchActivation(activation, 2)) != nil {
+		t.Fatal("an explicit null recovery is the default policy and admits the lost-runtime re-run")
+	}
+}
+
+// The allowance is one value across the Worker and Main.
+func TestRuntimeLostRetryAllowanceMatchesTheSharedPolicy(t *testing.T) {
+	raw, err := os.ReadFile("../../../../../../testdata/proto/runtime/v1/code_runtime_lost_retry_policy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy struct {
+		Schema  string `json:"schema"`
+		Retries int    `json:"max_runtime_lost_retries"`
+	}
+	if json.Unmarshal(raw, &policy) != nil || policy.Schema != "elitea.runtime.code-runtime-lost-retry-policy.v1" || policy.Retries != MaxRuntimeLostRetries {
+		t.Fatalf("shared lost-runtime policy drifted: %s", raw)
 	}
 }
 func TestOriginalCodeResourceCallbackFencesCurrentWriterBeforeCommit(t *testing.T) {

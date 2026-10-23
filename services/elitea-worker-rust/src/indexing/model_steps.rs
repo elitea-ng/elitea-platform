@@ -245,13 +245,13 @@ impl Gate<'_> {
         if charge {
             if let Some((spent, budget)) = self.images {
                 spent
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                         (n < budget).then_some(n + 1)
                     })
                     .map_err(|_| GateStop::Cap(cap_message(self.cap)))?;
             }
             self.calls
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                     (n < self.cap).then_some(n + 1)
                 })
                 .map_err(|_| GateStop::Cap(cap_message(self.cap)))?;

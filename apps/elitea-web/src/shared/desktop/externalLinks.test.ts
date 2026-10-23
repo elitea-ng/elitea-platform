@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { installExternalLinks } from './externalLinks';
+import { installExternalLinks, installExternalLinksIn } from './externalLinks';
 
 let dispose: (() => void) | undefined;
 afterEach(() => {
@@ -13,7 +13,7 @@ function setup() {
   const nativeOpen = vi.fn<typeof window.open>();
   window.open = nativeOpen;
   dispose = installExternalLinks({ openExternal: open }, 'https://elitea.example.com', document, window);
-  return { open };
+  return { open, nativeOpen };
 }
 
 function click(html: string): MouseEvent {
@@ -59,6 +59,42 @@ describe('installExternalLinks', () => {
     expect(window.open('https://x.example/', '_blank')).toBeNull();
     expect(open).toHaveBeenCalledWith('https://x.example/');
     window.open('data:text/html,hi');
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the page open an inspector tab in its own (blank, same-origin) window, and nothing else', () => {
+    const { open, nativeOpen } = setup();
+    window.open('about:blank#elitea-panel=changes', 'elitea-panel-changes', 'popup');
+    expect(nativeOpen).toHaveBeenCalledWith('about:blank#elitea-panel=changes', 'elitea-panel-changes', 'popup');
+    window.open('about:blank#elitea-panel=../x');
+    window.open('about:blank');
+    expect(nativeOpen).toHaveBeenCalledTimes(1);
+    expect(open).not.toHaveBeenCalled();
+  });
+});
+
+describe('installExternalLinksIn', () => {
+  it('handles a panel window\'s links like the main window\'s, until removed or uninstalled', () => {
+    const { open } = setup();
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const panel = frame.contentDocument as Document;
+    const clickIn = (): void => {
+      panel.body.innerHTML = '<a href="/docs" target="_blank">d</a>';
+      panel.querySelector('a')?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    };
+    const remove = installExternalLinksIn(panel);
+    clickIn();
+    expect(open).toHaveBeenCalledWith('https://elitea.example.com/docs');
+    remove();
+    clickIn();
+    expect(open).toHaveBeenCalledTimes(1);
+
+    // Without the desktop's handler there is nothing to install.
+    dispose?.();
+    dispose = undefined;
+    installExternalLinksIn(panel);
+    clickIn();
     expect(open).toHaveBeenCalledTimes(1);
   });
 });

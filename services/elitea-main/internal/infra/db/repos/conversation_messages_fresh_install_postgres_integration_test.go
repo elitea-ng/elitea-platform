@@ -8,17 +8,17 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	bootstrapschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrations"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	bootstrapschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // A FRESH INSTALL, not the corpus.
 //
 // Every other transcript test in this package reaches its database through
 // db.RunMigrations or the dbtest template, and both of those build p_1 from the
-// pylon-era schema PLUS the ledgered tenant history. That combination hides the
+// legacy-era schema PLUS the ledgered tenant history. That combination hides the
 // defect these tests exist for: `migrations/tenant/0123` and `0127` create
 // chat_messages_text and chat_messages_attachment, so a corpus-built tenant has
 // them no matter what 001_initial.sql does.
@@ -33,7 +33,7 @@ import (
 // added is absent.
 //
 // newFreshInstallPool reproduces that state precisely: a private empty
-// database, then migrate.Bootstrap with the embedded pylon-era schema, which is
+// database, then migrate.Bootstrap with the embedded legacy-era schema, which is
 // the same call cmd/elitea-migrate makes on a first install. Nothing else runs.
 func newFreshInstallPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -43,7 +43,7 @@ func newFreshInstallPool(t *testing.T) *pgxpool.Pool {
 
 	applied, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial)
 	if err != nil {
-		t.Fatalf("bootstrap the pylon-era schema: %v", err)
+		t.Fatalf("bootstrap the legacy-era schema: %v", err)
 	}
 	if !applied {
 		t.Fatal("Bootstrap reported nothing to do on an empty database")

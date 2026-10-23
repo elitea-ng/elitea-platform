@@ -70,9 +70,9 @@ import (
 	"sort"
 	"strconv"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // parseProjectID turns the URL segment into the integer the whitelist stores.
@@ -116,7 +116,7 @@ func (h *Handler) mcpFlags(ctx context.Context) mcpFlagState {
 // requireMCPEnabled is the gate on the MCP HTTP surface.
 //
 // It returns true when the request may proceed. The 403 and its wording match
-// pylon's (`legacy/plugins/elitea_core/api/v2/mcp_dcr_proxy.py:54`), because the
+// the legacy runtime's (`legacy/plugins/elitea_core/api/v2/mcp_dcr_proxy.py:54`), because the
 // existing clients of these routes were written against that answer.
 //
 // This is the half of the master switch that cannot be done in the client. The

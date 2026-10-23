@@ -55,7 +55,9 @@ fn vectors() -> BTreeMap<&'static str, &'static str> {
 fn decode_hex(raw: &str) -> Vec<u8> {
     raw.trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
                 .expect("fixture hex")
@@ -1194,6 +1196,15 @@ impl crate::agents::runtime::NativeAgentCompletionSelector for UnusedRecoveryCom
         crate::agents::runtime::NativeAgentAssemblyError,
     > {
         panic!("failed assembly cannot select a result")
+    }
+
+    async fn select_static_pause(
+        self,
+    ) -> Result<
+        crate::agents::events::CompletedAgentBrowserOutput,
+        crate::agents::runtime::NativeAgentAssemblyError,
+    > {
+        self.select().await
     }
 }
 #[async_trait]

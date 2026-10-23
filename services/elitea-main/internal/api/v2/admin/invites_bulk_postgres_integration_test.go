@@ -3,7 +3,7 @@ package admin_test
 // Acceptance for the cross-project bulk membership invite (issue 247,
 // internal/api/v2/admin/invites_bulk.go).
 //
-// A 200 proves nothing here. pylon's own version of this endpoint answers
+// A 200 proves nothing here. The legacy version of this endpoint answers
 // `{"ok": true, "logs": "..."}` for every request it does not crash on, and the
 // class of defect this platform keeps finding — a route that answers success
 // and writes nothing (#128, #130) — is exactly what a bulk write invites. So
@@ -27,8 +27,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -81,7 +81,7 @@ func bulkInviteRouter(handler *admin.Handler) chi.Router {
 }
 
 // newBulkInviteEnvironment seeds the roles fixture plus three accounts: two
-// ordinary users and one service account, which pylon's own loop skips
+// ordinary users and one service account, which the legacy loop skips
 // (invites_bulkusers.py:57).
 func newBulkInviteEnvironment(t *testing.T) (*pgxpool.Pool, chi.Router, int64, int64, int64) {
 	t.Helper()
@@ -102,7 +102,7 @@ func newBulkInviteEnvironment(t *testing.T) (*pgxpool.Pool, chi.Router, int64, i
 	first := newUser("bulk-first@autotest.local", "First")
 	second := newUser("bulk-second@autotest.local", "Second")
 	// The service account. Both shapes the resolver refuses are present: the
-	// pylon name prefix AND this platform's own `@centry.user` address.
+	// legacy name prefix AND this platform's own `@centry.user` address.
 	service := newUser("project_4@centry.user", ":system:project:4")
 	return pool, bulkInviteRouter(admin.NewHandler(pool)), first, second, service
 }
@@ -179,7 +179,7 @@ func TestBulkInviteWritesEveryPairOfTheCrossProduct(t *testing.T) {
 func TestBulkInviteAddsTheRoleAndKeepsTheOnesAlreadyHeld(t *testing.T) {
 	pool, router, first, _, _ := newBulkInviteEnvironment(t)
 
-	// The user is already an admin of project 2. pylon's own write REPLACES
+	// The user is already an admin of project 2. The legacy write REPLACES
 	// the role set (rpc/roles.py:137-148), which over "all users" demotes every
 	// project admin to whatever the operator typed. This must not.
 	if _, err := pool.Exec(context.Background(), `
@@ -203,8 +203,9 @@ WHERE role.project_id = 2 AND role.name = 'admin'`, first); err != nil {
 
 /* ── mixed batch ───────────────────────────────────────────────────────── */
 
-// TestBulkInviteReportsEveryOutcomeOfAMixedBatch is the case pylon cannot
-// express: one submission whose pairs end five different ways, each named.
+// TestBulkInviteReportsEveryOutcomeOfAMixedBatch is the case the legacy runtime
+// cannot express: one submission whose pairs end five different ways, each
+// named.
 func TestBulkInviteReportsEveryOutcomeOfAMixedBatch(t *testing.T) {
 	pool, router, first, _, service := newBulkInviteEnvironment(t)
 	const missingUser = int64(999001)
@@ -300,8 +301,9 @@ func TestBulkInviteRefusesARoleTheProjectDoesNotDefine(t *testing.T) {
 
 // A personal project is one account's own space — the platform provisions
 // exactly one per user, named `project_user_<id>` — so a bulk form may not
-// place a stranger in it. pylon has no such guard: its "add every user to a
-// project" page would write every account on the platform into project_user_9.
+// place a stranger in it. The legacy runtime has no such guard: its "add every
+// user to a project" page would write every account on the platform into
+// project_user_9.
 func TestBulkInviteRefusesAPersonalProject(t *testing.T) {
 	pool, router, first, second, _ := newBulkInviteEnvironment(t)
 

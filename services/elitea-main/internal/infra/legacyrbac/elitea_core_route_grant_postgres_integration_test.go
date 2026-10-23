@@ -25,9 +25,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const eliteaCoreRouteGrantMigration = "shared/0068_elitea_core_route_permissions.sql"
@@ -149,7 +149,7 @@ func TestEliteaCoreRouteGrantsGiveANonMemberNothing(t *testing.T) {
 }
 
 // A project that carries its OWN per-project grants — the shape every
-// pylon-backed database, every legacy dump and the E2E stack all have —
+// legacy-backed database, every legacy dump and the E2E stack all have —
 // suppresses the central fallback entirely, so this migration cannot change
 // what an existing deployment's members can do. It is also why a seeded stack
 // has to list these strings itself.

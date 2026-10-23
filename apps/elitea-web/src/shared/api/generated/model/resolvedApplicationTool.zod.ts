@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -40,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ResolvedPlatformTool } from "./resolvedPlatformTool.zod";
 import { ResolvedToolkitRef } from "./resolvedToolkitRef.zod";
 
 export const ResolvedApplicationTool = zod
@@ -62,18 +64,26 @@ export const ResolvedApplicationTool = zod
     server_name: zod
       .string()
       .optional()
-      .describe("A `platform_mcp` tool's server."),
+      .describe(
+        "A `platform_mcp` tool's server (its internal builder type, `mcp_elitea_internal_*`).",
+      ),
     selected_tools: zod
       .array(zod.string())
       .optional()
       .describe(
-        "A `remote_toolkit`'s tools the version may call, after the guardrails removed blocked ones. Read it with `all_tools`: an empty list means every tool only when `all_tools` is true.",
+        "A `remote_toolkit`'s (and, from client contract 1.16, a `platform_mcp`'s) tools the version may call, after the guardrails removed blocked ones. Read it with `all_tools`: an empty list means every tool only when `all_tools` is true.",
       ),
     all_tools: zod
       .boolean()
       .optional()
       .describe(
-        "A `remote_toolkit`'s: true when the author selected no tool, which means every tool of the toolkit (as in chat; the guardrails still block theirs). False with an empty `selected_tools` means the guardrails blocked every selected tool: the agent may call none. executeRemoteToolkitTool admits exactly this selection.",
+        "A `remote_toolkit`'s: true when the author selected no tool, which means every tool of the toolkit (as in chat; the guardrails still block theirs). False with an empty `selected_tools` means the guardrails blocked every selected tool: the agent may call none. executeRemoteToolkitTool admits exactly this selection. A `platform_mcp`'s (client contract 1.16) is true while the guardrails block none of the server's tools (a cloud turn's internal MCP has every tool of the server); once they block one, it is false and `selected_tools` lists the remaining tools.",
+      ),
+    tools: zod
+      .array(ResolvedPlatformTool)
+      .optional()
+      .describe(
+        "A `platform_mcp`'s tools the version may call, with their descriptions (at most 512 bytes each), as the server's internal MCP endpoint lists them (client contract 1.16); a blocked tool is never listed. Absent when the server cannot list them (no MCP server is composed).",
       ),
     toolkit_ref: ResolvedToolkitRef.optional(),
   })

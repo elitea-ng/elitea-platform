@@ -526,6 +526,8 @@ async fn harness_full(
             index: None,
             sandbox_deny: crate::d0::turn::app_dirs_for_sandbox([Some(app.path().to_owned())]),
             app_id: None,
+            user_rules_dir: None,
+            user_commands_dir: None,
         })
         .unwrap(),
     );
@@ -820,16 +822,15 @@ async fn a_secret_blocks_the_send_and_the_policy_gates_it() {
         .await
         .unwrap();
     assert_eq!(sent.state, "CLOUD_IDLE");
-    // Off by policy.
+    // Off by the device policy: the reason is the device's.
     *h.policy.0.lock().unwrap() = json!({"allowed": true});
-    assert_eq!(
-        h.host
-            .preview(&h.workspace_id, CONVERSATION, Vec::new())
-            .await
-            .unwrap_err()
-            .code,
-        "cloud_handoff_disabled"
-    );
+    let error = h
+        .host
+        .preview(&h.workspace_id, CONVERSATION, Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "cloud_handoff_disabled");
+    assert_eq!(error.details, json!({"reason": "device_off"}));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -891,6 +892,10 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         plan_mode: false,
         mentions: Vec::new(),
         skills: Vec::new(),
+        compact: false,
+        model: None,
+        project_skills: Vec::new(),
+        command: None,
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -1125,16 +1130,39 @@ async fn the_policy_is_read_before_begin_and_404_falls_back_to_defaults() {
         .collect();
     assert_eq!(caps, ["max_segment_bytes", "project_workspace_bytes_left"]);
     assert!(h.platform.lock().unwrap().begin.is_none());
-    // A policy that is off refuses at once.
+    // A policy that is off refuses at once, with the server's reason.
+    h.platform.lock().unwrap().policy = Some(server_policy(
+        json!({"enabled": false, "disabled_reason": "no_executor"}),
+    ));
+    let error = h
+        .host
+        .preview(&h.workspace_id, CONVERSATION, Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "cloud_handoff_disabled");
+    assert_eq!(error.details, json!({"reason": "no_executor"}));
+    // A server that names no reason: no details, the generic text.
     h.platform.lock().unwrap().policy = Some(server_policy(json!({"enabled": false})));
-    assert_eq!(
-        h.host
-            .preview(&h.workspace_id, CONVERSATION, Vec::new())
-            .await
-            .unwrap_err()
-            .code,
-        "cloud_handoff_disabled"
-    );
+    let error = h
+        .host
+        .preview(&h.workspace_id, CONVERSATION, Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "cloud_handoff_disabled");
+    assert_eq!(error.details, Value::Null);
+}
+
+/// The begin route's 403 carries `details.reason`; the host passes it on.
+#[test]
+fn a_server_refusal_keeps_its_reason() {
+    let error = super::answer_error(&crate::d0::api::Answer {
+        status: 403,
+        body: json!({"error": "cloud_handoff_disabled", "message": "off",
+                     "details": {"reason": "storage_encryption_unconfirmed"}}),
+        etag: None,
+    });
+    assert_eq!(error.code, "cloud_handoff_disabled");
+    assert_eq!(error.details["reason"], "storage_encryption_unconfirmed");
 }
 
 /// Risk 4: after begin, a refusal by the begin answer's caps, an upload
@@ -1270,20 +1298,6 @@ async fn status_many_is_local_first_and_cached() {
     assert_eq!(h.platform.lock().unwrap().state_gets, 1, "cached");
 }
 
-static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-struct CaptureLog;
-
-impl log::Log for CaptureLog {
-    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-        true
-    }
-    fn log(&self, record: &log::Record<'_>) {
-        LOG.lock().unwrap().push(format!("{}", record.args()));
-    }
-    fn flush(&self) {}
-}
-
 fn files_containing(dir: &Path, needle: &[u8], out: &mut Vec<String>) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
@@ -1305,10 +1319,11 @@ fn files_containing(dir: &Path, needle: &[u8], out: &mut Vec<String>) {
 /// no disk under the app data, in no log line and in no event.
 #[tokio::test(flavor = "multi_thread")]
 async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
-    let _ = log::set_logger(&CaptureLog).map(|()| log::set_max_level(log::LevelFilter::Trace));
+    crate::testutil::capture_log();
     log::info!("capture probe");
     assert!(
-        LOG.lock()
+        crate::testutil::LOG
+            .lock()
             .unwrap()
             .iter()
             .any(|line| line == "capture probe"),
@@ -1413,7 +1428,8 @@ async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
     files_containing(h.app.path(), planted.as_bytes(), &mut found);
     assert!(found.is_empty(), "{found:?}");
     assert!(
-        !LOG.lock()
+        !crate::testutil::LOG
+            .lock()
             .unwrap()
             .iter()
             .any(|line| line.contains(planted))
@@ -1688,6 +1704,10 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         plan_mode: false,
         mentions: Vec::new(),
         skills: Vec::new(),
+        compact: false,
+        model: None,
+        project_skills: Vec::new(),
+        command: None,
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 type nodeEventProjectorStub struct {
@@ -78,38 +78,6 @@ func TestNodeEventServiceRejectsStaleFenceBeforeProjection(t *testing.T) {
 	}
 	if len(projector.frames) != 0 {
 		t.Fatal("stale node event reached projection")
-	}
-}
-
-func TestNodeEventFrameSelectsOnlyCurrentInProgressTaskRestampSource(t *testing.T) {
-	frame := validNodeEventFrame()
-	frame.BrowserData = []byte(`{
-		"type":"agent_index_data_status",
-		"response_metadata":{
-			"state":"in_progress",
-			"created_at":1700000000.25,
-			"task_id":"forged-task",
-			"project_id":999,
-			"toolkit_id":999,
-			"index_name":"forged"
-		}
-	}`)
-	createdOn, selected := frame.CurrentIndexMetaTaskRestampSource()
-	if !selected || createdOn != 1700000000.25 {
-		t.Fatalf("task restamp source=(%v, %v)", createdOn, selected)
-	}
-
-	for _, browserData := range []string{
-		`{"type":"agent_thinking_step","response_metadata":{"state":"in_progress","created_at":1700000000}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"completed","created_at":1700000000}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"in_progress","created_at":"1700000000"}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"in_progress","created_at":0}}`,
-		`{"type":"agent_index_data_status","response_metadata":{"state":"in_progress"}}`,
-	} {
-		frame.BrowserData = []byte(browserData)
-		if _, selected := frame.CurrentIndexMetaTaskRestampSource(); selected {
-			t.Fatalf("unexpected task restamp source: %s", browserData)
-		}
 	}
 }
 

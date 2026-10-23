@@ -103,7 +103,7 @@ fn nested_configuration_is_bounded_deduplicated_and_secret_safe() {
             "fixture-secret",
         ))
         .expect("empty or null selection means all tools");
-        assert!(parsed.selected_tools().is_empty());
+        assert_eq!(parsed.selected_tools(), []);
     }
 
     for invalid in [

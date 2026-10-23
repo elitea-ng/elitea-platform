@@ -3,8 +3,8 @@ package runtimecomposition
 import (
 	"fmt"
 
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -12,11 +12,17 @@ import (
 // same sqlc-backed toolkit reader and claim-mode settings resolver as native
 // direct execution. The caller supplies the already-built settings resolver so
 // this path cannot acquire a second configuration expander or vault.
+//
+// projectOwned is the provenance twin
+// (CurrentConfigurationsRuntime.NewProjectOwnedToolkitSettingsResolver). It is
+// required: without it the proxy cannot tell a global secret from a project
+// one and refuses every settings-written token endpoint (#1286).
 func NewCurrentDelegatedAuthToolkitSettings(
 	pool *pgxpool.Pool,
 	settings toolkitexecutionapp.CurrentToolkitSettingsResolver,
+	projectOwned toolkitexecutionapp.CurrentToolkitSettingsResolver,
 ) (*toolkitexecutionapp.CurrentDelegatedAuthToolkitSettings, error) {
-	if pool == nil || settings == nil {
+	if pool == nil || settings == nil || projectOwned == nil {
 		return nil, fmt.Errorf("compose delegated authorization toolkit settings: dependencies are required")
 	}
 	builtIn, err := LoadPinnedCurrentToolkitSchemaSnapshot()
@@ -39,5 +45,5 @@ func NewCurrentDelegatedAuthToolkitSettings(
 	if err != nil {
 		return nil, fmt.Errorf("construct delegated authorization settings resolver: %w", err)
 	}
-	return resolver, nil
+	return resolver.WithProjectOwnedToolkitSettings(projectOwned), nil
 }

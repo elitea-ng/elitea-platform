@@ -1,0 +1,18 @@
+# The runtime-CA issuer the chart references by name and does NOT create
+# (deepwiki/inventory.callbackClient.certManager.issuerRef, vector.mtls.issuerRef,
+# and through it the bundled Qdrant's TLS Certificate): elitea-runtime-ca, kind
+# ClusterIssuer. It is backed by deploy/scripts/gen-runtime-certs.sh's
+# runtime-ca, the CA elitea-main's platform listener already verifies clients
+# against, so the certificates cert-manager issues here and the runtime
+# material kind-stack.sh mounts by hand share one trust root.
+#
+# kind-stack.sh creates the Secret (elitea-runtime-ca-tls, type kubernetes.io/tls)
+# in the cert-manager namespace before applying this, for the same reason as
+# ca-issuer.yaml: a ClusterIssuer's `ca.secretName` is resolved there.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: elitea-runtime-ca
+spec:
+  ca:
+    secretName: elitea-runtime-ca-tls

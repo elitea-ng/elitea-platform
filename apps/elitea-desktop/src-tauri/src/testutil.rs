@@ -175,3 +175,24 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Req> {
         raw,
     })
 }
+
+/// Every log line of the test binary since the first [`capture_log`] (the
+/// logger is process-wide: every test that inspects logs shares this one).
+pub static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+struct CaptureLog;
+
+impl log::Log for CaptureLog {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        LOG.lock().unwrap().push(format!("{}", record.args()));
+    }
+    fn flush(&self) {}
+}
+
+/// Route the `log` crate into [`LOG`] (idempotent).
+pub fn capture_log() {
+    let _ = log::set_logger(&CaptureLog).map(|()| log::set_max_level(log::LevelFilter::Trace));
+}

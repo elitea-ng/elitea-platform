@@ -10,9 +10,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	configurationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const (

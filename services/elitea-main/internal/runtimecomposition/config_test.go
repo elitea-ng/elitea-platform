@@ -1,12 +1,13 @@
 package runtimecomposition
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 
-	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
 )
 
 func TestConfigFromEnvIsDisabledByDefaultAndFailClosedWhenEnabled(t *testing.T) {
@@ -130,7 +131,6 @@ func TestConfigAgentExecutionDispatchIsOptionalAndMayShareTheIndexStream(t *test
 
 	environment := validEnvironment()
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	config, err := ConfigFromEnv(mapLookup(environment))
 	if err != nil {
@@ -151,35 +151,38 @@ func TestConfigAgentExecutionDispatchIsOptionalAndMayShareTheIndexStream(t *test
 	environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
 	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	if _, err := ConfigFromEnv(mapLookup(environment)); err != nil {
 		t.Fatalf("shared index/agent stream was rejected: %v", err)
 	}
 }
 
-func TestConfigAgentExecutionCurrentMainOriginFailsClosed(t *testing.T) {
-	for name, value := range map[string]string{
-		"plaintext": "http://elitea-gateway",
-		"path":      "https://elitea-gateway/api",
-		"userinfo":  "https://user@elitea-gateway",
-	} {
-		t.Run(name, func(t *testing.T) {
-			environment := validEnvironment()
-			environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-			environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
-			environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = value
-			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {
-				t.Fatalf("unsafe current Main origin accepted: %q", value)
-			}
-		})
+// ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL is retired (#1359 U5): the internal MCP
+// builders are InternalToolService on the platform gRPC listener. Any value an
+// older deployment still sets is refused at boot, naming the variable, with
+// agent dispatch on or off.
+func TestConfigRefusesTheRetiredCurrentMainBaseURL(t *testing.T) {
+	for name, dispatch := range map[string]string{"dispatch on": "true", "dispatch off": ""} {
+		for _, value := range []string{"https://elitea-main:9446", "http://127.0.0.1:8080"} {
+			t.Run(name+" "+value, func(t *testing.T) {
+				environment := validEnvironment()
+				if dispatch != "" {
+					environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = dispatch
+					environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
+				}
+				environment[RetiredCurrentMainBaseURLEnv] = value
+				_, err := ConfigFromEnv(mapLookup(environment))
+				if err == nil || !strings.Contains(err.Error(), RetiredCurrentMainBaseURLEnv) || !strings.Contains(err.Error(), "retired") {
+					t.Fatalf("the retired variable was not refused: %v", err)
+				}
+			})
+		}
 	}
-
 	environment := validEnvironment()
-	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
+	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	if _, err := ConfigFromEnv(mapLookup(environment)); err == nil ||
 		!strings.Contains(err.Error(), "explicit enablement") {
-		t.Fatalf("current Main origin without agent dispatch error=%v", err)
+		t.Fatalf("an agent stream without agent dispatch error=%v", err)
 	}
 }
 
@@ -394,6 +397,24 @@ func TestConfigNATSURLAndIdentityContract(t *testing.T) {
 	config, err := ConfigFromEnv(mapLookup(environment))
 	if err != nil || config.NATSMaterial.Enabled() {
 		t.Fatalf("the plaintext compose posture: enabled=%t err=%v", config.NATSMaterial.Enabled(), err)
+	}
+}
+
+// #966: the env parse follows the repository ceiling (4096), not the former
+// 1024, and still refuses anything above it.
+func TestConfigMaxOutstandingAcceptsCapsAboveTheFormer1024Ceiling(t *testing.T) {
+	for _, raw := range []string{"1025", "2048", "4096"} {
+		env := validEnvironment()
+		env["ELITEA_RUNTIME_MAX_OUTSTANDING"] = raw
+		config, err := ConfigFromEnv(mapLookup(env))
+		if err != nil || fmt.Sprint(config.MaxOutstanding) != raw {
+			t.Fatalf("ELITEA_RUNTIME_MAX_OUTSTANDING=%s: config=%d err=%v", raw, config.MaxOutstanding, err)
+		}
+	}
+	env := validEnvironment()
+	env["ELITEA_RUNTIME_MAX_OUTSTANDING"] = "4097"
+	if _, err := ConfigFromEnv(mapLookup(env)); err == nil {
+		t.Fatal("accepted ELITEA_RUNTIME_MAX_OUTSTANDING=4097")
 	}
 }
 

@@ -54,7 +54,7 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// PipelineRunner, ToolTester and MCPSyncer from RouterConfig entirely,
 		// together with internal/infra/indexersvc — the prototype Redis RPC
 		// client that was their only implementation. It published raw JSON to
-		// the "elitea_rpc" channel that pylon-indexer serves through arbiter's
+		// the "elitea_rpc" channel the legacy indexer serves through arbiter's
 		// gzip(pickle(...)) codec, so every call was dropped on decode; wiring
 		// it would have traded an immediate 404 for a 30s timeout and a 500.
 		//
@@ -112,9 +112,9 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// exact shape this map is meant to make visible, and the entries hid
 		// it instead, because the map cannot tell a deliberate absence from a
 		// forgotten one when the reason is written by the same hand that
-		// forgot. The fields, the pylon reverse proxy and the shadow
+		// forgot. The fields, the legacy reverse proxy and the shadow
 		// comparator behind them, and the internal-admin token that gated
-		// their routes, are all deleted. TestNoPylonBridgeWiringReturns fails
+		// their routes, are all deleted. TestNoLegacyBridgeWiringReturns fails
 		// if any of it comes back.
 	}
 
@@ -262,7 +262,7 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// DocumentLoadersResponse — {items, total} — so turning the flag on made
 		// the shipped generated client drift. #394 removed the conflict rather
 		// than the flag: internal/api/v2/indextypes now answers the published
-		// envelope BESIDE the Pylon keys, from one snapshot read, and
+		// envelope BESIDE the legacy keys, from one snapshot read, and
 		// deploy/helm/elitea/values-standalone.yaml sets the flag. The entry is
 		// gone because the check above turns a kept entry into a failure once a
 		// deployment assigns the flag.

@@ -12,8 +12,8 @@ import (
 // adminUIEmails resolves the admin console operator's address for the nav
 // footer.
 //
-// The admin SPA is served to a browser whose identity arrives as X-Auth-*
-// headers, and those headers carry an ID and never an address. The footer read
+// The admin SPA is served to a browser whose Form session carries a user ID
+// and never an address. The footer read
 // the injected `user_name`, found it empty, and fell back to the generic word
 // "Admin" on every load. This read fills it.
 //

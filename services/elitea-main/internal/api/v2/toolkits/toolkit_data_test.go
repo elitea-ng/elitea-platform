@@ -14,7 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 )
 
 // rowFirstRepo records which delete the handler asked for. Its row-first

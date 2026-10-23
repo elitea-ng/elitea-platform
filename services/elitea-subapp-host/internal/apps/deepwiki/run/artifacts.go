@@ -2,19 +2,18 @@ package run
 
 import (
 	"fmt"
-	"regexp"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
-// The artifact upload path. The transport — the platform's artifact route,
-// the bearer, the multipart shape, the refusal texts — moved to
-// internal/artifacts in ADR-0023 stage H4c, because none of it is
-// DeepWiki's; the names below stay so the composition here reads as it did.
+// The artifact upload path. The transport — the platform's artifact service,
+// the bearer, the refusal texts — moved to internal/artifacts in ADR-0023
+// stage H4c, because none of it is DeepWiki's; the names below stay so the
+// composition here reads as it did.
 //
 // What did NOT move is the derivation: llm_settings is the legacy plugin's
-// dict, and reading a base URL, a key and a project out of it (including
-// "no transport at all") is that plugin's contract, not the platform's.
+// dict, and reading a key and a project out of it (including "no transport
+// at all") is that plugin's contract, not the platform's.
 
 // ArtifactClient puts one object into a bucket.
 type ArtifactClient = artifacts.Client
@@ -25,49 +24,29 @@ type ArtifactClientFactory = artifacts.Factory
 // ArtifactSettings is the transport derived from one request's llm_settings.
 type ArtifactSettings = artifacts.Settings
 
-// HTTPArtifactClient uploads through the platform's artifact API.
-type HTTPArtifactClient = artifacts.HTTPClient
-
-// DefaultAPIPath is the platform API prefix the artifact routes live under.
-const DefaultAPIPath = artifacts.DefaultAPIPath
-
-// NewHTTPArtifactClient builds the upload transport, trusting caFile when given.
-func NewHTTPArtifactClient(settings ArtifactSettings, caFile string) (*HTTPArtifactClient, error) {
-	return artifacts.NewHTTPClient(settings, caFile)
-}
-
-var llmSuffix = regexp.MustCompile(`/llm(/api)?(/v\d+)?/?$`)
-
-// ExtractArtifactSettings is the legacy derivation, verbatim: api_base or
-// openai_api_base with `/llm[/api][/vN]` stripped; api_key or
+// ExtractArtifactSettings is the legacy derivation: api_key or
 // openai_api_key; the project from organization, openai_organization or
-// project_id, in that order.
+// project_id, in that order. api_base is not read: since #1359 U5 it only
+// names the model route, and the artifact service's address is the host's
+// own ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL.
 func ExtractArtifactSettings(llmSettings map[string]any) ArtifactSettings {
-	apiBase := firstTruthy(llmSettings["api_base"], llmSettings["openai_api_base"], "")
 	apiKey := firstTruthy(llmSettings["api_key"], llmSettings["openai_api_key"], "")
 	project := firstTruthy(llmSettings["organization"], llmSettings["openai_organization"], llmSettings["project_id"], "")
-	secret := firstTruthy(llmSettings["x_secret"], "secret")
-	return ArtifactSettings{
-		BaseURL:   llmSuffix.ReplaceAllString(fmt.Sprint(apiBase), ""),
-		APIKey:    fmt.Sprint(apiKey),
-		ProjectID: fmt.Sprint(project),
-		APIPath:   DefaultAPIPath,
-		XSecret:   fmt.Sprint(secret),
-	}
+	return ArtifactSettings{APIKey: fmt.Sprint(apiKey), ProjectID: fmt.Sprint(project)}
 }
 
-// ArtifactClientFrom is the default factory: nil without BOTH halves of the
-// transport (a direct SPI call, the P0 fixtures), else an HTTP client.
-// caFile, when set, is trusted for the callback hop — the shell read the
-// same ELITEA_DEEPWIKI_TLS_CA_FILE for its `verify=`.
-func ArtifactClientFrom(caFile string) ArtifactClientFactory {
-	return func(llmSettings map[string]any) (ArtifactClient, error) {
-		if !Truthy(llmSettings["api_base"]) && !Truthy(llmSettings["openai_api_base"]) {
-			return nil, nil
-		}
-		if !Truthy(llmSettings["api_key"]) && !Truthy(llmSettings["openai_api_key"]) {
-			return nil, nil
-		}
-		return NewHTTPArtifactClient(ExtractArtifactSettings(llmSettings), caFile)
-	}
+// hasTransport is the legacy "both halves" rule: a request carries a
+// transport only with an api_base AND an api_key (a direct SPI call and the
+// P0 fixtures carry neither).
+func hasTransport(llmSettings map[string]any) bool {
+	return (Truthy(llmSettings["api_base"]) || Truthy(llmSettings["openai_api_base"])) &&
+		(Truthy(llmSettings["api_key"]) || Truthy(llmSettings["openai_api_key"]))
+}
+
+// ArtifactClientFrom is the default factory: nil without both halves of the
+// transport, else a client of elitea.runtime.v1.ArtifactObjectService over
+// the callback hop (the platform listener, the runtime CA, the callback
+// client certificate), bound to the request's bearer and project.
+func ArtifactClientFrom(callback artifacts.Callback) ArtifactClientFactory {
+	return artifacts.FactoryFor(callback, ExtractArtifactSettings, hasTransport)
 }

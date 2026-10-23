@@ -4,7 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // SignatureProfileV1 identifies the complete signature-input and algorithm
 // contract. TEST_ONLY_HMAC_SHA256 is a public offline vector and must be

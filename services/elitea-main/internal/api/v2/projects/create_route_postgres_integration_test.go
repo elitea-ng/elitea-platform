@@ -31,7 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,20 +43,20 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	v2apps "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (
@@ -98,7 +98,7 @@ const (
 // readers treat as "never set", so a project with no vault no longer 500s and
 // this test is no longer what stands between a new project and an empty model
 // picker. It still pins the vault the route must create: the secrets API reads
-// it, and pylon provisions one with every project.
+// it, and the legacy runtime provisions one with every project.
 func TestCreateProjectRouteGivesTheNewProjectAUsableSecretsVault(t *testing.T) {
 	pool := newOnboardingPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

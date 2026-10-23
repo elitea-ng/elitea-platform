@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
 
 const projectViewerRole = "viewer"
@@ -66,7 +66,7 @@ func (r *PostgresRepository) Provision(
 		return identity.ProvisionResult{UserID: int64(user.ID), Suspended: true}, nil
 	}
 
-	// pylon also added every new user to root group 1
+	// The legacy runtime also added every new user to root group 1
 	// (auth_core__user_group). That write is deliberately not ported: this
 	// service's RBAC never reads the group tables (internal/infra/legacyrbac
 	// resolves from user_role and project_user_role only), and a database

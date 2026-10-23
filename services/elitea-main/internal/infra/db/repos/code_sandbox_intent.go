@@ -11,13 +11,13 @@ import (
 	"strconv"
 	"time"
 
-	recoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	recovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	recoveryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	recovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -602,17 +602,28 @@ func (r *CodeIntentRepository) AuthorizeCodeWorkspaceCompile(ctx context.Context
 
 var _ storage.OriginalCodeWorkspaceCompileAuthorizer = (*CodeIntentRepository)(nil)
 
+// MaxRuntimeLostRetries is the Worker's platform allowance for re-running a Code
+// attempt whose sandbox runtime was lost (node loss, eviction, a platform kill):
+// elitea-agent-runtime MAX_RUNTIME_LOST_RETRIES. Both sides pin the value in
+// testdata/proto/runtime/v1/code_runtime_lost_retry_policy.json.
+const MaxRuntimeLostRetries = 2
+
 // Omitted recovery policy preserves the compiler migration's legacy first dispatch.
 // Main pins that sealed Worker identity; it does not reconstruct NodeContext state.
+// Such a node gets a later attempt only as a lost-runtime re-run, so it is
+// bounded by that allowance and must use the ordinal dispatch identity.
 func matchOriginalCodeDispatch(d storage.SavedCodeDeclaration, activation string, attempt uint16, dispatch string) error {
 	if !code.NonzeroDigest(dispatch) {
 		return code.ErrRejected
 	}
 	if len(d.Recovery) == 0 || bytes.Equal(bytes.TrimSpace(d.Recovery), []byte("null")) {
-		if attempt != 1 {
+		if attempt == 1 {
+			return nil
+		}
+		// A platform-client node is never re-run: its committed calls would repeat.
+		if attempt == 0 || attempt > 1+MaxRuntimeLostRetries || d.PlatformClient {
 			return code.ErrRejected
 		}
-		return nil
 	}
 	if dispatch != code.DispatchActivation(activation, attempt) {
 		return code.ErrRejected

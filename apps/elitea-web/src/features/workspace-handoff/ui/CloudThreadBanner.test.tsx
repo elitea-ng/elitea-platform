@@ -32,7 +32,7 @@ describe('CloudThreadBanner', () => {
 
     const banner = screen.getByTestId('cloud-thread-banner');
     expect(banner).toHaveTextContent('This thread is running in the cloud executor. Local changes are not seen by it.');
-    expect(screen.getByTestId('executor-badge')).toHaveTextContent('In cloud');
+    expect(banner).toHaveAttribute('data-executor', 'cloud');
     expect(screen.queryByTestId('banner-reclaim-pending')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Take back' }));
@@ -48,7 +48,7 @@ describe('CloudThreadBanner', () => {
 
   it('shows a thread on its way back, and keeps Take back to finish it', () => {
     renderWithTheme(<CloudThreadBanner status={{ ...CLOUD, state: 'RECLAIMING', executor: 'returning' }} onTakeBack={vi.fn()} onErase={vi.fn()} />);
-    expect(screen.getByTestId('executor-badge')).toHaveTextContent('Returning');
+    expect(screen.getByTestId('cloud-thread-banner')).toHaveAttribute('data-executor', 'returning');
     expect(screen.getByTestId('banner-returning')).toHaveTextContent('Finish taking it back');
     expect(screen.getByRole('button', { name: 'Take back' })).toBeEnabled();
   });

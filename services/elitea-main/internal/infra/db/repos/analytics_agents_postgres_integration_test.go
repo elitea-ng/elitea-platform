@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 const agentAnalyticsProject int64 = 1
@@ -32,15 +32,12 @@ func agentAnalyticsWindow() analytics.QueryParams {
 	}
 }
 
-// seedPylonApplicationsTable creates the shape of the PYLON-OWNED applications
-// table.
+// seedApplicationsTable creates the columns of p_1.applications the read joins.
 //
-// The ledgered corpus does not create it — no migration in this service does,
-// deliberately — so a corpus-only database has the chat projection and no agent
-// NAMES. The read is built for exactly that split, and
-// TestGetAgentAnalytics_SurvivesAnAbsentApplicationsTable covers the other side
-// of it.
-func seedPylonApplicationsTable(t *testing.T, pool *pgxpool.Pool) {
+// The table is created with the tenant schema itself
+// (internal/infra/db/migrations/001_initial.sql), not by the ledgered corpus
+// this template is built from, so the template does not carry it.
+func seedApplicationsTable(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 CREATE TABLE IF NOT EXISTS p_1.applications (
@@ -48,7 +45,7 @@ CREATE TABLE IF NOT EXISTS p_1.applications (
     name     varchar NOT NULL,
     owner_id integer NOT NULL
 )`)
-	require.NoError(t, err, "seed the pylon-owned applications table")
+	require.NoError(t, err, "seed the applications table")
 }
 
 // seedAgentExecution writes the whole chain one attributable request needs: an
@@ -80,7 +77,7 @@ INSERT INTO elitea_runtime.execution_jobs (
 )`, executionID, agentAnalyticsProject, "bundle-"+executionID)
 	require.NoError(t, err, "seed execution job")
 
-	seedPylonApplicationsTable(t, pool)
+	seedApplicationsTable(t, pool)
 	_, err = pool.Exec(ctx, `
 INSERT INTO p_1.applications (id, name, owner_id)
 VALUES ($1, $2, 1)
@@ -415,24 +412,23 @@ func TestGetAgentAnalytics_RefusesWhenTheColumnIsAbsent(t *testing.T) {
 		"the refusal must name the migration that has not run")
 }
 
-// TestGetAgentAnalytics_SurvivesAnAbsentApplicationsTable.
+// TestGetAgentAnalytics_KeepsAnAgentWhoseApplicationRowIsGone.
 //
-// p_<id>.applications is pylon-owned and no migration in this service creates
-// it, so a Go-bootstrapped database legitimately has none. An absent name table
-// must cost the DISPLAY NAME and nothing else: dropping the rows would silently
-// shrink the breakdown, and refusing the read because a decoration is missing
-// is the "absence reads as failure" defect.
-func TestGetAgentAnalytics_SurvivesAnAbsentApplicationsTable(t *testing.T) {
+// The name is a LEFT JOIN: an agent whose application row was deleted must cost
+// the DISPLAY NAME and nothing else. Dropping the row would silently shrink the
+// breakdown, and refusing the read because a decoration is missing is the
+// "absence reads as failure" defect.
+func TestGetAgentAnalytics_KeepsAnAgentWhoseApplicationRowIsGone(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewAnalyticsRepo(pool)
 
 	seedAgentExecution(t, pool, "exec-nameless", 4005, "Nameless Agent", 2, 0)
 
-	_, err := pool.Exec(context.Background(), `DROP TABLE p_1.applications`)
+	_, err := pool.Exec(context.Background(), `DELETE FROM p_1.applications WHERE id = 4005`)
 	require.NoError(t, err)
 
 	breakdown, err := repo.GetAgentAnalytics(context.Background(), agentAnalyticsWindow())
-	require.NoError(t, err, "an absent pylon table must not fail the read")
+	require.NoError(t, err, "a missing application row must not fail the read")
 
 	require.True(t, breakdown.Available)
 	require.EqualValues(t, 2, breakdown.AttributedCalls)

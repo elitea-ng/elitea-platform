@@ -1,7 +1,8 @@
 //! The NDJSON stream one engine tool run reports through, and its stop flag.
 //!
-//! Every engine sidecar answers `POST /engine/invoke` with the same lines —
-//! `thinking`, `token`, then one `result` or `error` — and every long call
+//! Every engine sidecar answers an Invoke (elitea.engine.v1, served by
+//! engine-sidecar) with the same lines, one event each — `thinking`,
+//! `token`, then one `result` or `error` — and every long call
 //! inside a tool (a model request, a clone, a worker child) waits on the same
 //! stop flag. These types are that contract, shared by the sidecar server and
 //! the clients that must abort when a stop arrives.

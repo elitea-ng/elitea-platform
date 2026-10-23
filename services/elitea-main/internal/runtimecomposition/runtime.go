@@ -9,8 +9,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 )
 
 type publisherRunner interface {
@@ -35,17 +36,22 @@ type Runtime struct {
 	configurationValidator configurationapp.CurrentSDKConfigurationValidator
 	// egressAudit is the egress proxy's per-turn merger (nil when not
 	// configured); Close writes what it holds.
-	egressAudit  *egressaudit.Merger
-	closeOnce    sync.Once
-	closeErr     error
-	lifecycleMu  sync.Mutex
-	started      bool
-	stopped      bool
-	shutdown     bool
-	startReady   chan struct{}
-	publisherEnd context.CancelFunc
-	privateEnd   context.CancelFunc
-	runDone      chan struct{}
+	egressAudit *egressaudit.Merger
+	// vectorIntrospection is elitea-vector's token introspection, nil when
+	// ELITEA_VECTOR_INTROSPECTION_CLIENTS names nobody. The control listener
+	// serves it; the platform listener serves the same one
+	// (NewPlatformVectorIntrospection).
+	vectorIntrospection *vectorintrospection.Server
+	closeOnce           sync.Once
+	closeErr            error
+	lifecycleMu         sync.Mutex
+	started             bool
+	stopped             bool
+	shutdown            bool
+	startReady          chan struct{}
+	publisherEnd        context.CancelFunc
+	privateEnd          context.CancelFunc
+	runDone             chan struct{}
 }
 
 func (r *Runtime) PublicRoutes() PublicRoutes {

@@ -1,9 +1,13 @@
 //! The build space: stage, publish, reconcile (ADR-0026 decision 5).
 //!
 //! A generation opens a [`Build`] for one project's wiki (a [`WikiKey`]:
-//! `(project_id, wiki_id)`, migration 0005), stages the code graph
-//! (and later its embeddings) into the `deepwiki_build` tables with `COPY`,
-//! and publishes. [`Build::publish`] is ONE transaction:
+//! `(project_id, wiki_id)`, migration 0005), stages the code graph into the
+//! `deepwiki_build` tables with `COPY`, writes its dense vectors to
+//! elitea-vector under the build's own generation (the build id,
+//! [`crate::storage::dense`]) batch by batch, keeps them for Phase 2 (in
+//! memory up to a limit, then in a file in the job's scratch directory,
+//! [`BuildVectors`]), and
+//! publishes. [`Build::publish`] is ONE transaction:
 //!
 //! 1. lock the build row (a build the sweep removed cannot publish; the
 //!    sweep skips a locked build);
@@ -15,13 +19,31 @@
 //!    too), which bounds the `work_mem` the publishes take together;
 //! 3. set `statement_timeout`, `lock_timeout` and `work_mem` for the rest
 //!    of the transaction ([`PublishSettings`]);
-//! 4. upsert the `wikis` row;
+//! 4. upsert the `wikis` row, with `active_generation` = this build's id
+//!    when it wrote vectors (NULL when it wrote none) and the model and
+//!    dimension of those vectors (migrations 0006, 0008), the replaced
+//!    active generation added to `wiki_stale_generations`;
 //! 5. refuse an empty build, before anything is deleted;
-//! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`,
-//!    embeddings, edges, nodes (rows of other projects are not touched);
-//! 7. `INSERT ... SELECT` the staged nodes, edges and embeddings;
+//! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`, edges,
+//!    nodes (rows of other projects are not touched);
+//! 7. `INSERT ... SELECT` the staged nodes and edges;
 //! 8. write the `wiki_bm25_*` statistics of the `'fts'` branch;
 //! 9. delete the build row, which cascades to every staged row.
+//!
+//! The vectors were written BEFORE the transaction, under a generation no
+//! reader names; the commit flips `active_generation` together with the
+//! nodes and edges, so a reader (which reads the generation in its own
+//! snapshot) searches the old generation with the old nodes or the new one
+//! with the new nodes, never a mix. The generation it replaces is added to
+//! `wiki_stale_generations` in the same transaction. After the commit
+//! exactly the project's listed generations are deleted, in rounds of at
+//! most [`STALE_ROUND`], and removed from the list
+//! ([`sweep_stale_generations`]), best effort: a failure is logged and the
+//! list keeps them for the next holder of a bearer. Builds of one wiki run
+//! concurrently (only their publishes are serialised), so "every generation
+//! but the active one" would delete the vectors of a build still in flight;
+//! the list never names one. A reader whose generation is swept while it
+//! searches it notices and searches again (see [`crate::storage::search`]).
 //!
 //! After the commit, the live tables are `ANALYZE`d, best effort: one
 //! short transaction per table with a short `lock_timeout`, skipped (and
@@ -53,15 +75,28 @@
 //! from a background task every [`heartbeat_interval`], so a long model
 //! call between staging and the publish does not get it swept; the task
 //! stops when the build is dropped, published or abandoned.
+//!
+//! The vectors of an abandoned build: [`Build::abandon`] deletes its
+//! generation from elitea-vector, and so does the worker parent's
+//! clean-up of a killed child ([`delete_build`] returns the wiki it
+//! belonged to). The reconciliation and the sweep have no caller bearer, so
+//! they cannot; they record the removed builds' generations in
+//! `wiki_stale_generations` ([`record_stale_generation`]), as does a
+//! failed delete, also for a wiki that was never published (it has no
+//! `wikis` row). The next publish, abandon or worker clean-up in the
+//! project, which has a bearer, deletes them (see
+//! [`crate::storage::dense`]).
 
 use crate::graph::{CodeGraph, edge_row, node_row};
 use crate::storage::copy::CopyWriter;
+use crate::storage::dense::{self, DenseIndex, Space};
 use crate::storage::rows::{IndexEdge, IndexNode, collapse_edges};
 use crate::storage::text::{BRANCH_FTS, FTS_B, FTS_K1};
-use crate::storage::{Result, StorageError, WikiKey};
+use crate::storage::{ProjectScope, Result, StorageError, WikiKey};
 use serde_json::Value;
 use sqlx::Connection;
 use sqlx::postgres::{PgConnection, PgPool};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -201,6 +236,10 @@ pub struct BuildSpace {
     boot_id: String,
     stale_after: Duration,
     publish: PublishSettings,
+    /// Where the builds write their vectors.
+    dense: Option<DenseIndex>,
+    /// Where the builds keep their vectors for Phase 2 past a limit.
+    spill: Option<VectorSpill>,
 }
 
 /// Row counts a stage call wrote.
@@ -215,6 +254,8 @@ pub struct StageCounts {
 pub struct PublishCounts {
     pub nodes: u64,
     pub edges: u64,
+    /// The vectors the build holds (written to elitea-vector before the
+    /// transaction; none is a row of this database).
     pub embeddings: u64,
     pub fts_documents: u64,
     /// Every live table was `ANALYZE`d after the commit. `false` when one
@@ -246,7 +287,9 @@ pub struct WikiRecord {
     /// dimension the model client's first response established (migration
     /// 0006). Unlike the fields above, `None` is written as NULL: the
     /// publish replaces the wiki's embeddings, so a stored model would
-    /// describe vectors that are gone.
+    /// describe vectors that are gone. A build that holds vectors writes the
+    /// model and dimension it staged them with
+    /// ([`Build::stage_embeddings`]); a different value here is refused.
     pub embedding_model: Option<String>,
     pub embedding_dim: Option<i32>,
 }
@@ -310,7 +353,27 @@ impl BuildSpace {
             boot_id: process_boot_id().to_owned(),
             stale_after: DEFAULT_STALE_AFTER,
             publish: PublishSettings::default(),
+            dense: None,
+            spill: None,
         }
+    }
+
+    /// Keep the builds' vectors for Phase 2 in a file once they pass
+    /// `spill.after_bytes` ([`BuildVectors`]). Without it they stay in
+    /// memory (the tests, the parity tool).
+    #[must_use]
+    pub fn with_vector_spill(mut self, spill: Option<VectorSpill>) -> Self {
+        self.spill = spill;
+        self
+    }
+
+    /// The dense store the builds this space opens write their vectors to.
+    /// Without one a build keeps its vectors in memory only (Phase 2 reads
+    /// them) and publishes no active generation.
+    #[must_use]
+    pub fn with_dense(mut self, dense: Option<DenseIndex>) -> Self {
+        self.dense = dense;
+        self
     }
 
     /// Another boot id (a test stands for a restarted process with it).
@@ -379,6 +442,8 @@ impl BuildSpace {
             beat_every,
             beat: Some(beat),
             published: false,
+            dense: self.dense.clone(),
+            vectors: BuildVectors::new(self.spill.clone()),
         })
     }
 
@@ -393,15 +458,17 @@ impl BuildSpace {
     ///
     /// [`StorageError::Database`].
     pub async fn reconcile_owner(&self) -> Result<u64> {
-        let done = sqlx::query(
+        let removed: Vec<(String, i32, String)> = sqlx::query_as(
             "DELETE FROM deepwiki_build.builds \
-             WHERE owner = $1 AND boot_id IS DISTINCT FROM $2",
+             WHERE owner = $1 AND boot_id IS DISTINCT FROM $2 \
+             RETURNING build_id, project_id, wiki_id",
         )
         .bind(&self.owner)
         .bind(&self.boot_id)
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(done.rows_affected())
+        record_orphaned_generations(&self.pool, "reconciliation", &removed).await;
+        Ok(removed.len() as u64)
     }
 
     /// The periodic sweep: delete every build, of any owner, whose
@@ -414,16 +481,154 @@ impl BuildSpace {
     ///
     /// [`StorageError::Database`].
     pub async fn sweep(&self, stale_after: Duration) -> Result<u64> {
-        let done = sqlx::query(
+        let removed: Vec<(String, i32, String)> = sqlx::query_as(
             "DELETE FROM deepwiki_build.builds WHERE build_id IN ( \
                  SELECT build_id FROM deepwiki_build.builds \
                  WHERE heartbeat_at < now() - make_interval(secs => $1) \
-                 FOR UPDATE SKIP LOCKED)",
+                 FOR UPDATE SKIP LOCKED) \
+             RETURNING build_id, project_id, wiki_id",
         )
         .bind(stale_after.as_secs_f64())
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(done.rows_affected())
+        record_orphaned_generations(&self.pool, "sweep", &removed).await;
+        Ok(removed.len() as u64)
+    }
+}
+
+/// The reconciliation and the sweep remove builds without a caller bearer,
+/// so the vectors a removed build wrote (its generation) stay in
+/// elitea-vector. They are never searched (no reader names them); this
+/// records them in `wiki_stale_generations`, which the project's next
+/// holder of a bearer deletes. Best effort: a failure is logged.
+async fn record_orphaned_generations(pool: &PgPool, by: &str, removed: &[(String, i32, String)]) {
+    for (build, project, wiki) in removed {
+        tracing::info!(
+            by,
+            build = %build,
+            project,
+            wiki = %wiki,
+            "removed an abandoned build; its vector generation is deleted by the project's next publish"
+        );
+        let Some(scope) = crate::storage::ProjectScope::new(*project) else {
+            continue;
+        };
+        if let Err(error) =
+            record_stale_generation(pool, &WikiKey::new(scope, wiki.clone()), build).await
+        {
+            tracing::warn!(build = %build, %error, "could not record the abandoned build's vector generation");
+        }
+    }
+}
+
+/// The most generations one sweep deletes per call to elitea-vector.
+pub const STALE_ROUND: usize = 256;
+
+/// The most rounds of [`STALE_ROUND`] one [`sweep_stale_generations`]
+/// makes: generations recorded while it runs wait for the next one.
+pub const STALE_ROUNDS: usize = 64;
+
+/// Record `generation` of the wiki in `wiki_stale_generations`, for the
+/// project's next holder of a bearer to delete
+/// ([`sweep_stale_generations`]). Also for a wiki that has no `wikis` row
+/// (it was never published). Nothing when it is listed already, or when it
+/// is the wiki's active one.
+///
+/// # Errors
+///
+/// [`StorageError::Database`].
+pub async fn record_stale_generation(pool: &PgPool, key: &WikiKey, generation: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO wiki_stale_generations (project_id, wiki_id, generation) \
+         SELECT $1, $2, $3 WHERE NOT EXISTS ( \
+             SELECT 1 FROM wikis \
+             WHERE project_id = $1 AND wiki_id = $2 AND active_generation = $3) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(key.project_id())
+    .bind(key.wiki_id())
+    .bind(generation)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Delete the generations `wiki_stale_generations` lists for `project`, of
+/// every wiki of it, from `store` (whose bearer is admitted for the
+/// project), and remove each from the list once it is deleted: rounds of
+/// at most [`STALE_ROUND`], at most [`STALE_ROUNDS`] of them. A generation a
+/// wiki names as active is skipped (it is listed again, and deleted, once a
+/// publish replaces it). Returns the generations deleted. A failed round
+/// stops the sweep and stays listed for the next one.
+///
+/// # Errors
+///
+/// [`StorageError::Database`]; [`StorageError::Vector`] for the store's
+/// refusal (the rounds before it stay deleted and unlisted).
+pub async fn sweep_stale_generations(
+    pool: &PgPool,
+    store: &DenseIndex,
+    project: ProjectScope,
+) -> Result<usize> {
+    let mut deleted = 0;
+    for _ in 0..STALE_ROUNDS {
+        let listed: Vec<(String, String)> = sqlx::query_as(
+            "SELECT s.wiki_id, s.generation FROM wiki_stale_generations s \
+             WHERE s.project_id = $1 AND NOT EXISTS ( \
+                 SELECT 1 FROM wikis w \
+                 WHERE w.project_id = s.project_id AND w.wiki_id = s.wiki_id \
+                   AND w.active_generation = s.generation) \
+             ORDER BY s.recorded_at, s.wiki_id, s.generation LIMIT $2",
+        )
+        .bind(project.id())
+        .bind(i64::try_from(STALE_ROUND).unwrap_or(i64::MAX))
+        .fetch_all(pool)
+        .await?;
+        if listed.is_empty() {
+            break;
+        }
+        let mut by_wiki: HashMap<String, Vec<String>> = HashMap::new();
+        for (wiki, generation) in listed {
+            by_wiki.entry(wiki).or_default().push(generation);
+        }
+        for (wiki, generations) in by_wiki {
+            let key = WikiKey::new(project, wiki);
+            store
+                .delete_generations(&key, generations.clone())
+                .await
+                .map_err(|e| StorageError::Vector(e.to_string()))?;
+            sqlx::query(
+                "DELETE FROM wiki_stale_generations \
+                 WHERE project_id = $1 AND wiki_id = $2 AND generation = ANY($3)",
+            )
+            .bind(key.project_id())
+            .bind(key.wiki_id())
+            .bind(&generations)
+            .execute(pool)
+            .await?;
+            deleted += generations.len();
+        }
+    }
+    Ok(deleted)
+}
+
+/// [`sweep_stale_generations`], best effort: a failure is logged, and the
+/// generations stay listed for the next holder of a bearer.
+pub async fn sweep_stale_generations_logged(
+    pool: &PgPool,
+    store: &DenseIndex,
+    project: ProjectScope,
+) {
+    match sweep_stale_generations(pool, store, project).await {
+        Ok(0) => {}
+        Ok(deleted) => tracing::info!(
+            project = project.id(),
+            deleted,
+            "deleted the project's stale vector generations"
+        ),
+        Err(error) => {
+            tracing::warn!(project = project.id(), %error, "could not delete the project's stale vector generations; the next publish retries");
+        }
     }
 }
 
@@ -508,6 +713,272 @@ pub struct Build {
     /// `None` while a publish runs and after a publish succeeded.
     beat: Option<HeartbeatTask>,
     published: bool,
+    /// Where the vectors go; `None` keeps them in memory only.
+    dense: Option<DenseIndex>,
+    /// The vectors staged so far.
+    vectors: BuildVectors,
+}
+
+/// The vector bytes a build holds in memory before it spills them (64 MiB:
+/// about 6,500 vectors of 2,560 dimensions).
+pub const DEFAULT_SPILL_AFTER: usize = 64 << 20;
+
+/// The vector values a [`BuildVectors::scan`] reads per block from a spill
+/// file (4 MiB of `f32`), rounded down to whole vectors.
+const SCAN_VALUES: usize = 1 << 20;
+
+/// Where a build's vectors go once they pass `after_bytes`: an unlinked
+/// file in `directory` (the job's scratch directory), so a large repository
+/// does not hold all its vectors in memory for Phase 2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSpill {
+    pub directory: std::path::PathBuf,
+    pub after_bytes: usize,
+}
+
+impl VectorSpill {
+    /// Spill into `directory` past [`DEFAULT_SPILL_AFTER`].
+    pub fn new(directory: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+            after_bytes: DEFAULT_SPILL_AFTER,
+        }
+    }
+}
+
+/// Where the vector values are.
+#[derive(Debug)]
+enum VectorValues {
+    Memory(Vec<f32>),
+    /// Little-endian `f32`s, `values` of them, in an unlinked file.
+    File {
+        file: std::fs::File,
+        values: usize,
+    },
+}
+
+/// The vectors a build staged, for Phase 2 (no read-back from the store,
+/// whose float16 collections would not give the staged `f32`s back): node
+/// ids and one flat `f32` array, `dimension` values per node. In memory up
+/// to the build space's [`VectorSpill::after_bytes`], then all of them in a
+/// file in the spill directory (memory keeps the ids, never the values), so
+/// the values held in memory never pass that limit. The vectors were
+/// written to elitea-vector batch by batch already, as they were staged.
+#[derive(Debug)]
+pub struct BuildVectors {
+    model: Option<String>,
+    space: Option<Space>,
+    ids: Vec<String>,
+    positions: HashMap<String, usize>,
+    values: VectorValues,
+    spill: Option<VectorSpill>,
+    /// Points written to the dense store.
+    written: u64,
+}
+
+impl Default for BuildVectors {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+fn spill_failed(spill: &VectorSpill, error: &std::io::Error) -> StorageError {
+    StorageError::Publish(format!(
+        "keeping the build's vectors in {} failed: {error}",
+        spill.directory.display()
+    ))
+}
+
+/// An unlinked read-write file in `directory`: removed from the directory at
+/// once, so it goes away with the process however it ends.
+fn unlinked_file(directory: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let path = directory.join(format!(".build-vectors-{}", new_boot_id()));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    if let Err(error) = std::fs::remove_file(&path) {
+        tracing::warn!(path = %path.display(), %error, "could not unlink the build's vector file; the job directory's removal takes it");
+    }
+    Ok(file)
+}
+
+fn le_bytes(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn from_le_bytes(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+}
+
+impl BuildVectors {
+    /// No vector yet; past `spill`'s limit the values go to its directory.
+    #[must_use]
+    pub fn new(spill: Option<VectorSpill>) -> Self {
+        Self {
+            model: None,
+            space: None,
+            ids: Vec::new(),
+            positions: HashMap::new(),
+            values: VectorValues::Memory(Vec::new()),
+            spill,
+            written: 0,
+        }
+    }
+
+    /// The vectors held.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether no vector is held.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// The dimension, 0 before the first vector.
+    #[must_use]
+    pub fn dimension(&self) -> usize {
+        self.space
+            .as_ref()
+            .map_or(0, |space| space.dimension as usize)
+    }
+
+    /// The model the vectors were made with.
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// The node ids, in staging order.
+    #[must_use]
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// Whether the values are in the spill file.
+    #[must_use]
+    pub fn spilled(&self) -> bool {
+        matches!(self.values, VectorValues::File { .. })
+    }
+
+    /// The bytes of vector values held in memory.
+    #[must_use]
+    pub fn held_in_memory(&self) -> usize {
+        match &self.values {
+            VectorValues::Memory(values) => values.len() * size_of::<f32>(),
+            VectorValues::File { .. } => 0,
+        }
+    }
+
+    /// Append `values` (whole vectors), spilling when they pass the limit.
+    fn append(&mut self, values: &[f32]) -> Result<()> {
+        if let VectorValues::Memory(held) = &mut self.values {
+            let bytes = (held.len() + values.len()) * size_of::<f32>();
+            match &self.spill {
+                Some(spill) if bytes > spill.after_bytes => {
+                    let file = unlinked_file(&spill.directory)
+                        .map_err(|error| spill_failed(spill, &error))?;
+                    let held = std::mem::take(held);
+                    self.values = VectorValues::File { file, values: 0 };
+                    for block in held.chunks(SCAN_VALUES) {
+                        self.append(block)?;
+                    }
+                }
+                _ => {
+                    held.extend_from_slice(values);
+                    return Ok(());
+                }
+            }
+        }
+        if let VectorValues::File { file, values: held } = &mut self.values {
+            use std::os::unix::fs::FileExt as _;
+            let offset = (*held * size_of::<f32>()) as u64;
+            if let Err(error) = file.write_all_at(&le_bytes(values), offset) {
+                return Err(match &self.spill {
+                    Some(spill) => spill_failed(spill, &error),
+                    None => StorageError::Publish(format!(
+                        "keeping the build's vectors failed: {error}"
+                    )),
+                });
+            }
+            *held += values.len();
+        }
+        Ok(())
+    }
+
+    /// The vector of `node_id`.
+    ///
+    /// # Errors
+    ///
+    /// The spill file's read failure.
+    pub fn get(&self, node_id: &str) -> std::io::Result<Option<Vec<f32>>> {
+        let dimension = self.dimension();
+        let Some(position) = self.positions.get(node_id) else {
+            return Ok(None);
+        };
+        match &self.values {
+            VectorValues::Memory(values) => Ok(Some(
+                values[position * dimension..(position + 1) * dimension].to_vec(),
+            )),
+            VectorValues::File { file, .. } => {
+                use std::os::unix::fs::FileExt as _;
+                let mut bytes = vec![0_u8; dimension * size_of::<f32>()];
+                file.read_exact_at(&mut bytes, (position * dimension * size_of::<f32>()) as u64)?;
+                Ok(Some(from_le_bytes(&bytes).collect()))
+            }
+        }
+    }
+
+    /// Every vector, in staging order (the order of [`Self::ids`]), in
+    /// blocks of whole vectors: `visit(index of the block's first vector,
+    /// its values)`. From the spill file a block holds at most 4 MiB.
+    ///
+    /// # Errors
+    ///
+    /// The spill file's read failure.
+    pub fn scan(&self, mut visit: impl FnMut(usize, &[f32])) -> std::io::Result<()> {
+        let dimension = self.dimension();
+        if dimension == 0 {
+            return Ok(());
+        }
+        let per_block = (SCAN_VALUES / dimension).max(1);
+        match &self.values {
+            VectorValues::Memory(values) => {
+                for (block, chunk) in values.chunks(per_block * dimension).enumerate() {
+                    visit(block * per_block, chunk);
+                }
+            }
+            VectorValues::File { file, values } => {
+                use std::os::unix::fs::FileExt as _;
+                let mut bytes = Vec::new();
+                let mut decoded = Vec::new();
+                let mut first = 0;
+                while first * dimension < *values {
+                    let count = per_block.min(*values / dimension - first);
+                    bytes.resize(count * dimension * size_of::<f32>(), 0);
+                    file.read_exact_at(&mut bytes, (first * dimension * size_of::<f32>()) as u64)?;
+                    decoded.clear();
+                    decoded.extend(from_le_bytes(&bytes));
+                    visit(first, &decoded);
+                    first += count;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Rows per cluster-column `UPDATE` ([`Build::set_clusters`]).
@@ -517,13 +988,16 @@ const CLUSTER_ROUND: usize = 10_000;
 /// a [`DELETE_LOCK_TIMEOUT`] and a [`DELETE_STATEMENT_TIMEOUT`]. The
 /// generation worker's parent calls this after the child ended, so a child
 /// that was killed before it could abandon its build leaves no staging
-/// rows. Returns whether a build was deleted (a published or abandoned
-/// build is already gone).
+/// rows. Returns the wiki the build belonged to when a build was deleted
+/// (`None`: a published or abandoned build is already gone), so the caller
+/// can delete the build's vector generation too
+/// ([`dense::DenseIndex::delete_generations`]); a published build's
+/// generation is live and is never touched.
 ///
 /// # Errors
 ///
 /// [`StorageError::Database`].
-pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<bool> {
+pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<Option<WikiKey>> {
     let mut tx = pool.begin().await?;
     // Bounded: a killed child's backend can still hold the build row (a
     // publish's `FOR UPDATE`) until the server notices the client is gone.
@@ -536,12 +1010,16 @@ pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<bool> {
         ],
     )
     .await?;
-    let done = sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
-        .bind(build_id)
-        .execute(&mut *tx)
-        .await?;
+    let deleted: Option<(i32, String)> = sqlx::query_as(
+        "DELETE FROM deepwiki_build.builds WHERE build_id = $1 RETURNING project_id, wiki_id",
+    )
+    .bind(build_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(done.rows_affected() > 0)
+    Ok(deleted.and_then(|(project, wiki)| {
+        crate::storage::ProjectScope::new(project).map(|scope| WikiKey::new(scope, wiki))
+    }))
 }
 
 /// `lock_timeout` of [`delete_build`] (15 s): longer than a dead worker's
@@ -560,21 +1038,14 @@ const NODE_COPY: &str = "COPY deepwiki_build.wiki_nodes (build_id, node_id, rel_
      is_test) FROM STDIN";
 const EDGE_COPY: &str = "COPY deepwiki_build.wiki_edges (build_id, source_id, target_id, \
      rel_type, edge_class, weight) FROM STDIN";
-const EMBEDDING_COPY: &str =
-    "COPY deepwiki_build.wiki_node_embeddings (build_id, node_id, embedding) FROM STDIN";
 
 /// The staged tables, `ANALYZE`d before a publish reads them.
-const STAGING_TABLES: [&str; 3] = [
-    "deepwiki_build.wiki_nodes",
-    "deepwiki_build.wiki_edges",
-    "deepwiki_build.wiki_node_embeddings",
-];
+const STAGING_TABLES: [&str; 2] = ["deepwiki_build.wiki_nodes", "deepwiki_build.wiki_edges"];
 
 /// The live tables, `ANALYZE`d after a publish commits.
-pub const LIVE_TABLES: [&str; 7] = [
+pub const LIVE_TABLES: [&str; 6] = [
     "wiki_nodes",
     "wiki_edges",
-    "wiki_node_embeddings",
     "wiki_bm25_meta",
     "wiki_bm25_docs",
     "wiki_bm25_terms",
@@ -685,31 +1156,148 @@ impl Build {
         writer.finish().await
     }
 
-    /// Stage dense vectors, keyed by node id. Each vector is `f64` as the
-    /// gateway's JSON carries it; pgvector stores `float4`, rounded from the
-    /// same decimal text the Python publisher sent.
+    /// Stage dense vectors made with `model`, keyed by node id: keep them
+    /// for Phase 2 ([`Build::vectors`], in memory or spilled) and write them to
+    /// the dense store under this build's generation, in rounds of at most
+    /// 512, BEFORE the publish. Each vector is `f64` as the model client
+    /// answers it, stored as `f32` (what pgvector stored too).
+    ///
+    /// Every vector of a build has the same dimension and model, and names
+    /// a node this build staged, once.
     ///
     /// # Errors
     ///
-    /// [`StorageError::Publish`] for an empty or non-finite vector;
-    /// [`StorageError::Database`], e.g. for a node that was not staged.
+    /// [`StorageError::Publish`] for an empty or non-finite vector, another
+    /// dimension or model than the build's, a node that was not staged or
+    /// was given a vector already; [`StorageError::Vector`] when the dense
+    /// store refused the write (its message, never a bearer);
+    /// [`StorageError::Database`].
     pub async fn stage_embeddings<'a>(
         &mut self,
+        model: &str,
         embeddings: impl IntoIterator<Item = (&'a str, &'a [f64])>,
     ) -> Result<u64> {
         self.heartbeat().await?;
-        let mut connection = self.pool.acquire().await?;
-        let mut writer = CopyWriter::start(&mut connection, EMBEDDING_COPY).await?;
-        for (node_id, vector) in embeddings {
-            writer.text(&self.id);
-            writer.text(node_id);
-            if let Err(error) = writer.vector(vector, node_id) {
-                writer.abort("embedding encoding failed").await?;
-                return Err(error);
-            }
-            writer.end_row().await?;
+        let rows: Vec<(&str, &[f64])> = embeddings.into_iter().collect();
+        if rows.is_empty() {
+            return Ok(0);
         }
-        writer.finish().await
+        match self.vectors.model.as_deref() {
+            None => self.vectors.model = Some(model.to_owned()),
+            Some(staged) if staged == model => {}
+            Some(staged) => {
+                return Err(StorageError::Publish(format!(
+                    "build {} holds vectors of the model '{staged}'; vectors of '{model}' cannot join them",
+                    self.id
+                )));
+            }
+        }
+        let mut converted: Vec<(&str, Vec<f32>)> = Vec::with_capacity(rows.len());
+        for (node_id, vector) in &rows {
+            if vector.is_empty() {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: an empty embedding cannot be stored"
+                )));
+            }
+            if vector.iter().any(|value| !value.is_finite()) {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: the embedding has a non-finite component"
+                )));
+            }
+            #[allow(clippy::cast_possible_truncation)] // f64 -> f32, as pgvector's float4
+            converted.push((node_id, vector.iter().map(|v| *v as f32).collect()));
+        }
+        let dimension = if let Some(space) = &self.vectors.space {
+            space.dimension as usize
+        } else {
+            let space = Space::new(model, converted[0].1.len())
+                .map_err(|e| StorageError::Publish(e.to_string()))?;
+            let dimension = space.dimension as usize;
+            self.vectors.space = Some(space);
+            dimension
+        };
+        let mut seen = std::collections::HashSet::with_capacity(converted.len());
+        for (node_id, vector) in &converted {
+            if vector.len() != dimension {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: {} dimensions, the build's vectors have {dimension}",
+                    vector.len()
+                )));
+            }
+            if self.vectors.positions.contains_key(*node_id) || !seen.insert(*node_id) {
+                return Err(StorageError::Publish(format!(
+                    "embedding {node_id}: the node already has a vector in build {}",
+                    self.id
+                )));
+            }
+        }
+        let ids: Vec<&str> = converted.iter().map(|(id, _)| *id).collect();
+        self.check_staged(&ids).await?;
+        if let (Some(store), Some(space)) = (&self.dense, &self.vectors.space) {
+            let generation =
+                dense::generation_of(&self.id).map_err(|e| StorageError::Vector(e.to_string()))?;
+            let points: Vec<(&str, &[f32])> = converted
+                .iter()
+                .map(|(id, vector)| (*id, vector.as_slice()))
+                .collect();
+            self.vectors.written += store
+                .upsert(&self.key, &generation, space, &points)
+                .await
+                .map_err(|e| {
+                    StorageError::Vector(format!(
+                        "writing the vectors to elitea-vector failed: {e}"
+                    ))
+                })?;
+        }
+        let flat: Vec<f32> = converted
+            .iter()
+            .flat_map(|(_, vector)| vector.iter().copied())
+            .collect();
+        self.vectors.append(&flat)?;
+        for (node_id, _) in converted {
+            self.vectors
+                .positions
+                .insert(node_id.to_owned(), self.vectors.ids.len());
+            self.vectors.ids.push(node_id.to_owned());
+        }
+        Ok(rows.len() as u64)
+    }
+
+    /// Vectors only for staged nodes, as the staged vector table's foreign
+    /// key required (Phase 2 ranks nodes, never bare vectors).
+    async fn check_staged(&self, ids: &[&str]) -> Result<()> {
+        let staged: Vec<String> = sqlx::query_scalar(
+            "SELECT node_id FROM deepwiki_build.wiki_nodes WHERE build_id = $1 AND node_id = ANY($2)",
+        )
+        .bind(&self.id)
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        if staged.len() == ids.len() {
+            return Ok(());
+        }
+        let staged: std::collections::HashSet<&str> = staged.iter().map(String::as_str).collect();
+        let missing = ids
+            .iter()
+            .find(|id| !staged.contains(**id))
+            .copied()
+            .unwrap_or_default();
+        Err(StorageError::Publish(format!(
+            "embedding {missing}: build {} staged no such node",
+            self.id
+        )))
+    }
+
+    /// The vectors staged so far.
+    #[must_use]
+    pub fn vectors(&self) -> &BuildVectors {
+        &self.vectors
+    }
+
+    /// The generation the build's vectors are written under: the build id.
+    #[must_use]
+    pub fn generation(&self) -> &str {
+        &self.id
     }
 
     /// Replace the staged edges with `edges` (Phase 2's
@@ -824,6 +1412,28 @@ impl Build {
             .bind(&self.id)
             .execute(&self.pool)
             .await?;
+        // The generation's points, best effort: a build that wrote none
+        // costs one idempotent delete. A failure leaves them to the
+        // project's next publish (they are never searched). With the bearer
+        // at hand, the project's other stale generations go too.
+        if let Some(store) = &self.dense {
+            match store
+                .delete_generations(&self.key, vec![self.id.clone()])
+                .await
+            {
+                Ok(()) => {
+                    sweep_stale_generations_logged(&self.pool, store, self.key.project()).await;
+                }
+                Err(error) => {
+                    tracing::warn!(build = %self.id, %error, "could not delete the abandoned build's vectors; the project's next publish removes them");
+                    if let Err(error) =
+                        record_stale_generation(&self.pool, &self.key, &self.id).await
+                    {
+                        tracing::warn!(build = %self.id, %error, "could not record the abandoned build's vector generation");
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -885,10 +1495,28 @@ impl Build {
         let key = &self.key;
         let wiki = key.wiki_id();
         let project = key.project_id();
+        let record = self.record_with_vectors(record)?;
+        // The generation readers search once this commits: this build's,
+        // when it wrote its vectors to the dense store.
+        let active_generation = (self.dense.is_some() && !self.vectors.is_empty()).then_some(build);
         let mut tx = connection.begin().await?;
         enter_publish(&mut tx, &self.publish, build, key).await?;
 
-        upsert_wiki(&mut tx, key, record).await?;
+        // The generation this publish replaces is stale from its commit on.
+        sqlx::query(
+            "INSERT INTO wiki_stale_generations (project_id, wiki_id, generation) \
+             SELECT project_id, wiki_id, active_generation FROM wikis \
+             WHERE project_id = $1 AND wiki_id = $2 \
+               AND active_generation IS NOT NULL \
+               AND active_generation IS DISTINCT FROM $3 \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(project)
+        .bind(wiki)
+        .bind(active_generation)
+        .execute(&mut *tx)
+        .await?;
+        upsert_wiki(&mut tx, key, &record, active_generation).await?;
 
         let staged: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM deepwiki_build.wiki_nodes WHERE build_id = $1",
@@ -932,17 +1560,7 @@ impl Build {
         .execute(&mut *tx)
         .await?
         .rows_affected();
-        let embeddings = sqlx::query(
-            "INSERT INTO wiki_node_embeddings (project_id, wiki_id, node_id, embedding) \
-             SELECT $3, $1, node_id, embedding \
-             FROM deepwiki_build.wiki_node_embeddings WHERE build_id = $2",
-        )
-        .bind(wiki)
-        .bind(build)
-        .bind(project)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let embeddings = self.vectors.len() as u64;
 
         // The postings (millions of rows for a large repository) are
         // inserted in key order, so the B-trees fill in order instead of at
@@ -955,6 +1573,16 @@ impl Build {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+
+        // The project's generations listed stale: the previous publish's
+        // (added by this transaction) and any recorded before, of any of
+        // its wikis. After the commit, so no reader loses its vectors before
+        // the flip (one that read the previous snapshot searches again);
+        // best effort. Never "all but this one": a concurrent build of the
+        // wiki has its own generation in flight.
+        if let Some(store) = &self.dense {
+            sweep_stale_generations_logged(&self.pool, store, key.project()).await;
+        }
 
         // Statistics that describe the new rows: the first searches after
         // a publish otherwise plan against the old row counts (measured: a
@@ -973,6 +1601,31 @@ impl Build {
             fts_documents,
             statistics_refreshed,
         })
+    }
+
+    /// `record` with the model and dimension of the build's vectors. A
+    /// build without vectors publishes the record's (normally none).
+    fn record_with_vectors(&self, record: &WikiRecord) -> Result<WikiRecord> {
+        let mut record = record.clone();
+        let (Some(model), dimension) = (self.vectors.model(), self.vectors.dimension()) else {
+            return Ok(record);
+        };
+        let dimension = i32::try_from(dimension).ok();
+        let model_differs = record
+            .embedding_model
+            .as_deref()
+            .is_some_and(|m| m != model);
+        let dimension_differs = record.embedding_dim.is_some_and(|d| Some(d) != dimension);
+        if model_differs || dimension_differs {
+            return Err(StorageError::Publish(format!(
+                "build {} holds vectors of '{model}' ({} dimensions); the record names another model or dimension",
+                self.id,
+                self.vectors.dimension()
+            )));
+        }
+        record.embedding_model = Some(model.to_owned());
+        record.embedding_dim = dimension;
+        Ok(record)
     }
 }
 
@@ -1001,10 +1654,6 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
             "DELETE FROM wiki_bm25_meta WHERE project_id = $1 AND wiki_id = $2",
         ),
         (
-            "embeddings",
-            "DELETE FROM wiki_node_embeddings WHERE project_id = $1 AND wiki_id = $2",
-        ),
-        (
             "edges",
             "DELETE FROM wiki_edges WHERE project_id = $1 AND wiki_id = $2",
         ),
@@ -1021,7 +1670,6 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
             .rows_affected();
         match table {
             "statistics" => removed.statistics += done,
-            "embeddings" => removed.embeddings += done,
             "edges" => removed.edges += done,
             _ => removed.nodes += done,
         }
@@ -1034,6 +1682,8 @@ pub(crate) async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<
 pub struct LiveRows {
     pub nodes: u64,
     pub edges: u64,
+    /// Always 0: the vectors are in elitea-vector, not in this database.
+    /// Kept so the deletion results keep their shape.
     pub embeddings: u64,
     /// Rows of the four `wiki_bm25_*` tables together.
     pub statistics: u64,
@@ -1267,14 +1917,19 @@ async fn copy_nodes(
 /// `_update_registry`, in one static statement. A supplied field replaces
 /// the stored one; an absent one keeps it (or takes the column default on a
 /// new row). `updated_at` is set on every publish.
-async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) -> Result<()> {
+async fn upsert_wiki(
+    tx: &mut PgConnection,
+    key: &WikiKey,
+    record: &WikiRecord,
+    active_generation: Option<&str>,
+) -> Result<()> {
     sqlx::query(
         "INSERT INTO wikis (project_id, wiki_id, repo, branch, provider, host, display_name, \
              description, folder_path, commit_hash, canonical_repo_identifier, analysis_key, \
-             wiki_version_id, embedding_model, embedding_dim, updated_at) \
+             wiki_version_id, embedding_model, embedding_dim, active_generation, updated_at) \
          VALUES ($13, $1, COALESCE($2, $1), COALESCE($3, 'main'), COALESCE($4, 'github'), \
              COALESCE($5, 'github.com'), COALESCE($6, ''), COALESCE($7, ''), COALESCE($8, ''), \
-             $9, $10, $11, $12, $14, $15, now()) \
+             $9, $10, $11, $12, $14, $15, $16, now()) \
          ON CONFLICT (project_id, wiki_id) DO UPDATE SET \
              repo = COALESCE($2, wikis.repo), \
              branch = COALESCE($3, wikis.branch), \
@@ -1289,6 +1944,7 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
              wiki_version_id = COALESCE($12, wikis.wiki_version_id), \
              embedding_model = $14, \
              embedding_dim = $15, \
+             active_generation = $16, \
              updated_at = now()",
     )
     .bind(key.wiki_id())
@@ -1306,6 +1962,7 @@ async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) 
     .bind(key.project_id())
     .bind(record.embedding_model.as_deref())
     .bind(record.embedding_dim)
+    .bind(active_generation)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -1400,6 +2057,66 @@ async fn write_fts_branch(tx: &mut PgConnection, key: &WikiKey) -> Result<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The values held in memory never pass the spill limit: past it every
+    /// value is in the (unlinked) spill file, and reads give back exactly
+    /// what was staged.
+    #[test]
+    #[allow(clippy::float_cmp)] // exact: the staged f32s come back
+    fn vectors_past_the_limit_go_to_the_spill_file() {
+        let directory = std::env::temp_dir().join(format!("dw-spill-{}", new_boot_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let dimension = 4;
+        let limit = 3 * dimension * size_of::<f32>();
+        let mut vectors = BuildVectors::new(Some(VectorSpill {
+            directory: directory.clone(),
+            after_bytes: limit,
+        }));
+        vectors.space = Some(Space::new("m", dimension).unwrap());
+        let vector = |i: usize| -> Vec<f32> {
+            (0..dimension)
+                .map(|d| f32::from(u16::try_from(i * 10 + d).unwrap()))
+                .collect()
+        };
+        let mut staged = Vec::new();
+        for batch in 0..5 {
+            let flat: Vec<f32> = (0..2).flat_map(|i| vector(batch * 2 + i)).collect();
+            vectors.append(&flat).unwrap();
+            for i in 0..2 {
+                let id = format!("n{}", batch * 2 + i);
+                vectors.positions.insert(id.clone(), vectors.ids.len());
+                vectors.ids.push(id);
+            }
+            staged.extend(flat);
+            assert!(vectors.held_in_memory() <= limit, "batch {batch}");
+            assert_eq!(vectors.spilled(), (batch + 1) * 2 > 3, "batch {batch}");
+        }
+        // Unlinked: nothing is left in the directory.
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        assert_eq!(vectors.get("n7").unwrap(), Some(vector(7)));
+        assert_eq!(vectors.get("missing").unwrap(), None);
+        let mut scanned = Vec::new();
+        vectors
+            .scan(|first, block| {
+                assert_eq!(first * dimension, scanned.len());
+                scanned.extend_from_slice(block);
+            })
+            .unwrap();
+        assert_eq!(scanned, staged);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// Without a spill directory the vectors stay in memory.
+    #[test]
+    fn vectors_without_a_spill_stay_in_memory() {
+        let mut vectors = BuildVectors {
+            space: Some(Space::new("m", 2).unwrap()),
+            ..BuildVectors::default()
+        };
+        vectors.append(&[1.0; 4096]).unwrap();
+        assert!(!vectors.spilled());
+        assert_eq!(vectors.held_in_memory(), 4096 * 4);
+    }
 
     #[test]
     fn the_wiki_record_ports_registry_from_result() {

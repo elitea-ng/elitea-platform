@@ -3,7 +3,8 @@
  * Do not edit manually.
  * Elitea Platform API
  * External REST API for the Elitea Platform (elitea-main Go service).
- * Wire-compatible drop-in replacement for pylon_main (Python/Flask).
+ * Wire-compatible with the Elitea Python SDK and with the clients built for
+ * the previous platform.
  *
  * ## Response shape conventions
  * - **Single resource**: returned directly at top level — `{"id": 42, "name": "..."}`
@@ -11,15 +12,15 @@
  *   and the handlers' inline `map[string]any{"error": ...}` writes). One
  *   documented shape deviates: the five social/handler.go 500 sites (Like
  *   :268, Unlike :301, Pin :321, Unpin :341, CreateFeedback :419) emit the
- *   pylon-era `{"ok": false, "error": ...}` envelope instead, modeled as
- *   the named `SocialActionErrorResponse` schema and referenced only on
- *   those specific operations. Five more UNDOCUMENTED sites of the same
- *   envelope remain on toolkits/handler.go (:286, 312, 324, 350, 362) —
- *   scope that shape there when those domains are spec'd.
+ *   compatibility `{"ok": false, "error": ...}` envelope that shipped clients
+ *   parse instead, modeled as the named `SocialActionErrorResponse` schema and
+ *   referenced only on those specific operations. Five more UNDOCUMENTED sites
+ *   of the same envelope remain on toolkits/handler.go (:286, 312, 324, 350,
+ *   362) — scope that shape there when those domains are spec'd.
  * - **Rate limit (429)**: intentionally NOT documented. The Go RateLimit
  *   middleware is a pass-through stub (internal/api/middleware/ratelimit.go:9-14)
  *   and no elitea-main code emits a 429 body — documenting one would be contract
- *   fiction. Re-add per-operation 429 responses (pylon shape:
+ *   fiction. Re-add per-operation 429 responses (the legacy runtime's shape:
  *   `{"error": {"message", "type": "rate_limit_error", "code":
  *   "rate_limit_exceeded"}}`) when rate limiting becomes real.
  * - Field names are **snake_case** unless the Go handler observably marshals
@@ -72,6 +73,8 @@ import type {
   ConversationMessageListing,
   ConversationParticipant,
   ConversationParticipantCreate,
+  ConversationReadState,
+  ConversationSummary,
   CreateSupportConversationBody,
   CreatedConversation,
   ErrorResponse,
@@ -80,6 +83,7 @@ import type {
   ExecutionInterruptError,
   ExecutionInterruptList,
   ExportConversationParams,
+  ForkConversationRequest,
   GetConversationParams,
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
@@ -96,6 +100,7 @@ import type {
   LocalTurnError,
   LocalTurnStartRequest,
   LocalTurnStarted,
+  MarkConversationReadRequest,
   MemoryEntry,
   MemoryEntryList,
   MemoryEntryWriteRequest,
@@ -107,7 +112,9 @@ import type {
   N401Response,
   N403Response,
   N404Response,
+  N409Response,
   N500Response,
+  OkResponse,
   ParticipantCandidatesPage,
   RegenerateChatMessageParams,
   SendChatMessageParams,
@@ -122,6 +129,7 @@ import type {
   SupportPredictResponse,
   SyncCursorError,
   SyncCursorExpiredResponse,
+  UpdateConversationInternalToolsRequest,
   UpdateConversationRequest,
   UpdatedConversation,
   UploadConversationAttachmentBody,
@@ -1625,6 +1633,1723 @@ export function useHeartbeatCanvasPresence<
     projectId,
     canvasId,
     canvasPresenceRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type archiveConversationResponse200 = {
+  data: OkResponse;
+  status: 200;
+};
+
+export type archiveConversationResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
+export type archiveConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type archiveConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type archiveConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type archiveConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type archiveConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type archiveConversationResponseSuccess =
+  archiveConversationResponse200 & {
+    headers: Headers;
+  };
+export type archiveConversationResponseError = (
+  | archiveConversationResponse400
+  | archiveConversationResponse401
+  | archiveConversationResponse403
+  | archiveConversationResponse404
+  | archiveConversationResponse426
+  | archiveConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type archiveConversationResponse =
+  archiveConversationResponseSuccess | archiveConversationResponseError;
+
+export const getArchiveConversationUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_archive/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.10. Archives the conversation in its project. The
+ * archive is shared by the project, as the conversation pin is: one
+ * archive per conversation, and every member's default conversation
+ * list leaves it out. The list row names who archived it
+ * (`archived_by`) and when (`archived_at`). The archive does not change
+ * the conversation. It stays open by id, it keeps its project pin, and
+ * new turns work as before.
+ *
+ * Needs `models.chat.conversation.edit`, because an archive changes
+ * every member's default list (a default-mode viewer does not hold
+ * it), and access to the conversation itself (the chat authority's
+ * detail rule, the same one the conversation pin passes). A
+ * conversation the caller cannot see
+ * answers 404 and archives nothing. A repeated request succeeds and
+ * keeps the FIRST archive: its `archived_by` and `archived_at` do not
+ * change, and nothing is re-delivered.
+ *
+ * The archive re-delivers the conversation's list row, with
+ * `is_archived: true`, in the `changes_since` delta of every member who
+ * can see the conversation. It does not change `updated_at`. It writes
+ * no tombstone: a tombstone means a deletion or a loss of access. Only
+ * a delta call without `archived` (a client before contract 1.10) gets
+ * the archived row as an `access_lost` tombstone; see listConversations.
+ * @summary Archive a conversation in its project
+ */
+export const archiveConversation = async (
+  projectId: string,
+  conversationId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<archiveConversationResponse> => {
+  return eliteaFetch<archiveConversationResponse>(
+    getArchiveConversationUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "PUT",
+    },
+  );
+};
+
+export const getArchiveConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/conversation_archive/prompt_lib/${projectId}/${conversationId}`,
+  ] as const;
+};
+
+export const getArchiveConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof archiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof archiveConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getArchiveConversationQueryKey(projectId, conversationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof archiveConversation>>
+  > = ({ signal }) =>
+    archiveConversation(projectId, conversationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof archiveConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ArchiveConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof archiveConversation>>
+>;
+export type ArchiveConversationQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useArchiveConversation<
+  TData = Awaited<ReturnType<typeof archiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof archiveConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof archiveConversation>>,
+          TError,
+          Awaited<ReturnType<typeof archiveConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useArchiveConversation<
+  TData = Awaited<ReturnType<typeof archiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof archiveConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof archiveConversation>>,
+          TError,
+          Awaited<ReturnType<typeof archiveConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useArchiveConversation<
+  TData = Awaited<ReturnType<typeof archiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof archiveConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Archive a conversation in its project
+ */
+
+export function useArchiveConversation<
+  TData = Awaited<ReturnType<typeof archiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof archiveConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getArchiveConversationQueryOptions(
+    projectId,
+    conversationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type unarchiveConversationResponse200 = {
+  data: OkResponse;
+  status: 200;
+};
+
+export type unarchiveConversationResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
+export type unarchiveConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type unarchiveConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type unarchiveConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type unarchiveConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type unarchiveConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type unarchiveConversationResponseSuccess =
+  unarchiveConversationResponse200 & {
+    headers: Headers;
+  };
+export type unarchiveConversationResponseError = (
+  | unarchiveConversationResponse400
+  | unarchiveConversationResponse401
+  | unarchiveConversationResponse403
+  | unarchiveConversationResponse404
+  | unarchiveConversationResponse426
+  | unarchiveConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type unarchiveConversationResponse =
+  unarchiveConversationResponseSuccess | unarchiveConversationResponseError;
+
+export const getUnarchiveConversationUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_archive/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.10. Removes the project's archive of the
+ * conversation, whichever member archived it, as unpinEntity removes a
+ * pin. The conversation is in every member's default conversation list
+ * again. Needs the same access as archiveConversation; a conversation
+ * the caller cannot see answers 404. A repeated request succeeds,
+ * removes nothing and re-delivers nothing.
+ *
+ * An unarchive re-delivers the list row, with `is_archived: false`, in
+ * the `changes_since` delta of every member who can see the
+ * conversation.
+ * @summary Unarchive a conversation in its project
+ */
+export const unarchiveConversation = async (
+  projectId: string,
+  conversationId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<unarchiveConversationResponse> => {
+  return eliteaFetch<unarchiveConversationResponse>(
+    getUnarchiveConversationUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getUnarchiveConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/conversation_archive/prompt_lib/${projectId}/${conversationId}`,
+  ] as const;
+};
+
+export const getUnarchiveConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof unarchiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unarchiveConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUnarchiveConversationQueryKey(projectId, conversationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof unarchiveConversation>>
+  > = ({ signal }) =>
+    unarchiveConversation(projectId, conversationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof unarchiveConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UnarchiveConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof unarchiveConversation>>
+>;
+export type UnarchiveConversationQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUnarchiveConversation<
+  TData = Awaited<ReturnType<typeof unarchiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unarchiveConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof unarchiveConversation>>,
+          TError,
+          Awaited<ReturnType<typeof unarchiveConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUnarchiveConversation<
+  TData = Awaited<ReturnType<typeof unarchiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unarchiveConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof unarchiveConversation>>,
+          TError,
+          Awaited<ReturnType<typeof unarchiveConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUnarchiveConversation<
+  TData = Awaited<ReturnType<typeof unarchiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unarchiveConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Unarchive a conversation in its project
+ */
+
+export function useUnarchiveConversation<
+  TData = Awaited<ReturnType<typeof unarchiveConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unarchiveConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUnarchiveConversationQueryOptions(
+    projectId,
+    conversationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type markConversationReadResponse200 = {
+  data: ConversationReadState;
+  status: 200;
+};
+
+export type markConversationReadResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type markConversationReadResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type markConversationReadResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type markConversationReadResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type markConversationReadResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type markConversationReadResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type markConversationReadResponseSuccess =
+  markConversationReadResponse200 & {
+    headers: Headers;
+  };
+export type markConversationReadResponseError = (
+  | markConversationReadResponse400
+  | markConversationReadResponse401
+  | markConversationReadResponse403
+  | markConversationReadResponse404
+  | markConversationReadResponse426
+  | markConversationReadResponse500
+) & {
+  headers: Headers;
+};
+
+export type markConversationReadResponse =
+  markConversationReadResponseSuccess | markConversationReadResponseError;
+
+export const getMarkConversationReadUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_read/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.12. Moves the CALLER's read marker of the
+ * conversation: up to `message_id`, or up to now without it. The list
+ * rows' `unread` (listConversations and its `changes_since` delta)
+ * compares the newest answer with this marker. A client calls it when
+ * the user opens the conversation, and again when new messages arrive
+ * while the conversation is on screen.
+ *
+ * The marker is personal state, so read access is enough: the chat
+ * authority's detail rule (the rule of getConversation) and
+ * `models.chat.conversation.details`. A conversation the caller cannot
+ * see answers 404 and writes nothing. A `message_id` that is not a
+ * message of the conversation answers 404.
+ *
+ * The request is idempotent, and the marker never moves back. The read
+ * does not re-deliver the row in the `changes_since` delta of any
+ * member and does not change `updated_at`. The project event stream
+ * sends a `conversation_activity` event with `unread_hint: false` to the
+ * caller's other devices only. A delete of the conversation deletes its
+ * markers. A fork starts read for the member who forked it.
+ * @summary Mark a conversation read for the caller
+ */
+export const markConversationRead = async (
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<markConversationReadResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<markConversationReadResponse>(
+    getMarkConversationReadUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(markConversationReadRequest),
+    },
+  );
+};
+
+export const getMarkConversationReadQueryKey = (
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/conversation_read/prompt_lib/${projectId}/${conversationId}`,
+    markConversationReadRequest,
+  ] as const;
+};
+
+export const getMarkConversationReadQueryOptions = <
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMarkConversationReadQueryKey(
+      projectId,
+      conversationId,
+      markConversationReadRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof markConversationRead>>
+  > = ({ signal }) =>
+    markConversationRead(
+      projectId,
+      conversationId,
+      markConversationReadRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof markConversationRead>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MarkConversationReadQueryResult = NonNullable<
+  Awaited<ReturnType<typeof markConversationRead>>
+>;
+export type MarkConversationReadQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest: undefined | MarkConversationReadRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markConversationRead>>,
+          TError,
+          Awaited<ReturnType<typeof markConversationRead>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markConversationRead>>,
+          TError,
+          Awaited<ReturnType<typeof markConversationRead>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mark a conversation read for the caller
+ */
+
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMarkConversationReadQueryOptions(
+    projectId,
+    conversationId,
+    markConversationReadRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateConversationInternalToolsResponse200 = {
+  data: UpdatedConversation;
+  status: 200;
+};
+
+export type updateConversationInternalToolsResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type updateConversationInternalToolsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateConversationInternalToolsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateConversationInternalToolsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateConversationInternalToolsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type updateConversationInternalToolsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateConversationInternalToolsResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type updateConversationInternalToolsResponseSuccess =
+  updateConversationInternalToolsResponse200 & {
+    headers: Headers;
+  };
+export type updateConversationInternalToolsResponseError = (
+  | updateConversationInternalToolsResponse400
+  | updateConversationInternalToolsResponse401
+  | updateConversationInternalToolsResponse403
+  | updateConversationInternalToolsResponse404
+  | updateConversationInternalToolsResponse426
+  | updateConversationInternalToolsResponse500
+  | updateConversationInternalToolsResponse501
+) & {
+  headers: Headers;
+};
+
+export type updateConversationInternalToolsResponse =
+  | updateConversationInternalToolsResponseSuccess
+  | updateConversationInternalToolsResponseError;
+
+export const getUpdateConversationInternalToolsUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_internal_tools/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.15. Sets the conversation's `meta.internal_tools`
+ * (the built-in tools a turn may use, such as `attachments` or
+ * `ask_user`) and no other key, in one statement, so it never loses or
+ * undoes a concurrent write of other settings, from this client or
+ * another. updateConversation replaces the whole settings document and
+ * keeps the stored list only when its document has no
+ * `internal_tools` key.
+ *
+ * The body is `{"internal_tools": [names]}`, the whole new list (an
+ * empty list clears it); repeated names are stored once. Every name
+ * must be in the internal-tools catalogue the agent turn admits:
+ * `ask_user`, `attachments`, `data_analysis`, `image_generation`,
+ * `internal_mcp`, `lazy_tools_mode`, `planner`,
+ * `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
+ * name outside it, a missing or non-array `internal_tools`, or any
+ * other key answers 400 and writes nothing. Whether the configured
+ * worker runs a tool is a separate question (runtime capabilities).
+ *
+ * Needs `models.chat.conversation.update` (the PUT's permission) and
+ * access to the conversation (the chat authority's detail rule); a
+ * conversation the caller cannot see answers 404. The answer is the
+ * conversation as updateConversation answers it. NOTE(W2):
+ * internal/api/v2/conversations/internal_tools.go:53
+ * (`UpdateInternalTools`).
+ * @summary Replace a conversation's internal tools and nothing else
+ */
+export const updateConversationInternalTools = async (
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateConversationInternalToolsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateConversationInternalToolsResponse>(
+    getUpdateConversationInternalToolsUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(updateConversationInternalToolsRequest),
+    },
+  );
+};
+
+export const getUpdateConversationInternalToolsQueryKey = (
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest?: UpdateConversationInternalToolsRequest,
+) => {
+  return [
+    "PATCH",
+    `/elitea_core/conversation_internal_tools/prompt_lib/${projectId}/${conversationId}`,
+    updateConversationInternalToolsRequest,
+  ] as const;
+};
+
+export const getUpdateConversationInternalToolsQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateConversationInternalToolsQueryKey(
+      projectId,
+      conversationId,
+      updateConversationInternalToolsRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateConversationInternalTools>>
+  > = ({ signal }) =>
+    updateConversationInternalTools(
+      projectId,
+      conversationId,
+      updateConversationInternalToolsRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateConversationInternalTools>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateConversationInternalToolsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateConversationInternalTools>>
+>;
+export type UpdateConversationInternalToolsQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateConversationInternalTools>>,
+          TError,
+          Awaited<ReturnType<typeof updateConversationInternalTools>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateConversationInternalTools>>,
+          TError,
+          Awaited<ReturnType<typeof updateConversationInternalTools>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace a conversation's internal tools and nothing else
+ */
+
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateConversationInternalToolsQueryOptions(
+    projectId,
+    conversationId,
+    updateConversationInternalToolsRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type forkConversationResponse201 = {
+  data: ConversationSummary;
+  status: 201;
+};
+
+export type forkConversationResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type forkConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type forkConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type forkConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type forkConversationResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type forkConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type forkConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type forkConversationResponseSuccess = forkConversationResponse201 & {
+  headers: Headers;
+};
+export type forkConversationResponseError = (
+  | forkConversationResponse400
+  | forkConversationResponse401
+  | forkConversationResponse403
+  | forkConversationResponse404
+  | forkConversationResponse409
+  | forkConversationResponse426
+  | forkConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type forkConversationResponse =
+  forkConversationResponseSuccess | forkConversationResponseError;
+
+export const getForkConversationUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_fork/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.11. Creates a NEW conversation from the history of
+ * the source conversation. With `message_id`, the new conversation holds
+ * the messages up to and including that message (the fork point), and
+ * every later message that belongs to one of them: the replies to a
+ * copied message (its answer, a regenerated or swarm answer) and the
+ * swarm children of a copied answer. Without it, it holds the whole
+ * history.
+ *
+ * The copy is one transaction. It copies the message groups, their items
+ * (text, context, attachments, canvases with their versions) and their
+ * trace steps, with new ids, in the same order and with the same
+ * `created_at`; the answer's `forked_messages` maps each copied message
+ * group's UUID to its copy's. It copies the participants with their
+ * per-conversation settings, except the other members: the fork is the
+ * caller's, so another member's questions are copied (still theirs, with
+ * `role` `user`) but that member is not a participant of the fork and
+ * cannot read it. It copies the instructions, `source` and the
+ * conversation settings in `meta`. Attachment files are copied to the new conversation, so a
+ * delete of either conversation leaves the other one readable. It does
+ * NOT copy the pin, the archive, likes and dislikes, a selection, the
+ * folder of another member, or a pending tool approval.
+ *
+ * The new conversation belongs to the caller, in the same project, with
+ * the privacy a new conversation of the caller gets. Its name is `name`,
+ * or the source name with " (fork)" added. Its `meta.forked_from` and
+ * the row's `forked_from` name the source conversation and the fork
+ * point. A Local work thread (`source: local_work`) gives a Local work
+ * thread with the same folder settings; the desktop copies its local
+ * turn history itself.
+ *
+ * Needs `models.chat.conversations.create` and
+ * `models.chat.conversation.details`, and access to the source
+ * conversation (the chat authority's detail rule). A source the caller
+ * cannot see answers 404. A `message_id` that is not a message of the
+ * source answers 404. A fork point that is still streaming or waits for
+ * a tool approval answers 409 `fork_point_unsettled`, as does a later
+ * reply of the copy that is; without
+ * `message_id`, the newest message is the fork point. An editor Test
+ * conversation answers 409 `fork_not_supported`.
+ * @summary Fork a conversation into a new conversation
+ */
+export const forkConversation = async (
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<forkConversationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<forkConversationResponse>(
+    getForkConversationUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(forkConversationRequest),
+    },
+  );
+};
+
+export const getForkConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversation_fork/prompt_lib/${projectId}/${conversationId}`,
+    forkConversationRequest,
+  ] as const;
+};
+
+export const getForkConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getForkConversationQueryKey(
+      projectId,
+      conversationId,
+      forkConversationRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof forkConversation>>
+  > = ({ signal }) =>
+    forkConversation(projectId, conversationId, forkConversationRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof forkConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ForkConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof forkConversation>>
+>;
+export type ForkConversationQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest: undefined | ForkConversationRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof forkConversation>>,
+          TError,
+          Awaited<ReturnType<typeof forkConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof forkConversation>>,
+          TError,
+          Awaited<ReturnType<typeof forkConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Fork a conversation into a new conversation
+ */
+
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getForkConversationQueryOptions(
+    projectId,
+    conversationId,
+    forkConversationRequest,
     options,
   );
 
@@ -6373,8 +8098,10 @@ export const getBeginWorkspaceHandoffUrl = (
  *
  * POLICY. The effective policy (the platform `cloud_executor` section,
  * narrowed by the project setting and the native client policy's
- * `local_work.cloud_handoff`) must allow the cloud executor: 403
- * `cloud_handoff_disabled` otherwise.
+ * `local_work.cloud_handoff`) must allow the cloud executor, the
+ * deployment must run one, and its storage encryption must be
+ * confirmed: 403 `cloud_handoff_disabled` otherwise, with
+ * `details.reason` as in the policy's `disabled_reason`.
  * @summary Send a Local work thread to the cloud executor
  */
 export const beginWorkspaceHandoff = async (
@@ -10720,7 +12447,9 @@ export const getCancelChatExecutionUrl = (
  * NOT stop the run; it keeps spending the budget.
  *
  * What happens to the answer: a turn stopped before any output is
- * removed together with its question; a turn with partial output keeps
+ * removed together with its question; a regeneration stopped before
+ * any output keeps its question and its answer, settled empty (the
+ * previous text is not restored); a turn with partial output keeps
  * what was written. After a 204, close the stream and reload the
  * transcript rather than waiting for a terminal frame.
  *
@@ -12299,6 +14028,11 @@ export type uploadConversationAttachmentResponse403 = {
   status: 403;
 };
 
+export type uploadConversationAttachmentResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
 export type uploadConversationAttachmentResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
@@ -12319,6 +14053,7 @@ export type uploadConversationAttachmentResponseError = (
   | uploadConversationAttachmentResponse400
   | uploadConversationAttachmentResponse401
   | uploadConversationAttachmentResponse403
+  | uploadConversationAttachmentResponse409
   | uploadConversationAttachmentResponse426
   | uploadConversationAttachmentResponse500
 ) & {
@@ -12345,6 +14080,22 @@ export const getUploadConversationAttachmentUrl = (
  * `payload.attachments`. Size limits are the project's storage policy
  * (images and documents have separate ceilings); one chunk is at most a
  * few MB.
+ *
+ * Client contract 1.13: a name already stored in this conversation is
+ * never overwritten. The file is stored under a numbered name instead:
+ * the number after the highest one the conversation holds for that name
+ * (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
+ * before the extension), and two concurrent uploads of one name always
+ * get two different names, the loser of a race possibly a random
+ * suffix such as `photo (3f9c01ab).jpg`. However many files of one name
+ * a conversation holds, the upload is never refused for it. Always send
+ * the returned `filepath`, never one built from the local file name.
+ *
+ * Client contract 1.14: a stored document's text is extracted in the
+ * background as soon as it is uploaded, so the first turn that carries
+ * it does not wait for the extraction. This never delays or fails the
+ * upload. A file uploaded and never sent can be removed with
+ * deleteConversationAttachment.
  * @summary Upload a file to attach to the next chat message
  */
 export const uploadConversationAttachment = async (
@@ -12402,6 +14153,7 @@ export const getUploadConversationAttachmentQueryOptions = <
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -12462,6 +14214,7 @@ export type UploadConversationAttachmentQueryError =
   | N400Response
   | N401Response
   | N403Response
+  | ErrorResponse
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -12471,6 +14224,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -12505,6 +14259,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -12539,6 +14294,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -12569,6 +14325,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -12937,6 +14694,341 @@ export function useDownloadConversationAttachment<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getDownloadConversationAttachmentQueryOptions(
+    projectId,
+    conversationId,
+    name,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteConversationAttachmentResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteConversationAttachmentResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type deleteConversationAttachmentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteConversationAttachmentResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteConversationAttachmentResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteConversationAttachmentResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type deleteConversationAttachmentResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type deleteConversationAttachmentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteConversationAttachmentResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type deleteConversationAttachmentResponseSuccess =
+  deleteConversationAttachmentResponse204 & {
+    headers: Headers;
+  };
+export type deleteConversationAttachmentResponseError = (
+  | deleteConversationAttachmentResponse400
+  | deleteConversationAttachmentResponse401
+  | deleteConversationAttachmentResponse403
+  | deleteConversationAttachmentResponse404
+  | deleteConversationAttachmentResponse409
+  | deleteConversationAttachmentResponse426
+  | deleteConversationAttachmentResponse500
+  | deleteConversationAttachmentResponse501
+) & {
+  headers: Headers;
+};
+
+export type deleteConversationAttachmentResponse =
+  | deleteConversationAttachmentResponseSuccess
+  | deleteConversationAttachmentResponseError;
+
+export const getDeleteConversationAttachmentUrl = (
+  projectId: string,
+  conversationId: string,
+  name: string,
+) => {
+  return `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}/${name}`;
+};
+
+/**
+ * Client contract 1.14. Removes one stored file: the one a user uploaded
+ * in the composer and took back before sending. Needs
+ * `models.chat.attachments.delete` (the permission of the
+ * conversation-wide attachment delete) and access to the conversation;
+ * a caller who cannot see the conversation gets 404, as for a file that
+ * does not exist. Address it as for downloadConversationAttachment. The
+ * bytes go first, then the file's record, so a 500 can be retried.
+ *
+ * A file a message carries answers 409 with
+ * `{"error": "attachment_in_use"}` and nothing is deleted: the
+ * transcript, the download and every later turn read it from the
+ * message. Delete the message with its attachments to remove such a
+ * file. A file named by a message of another conversation (a fork
+ * that shares it) counts too.
+ * NOTE(W2): internal/api/v2/conversations/attachment_delete.go:47
+ * (`DeleteAttachment`).
+ * @summary Delete one file uploaded to a conversation that no message carries
+ */
+export const deleteConversationAttachment = async (
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteConversationAttachmentResponse> => {
+  return eliteaFetch<deleteConversationAttachmentResponse>(
+    getDeleteConversationAttachmentUrl(projectId, conversationId, name),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteConversationAttachmentQueryKey = (
+  projectId: string,
+  conversationId: string,
+  name: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}/${name}`,
+  ] as const;
+};
+
+export const getDeleteConversationAttachmentQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteConversationAttachmentQueryKey(projectId, conversationId, name);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteConversationAttachment>>
+  > = ({ signal }) =>
+    deleteConversationAttachment(projectId, conversationId, name, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined &&
+      name !== null &&
+      name !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteConversationAttachment>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteConversationAttachmentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteConversationAttachment>>
+>;
+export type DeleteConversationAttachmentQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete one file uploaded to a conversation that no message carries
+ */
+
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteConversationAttachmentQueryOptions(
     projectId,
     conversationId,
     name,

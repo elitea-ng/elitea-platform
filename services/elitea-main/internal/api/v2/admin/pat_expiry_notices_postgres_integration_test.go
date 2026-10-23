@@ -20,7 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,12 +31,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	migrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (
@@ -342,7 +342,7 @@ func TestPATExpiryRunNowSaysSoWhenItHasNoProducer(t *testing.T) {
 // newPATExpiryCorpusPool builds a throwaway database holding what a deployed
 // installation holds: the bootstrap schema plus every ledgered shared
 // migration, applied by the runner elitea-migrate uses. No hand-written CREATE
-// TABLE — 0125's guarded foreign key onto the pylon-owned auth_core__token is
+// TABLE — 0125's guarded foreign key onto the legacy-owned auth_core__token is
 // one of the things under test, and a hand-made table would not have it.
 func newPATExpiryCorpusPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()

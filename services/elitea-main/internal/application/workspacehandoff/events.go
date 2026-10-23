@@ -37,7 +37,11 @@ func (s *Service) WithStateEvents(events StateEvents) *Service {
 }
 
 // eventingRepository emits after each successful transition. It wraps the
-// repository so no transition, including the sweeper's, can forget to.
+// repository so no transition, including the sweeper's, can forget to. A
+// call a retry replays (TransitionResult, EraseResult) emits only when it
+// changed the thread: a replay would make every client re-read for nothing
+// (#1311). Begin, Complete, Finish and the sweeper's transitions always
+// change it (a retry of those fails instead).
 type eventingRepository struct {
 	Repository
 	events StateEvents
@@ -69,12 +73,12 @@ func (r eventingRepository) Complete(ctx context.Context, record CompleteRecord)
 	return r.after(ctx)(r.Repository.Complete(ctx, record))
 }
 
-func (r eventingRepository) Reclaim(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (Handoff, error) {
-	return r.after(ctx)(r.Repository.Reclaim(ctx, thread, actorUserID, epoch, deviceID))
+func (r eventingRepository) Reclaim(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (TransitionResult, error) {
+	return r.afterChange(ctx)(r.Repository.Reclaim(ctx, thread, actorUserID, epoch, deviceID))
 }
 
-func (r eventingRepository) Release(ctx context.Context, record ReleaseRecord) (Handoff, error) {
-	return r.after(ctx)(r.Repository.Release(ctx, record))
+func (r eventingRepository) Release(ctx context.Context, record ReleaseRecord) (TransitionResult, error) {
+	return r.afterChange(ctx)(r.Repository.Release(ctx, record))
 }
 
 func (r eventingRepository) Erase(ctx context.Context, record EraseRecord) (EraseResult, error) {
@@ -89,8 +93,8 @@ func (r eventingRepository) Erase(ctx context.Context, record EraseRecord) (Eras
 	return result, err
 }
 
-func (r eventingRepository) StartCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID, responseMessageID string) (Handoff, error) {
-	return r.after(ctx)(r.Repository.StartCloudTurn(ctx, thread, epoch, executionID, responseMessageID))
+func (r eventingRepository) StartCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID, responseMessageID string) (TransitionResult, error) {
+	return r.afterChange(ctx)(r.Repository.StartCloudTurn(ctx, thread, epoch, executionID, responseMessageID))
 }
 
 func (r eventingRepository) FinishCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID string, message *EventMessage) (Handoff, error) {
@@ -115,6 +119,15 @@ func (r eventingRepository) IdleErase(ctx context.Context, transition TimedTrans
 
 func (r eventingRepository) OrphanErase(ctx context.Context, transition TimedTransition) (Handoff, error) {
 	return r.after(ctx)(r.Repository.OrphanErase(ctx, transition))
+}
+
+func (r eventingRepository) afterChange(ctx context.Context) func(TransitionResult, error) (TransitionResult, error) {
+	return func(result TransitionResult, err error) (TransitionResult, error) {
+		if err == nil && result.Changed {
+			r.emit(ctx, result.Handoff)
+		}
+		return result, err
+	}
 }
 
 func (r eventingRepository) after(ctx context.Context) func(Handoff, error) (Handoff, error) {

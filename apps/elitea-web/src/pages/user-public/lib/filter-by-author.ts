@@ -17,7 +17,7 @@
  * `listPublicApplicationsParams.zod.ts`), and the handler source itself. A
  * live parity defect flagged for operator triage in the A12 report — see
  * that report for whether this is a genuine Go-side regression from the
- * pre-migration (pylon) backend or was always the case.
+ * pre-migration (legacy) backend or was always the case.
  *
  * Only applicable to the `Application` shape (has `authors`/`owner_id`).
  * The public-catalog `PublicApplicationSummary` shape carries no author

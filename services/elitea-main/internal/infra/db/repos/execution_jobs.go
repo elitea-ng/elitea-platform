@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,10 +19,13 @@ const (
 	maxStoredInputContentBytes  = 256 * 1024
 	minValidationDeadlineTTL    = time.Millisecond
 	maxValidationDeadlineTTL    = 24 * time.Hour
-	// Phase one deliberately shares the command bus's live-entry ceiling.
-	// This keeps the serialized active-index scan and worst-case durable input
-	// footprint bounded until production measurements justify a forward change.
-	maxSupportedOutstandingJobs = 1_024
+	// MaxSupportedOutstandingJobs bounds the serialized active-index scan and
+	// the worst-case durable input footprint per capability. Phase one shared
+	// the command bus's 1024 live-entry ceiling; the 1k-flow load test (#966)
+	// measured that as no headroom, so the admission cap is now independent of
+	// it (a full stream backpressures dispatch, it does not refuse admission).
+	// Keep in step with the CHECKs in shared/0170.
+	MaxSupportedOutstandingJobs = 4_096
 )
 
 var ErrAdmissionPolicyMismatch = errors.New("execution admission policy does not match persisted policy")
@@ -46,7 +49,7 @@ type AgentExecutionDispatchPolicy = ExecutionDispatchPolicy
 type ToolkitExecuteReadDispatchPolicy = ExecutionDispatchPolicy
 
 func (p ExecutionDispatchPolicy) validate() error {
-	if p.StreamName == "" || p.CapabilityVersion == "" || p.ResourceClass == "" || p.IsolationClass == "" || p.Priority == 0 || p.Priority > math.MaxInt32 || p.DeadlineTTL < minValidationDeadlineTTL || p.DeadlineTTL > maxValidationDeadlineTTL || p.DeadlineTTL%time.Millisecond != 0 || p.LimitsRevision == "" || p.MaxOutstanding <= 0 || p.MaxOutstanding > maxSupportedOutstandingJobs {
+	if p.StreamName == "" || p.CapabilityVersion == "" || p.ResourceClass == "" || p.IsolationClass == "" || p.Priority == 0 || p.Priority > math.MaxInt32 || p.DeadlineTTL < minValidationDeadlineTTL || p.DeadlineTTL > maxValidationDeadlineTTL || p.DeadlineTTL%time.Millisecond != 0 || p.LimitsRevision == "" || p.MaxOutstanding <= 0 || p.MaxOutstanding > MaxSupportedOutstandingJobs {
 		return errors.New("execution dispatch policy is incomplete")
 	}
 	for _, value := range []string{p.StreamName, p.CapabilityVersion, p.ResourceClass, p.IsolationClass, p.LimitsRevision} {
@@ -222,7 +225,7 @@ FOR UPDATE`, capabilityID).Scan(&persistedMax); err != nil {
 		return fmt.Errorf("lock execution admission policy: %w", err)
 	}
 	if persistedMax != maxOutstanding {
-		return fmt.Errorf("%w: capability %q configured=%d persisted=%d", ErrAdmissionPolicyMismatch, capabilityID, maxOutstanding, persistedMax)
+		return admissionPolicyMismatchError(capabilityID, maxOutstanding, persistedMax)
 	}
 	return nil
 }

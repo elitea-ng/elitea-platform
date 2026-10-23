@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"time"
 
-	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	agentexecutionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 type PublicRoutes struct {
@@ -54,8 +54,8 @@ type PublicRoutes struct {
 	// IndexCancel preserves the current UI DELETE contract while selecting only
 	// Go-owned execution IDs at the compatibility edge.
 	IndexCancel indexingapi.CurrentIndexCanceller
-	// IndexMeta reads the current raw-array UI contract from the project-owned
-	// PgVector target resolved through the saved toolkit and Configurations.
+	// IndexMeta reads the current raw-array UI contract from the index
+	// registry.
 	IndexMeta indexingapi.CurrentIndexMetaReader
 	// IndexMetaDelete preserves the current synchronous two-commit contract. It
 	// is exposed only with the coordinated Go index owner and receives
@@ -74,6 +74,11 @@ type PublicRoutes struct {
 	// (ADR-0029 decision 5a). It is built from the agent plane's own freezer
 	// and nested-version reader, so it is nil exactly when that plane is.
 	ClientApplicationVersions *storage.ClientApplicationVersionService
+	// AttachmentExtraction is the attachment text reader the content plane
+	// serves turns from. The upload route uses it to warm an attachment's
+	// extraction (issue 1062). It is nil exactly when that reader is: no
+	// agent plane or no object store.
+	AttachmentExtraction *storage.RuntimeAttachmentObjectService
 }
 
 // Durable PostgreSQL replay remains authoritative. The advisory waiter wakes

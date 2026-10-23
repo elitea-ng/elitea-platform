@@ -13,7 +13,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // fakeEgressSource stands in for the compiled governance snapshot.
@@ -188,7 +188,7 @@ func TestGovernanceStatusReportsTheMergedEgressList(t *testing.T) {
 	acct.SetEgressSource(src)
 
 	recorder := httptest.NewRecorder()
-	makeGovernanceStatusHandler(nil, nil, "", acct)(
+	makeGovernanceStatusHandler(nil, nil, "", false, acct)(
 		recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 
 	if recorder.Code != http.StatusOK {
@@ -217,7 +217,7 @@ func TestGovernanceStatusReportsTheMergedEgressList(t *testing.T) {
 	// No account (no database pool): the field is absent rather than reported
 	// as an empty policy that nobody authored.
 	recorder = httptest.NewRecorder()
-	makeGovernanceStatusHandler(nil, nil, "", nil)(
+	makeGovernanceStatusHandler(nil, nil, "", false, nil)(
 		recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {

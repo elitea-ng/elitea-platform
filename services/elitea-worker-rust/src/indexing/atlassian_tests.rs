@@ -308,7 +308,7 @@ async fn confluence_indexes_incrementally_with_dependents() {
     assert_eq!(second.status, IndexIngestStatusV1::Ok as i32, "{second:?}");
     assert_eq!(second.indexed_documents, 0);
     assert_eq!(second.total_documents, Some(4));
-    assert!(second.removed_document_keys.is_empty());
+    assert_eq!(second.removed_document_keys, [] as [String; 0]);
     assert_eq!(second.reindex, Some(true));
     assert_eq!(
         store_calls_since(&harness, calls_before),

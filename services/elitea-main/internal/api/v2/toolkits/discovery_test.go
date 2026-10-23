@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 func TestAgentToolkitDiscoveryPreservesSchemaAndPolicy(t *testing.T) {
@@ -71,10 +71,13 @@ func TestAgentToolkitDiscoveryUsesSavedSettingsContract(t *testing.T) {
 	}
 	before := read(false)
 	uiProperties := before["github"]["properties"].(map[string]any)
-	for _, field := range []string{"github_configuration", "pgvector_configuration", "embedding_model", "active_branch", "base_branch"} {
+	for _, field := range []string{"github_configuration", "embedding_model", "active_branch", "base_branch"} {
 		if uiProperties[field] == nil {
 			t.Errorf("GitHub UI schema omits %s", field)
 		}
+	}
+	if uiProperties["pgvector_configuration"] != nil {
+		t.Error("GitHub UI schema still serves the retired pgvector_configuration")
 	}
 	if uiProperties["embedding_model"].(map[string]any)["configuration_model"] != "embedding" {
 		t.Fatal("embedding field does not select the embedding model catalogue")

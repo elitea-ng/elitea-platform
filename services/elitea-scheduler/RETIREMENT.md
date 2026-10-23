@@ -7,7 +7,7 @@ dispatches anything.
 
 Until this change the daemon ran a once-a-minute tick that polled
 `centry.schedule`, took a `scheduler_tick` lock in Redis (Valkey), and PUBLISHed
-legacy Pylon/Arbiter pickle RPC payloads to the `elitea_rpc` channel. Nothing in
+legacy-runtime/Arbiter pickle RPC payloads to the `elitea_rpc` channel. Nothing in
 the Go stack subscribed to that channel (issue #305): in a Go-only deployment
 every publish reached zero subscribers, and the guard added for #305 only
 stopped the tick from recording those runs as done.
@@ -23,9 +23,8 @@ What owns scheduled work now:
   `elitea_runtime.scheduled_job_cursors` and
   `elitea_runtime.scheduled_occurrences` own planning, takeover, and completion.
 - `centry.schedule` rows are still listed and edited by the admin Schedules
-  surface. In a hybrid deployment, a legacy Pylon scheduling plugin running
-  against the same database is the only thing that executes them; nothing in
-  this repository does.
+  surface, and nothing executes them: no legacy component shares this
+  database. Moving their execution onto the platform scheduler is #1369.
 
 ## What this binary still runs
 

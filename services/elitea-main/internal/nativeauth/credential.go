@@ -22,10 +22,9 @@
 // Each device session owns one public.auth_core__token row with uuid NULL. The
 // validator returns that row's id as the principal's TokenID, so a native
 // principal is field-for-field a personal-access-token principal and every
-// downstream check (principal re-check, legacy RBAC, the edge kernel, the
-// forwarded X-Auth-* contract, the ADR-0018 binding) accepts it unchanged.
-// Revoking a family deletes the anchor, which is what cuts off an
-// edge-validated (forwarded) native principal.
+// downstream check (principal re-check, legacy RBAC, the ADR-0018 binding)
+// accepts it unchanged. Revoking a family deletes the anchor, which is what
+// cuts off the native principal.
 package nativeauth
 
 import (

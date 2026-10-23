@@ -6,7 +6,7 @@ import "elitea/runtime/v1/common.proto";
 import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/errors.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // Main checks the original worker's verified mTLS session and active execution
 // fence. The audience is an exact configured supervisor identity, not a URL.
@@ -52,12 +52,12 @@ message SandboxJobGrantClaimsV1 {
   bytes dependency_bundle_sha256 = 33;
 }
 
-// Bundle content uses Main's private mTLS HTTP listener, never this RPC body.
-// X-Elitea-Sandbox-Bundle-Grant carries strict base64 of SignedSandboxJobGrantV1.
-// /sandbox-bundles/{lowercase-root-hex}/files/{safe-name}: PUT multipart/form-data
-// with exactly two parts: "bundle" JSON metadata, then "file" binary content.
-// GET returns verified binary content. GET /sandbox-bundles/{root} returns JSON
-// metadata. POST to that path accepts JSON and publishes metadata last.
+// Bundle content uses Main's private content listener, never this RPC body:
+// RuntimeContentService (content.proto) Get/PublishSandboxBundle and the
+// Fetch/UploadSandboxBundleFile streams. Each request carries the protobuf
+// encoding of SignedSandboxJobGrantV1 as signed_grant. An upload is a header
+// (bundle JSON metadata, file name) then the file's chunks; publication of the
+// metadata comes last.
 // The grant audience must equal the verified recipient certificate identity.
 // Requests carry no caller-selected tenant or project. Revision 3 cannot run
 // or cancel code. The root, active worker claim, and resource scope are signed.
@@ -127,6 +127,73 @@ service SandboxSupervisorService {
   rpc PrepareSandboxDependencies(PrepareSandboxDependenciesRequestV1) returns (PrepareSandboxDependenciesResponseV1);
   rpc PublishSandboxDependencies(PublishSandboxDependenciesRequestV1) returns (PublishSandboxDependenciesResponseV1);
   rpc HydrateSandboxDependencies(HydrateSandboxDependenciesRequestV1) returns (HydrateSandboxDependenciesResponseV1);
+
+  // Main's owner observations (#1359 U4; they replaced the JSON-over-h2
+  // routes /elitea.runtime.node-code-recovery.v1 and
+  // /elitea.runtime.code-platform.v1). The caller must be Main's configured
+  // workload identity, and each request is the exact canonical owner document
+  // carrying a Main-signed owner grant for this supervisor's audience. None of
+  // them submits, starts or resumes a runtime. Any refusal is a non-OK status
+  // that carries nothing from the ledger.
+  rpc CodeOwnerRecoveryRead(CodeOwnerRecoveryReadRequestV1) returns (CodeOwnerRecoveryReadResponseV1);
+  rpc CodeOwnerRecoverySealNoEffect(CodeOwnerRecoverySealNoEffectRequestV1) returns (CodeOwnerRecoverySealNoEffectResponseV1);
+  rpc CodePlatformOwnerReadRetainedRuntime(CodePlatformOwnerReadRetainedRuntimeRequestV1) returns (CodePlatformOwnerReadRetainedRuntimeResponseV1);
+  rpc CodePlatformOwnerReadPendingCall(CodePlatformOwnerReadPendingCallRequestV1) returns (CodePlatformOwnerReadPendingCallResponseV1);
+  rpc CodePlatformOwnerPublishReply(CodePlatformOwnerPublishReplyRequestV1) returns (CodePlatformOwnerPublishReplyResponseV1);
+}
+
+// The node-code recovery owner requests: job_key is the 64-hex original job
+// key the grant names; request_json is the canonical
+// elitea.sandbox.node-code-recovery-request.v1 document (at most 16 KiB). The
+// response is the canonical elitea.sandbox.node-code-recovery-response.v1.
+message CodeOwnerRecoveryReadRequestV1 {
+  string job_key = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+message CodeOwnerRecoveryReadResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+message CodeOwnerRecoverySealNoEffectRequestV1 {
+  string job_key = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+message CodeOwnerRecoverySealNoEffectResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+// The retained Code platform owner requests: request_json is the canonical
+// elitea.sandbox.code-platform-owner-request.v1 document; the response is the
+// canonical elitea.sandbox.code-platform-owner-response.v1.
+message CodePlatformOwnerReadRetainedRuntimeRequestV1 {
+  string job_key = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+message CodePlatformOwnerReadRetainedRuntimeResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+message CodePlatformOwnerReadPendingCallRequestV1 {
+  string job_key = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+message CodePlatformOwnerReadPendingCallResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+message CodePlatformOwnerPublishReplyRequestV1 {
+  string job_key = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+message CodePlatformOwnerPublishReplyResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
 }
 
 message SubmitSandboxJobRequestV1 {

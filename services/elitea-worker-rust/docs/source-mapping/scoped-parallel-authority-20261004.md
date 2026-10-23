@@ -64,6 +64,10 @@ Prior default-feature logs do not verify those final two postimages.
 ## Remaining gates
 
 The production fixed Parallel and scoped continuation gates remain false.
+
+> Superseded 2026-10-12: the scoped continuation gate no longer exists (see
+> [scoped-application-continuation-admitted-20261012.md](scoped-application-continuation-admitted-20261012.md)).
+> The fixed Parallel gate is unchanged here.
 This packet does not enable dispatch or declare deployed durability.
 
 Root must prove authenticated Main start, frozen participant identity, durable effect owner, and signed checkpoint claim scope together.

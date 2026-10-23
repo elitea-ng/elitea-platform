@@ -1,13 +1,26 @@
+// LAYER CACHE: read-only, from the registry. Each target reads two refs of
+// the public package ghcr.io/elitea-ng/ci-cache-<target>: `release-<platform>`,
+// which publish.yml's build of the same Containerfile writes (mode=max, on a
+// push to main only), and `linux-amd64`, which ci-web-e2e.yml's build-once
+// jobs write for the compose stacks (same rule; deploy/ci/bake-cache.hcl).
+// NOTHING here declares a cache-to: a local `docker buildx bake`, the helm
+// smoke and the DeepWiki real-engine lane read and never write, so no build
+// from a pull request or a laptop can replace a layer a release reads. (Until
+// 2026-10-20 every target exported `type=gha,mode=max` into the Actions cache,
+// whose 10 GB cap evicted it.) These are layer caches, not images: nothing
+// here, or in the chart or a release, runs a ci-* image
+// (scripts/ci/check-ci-image-references.mjs).
+
 variable "TAG" {
   default = "dev"
 }
 
 variable "REGISTRY" {
-  default = "ghcr.io/eliteaai"
+  default = "ghcr.io/elitea-ng"
 }
 
 group "default" {
-  targets = ["elitea-main", "elitea-ui", "elitea-scheduler", "elitea-llm-gateway"]
+  targets = ["elitea-main", "elitea-web", "elitea-scheduler", "elitea-llm-gateway"]
 }
 
 group "go" {
@@ -18,42 +31,31 @@ group "scheduler" {
   targets = ["elitea-scheduler"]
 }
 
-group "ui" {
-  targets = ["elitea-ui"]
-}
-
 target "elitea-main" {
   context    = "."
   dockerfile = "services/elitea-main/Containerfile"
   # Named explicitly rather than relying on "last stage wins": the Containerfile
-  # also defines `hybrid` and `e2e`, and which one ships must not depend on
-  # stage order.
+  # also defines `e2e`, and which one ships must not depend on stage order.
   target     = "final"
   tags       = ["${REGISTRY}/elitea-main:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-main-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-main-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-main:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-main:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
-target "elitea-ui" {
-  context    = "./apps/elitea-ui"
-  dockerfile = "../deploy/docker/Containerfile.elitea-ui"
-  tags       = ["${REGISTRY}/elitea-ui:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-ui-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-ui-linux-amd64,ignore-error=true"]
-  platforms  = ["linux/amd64", "linux/arm64"]
-}
-
-# New UI (spec §7.3): context is the repo root and the Containerfile lives with
+# The UI (spec §7.3): context is the repo root and the Containerfile lives with
 # the app, so bake, publish.yml and Taskfile build with identical contexts —
-# fixing defect D1 by construction. Built in parallel with elitea-ui for the
-# whole cutover; rollback is a traefik weight change, never a rebuild.
+# fixing defect D1 by construction.
 target "elitea-web" {
   context    = "."
   dockerfile = "apps/elitea-web/Containerfile"
   tags       = ["${REGISTRY}/elitea-web:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-web-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-web:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-web:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -68,8 +70,10 @@ target "elitea-worker-rust" {
   context    = "."
   dockerfile = "services/elitea-worker-rust/Containerfile"
   tags       = ["${REGISTRY}/elitea-worker-rust:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-worker-rust-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-worker-rust-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-worker-rust:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-worker-rust:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -79,8 +83,10 @@ target "elitea-scheduler" {
   context    = "."
   dockerfile = "services/elitea-scheduler/Containerfile"
   tags       = ["${REGISTRY}/elitea-scheduler:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-scheduler-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-scheduler-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-scheduler:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-scheduler:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -91,8 +97,10 @@ target "elitea-subapp-host" {
   context    = "."
   dockerfile = "services/elitea-subapp-host/Containerfile"
   tags       = ["${REGISTRY}/elitea-subapp-host:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-subapp-host-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-subapp-host-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-subapp-host:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-subapp-host:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -104,8 +112,30 @@ target "elitea-egress-proxy" {
   dockerfile = "services/elitea-egress-proxy/Containerfile"
   target     = "final"
   tags       = ["${REGISTRY}/elitea-egress-proxy:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-egress-proxy-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-egress-proxy-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-egress-proxy:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-egress-proxy:linux-amd64",
+  ]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
+# The cloud executor's sandbox supervisor (ADR-0034): the `supervisor` stage of
+# the worker Containerfile, built with `--features sandbox-supervisor`. It runs
+# the workspace sandboxes (Kubernetes pods under a gVisor/Kata RuntimeClass)
+# and is the only process that may create them. The same distroless
+# base-nossl-debian13 runtime and cargo-auditable build as the worker; the
+# default worker image keeps no sandbox feature.
+#
+# Not in `group "default"`, like the worker: it compiles from source.
+target "elitea-sandbox-supervisor" {
+  context    = "."
+  dockerfile = "services/elitea-worker-rust/Containerfile"
+  target     = "supervisor"
+  tags       = ["${REGISTRY}/elitea-sandbox-supervisor:${TAG}"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-sandbox-supervisor:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-sandbox-supervisor:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -124,8 +154,10 @@ target "elitea-deepwiki-engine-native" {
   context    = "."
   dockerfile = "services/elitea-deepwiki-engine/Containerfile"
   tags       = ["${REGISTRY}/elitea-deepwiki-engine-native:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-deepwiki-engine-native-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-deepwiki-engine-native:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-deepwiki-engine-native:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -141,8 +173,10 @@ target "elitea-inventory-engine" {
   context    = "."
   dockerfile = "services/elitea-inventory-engine/Containerfile"
   tags       = ["${REGISTRY}/elitea-inventory-engine:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-inventory-engine-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-inventory-engine-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-inventory-engine:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-inventory-engine:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -157,8 +191,10 @@ target "elitea-vector" {
   context    = "."
   dockerfile = "services/elitea-vector/Containerfile"
   tags       = ["${REGISTRY}/elitea-vector:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-vector-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-vector-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-vector:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-vector:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -175,8 +211,10 @@ target "elitea-doc-extractor" {
   context    = "."
   dockerfile = "services/elitea-doc-extractor/Containerfile"
   tags       = ["${REGISTRY}/elitea-doc-extractor:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-doc-extractor-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-doc-extractor-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-doc-extractor:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-doc-extractor:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -192,15 +230,18 @@ target "elitea-doc-extractor" {
 # /workspace. Debian 13 (trixie-slim) with git and a build toolchain, because
 # the agent's `run_command` builds the user's project: a Debian userland, so
 # its scan is exempt (.github/image-scan-exempt.txt), not distroless.
-# Repo-root context: the Containerfile COPYs libs/rust.
+# Repo-root context: the Containerfile COPYs libs/rust and the contracts
+# under libs/proto/elitea that platform-rpc compiles.
 #
 # Not in `group "default"`: it compiles from source.
 target "elitea-workspace-runner" {
   context    = "."
   dockerfile = "libs/rust/workspace-runner/Containerfile"
   tags       = ["${REGISTRY}/elitea-workspace-runner:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-workspace-runner-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-workspace-runner-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-workspace-runner:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-workspace-runner:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -208,7 +249,9 @@ target "elitea-llm-gateway" {
   context    = "."
   dockerfile = "services/elitea-llm-gateway/Containerfile"
   tags       = ["${REGISTRY}/elitea-llm-gateway:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-llm-gateway-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-llm-gateway-linux-amd64,ignore-error=true"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-llm-gateway:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-llm-gateway:linux-amd64",
+  ]
   platforms  = ["linux/amd64", "linux/arm64"]
 }

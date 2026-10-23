@@ -11,9 +11,9 @@
  * the table rather than about taste: `centry.moderation_state` grows with every
  * user who ever asked for anything, across every tenant, while
  * `centry.schedule` is a platform table with tens of rows. The endpoint pages in
- * pylon and in the Go handler alike, so the page that pages must also let the
- * server sort — a client-side sort over one page reorders that page only, which
- * reads as a working sort and is not one.
+ * the legacy runtime and in the Go handler alike, so the page that pages must
+ * also let the server sort — a client-side sort over one page reorders that
+ * page only, which reads as a working sort and is not one.
  *
  * ## The issue-type filter
  *

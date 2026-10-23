@@ -5,7 +5,7 @@ backlog behind [recovery-guarantees.md](../recovery-guarantees.md). It changes n
 
 ## 1. Business behaviour from the current platform
 
-The current Elitea platform (Pylon and Arbiter) keeps task results in arbiter memory. Results are ephemeral. The
+The current Elitea platform (the legacy runtime and Arbiter) keeps task results in arbiter memory. Results are ephemeral. The
 retention is about 3600 s, and a file-backed result is deleted on read. A lost worker means "run again from scratch".
 
 This change does not port that behaviour or its defects. The replatform target is class R: execution continues from
@@ -68,7 +68,7 @@ Measured result for every mechanism below: none (inventory). This change measure
 |---|---|---|
 | Bounded admission with a capacity reservation and a reaper | `services/elitea-main/internal/infra/db/repos/agent_execution_jobs.go:273-365` | `services/elitea-main/internal/infra/db/repos/agent_admission_capacity_postgres_integration_test.go:24,170` |
 | Outbox batch up to 256, concurrency up to 32, poll 250 ms | `services/elitea-main/internal/application/execution/outbox_publisher.go:19-23,100` | None for the limits. |
-| NATS `MaxAckPending` 1024 and `MaxMsgSize` 65536 | `deploy/helm/nats-bootstrap/files/bootstrap.sh:397-470` | `services/elitea-main/internal/transport/commandbus/producer_test.go:102` |
+| NATS `MaxAckPending` 1024 and `MaxMsgSize` 65536 | `deploy/helm/elitea/files/nats-bootstrap.sh:397-470` | `services/elitea-main/internal/transport/commandbus/producer_test.go:102` |
 | Spool size limit 2Gi | `deploy/helm/elitea/values.yaml:3630` | `services/elitea-worker-rust/src/execution/output_delivery_tests.rs` |
 | Worker drain 30 s, Main drain 15 s, gateway drain 150 s | `services/elitea-worker-rust/src/execution/production.rs:140-166` | `services/elitea-worker-rust/src/execution/command_delivery_tests.rs:571,907` (unit) |
 

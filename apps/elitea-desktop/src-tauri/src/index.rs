@@ -34,22 +34,43 @@
 //! reopened under the new one, which rebuilds before it is served. No
 //! refresh ever runs with the `Workspace` of an older policy.
 //!
+//! **Watched.** While an index is open and turned on, its folder is
+//! watched for changes made outside the app (the person's editor, a
+//! `git pull`): once the folder has been quiet for 3 s, and at most every
+//! 30 s, the index refreshes incrementally — under the policy then, as
+//! after a turn. Changes to ignored, denied or `.git` paths are not
+//! changes (`elitea_local_index::watch`). The watch stops when the index
+//! is turned off, removed or closed (the policy turned it off or changed)
+//! and at sign-out; it starts again when the index opens, and at sign-in
+//! for an index still open. `IndexStatus::watching` says whether it runs.
+//!
+//! **Rebuilt when idle.** Incremental refreshes drift from what a full
+//! build makes; once more than `DRIFT_REBUILD` files changed since the last
+//! full build (`IndexService::wants_full_rebuild`), the index is rebuilt
+//! from nothing after [`IDLE_REBUILD`] with no refresh, no change and no
+//! turn running.
+//!
 //! Indexes are kept across sign-out and `host_wipe`: they hold code
-//! structure parsed from the person's own folders, no account data. The
+//! structure parsed from the person's own folders, no account data (only
+//! their folder watches stop at sign-out: nothing refreshes for nobody). The
 //! person removes one with `index_remove` (or by removing the workspace);
 //! the Doctor can too.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
+use elitea_local_index::embedding::{EmbedStatus, Embedding, OFF, SETTING, TurnGuard, choice_of};
+
+use crate::embeddings::{Allowed, Choice};
 use elitea_local_index::service::{
     IndexError, IndexEvent, IndexEvents, IndexService, IndexState, IndexStatus,
     limit_parser_threads, policy_fingerprint,
 };
 use elitea_local_index::sqlite_store::{FILE_NAME, Peek, SqliteGraphStore};
+use elitea_local_index::watch::{FolderWatcher, WatchConfig};
 use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::policy::LocalWorkPolicy;
 use tauri::State;
@@ -93,6 +114,29 @@ async fn blocking<T: Send + 'static>(
 /// How long after a turn's last change its index refreshes.
 pub const DEFAULT_REFRESH_DELAY: Duration = Duration::from_secs(3);
 
+/// How long after start-up an unfinished embedding pass resumes.
+pub const RESUME_EMBEDDINGS_AFTER: Duration = Duration::from_secs(20);
+
+/// How long a refresh that found another one running waits to try again.
+const BUSY_RETRY: Duration = Duration::from_secs(1);
+
+/// How long an index that wants a full rebuild must be idle (no refresh,
+/// no change, no turn) before it gets one.
+pub const IDLE_REBUILD: Duration = Duration::from_secs(60);
+
+/// Held while a turn runs: background embedding waits between batches, and
+/// no idle rebuild starts.
+pub struct TurnHold {
+    _embedding: Option<TurnGuard>,
+    turns: Arc<AtomicUsize>,
+}
+
+impl Drop for TurnHold {
+    fn drop(&mut self) {
+        self.turns.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// What one workspace's slot knows.
 #[derive(Default)]
 struct Slot {
@@ -110,6 +154,9 @@ struct Open {
     service: Arc<IndexService>,
     /// The `enabled` setting, as last written or read.
     enabled: bool,
+    /// The folder's watch while the index is turned on; dropped (stopped)
+    /// with the service.
+    watcher: Option<FolderWatcher>,
 }
 
 impl Open {
@@ -136,6 +183,9 @@ struct Entry {
     /// Bumped by every change signal: the debounced refresh runs for the
     /// latest only.
     changes: AtomicU64,
+    /// Bumped by every completed refresh: an idle rebuild is for the
+    /// latest only.
+    readies: AtomicU64,
 }
 
 impl Entry {
@@ -181,8 +231,21 @@ fn peeked_status(peek: Option<&Peek>, policy: &str) -> IndexStatus {
         status.files = peek.documents;
         status.entities = peek.entities;
         status.relations = peek.relations;
+        status.chunks = peek.chunks;
     }
     status
+}
+
+/// Whether the index's embedding pass was left unfinished (the app quit
+/// mid-pass): turned on, a model chosen, fewer vectors than distinct chunk
+/// texts. Its next pass embeds only what is missing.
+fn embedding_unfinished(peek: &Peek) -> bool {
+    let chosen = peek
+        .settings
+        .get(SETTING)
+        .is_some_and(|choice| !choice.is_empty() && choice != OFF);
+    let kept = peek.vectors.values().copied().max().unwrap_or(0);
+    is_enabled(Some(peek)) && peek.built && chosen && kept < peek.chunk_texts
 }
 
 /// The policy as it is now, read and parsed once: whether it allows the
@@ -214,6 +277,18 @@ pub struct IndexRegistry {
     /// What no index lists, reads or keeps, wherever the workspace sits:
     /// the credentials and the app's own data (the agent's deny list).
     deny: Option<Arc<DenyList>>,
+    /// How folders are watched (`None`: they are not).
+    watch: Option<WatchConfig>,
+    /// The background embedder (`None`: no embeddings at all).
+    embedding: Option<Arc<Embedding>>,
+    /// Turns running now ([`TurnHold`]).
+    turns: Arc<AtomicUsize>,
+    /// How long a drifted index must be idle before its full rebuild
+    /// (`None`: never rebuilt on its own).
+    idle_rebuild: Option<Duration>,
+    /// The registry itself, for the watchers' callbacks (set by
+    /// [`Self::shared`]; a registry made otherwise watches nothing).
+    me: Weak<Self>,
 }
 
 impl IndexRegistry {
@@ -231,6 +306,186 @@ impl IndexRegistry {
             entries: Mutex::new(HashMap::new()),
             refresh_delay: Some(DEFAULT_REFRESH_DELAY),
             deny: None,
+            watch: Some(WatchConfig::default()),
+            embedding: None,
+            turns: Arc::new(AtomicUsize::new(0)),
+            idle_rebuild: Some(IDLE_REBUILD),
+            me: Weak::new(),
+        }
+    }
+
+    /// Embed the chunks of every open, turned-on index whose `embeddings`
+    /// setting names an embedder (`src/embeddings.rs`); woken after every
+    /// build.
+    #[must_use]
+    pub fn with_embedding(mut self, embedding: Arc<Embedding>) -> Self {
+        self.events = Arc::new(WakeAfterBuild {
+            inner: self.events,
+            embedding: Arc::downgrade(&embedding),
+        });
+        self.embedding = Some(embedding);
+        self
+    }
+
+    /// Hold background embedding, and any idle rebuild, while the guard
+    /// lives (a turn runs).
+    #[must_use]
+    pub fn hold_for_turn(&self) -> TurnHold {
+        self.turns.fetch_add(1, Ordering::SeqCst);
+        TurnHold {
+            _embedding: self.embedding.as_ref().map(|embedding| embedding.turn()),
+            turns: Arc::clone(&self.turns),
+        }
+    }
+
+    /// The registry, shared: the only form that watches folders and
+    /// rebuilds drifted indexes when idle (both reach the registry through
+    /// it).
+    #[must_use]
+    pub fn shared(self) -> Arc<Self> {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
+            events: Arc::new(RebuildWhenIdle {
+                inner: self.events.clone(),
+                registry: me.clone(),
+            }),
+            ..self
+        })
+    }
+
+    /// How long a drifted index must be idle before its full rebuild
+    /// (`None`: never).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_idle_rebuild(mut self, idle: Option<Duration>) -> Self {
+        self.idle_rebuild = idle;
+        self
+    }
+
+    /// A refresh of the workspace completed: if its index wants a full
+    /// rebuild, one starts once it has been idle for the idle delay.
+    fn after_ready(self: &Arc<Self>, workspace_id: &str) {
+        let Some(entry) = self.existing(workspace_id) else {
+            return;
+        };
+        let ready = entry.readies.fetch_add(1, Ordering::SeqCst) + 1;
+        if let (Some(idle), Ok(runtime)) =
+            (self.idle_rebuild, tokio::runtime::Handle::try_current())
+        {
+            let this = Arc::clone(self);
+            let id = workspace_id.to_owned();
+            runtime.spawn(async move { this.rebuild_when_idle(&id, &entry, ready, idle).await });
+        }
+    }
+
+    /// The full rebuild after refresh `ready`, once nothing happened for
+    /// `idle`: none when another refresh completed or a change came since
+    /// (that one decides), and none while a turn runs (it waits again).
+    async fn rebuild_when_idle(
+        &self,
+        workspace_id: &str,
+        entry: &Arc<Entry>,
+        ready: u64,
+        idle: Duration,
+    ) {
+        let changes = entry.changes.load(Ordering::SeqCst);
+        loop {
+            tokio::time::sleep(idle).await;
+            if entry.readies.load(Ordering::SeqCst) != ready
+                || entry.changes.load(Ordering::SeqCst) != changes
+            {
+                return;
+            }
+            let Some(service) = entry.current() else {
+                return;
+            };
+            if service.is_building() {
+                return;
+            }
+            if self.turns.load(Ordering::SeqCst) > 0 {
+                continue;
+            }
+            let wants = {
+                let service = service.clone();
+                blocking(move || service.wants_full_rebuild()).await
+            };
+            if !matches!(wants, Ok(true)) {
+                return;
+            }
+            // Under the policy now, as the refresh after a change.
+            let now = self.policy_now();
+            let Ok(workspace) = self.workspace(workspace_id).await else {
+                return;
+            };
+            let (current, mut slot) = self.lock(workspace_id).await;
+            if !Arc::ptr_eq(&current, entry) || !slot.open.as_ref().is_some_and(|open| open.enabled)
+            {
+                return;
+            }
+            let Some(policy) = now.allowed else {
+                if let Err(error) = Self::close_open(&current, &mut slot).await {
+                    log::warn!("an index could not be closed: {}", error.code);
+                }
+                return;
+            };
+            let service = match self
+                .open_in(&workspace, &policy, &current, &mut slot, false)
+                .await
+            {
+                Ok(service) => service,
+                Err(error) => {
+                    log::warn!("an index could not be rebuilt: {}", error.code);
+                    return;
+                }
+            };
+            drop(slot);
+            if let Err(error) = service.start_refresh(true) {
+                log::warn!("an index could not start its idle rebuild: {}", error.code);
+            }
+            return;
+        }
+    }
+
+    /// How folders are watched (`None`: not at all).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_watch(mut self, watch: Option<WatchConfig>) -> Self {
+        self.watch = watch;
+        self
+    }
+
+    /// Start watching the folder of `service` (turned on): its changes
+    /// refresh the index the way a turn's do, without the debounce (the
+    /// watch waited for the folder to be quiet). `None` when the registry
+    /// does not watch, or the system refused (logged; the index still
+    /// refreshes on open and after turns).
+    async fn watch(
+        &self,
+        workspace_id: &str,
+        service: &Arc<IndexService>,
+    ) -> Option<FolderWatcher> {
+        let config = self.watch?;
+        self.me.upgrade()?;
+        let runtime = tokio::runtime::Handle::try_current().ok()?;
+        let me = self.me.clone();
+        let id = workspace_id.to_owned();
+        let workspace = service.workspace().clone();
+        let on_change = Box::new(move |files: u64| {
+            if let Some(registry) = me.upgrade() {
+                let _context = runtime.enter();
+                registry.changed(&id, files, Some(Duration::ZERO));
+            }
+        });
+        match blocking(move || FolderWatcher::start(workspace, config, on_change)).await {
+            Ok(Ok(watcher)) => {
+                service.set_watching(true);
+                Some(watcher)
+            }
+            Ok(Err(error)) => {
+                log::warn!("a workspace folder could not be watched: {error}");
+                None
+            }
+            Err(_) => None,
         }
     }
 
@@ -413,9 +668,18 @@ impl IndexRegistry {
         })
         .await??;
         slot.peeked = None;
+        if enabled && let Some(embedding) = &self.embedding {
+            embedding.add(&service);
+        }
+        let watcher = if enabled {
+            self.watch(&workspace.id, &service).await
+        } else {
+            None
+        };
         slot.open = Some(Open {
             service: service.clone(),
             enabled,
+            watcher,
         });
         entry.set_current(Some(service.clone()));
         if catch_up
@@ -503,8 +767,18 @@ impl IndexRegistry {
         blocking(move || writer.store().set_setting(ENABLED, "true"))
             .await?
             .map_err(IndexError::from)?;
+        let watcher = match slot.open.as_ref() {
+            Some(open) if open.watcher.is_none() => self.watch(workspace_id, &service).await,
+            _ => None,
+        };
+        if let Some(embedding) = &self.embedding {
+            embedding.add(&service);
+        }
         if let Some(open) = slot.open.as_mut() {
             open.enabled = true;
+            if watcher.is_some() {
+                open.watcher = watcher;
+            }
         }
         match service.start_refresh(false) {
             Ok(()) => {}
@@ -526,6 +800,8 @@ impl IndexRegistry {
         let (entry, mut slot) = self.lock(workspace_id).await;
         let open = Self::take_open(&entry, &mut slot);
         slot.peeked = None;
+        // Its embedding status, Embed now and retry wait go with it.
+        self.forget_embedding(workspace_id);
         let dir = self.index_dir(workspace_id);
         let on_disk = blocking(move || {
             if let Some(open) = open {
@@ -575,6 +851,257 @@ impl IndexRegistry {
             other => other?,
         }
         Ok(service.status())
+    }
+
+    /// Set the workspace's embeddings (`off`, `local:<model>`,
+    /// `remote:<dim>:<model>`): what the background embedder makes and the
+    /// dense side of searches use. Off by default; a choice the policy does
+    /// not allow now is refused (`embeddings_not_allowed`), an unknown one
+    /// too (`embeddings_unknown`). Returns the value stored.
+    ///
+    /// # Errors
+    ///
+    /// `local_index_disabled`, `index_off`, `workspace_unknown`, the two
+    /// above, or the index could not be written.
+    pub async fn set_embeddings(
+        &self,
+        workspace_id: &str,
+        value: &str,
+    ) -> Result<String, TurnError> {
+        let (policy, _) = self.policy_now().gate()?;
+        let choice = Choice::parse(value);
+        match &choice {
+            Choice::Unknown => {
+                return Err(TurnError::new(
+                    "embeddings_unknown",
+                    "That is not an embedder this app knows.",
+                ));
+            }
+            Choice::Off => {}
+            other if !Allowed::of(self.policy.as_ref()).allows(other) => {
+                return Err(TurnError::new(
+                    "embeddings_not_allowed",
+                    "Your organization's policy does not allow these embeddings.",
+                ));
+            }
+            _ => {}
+        }
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        if !self.enabled(workspace_id, &mut slot).await? {
+            return Err(TurnError::new(
+                "index_off",
+                "Turn the index on for this workspace first.",
+            ));
+        }
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
+        drop(slot);
+        let stored = choice.value();
+        let (writer, saved) = (service.clone(), stored.clone());
+        blocking(move || writer.store().set_setting(SETTING, &saved))
+            .await?
+            .map_err(IndexError::from)?;
+        if let Some(embedding) = &self.embedding {
+            embedding.add(&service);
+            embedding.wake_workspace(workspace_id);
+        }
+        Ok(stored)
+    }
+
+    /// The workspace's embedding progress.
+    #[must_use]
+    pub fn embedding_status(&self, workspace_id: &str) -> Option<EmbedStatus> {
+        self.embedding.as_ref()?.status(workspace_id)
+    }
+
+    /// Embed the workspace now whatever the power state (`full`: its
+    /// vectors are dropped first and every chunk embedded again).
+    ///
+    /// # Errors
+    ///
+    /// `local_index_disabled`, `index_off`, `embeddings_off` (the setting
+    /// names no embedder), or the index could not be written.
+    pub async fn rebuild_embeddings(
+        &self,
+        workspace_id: &str,
+        full: bool,
+    ) -> Result<(), TurnError> {
+        let (policy, _) = self.policy_now().gate()?;
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        if !self.enabled(workspace_id, &mut slot).await? {
+            return Err(TurnError::new(
+                "index_off",
+                "Turn the index on for this workspace first.",
+            ));
+        }
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
+        drop(slot);
+        let Some(embedding) = &self.embedding else {
+            return Err(TurnError::new(
+                "embeddings_off",
+                "Embeddings are not available.",
+            ));
+        };
+        let reader = service.clone();
+        if blocking(move || choice_of(&reader)).await? == OFF {
+            return Err(TurnError::new(
+                "embeddings_off",
+                "Choose how to embed this workspace first.",
+            ));
+        }
+        if full {
+            let writer = service.clone();
+            blocking(move || writer.store().prune_vectors(None))
+                .await?
+                .map_err(IndexError::from)?;
+        }
+        embedding.add(&service);
+        embedding.force(workspace_id);
+        Ok(())
+    }
+
+    /// The workspace's embeddings setting (`off` when never set), from the
+    /// open service or a small read of the index file.
+    pub async fn embeddings(&self, workspace_id: &str) -> String {
+        if let Some(service) = self
+            .existing(workspace_id)
+            .and_then(|entry| entry.current())
+        {
+            return blocking(move || choice_of(&service))
+                .await
+                .unwrap_or_else(|_| OFF.to_owned());
+        }
+        let (_, mut slot) = self.lock(workspace_id).await;
+        match self.peek(workspace_id, &mut slot).await {
+            Ok(Some(peek)) => peek
+                .settings
+                .get(SETTING)
+                .filter(|choice| !choice.is_empty())
+                .cloned()
+                .unwrap_or_else(|| OFF.to_owned()),
+            _ => OFF.to_owned(),
+        }
+    }
+
+    /// Embed `paths` of the workspace first (most recent first): the files a
+    /// turn changed, the files a thread references. A hint only.
+    pub fn prioritise(&self, workspace_id: &str, paths: impl IntoIterator<Item = String>) {
+        if let Some(embedding) = &self.embedding {
+            embedding.prioritise(workspace_id, paths);
+        }
+    }
+
+    /// At start-up: reopen every index whose embedding pass the app quit in
+    /// the middle of, so the pass resumes (embedding only the chunks still
+    /// missing a vector). Nothing when the policy turns indexes off.
+    /// Answers how many resumed.
+    pub async fn resume_embeddings(&self) -> usize {
+        if self.embedding.is_none() {
+            return 0;
+        }
+        let Ok((policy, _)) = self.policy_now().gate() else {
+            return 0;
+        };
+        let workspaces = self.workspaces.clone();
+        let Ok(Ok(listed)) = blocking(move || workspaces.list()).await else {
+            return 0;
+        };
+        let mut resumed = 0;
+        for workspace in listed {
+            let (entry, mut slot) = self.lock(&workspace.id).await;
+            if slot.open.is_some() {
+                continue;
+            }
+            let unfinished = match self.peek(&workspace.id, &mut slot).await {
+                Ok(peek) => peek.as_ref().is_some_and(embedding_unfinished),
+                Err(_) => false,
+            };
+            if !unfinished {
+                continue;
+            }
+            match self
+                .open_in(&workspace, &policy, &entry, &mut slot, true)
+                .await
+            {
+                Ok(_) => resumed += 1,
+                Err(error) => log::warn!("an index could not resume embedding: {}", error.code),
+            }
+        }
+        resumed
+    }
+
+    /// Whether the workspace's folder is watched now (the Doctor's
+    /// staleness check). Never waits for the workspace's slot.
+    #[must_use]
+    pub fn is_watching(&self, workspace_id: &str) -> bool {
+        self.existing(workspace_id)
+            .and_then(|entry| entry.current())
+            .is_some_and(|service| service.status().watching)
+    }
+
+    /// Every entry, for a pass over all workspaces.
+    fn all_entries(&self) -> Vec<(String, Arc<Entry>)> {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(id, entry)| (id.clone(), Arc::clone(entry)))
+            .collect()
+    }
+
+    /// Sign-out: stop every folder watch. The indexes themselves stay (they
+    /// are kept across sign-out, above); with the policy gone, the next
+    /// entry point closes them. [`Self::resume_watching`] starts the
+    /// watches again at sign-in.
+    pub async fn stop_watching(&self) {
+        let mut stopped = Vec::new();
+        for (_, entry) in self.all_entries() {
+            let mut slot = entry.slot.clone().lock_owned().await;
+            if let Some(open) = slot.open.as_mut()
+                && let Some(watcher) = open.watcher.take()
+            {
+                open.service.set_watching(false);
+                stopped.push(watcher);
+            }
+        }
+        // Each joins its thread, which notices the stop within a tick.
+        if !stopped.is_empty() {
+            let _ = blocking(move || drop(stopped)).await;
+        }
+    }
+
+    /// Sign-in: watch the folder of every index still open and turned on
+    /// again, when the policy now allows the index and the index was opened
+    /// under it (one opened under another `path_deny` is reopened, with its
+    /// watch, by the next entry point; a closed one when it opens).
+    pub async fn resume_watching(&self) {
+        let now = self.policy_now();
+        if now.allowed.is_none() {
+            return;
+        }
+        for (id, entry) in self.all_entries() {
+            let mut slot = entry.slot.clone().lock_owned().await;
+            let Some(open) = slot.open.as_ref() else {
+                continue;
+            };
+            if !open.enabled
+                || open.watcher.is_some()
+                || open.service.is_closed()
+                || open.service.policy() != now.fingerprint
+            {
+                continue;
+            }
+            let service = open.service.clone();
+            let watcher = self.watch(&id, &service).await;
+            if let Some(open) = slot.open.as_mut() {
+                open.watcher = watcher;
+            }
+        }
     }
 
     /// `index_cancel`: `true` when a refresh was running. Never waits for
@@ -640,6 +1167,7 @@ impl IndexRegistry {
         }
         self.workspace(workspace_id).await?;
         let dir = self.index_dir(workspace_id);
+        self.forget_embedding(workspace_id);
         self.with_closed(workspace_id, move || match std::fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -649,6 +1177,14 @@ impl IndexRegistry {
             )),
         })
         .await?
+    }
+
+    /// Drop what the embedder keeps for the workspace (its service, status,
+    /// forced flag, retry wait and priorities).
+    fn forget_embedding(&self, workspace_id: &str) {
+        if let Some(embedding) = &self.embedding {
+            embedding.remove(workspace_id);
+        }
     }
 
     /// The service whose tools a turn in the workspace is offered: when the
@@ -691,6 +1227,16 @@ impl IndexRegistry {
     /// (closed if the policy turned the index off, reopened if `path_deny`
     /// changed).
     pub fn mark_changed(self: &Arc<Self>, workspace_id: &str, files: usize) {
+        self.changed(
+            workspace_id,
+            u64::try_from(files).unwrap_or(u64::MAX),
+            self.refresh_delay,
+        );
+    }
+
+    /// `files` changed in the workspace's folder (a turn's writes, or the
+    /// watch): mark the open service and refresh after `delay`.
+    fn changed(self: &Arc<Self>, workspace_id: &str, files: u64, delay: Option<Duration>) {
         if files == 0 {
             return;
         }
@@ -698,12 +1244,10 @@ impl IndexRegistry {
             return;
         };
         if let Some(service) = entry.current() {
-            service.mark_changed(u64::try_from(files).unwrap_or(u64::MAX));
+            service.mark_changed(files);
         }
         let change = entry.changes.fetch_add(1, Ordering::SeqCst) + 1;
-        if let (Some(delay), Ok(runtime)) =
-            (self.refresh_delay, tokio::runtime::Handle::try_current())
-        {
+        if let (Some(delay), Ok(runtime)) = (delay, tokio::runtime::Handle::try_current()) {
             let this = Arc::clone(self);
             let id = workspace_id.to_owned();
             runtime
@@ -753,7 +1297,7 @@ impl IndexRegistry {
             drop(slot);
             match service.start_refresh(false) {
                 Err(error) if error.code == "index_busy" => {
-                    tokio::time::sleep(delay).await;
+                    tokio::time::sleep(delay.max(BUSY_RETRY)).await;
                 }
                 _ => return,
             }
@@ -776,14 +1320,60 @@ impl IndexRegistry {
     }
 }
 
+/// Index events, and a wake-up for the embedder once a build is ready.
+struct WakeAfterBuild {
+    inner: Arc<dyn IndexEvents>,
+    embedding: Weak<Embedding>,
+}
+
+impl IndexEvents for WakeAfterBuild {
+    fn emit(&self, event: IndexEvent) {
+        let ready = (event.phase == "ready").then(|| event.workspace_id.clone());
+        self.inner.emit(event);
+        if let Some(workspace_id) = ready
+            && let Some(embedding) = self.embedding.upgrade()
+        {
+            embedding.wake_workspace(&workspace_id);
+        }
+    }
+}
+
+/// Index events, and the idle rebuild check after every completed refresh.
+struct RebuildWhenIdle {
+    inner: Arc<dyn IndexEvents>,
+    registry: Weak<IndexRegistry>,
+}
+
+impl IndexEvents for RebuildWhenIdle {
+    fn emit(&self, event: IndexEvent) {
+        let ready = (event.phase == "ready").then(|| event.workspace_id.clone());
+        self.inner.emit(event);
+        if let Some(workspace_id) = ready
+            && let Some(registry) = self.registry.upgrade()
+        {
+            registry.after_ready(&workspace_id);
+        }
+    }
+}
+
 /// Index events to the main window only.
 pub struct MainWindowIndexEvents(pub tauri::AppHandle);
 
 impl IndexEvents for MainWindowIndexEvents {
     fn emit(&self, event: IndexEvent) {
-        use tauri::Emitter as _;
+        use tauri::{Emitter as _, Manager as _};
         if let Err(error) = self.0.emit_to("main", EVENT_NAME, &event) {
             log::warn!("could not deliver an index event: {error}");
+        }
+        if let Some(activity) = self
+            .0
+            .try_state::<std::sync::Arc<crate::activity::Activity>>()
+        {
+            activity.index(
+                &event.workspace_id,
+                event.status.state == IndexState::Building,
+                event.message.as_deref(),
+            );
         }
     }
 }
@@ -824,6 +1414,15 @@ pub async fn index_disable(
     workspace_id: String,
 ) -> Result<IndexStatus, IpcError> {
     Ok(state.index.disable(&workspace_id).await?)
+}
+
+/// The workspace's embeddings setting (IPC.md, "Index embeddings").
+#[tauri::command(rename_all = "snake_case")]
+pub async fn index_embeddings_get(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+) -> Result<String, IpcError> {
+    Ok(state.index.embeddings(&workspace_id).await)
 }
 
 /// Refresh the index (`full`: rebuild it from nothing).
@@ -1241,6 +1840,347 @@ mod tests {
         release.send(()).unwrap();
         holder.await.unwrap().unwrap();
         assert!(took < Duration::from_millis(500), "waited {took:?}");
+    }
+
+    /// An index drifted past the threshold is rebuilt from nothing once it
+    /// has been idle; not while a turn runs (#1219).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_drifted_index_is_rebuilt_when_idle() {
+        use elitea_local_index::service::DRIFT_REBUILD;
+        use elitea_local_index::sqlite_store::GraphKey;
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let id = workspaces.add(folder.path()).unwrap().id;
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let idle = Duration::from_millis(300);
+        let registry = IndexRegistry::new(workspaces, policy, Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(None)
+            .with_idle_rebuild(Some(idle))
+            .shared();
+        registry.enable(&id).await.unwrap();
+        until_built(&registry, &id).await;
+        let service = registry.for_turn(&id).await.unwrap();
+        service.store().set_drift_files(DRIFT_REBUILD + 1).unwrap();
+        let held = registry.hold_for_turn();
+        registry.refresh(&id, false).await.unwrap();
+        until_built(&registry, &id).await;
+        // A turn runs: no rebuild however long it lasts.
+        tokio::time::sleep(idle * 3).await;
+        assert!(service.wants_full_rebuild(), "rebuilt during a turn");
+        let runs = service.store().runs(GraphKey::LOCAL).unwrap().len();
+        drop(held);
+        for _ in 0..500 {
+            if !service.wants_full_rebuild() && !service.is_building() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!service.wants_full_rebuild(), "rebuilt once idle");
+        assert_eq!(service.store().drift_files().unwrap(), 0);
+        assert_eq!(
+            service.store().runs(GraphKey::LOCAL).unwrap().len(),
+            runs + 1
+        );
+        assert_eq!(
+            service.last_report().unwrap().read,
+            1,
+            "every file read again"
+        );
+    }
+
+    /// A change made outside the app (no turn, no command) refreshes a
+    /// turned-on index once the folder is quiet; turned off, the folder is
+    /// no longer watched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_folder_watch_refreshes_a_turned_on_index() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let id = workspaces.add(folder.path()).unwrap().id;
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let registry = IndexRegistry::new(workspaces, policy, Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(Some(WatchConfig {
+                quiet: Duration::from_millis(200),
+                min_interval: Duration::from_millis(500),
+            }))
+            .shared();
+        registry.enable(&id).await.unwrap();
+        let built = until_built(&registry, &id).await;
+        std::fs::write(folder.path().join("b.py"), "class B:\n    pass\n").unwrap();
+        let status = until(&registry, &id, |status| {
+            status.state == IndexState::Ready && status.files > built.files
+        })
+        .await;
+        assert_eq!(status.files, built.files + 1);
+        registry.disable(&id).await.unwrap();
+        std::fs::write(folder.path().join("c.py"), "class C:\n    pass\n").unwrap();
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let dir = registry.index_dir(&id);
+        let peek = SqliteGraphStore::peek(&dir).unwrap().unwrap();
+        assert_eq!(peek.documents, status.files, "not refreshed while off");
+    }
+
+    /// The watch runs while the index is open and turned on, and the status
+    /// says so: it stops on disable, sign-out and the policy turning the
+    /// index off, and starts again on enable, sign-in and reopening
+    /// (#1219).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watcher_stops_on_disable_and_policy_off() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let id = workspaces.add(folder.path()).unwrap().id;
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let registry = IndexRegistry::new(workspaces, policy.clone(), Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(Some(WatchConfig {
+                quiet: Duration::from_millis(100),
+                min_interval: Duration::from_millis(200),
+            }))
+            .shared();
+        registry.enable(&id).await.unwrap();
+        assert!(
+            until_built(&registry, &id).await.watching,
+            "watched once on"
+        );
+        assert!(registry.is_watching(&id));
+
+        let off = registry.disable(&id).await.unwrap();
+        assert!(!off.watching && !registry.is_watching(&id), "{off:?}");
+        assert!(registry.enable(&id).await.unwrap().watching, "on again");
+
+        // Sign-out stops the watch, keeping the index open; sign-in
+        // starts it again.
+        registry.stop_watching().await;
+        assert!(!registry.status(&id).await.unwrap().watching);
+        assert!(!registry.is_watching(&id));
+        registry.resume_watching().await;
+        assert!(registry.status(&id).await.unwrap().watching);
+
+        // The policy turns the index off: closed, not watched, and a change
+        // refreshes nothing.
+        let built = until_built(&registry, &id).await;
+        *policy.0.lock().unwrap() = None;
+        let status = registry.status(&id).await.unwrap();
+        assert!(status.policy_off && !status.watching, "{status:?}");
+        assert!(!registry.is_watching(&id));
+        std::fs::write(folder.path().join("b.py"), "class B:\n    pass\n").unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let peek = SqliteGraphStore::peek(&registry.index_dir(&id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(peek.documents, built.files, "not refreshed while off");
+        // Sign-in under no policy starts nothing.
+        registry.resume_watching().await;
+        assert!(!registry.is_watching(&id));
+
+        // Allowed again: reopening watches it.
+        *policy.0.lock().unwrap() = Some(on());
+        assert!(registry.open(&id).await.unwrap().watching);
+    }
+
+    /// A turned-on index whose setting names an embedder is embedded
+    /// after its build, and a turn holds the embedder.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_built_index_is_embedded_when_its_setting_says_so() {
+        use elitea_local_embed::{EmbedError, Embedder};
+        use elitea_local_index::embedding::{
+            AlwaysRun, EmbedConfig, EmbedState, EmbedderSource, SETTING,
+        };
+        use elitea_local_index::sqlite_store::VectorSet;
+
+        struct Fake;
+        impl Embedder for Fake {
+            fn stamp(&self) -> String {
+                "local:fake".into()
+            }
+            fn dimension(&self) -> usize {
+                2
+            }
+            fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+                Ok(texts.iter().map(|_| vec![1.0, 0.0]).collect())
+            }
+            fn embed_query(&self, _: &str) -> Result<Vec<f32>, EmbedError> {
+                Ok(vec![1.0, 0.0])
+            }
+        }
+        struct Source;
+        impl EmbedderSource for Source {
+            fn vector_set(&self, choice: &str) -> Option<VectorSet> {
+                (choice == "local:fake").then(|| VectorSet {
+                    origin: "local".into(),
+                    model: "fake".into(),
+                    dim: 2,
+                })
+            }
+            fn load(&self, _: &str, _: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+                Ok(Arc::new(Fake))
+            }
+        }
+
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let id = workspaces.add(folder.path()).unwrap().id;
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let embedding = Arc::new(
+            Embedding::start(
+                Arc::new(Source),
+                Arc::new(AlwaysRun),
+                EmbedConfig {
+                    poll: Duration::from_millis(100),
+                    ..EmbedConfig::default()
+                },
+                Arc::new(|_: &str, _: &elitea_local_index::embedding::EmbedStatus| {}),
+            )
+            .unwrap(),
+        );
+        let registry = IndexRegistry::new(workspaces, policy, Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(None)
+            .with_embedding(embedding.clone())
+            .shared();
+        let held = registry.hold_for_turn();
+        let service = registry.for_turn(&id).await;
+        assert!(service.is_none(), "not turned on yet");
+        registry.enable(&id).await.unwrap();
+        until_built(&registry, &id).await;
+        let service = registry.for_turn(&id).await.unwrap();
+        service.store().set_setting(SETTING, "local:fake").unwrap();
+        embedding.wake();
+        for _ in 0..200 {
+            if embedding
+                .status(&id)
+                .is_some_and(|s| s.held == Some("turn"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(embedding.status(&id).unwrap().state, EmbedState::Paused);
+        drop(held);
+        for _ in 0..500 {
+            if embedding
+                .status(&id)
+                .is_some_and(|s| s.state == EmbedState::Done)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let (with, all) = service.store().vector_coverage("local:fake:2").unwrap();
+        assert!(all > 0 && with == all, "{with}/{all}");
+        assert_eq!(registry.embeddings(&id).await, "local:fake");
+
+        // The app quits with the pass unfinished (here: no vectors left).
+        service.store().prune_vectors(None).unwrap();
+        service.close();
+        drop((service, registry, embedding));
+        let start = || {
+            Arc::new(
+                Embedding::start(
+                    Arc::new(Source),
+                    Arc::new(AlwaysRun),
+                    EmbedConfig {
+                        poll: Duration::from_millis(100),
+                        ..EmbedConfig::default()
+                    },
+                    Arc::new(|_: &str, _: &elitea_local_index::embedding::EmbedStatus| {}),
+                )
+                .unwrap(),
+            )
+        };
+        let embedding = start();
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let registry = IndexRegistry::new(workspaces, policy, Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(None)
+            .with_embedding(embedding.clone())
+            .shared();
+        // Not open yet: the setting is read from the file.
+        assert_eq!(registry.embeddings(&id).await, "local:fake");
+        assert_eq!(
+            registry.resume_embeddings().await,
+            1,
+            "the next start resumes it"
+        );
+        assert_eq!(registry.resume_embeddings().await, 0, "already open");
+        for _ in 0..500 {
+            if embedding
+                .status(&id)
+                .is_some_and(|s| s.state == EmbedState::Done)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let service = registry.for_turn(&id).await.unwrap();
+        let (with, all) = service.store().vector_coverage("local:fake:2").unwrap();
+        assert!(all > 0 && with == all, "resumed: {with}/{all}");
+        assert!(embedding.status(&id).is_some());
+        // Turned off: the embedder forgets it (no stale status).
+        drop(service);
+        registry.disable(&id).await.unwrap();
+        assert!(
+            embedding.status(&id).is_none(),
+            "{:?}",
+            embedding.status(&id)
+        );
+        registry.enable(&id).await.unwrap();
+        until_built(&registry, &id).await;
+        registry.remove(&id, true).await.unwrap();
+        assert!(embedding.status(&id).is_none());
+    }
+
+    /// Embeddings are off until set, and only to a way the policy allows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn embeddings_are_set_only_as_the_policy_allows() {
+        let f = registry(json!({"allowed": true, "local_index": true,
+            "index_local_embeddings": true}));
+        let refused = f.registry.set_embeddings(&f.id, "off").await.unwrap_err();
+        assert_eq!(refused.code, "index_off");
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        assert_eq!(f.registry.embeddings(&f.id).await, "off");
+        let unknown = f
+            .registry
+            .set_embeddings(&f.id, "local:nope")
+            .await
+            .unwrap_err();
+        assert_eq!(unknown.code, "embeddings_unknown");
+        let remote = f
+            .registry
+            .set_embeddings(&f.id, "remote:8:text-embedding-3-small")
+            .await
+            .unwrap_err();
+        assert_eq!(remote.code, "embeddings_not_allowed");
+        let stored = f
+            .registry
+            .set_embeddings(&f.id, "local:multilingual-e5-small")
+            .await
+            .unwrap();
+        assert_eq!(stored, "local:multilingual-e5-small");
+        assert_eq!(f.registry.embeddings(&f.id).await, stored);
+        // Local embeddings turned off by the policy: refused, off still is not.
+        *f.policy.0.lock().unwrap() = Some(on());
+        let local = f
+            .registry
+            .set_embeddings(&f.id, "local:multilingual-e5-small")
+            .await
+            .unwrap_err();
+        assert_eq!(local.code, "embeddings_not_allowed");
+        assert_eq!(
+            f.registry.set_embeddings(&f.id, "off").await.unwrap(),
+            "off"
+        );
     }
 
     /// `workspace_remove`'s path (`with_closed`) drops the workspace's

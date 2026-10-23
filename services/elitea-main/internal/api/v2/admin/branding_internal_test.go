@@ -3,11 +3,39 @@ package admin
 import (
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 var fontAssetPath = "/api/v2/branding/assets/font/" + strings.Repeat("cd", 32) + ".woff2"
+
+// #1057: a fresh unreferenced upload is not collected (another tab's save
+// would otherwise delete it before its uploader saves); an old one is.
+func TestCollectableBrandingAssets_SkipsYoungReferencedAndPackageObjects(t *testing.T) {
+	now := time.Now()
+	cutoff := now.Add(-brandingAssetGrace)
+	path := func(kind, digit string) string {
+		return "/api/v2/branding/assets/" + kind + "/" + strings.Repeat(digit, 64) + ".png"
+	}
+	infos := []v2branding.AssetInfo{
+		// fresh, unreferenced: an upload whose uploader has not saved yet
+		{Path: path("logo-full", "a"), Kind: "logo-full", LastModified: now.Add(-time.Minute)},
+		// old, unreferenced: collected
+		{Path: path("logo-full", "b"), Kind: "logo-full", LastModified: now.Add(-time.Hour)},
+		// old, referenced
+		{Path: path("logo-mark", "c"), Kind: "logo-mark", LastModified: now.Add(-time.Hour)},
+		// a kept package
+		{Path: path("package", "d"), Kind: v2branding.KindPackage, LastModified: now.Add(-time.Hour)},
+		// age unknown
+		{Path: path("favicon", "e"), Kind: "favicon"},
+	}
+	got := collectableBrandingAssets(infos, map[string]bool{path("logo-mark", "c"): true}, cutoff)
+	if len(got) != 1 || got[0] != path("logo-full", "b") {
+		t.Fatalf("collectable = %v, want only the old unreferenced logo", got)
+	}
+}
 
 func TestValidateBrandingValues(t *testing.T) {
 	tests := []struct {

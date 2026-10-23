@@ -23,9 +23,9 @@
 --
 -- The schema is a NEW one this repository owns end to end (`elitea_chat`), in
 -- the same style as elitea_auth (0095), elitea_mcp (0094), elitea_identity and
--- elitea_runtime. It is deliberately not `centry.`: that schema is pylon's, and
--- claiming an object in it is how a migration collides with a shape someone else
--- owns.
+-- elitea_runtime. It is deliberately not `centry.`: that schema is the legacy
+-- runtime's, and claiming an object in it is how a migration collides with a
+-- shape someone else owns.
 --
 -- WHAT IS STORED, AND WHAT IS DELIBERATELY NOT
 --

@@ -5,25 +5,28 @@ name: Image Matrix
 # NOT path-filtered on the workflow files alone, deliberately: a new bake target
 # is a change to docker-bake.hcl and to nothing else, and that is precisely the
 # case this catches.
+#
+# It also holds the PR-time half of the image scan. The scan itself is
+# nightly, of the published `latest` images (nightly-image-scan.yml), and the
+# release scan in publish.yml gates `latest`; what a pull request can break —
+# the image list, the exemption register, the gate rule, the issue script —
+# is checked here in seconds, with no image built.
 
 on:
   pull_request:
     paths:
       - "docker-bake.hcl"
       - ".github/workflows/publish.yml"
-      - ".github/workflows/ci-image-scan.yml"
+      - ".github/workflows/nightly-image-scan.yml"
       - ".github/image-scan-exempt.txt"
       - "scripts/ci/image-matrix.sh"
-      - ".github/workflows/image-matrix.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "docker-bake.hcl"
-      - ".github/workflows/publish.yml"
-      - ".github/workflows/ci-image-scan.yml"
-      - ".github/image-scan-exempt.txt"
-      - "scripts/ci/image-matrix.sh"
+      # The scan gate both scans run, the nightly issue script, and their tests.
+      - "scripts/ci/image-scan-gate.sh"
+      - "scripts/ci/image-scan-gate-test.sh"
+      - "scripts/ci/image-scan-issue.mjs"
+      - "scripts/ci/image-scan-issue.test.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/testdata/trivy-*.json"
       - ".github/workflows/image-matrix.yml"
 
 permissions:
@@ -43,7 +46,50 @@ jobs:
       - name: docker-bake.hcl evaluates
         # `--print` resolves every target (contexts, dockerfiles, args, tags)
         # without building. It is the only PR-time evaluation of the bake file
-        # now that no PR job bakes elitea-web, elitea-ui or the workers;
+        # now that no PR job bakes elitea-web or the workers;
         # without it a broken target first fails in publish.yml
         # at release time.
         run: docker buildx bake --print > /dev/null
+
+  # The gate publish.yml and nightly-image-scan.yml both run goes red: driven
+  # with synthetic trivy reports, every arm (clean, HIGH, CRITICAL, missing,
+  # unparsable, wrong target type, exempt, stale exemption). #501's rule.
+  gate-selftest:
+    name: The scan gate goes red
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Drive every arm of the gate with synthetic reports
+        run: bash scripts/ci/image-scan-gate-test.sh
+
+  # The nightly issue script, against two REAL trimmed trivy reports and a
+  # fake github-script client. The COUNT is read, not only the exit status:
+  # a suite that collects nothing exits 0 (#534). Only node built-ins: the
+  # runner's node, nothing to install.
+  issue-script:
+    name: The nightly scan's issue script opens, updates and closes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run every scenario
+        run: |
+          set -euo pipefail
+          expected="$(grep -c '^test(' scripts/ci/image-scan-issue.test.mjs)"
+          if [ "${expected}" -lt 15 ]; then
+            echo "::error::found ${expected} scenario(s), expected at least 15 — the pattern stopped matching"
+            exit 1
+          fi
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/image-scan-issue.test.mjs 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::the suite holds ${expected} scenario(s) and node --test passed ${ran:-none}"
+            exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test image-scan-issue.test.mjs exited ${status}"
+            exit "${status}"
+          fi

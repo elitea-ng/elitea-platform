@@ -5,9 +5,9 @@ package admin
 //
 // # Why this stopped being a 501
 //
-// It answered "configuration value suggestions are sourced from the Pylon
+// It answered "configuration value suggestions are sourced from the legacy
 // toolkit registry, which has no equivalent in this service". That was true of
-// the mechanism and false of the claim underneath it. pylon reads
+// the mechanism and false of the claim underneath it. The legacy runtime reads
 // `elitea_core.toolkit_schemas` — an in-process dict a plugin populates at load —
 // and this service has the same registry in a better form: the digest-pinned
 // snapshot in internal/runtimecomposition, generated from the exact elitea-sdk

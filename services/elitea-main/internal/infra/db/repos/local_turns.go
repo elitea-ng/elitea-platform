@@ -20,8 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 // LocalTurnsRepo implements localturn.Store.

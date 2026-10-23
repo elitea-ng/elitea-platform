@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"testing"
 
-	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	configurationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

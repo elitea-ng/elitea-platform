@@ -133,7 +133,7 @@ fn catalog_preserves_source_order_and_groups() {
 fn config_is_nested_exact_origin_secret_safe_and_selection_is_deterministic() {
     for selected in [None, Some(Value::Null), Some(json!([]))] {
         let parsed = AhaToolkitConfig::parse(&settings(selected)).expect("all-tools selection");
-        assert!(parsed.selected_tools().is_empty());
+        assert_eq!(parsed.selected_tools(), []);
     }
 
     let selected = AhaToolkitConfig::parse(&settings(Some(json!([

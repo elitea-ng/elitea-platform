@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentConfigurationReaderStub struct {
@@ -50,12 +51,6 @@ func (function currentReadPrincipalValidatorFunc) ValidatePrincipal(ctx context.
 	return function(ctx, user)
 }
 
-type currentReadPeerVerifierFunc func(*http.Request) error
-
-func (function currentReadPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return function(request)
-}
-
 func TestCurrentConfigurationReadRouteBindsExactCurrentPathsAndPermissions(t *testing.T) {
 	if handler.CurrentConfigurationListPath != "/api/v2/configurations/configurations/{projectID}" ||
 		handler.CurrentConfigurationDetailsPath != "/api/v2/configurations/configuration/{projectID}/{configID}" ||
@@ -76,11 +71,10 @@ func TestCurrentConfigurationReadRouteBindsExactCurrentPathsAndPermissions(t *te
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := currentReadPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
-	authConfig := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	authConfig := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}
 
 	for name, test := range map[string]struct {
 		reader          handler.CurrentConfigurationReader
@@ -92,7 +86,7 @@ func TestCurrentConfigurationReadRouteBindsExactCurrentPathsAndPermissions(t *te
 		"missing public project": {reader: reader, authConfig: authConfig, permissions: permissions},
 		"missing principal": {
 			reader: reader, publicProjectID: 1,
-			authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions,
+			authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions,
 		},
 		"no credential reader": {
 			reader: reader, publicProjectID: 1,
@@ -242,11 +236,12 @@ func TestCurrentConfigurationReadRouteRejectsBeforeServiceAndOtherMethods(t *tes
 		method     string
 		path       string
 		remoteAddr string
+		forged     bool
 		wantStatus int
 	}{
-		"untrusted peer": {
+		"forged X-Auth-* identity without a session": {
 			method: http.MethodGet, path: "/api/v2/configurations/configurations/7",
-			remoteAddr: "192.0.2.9:443", wantStatus: http.StatusUnauthorized,
+			remoteAddr: "192.0.2.9:443", forged: true, wantStatus: http.StatusUnauthorized,
 		},
 		"permission denied": {
 			method: http.MethodGet, path: "/api/v2/configurations/configurations/7",
@@ -263,7 +258,12 @@ func TestCurrentConfigurationReadRouteRejectsBeforeServiceAndOtherMethods(t *tes
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			route.ServeHTTP(response, currentReadRequest(test.method, test.path, test.remoteAddr))
+			request := currentReadRequest(test.method, test.path, test.remoteAddr)
+			if test.forged {
+				request.Header.Del("Cookie")
+				authtest.ForgeXAuth(request, "11")
+			}
+			route.ServeHTTP(response, request)
 			if response.Code != test.wantStatus {
 				t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
 			}
@@ -281,21 +281,15 @@ func newCurrentConfigurationReadRoute(
 ) *handler.CurrentConfigurationReadRoute {
 	t.Helper()
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
-		if user.ID != "11" || user.UserID != "11" || user.AuthType != "user" {
+		if user.ID != "11" || user.UserID != "11" || user.AuthType != "session" {
 			t.Fatalf("unexpected forwarded principal: %+v", user)
 		}
 		return user, nil
 	})
-	peer := currentReadPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	route, err := handler.NewCurrentConfigurationReadRoute(
 		reader,
 		1,
-		apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
 	)
 	if err != nil {
@@ -306,8 +300,7 @@ func newCurrentConfigurationReadRoute(
 
 func currentReadRequest(method, path, remoteAddress string) *http.Request {
 	request := httptest.NewRequest(method, path, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = remoteAddress
 	return request
 }

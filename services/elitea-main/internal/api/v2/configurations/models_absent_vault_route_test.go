@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // TestCurrentModelCatalogRouteAnswersWithNoVault is the ROUTE-level pin for the

@@ -1,3 +1,5 @@
+import { FRAME_TYPE } from '@elitea/client-core/stream';
+
 import type { AiAssistantConfigurationTypeDescriptor } from '../api/aiAssistantConfigurations';
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
 
@@ -49,15 +51,15 @@ export interface ApplicationPredictStreamMessage {
   readonly [key: string]: unknown;
 }
 
-/** `SocketMessageType`'s string literals the baseline switches on (`common/constants.js`) — matches `shared/api/socket/messages.ts`'s generated `SOCKET_MESSAGE_TYPES` values for these entries. */
-export const START_TASK = 'start_task';
-export const CHUNK = 'chunk';
-export const AI_MESSAGE_CHUNK = 'AIMessageChunk';
-export const AGENT_LLM_CHUNK = 'agent_llm_chunk';
-export const AGENT_RESPONSE = 'agent_response';
-export const AGENT_LLM_END = 'agent_llm_end';
-export const SOCKET_ERROR = 'error';
-export const LLM_ERROR = 'llm_error';
+/** `SocketMessageType`'s string literals the baseline switches on (`common/constants.js`), taken from `@elitea/client-core`'s `FRAME_TYPE`. */
+export const START_TASK = FRAME_TYPE.StartTask;
+export const CHUNK = FRAME_TYPE.Chunk;
+export const AI_MESSAGE_CHUNK = FRAME_TYPE.AIMessageChunk;
+export const AGENT_LLM_CHUNK = FRAME_TYPE.AgentLlmChunk;
+export const AGENT_RESPONSE = FRAME_TYPE.AgentResponse;
+export const AGENT_LLM_END = FRAME_TYPE.AgentLlmEnd;
+export const SOCKET_ERROR = FRAME_TYPE.Error;
+export const LLM_ERROR = FRAME_TYPE.LlmError;
 
 // Backstop: if no completion event arrives (events dropped, network drop,
 // backend silently aborted), unblock the UI so the user is not stuck on

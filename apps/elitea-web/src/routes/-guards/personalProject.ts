@@ -2,12 +2,13 @@
  * "Is the SELECTED project the caller's own personal project?" — the gate the
  * reference writes as `isPrivateProject = projectId == user.personal_project_id`
  * (`apps/elitea-ui/src/[fsd]/pages/settings/index.jsx:162`), corrected for the
- * one way this backend's `personal_project_id` differs from pylon's.
+ * one way this backend's `personal_project_id` differs from the legacy
+ * runtime's.
  *
  * THE ID COMPARISON ALONE IS NOT ENOUGH HERE. `GET /social/author` resolves
  * `personal_project_id` down three branches (`resolvePersonalProjectID`,
  * services/elitea-main/internal/api/v2/social/handler.go). Branches 1 and 2
- * name a real `project_user_<uid>` row, exactly as pylon's
+ * name a real `project_user_<uid>` row, exactly as the legacy
  * `projects_get_personal_project_id` did. Branch 3 — "the lowest-id project the
  * user actually holds a role in" — does not: it exists so an account whose
  * personal project has not been provisioned yet still gets a usable scope

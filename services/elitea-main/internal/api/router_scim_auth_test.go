@@ -16,8 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 type discardAuditRecorder struct{}

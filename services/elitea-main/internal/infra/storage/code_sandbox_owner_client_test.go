@@ -2,34 +2,68 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"io"
-	"net/http"
 	"strings"
 	"testing"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 )
 
+// codeOwnerTestTransport is the supervisor end of the owner RPCs. A status
+// other than 200 answers with a gRPC refusal.
 type codeOwnerTestTransport struct {
+	runtimev1.SandboxSupervisorServiceClient
 	calls   int
 	status  int
 	body    string
 	path    string
-	query   string
-	headers http.Header
+	request []byte
 }
 
-func (f *codeOwnerTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+func (f *codeOwnerTestTransport) answer(method, jobKey string, request []byte) ([]byte, error) {
 	f.calls++
-	f.path = r.URL.Path
-	f.query = r.URL.RawQuery
-	f.headers = r.Header.Clone()
-	return &http.Response{StatusCode: f.status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(f.body)), ContentLength: int64(len(f.body))}, nil
+	f.path = method + "/" + jobKey
+	f.request = request
+	if f.status != 200 {
+		return nil, grpcstatus.Error(codes.FailedPrecondition, "refused")
+	}
+	return []byte(f.body), nil
 }
+
+func (f *codeOwnerTestTransport) CodeOwnerRecoveryRead(_ context.Context, r *runtimev1.CodeOwnerRecoveryReadRequestV1, _ ...grpc.CallOption) (*runtimev1.CodeOwnerRecoveryReadResponseV1, error) {
+	raw, err := f.answer("CodeOwnerRecoveryRead", r.GetJobKey(), r.GetRequestJson())
+	return &runtimev1.CodeOwnerRecoveryReadResponseV1{ResponseJson: raw}, err
+}
+
+func (f *codeOwnerTestTransport) CodeOwnerRecoverySealNoEffect(_ context.Context, r *runtimev1.CodeOwnerRecoverySealNoEffectRequestV1, _ ...grpc.CallOption) (*runtimev1.CodeOwnerRecoverySealNoEffectResponseV1, error) {
+	raw, err := f.answer("CodeOwnerRecoverySealNoEffect", r.GetJobKey(), r.GetRequestJson())
+	return &runtimev1.CodeOwnerRecoverySealNoEffectResponseV1{ResponseJson: raw}, err
+}
+
+func (f *codeOwnerTestTransport) CodePlatformOwnerReadRetainedRuntime(_ context.Context, r *runtimev1.CodePlatformOwnerReadRetainedRuntimeRequestV1, _ ...grpc.CallOption) (*runtimev1.CodePlatformOwnerReadRetainedRuntimeResponseV1, error) {
+	raw, err := f.answer("CodePlatformOwnerReadRetainedRuntime", r.GetJobKey(), r.GetRequestJson())
+	return &runtimev1.CodePlatformOwnerReadRetainedRuntimeResponseV1{ResponseJson: raw}, err
+}
+
+func (f *codeOwnerTestTransport) CodePlatformOwnerReadPendingCall(_ context.Context, r *runtimev1.CodePlatformOwnerReadPendingCallRequestV1, _ ...grpc.CallOption) (*runtimev1.CodePlatformOwnerReadPendingCallResponseV1, error) {
+	raw, err := f.answer("CodePlatformOwnerReadPendingCall", r.GetJobKey(), r.GetRequestJson())
+	return &runtimev1.CodePlatformOwnerReadPendingCallResponseV1{ResponseJson: raw}, err
+}
+
+func (f *codeOwnerTestTransport) CodePlatformOwnerPublishReply(_ context.Context, r *runtimev1.CodePlatformOwnerPublishReplyRequestV1, _ ...grpc.CallOption) (*runtimev1.CodePlatformOwnerPublishReplyResponseV1, error) {
+	raw, err := f.answer("CodePlatformOwnerPublishReply", r.GetJobKey(), r.GetRequestJson())
+	return &runtimev1.CodePlatformOwnerPublishReplyResponseV1{ResponseJson: raw}, err
+}
+
 func codeGrantFixture(t *testing.T) (*CodeOwnerGrantSigner, ed25519.PublicKey, code.GrantClaims) {
 	t.Helper()
 	pub, key, err := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{7}, 128)))
@@ -83,18 +117,18 @@ func TestCodeOwnerClientOneAttemptAndNoEvidenceFromUnknownStates(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			raw, _ := json.Marshal(code.Response{Schema: "elitea.sandbox.node-code-recovery-response.v1", State: state, Receipt: json.RawMessage("null")})
 			tr := &codeOwnerTestTransport{status: 200, body: string(raw)}
-			c := &CodeOwnerClient{requester: claims.RequesterWorkloadIdentity, endpoints: map[string]codeOwnerEndpoint{claims.SupervisorAudience: {origin: "https://owner.invalid", client: &http.Client{Transport: tr}}}}
+			c := &CodeOwnerClient{requester: claims.RequesterWorkloadIdentity, endpoints: map[string]codeOwnerEndpoint{claims.SupervisorAudience: {client: tr}}}
 			if _, err := c.Read(t.Context(), claims, g); err == nil {
 				t.Fatal("unknown granted evidence")
 			}
-			if tr.calls != 1 || tr.query != "" || tr.path != "/elitea.runtime.node-code-recovery.v1/jobs/"+claims.JobKey+"/read" {
+			if tr.calls != 1 || tr.path != "CodeOwnerRecoveryRead/"+claims.JobKey {
 				t.Fatal("incorrect owner route/attempts")
 			}
 		})
 	}
 	tr := &codeOwnerTestTransport{status: 307, body: `{}`}
-	c := &CodeOwnerClient{requester: claims.RequesterWorkloadIdentity, endpoints: map[string]codeOwnerEndpoint{claims.SupervisorAudience: {origin: "https://owner.invalid", client: &http.Client{Transport: tr}}}}
+	c := &CodeOwnerClient{requester: claims.RequesterWorkloadIdentity, endpoints: map[string]codeOwnerEndpoint{claims.SupervisorAudience: {client: tr}}}
 	if _, err := c.Read(t.Context(), claims, g); err == nil || tr.calls != 1 {
-		t.Fatal("redirect accepted/retried")
+		t.Fatal("refusal accepted/retried")
 	}
 }

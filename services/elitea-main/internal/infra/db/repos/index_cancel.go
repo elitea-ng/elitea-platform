@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"math"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,8 +19,9 @@ type currentIndexCancellationQueries interface {
 }
 
 // CurrentIndexCancellationRepository changes only the durable desired state of
-// the exact active index execution. Worker settlement owns terminal state and
-// external PgVector cleanup.
+// the exact active index execution. Worker settlement owns terminal state; a
+// stopped run's vectors stay in elitea-vector (indexing.RegistryManualStopCleaner
+// deletes none).
 type CurrentIndexCancellationRepository struct {
 	queries currentIndexCancellationQueries
 }

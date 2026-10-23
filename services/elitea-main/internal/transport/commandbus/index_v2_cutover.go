@@ -7,7 +7,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/cutover"
 )
 
 // IndexV2CutoverReader reads the complete state of one command stream and its

@@ -13,11 +13,11 @@
  * unchanged in substance and asserted against the same public route.
  *
  * Most of what is left on this page is every section this platform cannot serve
- * HERE — Pylon plugin configuration, and a maintenance hook that does not
- * exist. That is a true and useful thing for the page to say, and it is most of
- * what this journey asserts: not that a form renders, but that each pane states
- * a server-declared REASON and each endpoint refuses the write rather than
- * accepting and discarding it.
+ * HERE — legacy-runtime plugin configuration, and a maintenance hook that does
+ * not exist. That is a true and useful thing for the page to say, and it is
+ * most of what this journey asserts: not that a form renders, but that each
+ * pane states a server-declared REASON and each endpoint refuses the write
+ * rather than accepting and discarding it.
  *
  * **Guardrails is the exception, and is now the page's landing section.** It was
  * on the unavailable list until the toolkit surfaces, the toolkit write paths
@@ -121,9 +121,10 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
     ).toHaveCount(0);
   }
 
-  // Advanced is not marked either — it is GONE. Its subject is Pylon plugin
-  // loading, which the target architecture drops on purpose, so a permanent
-  // "not available here" row would be a promise that can never be kept.
+  // Advanced is not marked either — it is GONE. Its subject is legacy-runtime
+  // plugin loading, which the target architecture drops on purpose, so a
+  // permanent "not available here" row would be a promise that can never be
+  // kept.
   await expect(sections.getByRole('button', { name: /Advanced/ })).toHaveCount(0);
 
   // Guardrails is NOT among them, and is the section the page lands on. The
@@ -191,14 +192,14 @@ adminTest('J34b: the sections with no backend say so instead of showing a form',
   // by gaining, respectively, a renderer in the app shell and an enforcing
   // middleware — see J34i and J34j.
   //
-  // Advanced did not leave this list, it left the PAGE: its subject is Pylon
-  // plugin loading, which the target architecture removes deliberately, so the
-  // section is gone rather than permanently withheld. Observability, Runtime
-  // and Admin Panel followed it out the door for the same reason — see
-  // config_schemas.go's "Observability, Runtime and Admin Panel are GONE too"
-  // note — so this loop is repointed at the two names that are still genuinely
-  // unavailable: Service Descriptors and LLM Governance, each pointing an
-  // operator at a page of its own.
+  // Advanced did not leave this list, it left the PAGE: its subject is
+  // legacy-runtime plugin loading, which the target architecture removes
+  // deliberately, so the section is gone rather than permanently withheld.
+  // Observability, Runtime and Admin Panel followed it out the door for the
+  // same reason — see config_schemas.go's "Observability, Runtime and Admin
+  // Panel are GONE too" note — so this loop is repointed at the two names that
+  // are still genuinely unavailable: Service Descriptors and LLM Governance,
+  // each pointing an operator at a page of its own.
   //
   // Every name here has to be a section that is STILL unavailable, or this
   // journey asserts a refusal that no longer happens and would pass only by
@@ -236,8 +237,8 @@ adminTest('J34b: the sections with no backend say so instead of showing a form',
     // cannot configure that" from "that is configured to its defaults". A form
     // over defaults would say the second when the truth is the first.
     //
-    // No "Pylon" alternative any more: neither remaining name is a Pylon
-    // plugin runtime, so that branch has no section left to match.
+    // No legacy-runtime alternative any more: neither remaining name is a
+    // legacy plugin runtime, so that branch has no section left to match.
     await expect(notice).toContainText(reason);
     await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
   }

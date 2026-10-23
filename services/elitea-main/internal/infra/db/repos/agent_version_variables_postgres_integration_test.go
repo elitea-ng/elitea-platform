@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -25,15 +25,15 @@ import (
 //
 // WHICH STORE the key reads is the second thing pinned here, and it is not
 // `meta`. A version's variables live in `p_<id>.application_variables`, the
-// only store pylon has and the one every other reader in this repository
-// already reads — the version-detail GET the editor reloads through, the
-// runtime-facing `GetVersionExpanded`, and the export. `meta -> 'variables'`
-// is a mirror the interactive write folds in for its own 201 echo, and a FORK
-// does not carry it: the fork copies `meta` verbatim out of an export, and an
-// export of a legacy or imported agent has no such key. Reading the mirror
-// alone therefore served every forked agent an empty list while its rows sat
-// in the table. The projection reads the rows and falls back to the mirror, so
-// this test seeds each store separately and pins which one wins.
+// only store the legacy runtime has and the one every other reader in this
+// repository already reads — the version-detail GET the editor reloads through,
+// the runtime-facing `GetVersionExpanded`, and the export. `meta ->
+// 'variables'` is a mirror the interactive write folds in for its own 201 echo,
+// and a FORK does not carry it: the fork copies `meta` verbatim out of an
+// export, and an export of a legacy or imported agent has no such key. Reading
+// the mirror alone therefore served every forked agent an empty list while its
+// rows sat in the table. The projection reads the rows and falls back to the
+// mirror, so this test seeds each store separately and pins which one wins.
 //
 // Both queries are asserted, not just the turn: the two copies of the block
 // are byte-identical by construction

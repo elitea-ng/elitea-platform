@@ -3,7 +3,7 @@ package contract_test
 import (
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 )
 
 func TestAgentExecutionUsesOneReferenceOnlyCommandForTwoCurrentSemantics(t *testing.T) {

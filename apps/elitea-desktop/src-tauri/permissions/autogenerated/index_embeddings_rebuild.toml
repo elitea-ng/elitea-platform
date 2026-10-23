@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-index-embeddings-rebuild"
+description = "Enables the index_embeddings_rebuild command without any pre-configured scope."
+commands.allow = ["index_embeddings_rebuild"]
+
+[[permission]]
+identifier = "deny-index-embeddings-rebuild"
+description = "Denies the index_embeddings_rebuild command without any pre-configured scope."
+commands.deny = ["index_embeddings_rebuild"]

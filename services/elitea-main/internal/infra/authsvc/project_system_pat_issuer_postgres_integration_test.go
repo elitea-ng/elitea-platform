@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 func TestPostgresIndexRuntimeCurrentIdentityPATSelection(t *testing.T) {

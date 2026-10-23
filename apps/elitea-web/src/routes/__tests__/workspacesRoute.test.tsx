@@ -7,7 +7,7 @@
  */
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import type { AuthContext, RouterContext } from '@/app/router-context';
@@ -41,6 +41,36 @@ function mountAt(path: string) {
   );
   return router;
 }
+
+// Everything the routes render sits behind a dynamic import: the pages and
+// the desktop frame (`lazy()` in desktopEntry / AppShell) and, via the router
+// plugin's autoCodeSplitting, each route's own component chunk. The first
+// import in a worker transforms that whole graph, and the first mount of the
+// real shell builds MUI/emotion's caches; under a loaded full-suite run the
+// two outlast a `findBy*`'s 1s default, so the first test looked for
+// `workspaces-page` while the page was still arriving. Pay both once here,
+// under the (much longer) hook timeout, by mounting the desktop route once
+// and waiting for it, so the tests assert on behaviour rather than on how
+// fast a cold module graph transforms.
+beforeAll(async () => {
+  vi.stubEnv('MODE', 'desktop');
+  resetConfigForTests();
+  globals['elitea_ui_config'] = { vite_server_url: 'https://elitea.example', vite_base_uri: '/', vite_public_project_id: '11' };
+  configureGeneratedClient({ baseUrl: '/api/v2' });
+  try {
+    mountAt('/workspaces');
+    await screen.findByTestId('workspaces-page', undefined, { timeout: 45_000 });
+    cleanup();
+    mountAt('/workspaces/w1');
+    await screen.findByText('Bind a project to this folder first.', undefined, { timeout: 45_000 });
+    cleanup();
+  } finally {
+    resetGeneratedClient();
+    resetConfigForTests();
+    delete globals['elitea_ui_config'];
+    vi.unstubAllEnvs();
+  }
+}, 60_000);
 
 beforeEach(() => {
   resetConfigForTests();
@@ -80,8 +110,10 @@ describe('the Workspaces route in the real app shell', () => {
 
     fireEvent.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
-    // Off the folders, the way back is in the title row.
-    expect(await screen.findByRole('button', { name: 'Local work' })).toBeInTheDocument();
+    // Off the folders, the title row names the page (no back button); Local work stays in the sidebar.
+    expect(await screen.findByTestId('page-title')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Local work' })).toBeNull();
+    expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
   });
 
   it('desktop build: /workspaces/$id reaches the session page', async () => {

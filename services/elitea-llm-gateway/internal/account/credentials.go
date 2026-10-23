@@ -8,7 +8,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // credential is a single provider credential row read from the project's
@@ -62,6 +62,18 @@ type credential struct {
 	// not stored on the credential row: GetKeysForProvider copies it from the
 	// linked-credential pin onto the one credential the pin selected.
 	dialProtocol DialProtocol
+	// authMode is the stored `data.auth_mode` as written ("" reads as "key").
+	// It is kept raw so an unknown value can be REFUSED rather than read as a
+	// default (workload_identity.go).
+	authMode string
+	// tokenAudience is the ai_dial `data.token_audience`: the audience of the
+	// Google ID token a workload-identity DIAL credential sends. Empty means the
+	// api_base origin.
+	tokenAudience string
+	// workloadIdentity is set by GetKeysForProvider AFTER admitWorkloadIdentity
+	// admitted the row. It is never read from the row directly, so a row that
+	// says workload_identity but was not admitted cannot reach buildKey with it.
+	workloadIdentity bool
 }
 
 // sharedKeyIDPrefix marks a bifrost Key ID that came from the public project
@@ -146,6 +158,13 @@ type credentialData struct {
 	// bifrost's vllm provider then builds Anthropic-dialect requests against
 	// api_base + /v1/messages with Bearer auth.
 	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints"`
+	// AuthMode selects how the credential authenticates: "key" (the default,
+	// also when absent) or "workload_identity", the gateway pod's own Google
+	// identity. Only a platform credential may use the second
+	// (workload_identity.go).
+	AuthMode string `json:"auth_mode"`
+	// TokenAudience is the ai_dial ID-token audience for workload identity.
+	TokenAudience string `json:"token_audience"`
 }
 
 // noValueSentinel is the platform's "this field has no value" marker. The
@@ -361,6 +380,8 @@ func (a *EliteaAccount) loadCredentialScope(
 			vertexLocation:        storedValue(d.VertexLocation),
 			vertexCredentialsRef:  storedValue(string(d.VertexCredentials)),
 			useAnthropicEndpoints: d.UseAnthropicEndpoints,
+			authMode:              d.AuthMode,
+			tokenAudience:         storedValue(d.TokenAudience),
 		})
 	}
 	if err := rows.Err(); err != nil {

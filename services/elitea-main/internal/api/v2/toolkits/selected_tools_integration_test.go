@@ -28,10 +28,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // relationFixture is one project schema holding one application, one draft
@@ -197,7 +197,7 @@ func TestRelationPatchPersistsSelectedToolsAndReadsThemBack(t *testing.T) {
 
 // The attach itself, against the schema the migration corpus actually builds.
 //
-// `entity_tool_mapping.entity_id` is in the deployed pylon shape
+// `entity_tool_mapping.entity_id` is in the deployed legacy-era shape
 // (internal/db/schema/agent_chat_baseline.sql:104-113) and in every writer, but
 // was in no migration until tenant/0125. Revert 0125 and this test fails at the
 // first line with the production error, verbatim:

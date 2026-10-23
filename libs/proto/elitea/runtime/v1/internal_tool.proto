@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// InternalToolService is served by elitea-main on its platform gRPC listener
+// (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446) and called by the agent worker for
+// the platform's internal MCP tool categories (the internal builders: the
+// project's applications, toolkits, configurations, skills, ...). It replaced
+// the worker's MCP streamable-HTTP client calls to /app/{project}/mcp/{scope}
+// on the platform listener (#1359 U5). External MCP clients keep that HTTP
+// route on the public listener.
+//
+// WHAT RUNS. Each RPC is one JSON-RPC request to the MCP endpoint, run in
+// process through the same handler, authentication and project-access check
+// an external MCP client's request takes; the tools and their results are the
+// MCP shapes, as JSON bytes.
+//
+// WHO MAY CALL. The listener requires a runtime-CA client certificate, and only
+// the workload identities in ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS are admitted
+// (grpcauth): the worker, and the Inventory engine for InvokeToolkit. The
+// credential travels as `authorization: Bearer <token>` metadata: the actor
+// token the materialized toolkit carries, or the engine's callback bearer.
+//
+// ERRORS. An HTTP refusal of the endpoint (401 bearer, 403 project access or
+// MCP disabled, 400 scope) ends the call with a gRPC status mapped from the
+// HTTP status and the `elitea-internal-tool-refusal-bin` trailer
+// (InternalToolRefusalV1). A JSON-RPC error the endpoint answered is not a
+// refusal: it arrives in band (InternalToolRpcErrorV1).
+//
+// CANCELLATION. Cancelling CallTool cancels the call the handler serves.
+service InternalToolService {
+  // ListTools is the MCP `tools/list` request.
+  rpc ListTools(InternalToolListRequestV1) returns (InternalToolListResponseV1);
+  // CallTool is the MCP `tools/call` request: progress frames while the call
+  // runs, then exactly one result or error frame.
+  rpc CallTool(InternalToolCallRequestV1) returns (stream InternalToolCallFrameV1);
+  // InvokeToolkit runs one tool of a saved toolkit, as POST
+  // /api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit} did for the
+  // Inventory engine's `investigate` source calls: the platform reloads the
+  // toolkit's own settings and credentials and applies the caller's
+  // permissions (the callback bearer's investigate grant admits exactly this
+  // shape). Progress frames while it runs, then one result frame carrying the
+  // route's JSON answer ({"ok", "result", "truncated"}). A non-2xx answer is a
+  // refusal (status and trailer), its body the route's {"ok": false, "error"}.
+  rpc InvokeToolkit(InternalToolInvokeRequestV1) returns (stream InternalToolInvokeFrameV1);
+}
+
+// InternalToolScopeV1 names the MCP endpoint: /app/{project_id}/mcp/{scope}.
+message InternalToolScopeV1 {
+  int64 project_id = 1;
+  // scope is the path below /mcp/, e.g. "applications"; empty is the bare
+  // endpoint.
+  string scope = 2;
+}
+
+// InternalToolRefusalV1 is the `elitea-internal-tool-refusal-bin` trailer of a
+// refused call: the HTTP status and body the endpoint answered.
+message InternalToolRefusalV1 {
+  int32 http_status = 1;
+  bytes body = 2;
+}
+
+// InternalToolRpcErrorV1 is a JSON-RPC error object the endpoint answered.
+message InternalToolRpcErrorV1 {
+  int32 code = 1;
+  string message = 2;
+}
+
+message InternalToolListRequestV1 {
+  InternalToolScopeV1 scope = 1;
+}
+
+message InternalToolListResponseV1 {
+  oneof outcome {
+    // result_json is the JSON-RPC `result` of tools/list: {"tools": [...]}.
+    bytes result_json = 1;
+    InternalToolRpcErrorV1 error = 2;
+  }
+}
+
+message InternalToolCallRequestV1 {
+  InternalToolScopeV1 scope = 1;
+  string name = 2;
+  // arguments_json is the JSON object of the call's arguments; empty is {}.
+  bytes arguments_json = 3;
+}
+
+// InternalToolProgressV1 reports that the call is running.
+message InternalToolProgressV1 {
+  // stage is "admitted" once the endpoint has started the call (a run or a
+  // toolkit invocation was admitted and is being observed), then
+  // "running" on each keepalive while it waits.
+  string stage = 1;
+}
+
+message InternalToolCallFrameV1 {
+  oneof frame {
+    InternalToolProgressV1 progress = 1;
+    // result_json is the JSON-RPC `result` of tools/call: the MCP
+    // CallToolResult ({"content": [...], "isError": ...}).
+    bytes result_json = 2;
+    InternalToolRpcErrorV1 error = 3;
+  }
+}
+
+message InternalToolInvokeRequestV1 {
+  int64 project_id = 1;
+  // toolkit_id is the saved toolkit's id, as the route's path names it.
+  string toolkit_id = 2;
+  string tool_name = 3;
+  // tool_params_json is the JSON object of the tool's arguments; empty is {}.
+  bytes tool_params_json = 4;
+  // request_id labels the call in the platform's logs.
+  string request_id = 5;
+}
+
+message InternalToolInvokeFrameV1 {
+  oneof frame {
+    InternalToolProgressV1 progress = 1;
+    // result_json is the route's JSON answer: {"ok": true, "result": ...,
+    // "truncated": ...}.
+    bytes result_json = 2;
+  }
+}

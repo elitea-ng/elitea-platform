@@ -20,7 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,8 +32,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const listFiltersDatabaseURL = "ELITEA_TEST_DATABASE_URL"
@@ -92,11 +93,21 @@ CREATE TABLE p_1.chat_conversations (
 );
 CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,entity_name text,entity_meta jsonb);
 CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
+-- tenant/0151: the project's conversation archive (client contract 1.10).
+CREATE TABLE p_1.chat_conversation_archives (
+    conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,
+    archived_by bigint NOT NULL,
+    archived_at timestamp NOT NULL DEFAULT now()
+);
 CREATE TABLE p_1.chat_message_group (
     id serial PRIMARY KEY,
     conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id)
 );`); err != nil {
 		t.Fatalf("create the listing fixture schema: %v", err)
+	}
+	// Client contract 1.12: the list rows read the activity columns.
+	if _, err := pool.Exec(ctx, chatactivitytest.Schema("p_1")); err != nil {
+		t.Fatalf("apply the activity fixture: %v", err)
 	}
 	// The list row's `is_pinned` (client contract 1.4) reads the project
 	// pins, declared in the shared schema by shared/0064.

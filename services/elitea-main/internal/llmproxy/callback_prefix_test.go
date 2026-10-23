@@ -3,8 +3,8 @@ package llmproxy_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 // The facade issues `callback-<uuid>` and the edge recognises it by the same

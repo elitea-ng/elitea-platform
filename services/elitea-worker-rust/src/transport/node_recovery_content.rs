@@ -1,19 +1,28 @@
-//! One-attempt mTLS node recovery control. No redirects or business dispatch.
+//! One-attempt mTLS node recovery control. No business dispatch.
 
 use super::{
-    Body, CLAIM_HEADER, CONTENT_LENGTH, CONTENT_TYPE, Duration, FENCE_HEADER, InputContentClient,
-    InputContentError, Method, PATH_SEGMENT, Request, StatusCode, Version, timeout,
-    utf8_percent_encode,
+    Code, Duration, InputContentClient, InputContentError, Status, claim_request, content_scope,
+    is_transport_status, timeout,
 };
+use crate::agents::graph::node_recovery_owner::NodeRecoveryResultReference;
 use crate::agents::graph::node_recovery_receipt::{
     NodeRecoveryAction, NodeRecoveryRequiredReceipt,
 };
 use crate::protocol::control::NodeRecoveryControlAuthority;
-use base64::Engine as _;
-use http_body_util::BodyExt as _;
+use crate::protocol::elitea::runtime::v1::{
+    AcknowledgeNodeRecoveryRequestV1, PollNodeRecoveryRequestV1, ReadNodeRecoveryResultRequestV1,
+};
 use serde::{Deserialize, Serialize};
 
 const MAX_CONTROL_BYTES: usize = 16 * 1024;
+
+/// The three recovery control calls, one RPC each.
+#[derive(Clone, Copy)]
+enum Control<'a> {
+    Poll,
+    Ack(&'a [u8]),
+    Result(&'a NodeRecoveryResultReference),
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,13 +222,8 @@ impl InputContentClient {
             crate::agents::graph::node_recovery_owner::NodeRecoveryOwnerProofKind::CommittedResult => proof.result_ref.as_ref(),
             crate::agents::graph::node_recovery_owner::NodeRecoveryOwnerProofKind::VerifiedNoEffect => proof.owner_receipt_ref.as_ref(),
         }.ok_or_else(invalid)?;
-        let operation = format!(
-            "results/{}/versions/{}",
-            utf8_percent_encode(&reference.content_id, PATH_SEGMENT),
-            utf8_percent_encode(&reference.immutable_version, PATH_SEGMENT)
-        );
         let bytes = self
-            .node_recovery_post_with_reference(authority, &operation, Vec::new(), Some(reference))
+            .node_recovery_call(authority, Control::Result(reference))
             .await?;
         if !match proof.kind {
             crate::agents::graph::node_recovery_owner::NodeRecoveryOwnerProofKind::CommittedResult => proof.matches_result_bytes(&bytes),
@@ -233,9 +237,7 @@ impl InputContentClient {
         &self,
         authority: &NodeRecoveryControlAuthority,
     ) -> Result<NodeRecoveryControlReply, InputContentError> {
-        let bytes = self
-            .node_recovery_post(authority, "control", Vec::new())
-            .await?;
+        let bytes = self.node_recovery_call(authority, Control::Poll).await?;
         let reply: NodeRecoveryControlReply =
             serde_json::from_slice(&bytes).map_err(|_| invalid())?;
         if reply.schema != "elitea.pipeline.node-recovery-control.v1"
@@ -286,7 +288,9 @@ impl InputContentClient {
             return Err(invalid());
         }
         let payload = serde_json::to_vec(request).map_err(|_| invalid())?;
-        let bytes = self.node_recovery_post(authority, "ack", payload).await?;
+        let bytes = self
+            .node_recovery_call(authority, Control::Ack(&payload))
+            .await?;
         let reply: NodeRecoveryAckReply = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
         if reply.schema != "elitea.pipeline.node-recovery-ack.v1"
             || reply.execution_id != authority.execution_id()
@@ -329,118 +333,71 @@ impl InputContentClient {
         }
         Ok(reply)
     }
-    async fn node_recovery_post(
+    async fn node_recovery_call(
         &self,
         authority: &NodeRecoveryControlAuthority,
-        operation: &str,
-        payload: Vec<u8>,
+        control: Control<'_>,
     ) -> Result<Vec<u8>, InputContentError> {
-        self.node_recovery_post_with_reference(authority, operation, payload, None)
-            .await
-    }
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Keep ordered authority checks and durable phases in one owner operation."
-    )]
-    async fn node_recovery_post_with_reference(
-        &self,
-        authority: &NodeRecoveryControlAuthority,
-        operation: &str,
-        payload: Vec<u8>,
-        reference: Option<&crate::agents::graph::node_recovery_owner::NodeRecoveryResultReference>,
-    ) -> Result<Vec<u8>, InputContentError> {
-        if payload.len() > 8192 {
+        if matches!(control, Control::Ack(payload) if payload.len() > 8192) {
             return Err(InputContentError::ResourceExhausted(
                 "the recovery control request exceeds its bound",
             ));
         }
-        let uri = format!(
-            "/executions/{}/generations/{}/node-recovery/{operation}",
-            utf8_percent_encode(authority.execution_id(), PATH_SEGMENT),
-            authority.generation()
-        );
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri(uri)
-            .header(CLAIM_HEADER, authority.claim_id())
-            .header(
-                FENCE_HEADER,
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(authority.fence_bytes()),
-            )
-            .header(CONTENT_TYPE, "application/json")
-            .header(CONTENT_LENGTH, payload.len())
-            .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                payload,
-            ))))
-            .map_err(|_| invalid())?;
+        let limit = match control {
+            Control::Result(reference) => {
+                usize::try_from(reference.byte_length).map_err(|_| invalid())?
+            }
+            Control::Poll | Control::Ack(_) => MAX_CONTROL_BYTES,
+        };
+        let scope = Some(content_scope(
+            authority.execution_id(),
+            authority.generation(),
+        ));
+        let (claim_id, fence) = (authority.claim_id(), authority.fence_bytes());
+        let mut rpc = self.rpc();
         timeout(self.config.deadline.min(Duration::from_secs(10)), async {
-            let mut response = self
-                .rpc
-                .get(request)
-                .await
-                .map_err(InputContentError::Transport)?;
-            if matches!(
-                response.status(),
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT
-            ) {
-                return Err(InputContentError::AuthorizationFailed(
-                    "the recovery control authority is no longer current",
+            let result = match control {
+                Control::Poll => {
+                    let request = PollNodeRecoveryRequestV1 { scope };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.poll_node_recovery(request)
+                        .await
+                        .map(|response| response.into_inner().control_json)
+                }
+                Control::Ack(payload) => {
+                    let request = AcknowledgeNodeRecoveryRequestV1 {
+                        scope,
+                        ack_json: payload.to_vec(),
+                    };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.acknowledge_node_recovery(request)
+                        .await
+                        .map(|response| response.into_inner().outcome_json)
+                }
+                Control::Result(reference) => {
+                    let request = ReadNodeRecoveryResultRequestV1 {
+                        scope,
+                        content_id: reference.content_id.clone(),
+                        version: reference.immutable_version.clone(),
+                    };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.read_node_recovery_result(request)
+                        .await
+                        .map(|response| response.into_inner().result_json)
+                }
+            }
+            .map_err(recovery_status)?;
+            if result.len() > limit {
+                return Err(InputContentError::ResourceExhausted(
+                    "the recovery control response exceeds its bound",
                 ));
             }
-            if response.status() != StatusCode::OK
-                || response.version() != Version::HTTP_2
-                || response
-                    .headers()
-                    .get(CONTENT_TYPE)
-                    .and_then(|h| h.to_str().ok())
-                    .is_none_or(|h| h.split(';').next() != Some("application/json"))
-            {
-                return Err(invalid());
-            }
-            if let Some(reference) = reference
-                && (response
-                    .headers()
-                    .get(CONTENT_LENGTH)
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|h| h.parse::<u64>().ok())
-                    != Some(reference.byte_length)
-                    || response
-                        .headers()
-                        .get("X-Elitea-Content-SHA256")
-                        .and_then(|h| h.to_str().ok())
-                        != Some(reference.digest_sha256.as_str()))
-            {
-                return Err(invalid());
-            }
-            let limit = reference.map_or(Ok(MAX_CONTROL_BYTES), |reference| {
-                usize::try_from(reference.byte_length).map_err(|_| invalid())
-            })?;
-            let mut result = Vec::new();
-            while let Some(frame) = response.body_mut().frame().await {
-                let frame = frame.map_err(|_| {
-                    InputContentError::DependencyUnavailable(
-                        "the recovery control response was interrupted",
-                    )
-                })?;
-                if frame.is_trailers() {
-                    return Err(invalid());
-                }
-                if let Ok(bytes) = frame.into_data() {
-                    if result
-                        .len()
-                        .checked_add(bytes.len())
-                        .is_none_or(|n| n > limit)
-                    {
-                        return Err(InputContentError::ResourceExhausted(
-                            "the recovery control response exceeds its bound",
-                        ));
-                    }
-                    result.extend_from_slice(&bytes);
-                }
-            }
+            // A stored result is addressed by its own digest: the bytes must
+            // be exactly the referenced length and hash to the reference.
             if result.is_empty()
-                || reference.is_some_and(|reference| reference.byte_length != result.len() as u64)
+                || matches!(control, Control::Result(reference)
+                    if reference.byte_length != result.len() as u64
+                        || crate::sandbox::code_recovery::sha256(&result) != reference.digest_sha256)
             {
                 return Err(invalid());
             }
@@ -448,6 +405,23 @@ impl InputContentClient {
         })
         .await
         .map_err(|_| InputContentError::Timeout("the recovery control request timed out"))?
+    }
+}
+
+/// A stale claim or a superseded action is lost authority; any other answer
+/// from Main leaves the control reply unproven.
+fn recovery_status(status: Status) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied | Code::Aborted => {
+            InputContentError::AuthorizationFailed(
+                "the recovery control authority is no longer current",
+            )
+        }
+        Code::DeadlineExceeded => {
+            InputContentError::Timeout("the recovery control request timed out")
+        }
+        _ if is_transport_status(&status) => InputContentError::transport(status),
+        _ => invalid(),
     }
 }
 
@@ -665,6 +639,9 @@ fn invalid() -> InputContentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::elitea::runtime::v1::{
+        AcknowledgeNodeRecoveryResponseV1, PollNodeRecoveryResponseV1,
+    };
     use serde_json::{Value, json};
     fn receipt() -> NodeRecoveryRequiredReceipt {
         serde_json::from_slice(include_bytes!(
@@ -728,82 +705,59 @@ mod tests {
         operation: &'static str,
         expected_ack: Option<Value>,
     }
-    #[async_trait::async_trait]
-    impl super::super::InputContentRpc for ReplyRpc {
-        async fn get(
-            &self,
-            request: Request<Body>,
-        ) -> Result<http::Response<Body>, super::super::InputContentTransportError> {
+    impl ReplyRpc {
+        fn answer<T>(&self, request: &tonic::Request<T>, operation: &str) -> Vec<u8> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            assert_eq!(request.method(), Method::POST);
-            assert_eq!(request.version(), Version::HTTP_2);
+            assert_eq!(self.operation, operation);
             assert_eq!(
-                request.uri().path(),
-                format!(
-                    "/executions/execution-one/generations/2/node-recovery/{}",
-                    self.operation
-                )
+                super::super::content_fake::claim_of(request),
+                ("claim-1".to_owned(), vec![b'f'; 32])
             );
-            assert_eq!(request.headers()[CLAIM_HEADER], "claim-1");
-            assert_eq!(
-                request.headers()[FENCE_HEADER],
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([b'f'; 32])
-            );
-            let body = request
-                .into_body()
-                .collect()
-                .await
-                .expect("body")
-                .to_bytes();
-            if self.operation == "control" {
-                assert!(body.is_empty());
-            } else {
-                let value: Value = serde_json::from_slice(&body).expect("ack body");
-                if let Some(expected) = &self.expected_ack {
-                    assert_eq!(&value, expected);
-                } else {
-                    assert!(
-                        value
-                            .get("continuation_receipt")
-                            .expect("required nullable")
-                            .is_null()
-                    );
-                    assert!(
-                        value
-                            .get("terminal_stop_reason")
-                            .expect("required nullable")
-                            .is_null()
-                    );
-                    assert!(
-                        value
-                            .get("failure_route_continuation")
-                            .expect("required nullable")
-                            .is_null()
-                    );
-                }
-            }
-            Ok(http::Response::builder()
-                .status(200)
-                .version(Version::HTTP_2)
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                    serde_json::to_vec(&self.reply).expect("json"),
-                ))))
-                .expect("response"))
+            serde_json::to_vec(&self.reply).expect("json")
         }
     }
-    fn client(
-        reply: Value,
-        operation: &'static str,
-        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> InputContentClient {
+    #[tonic::async_trait]
+    impl super::super::content_fake::ContentFake for ReplyRpc {
+        async fn poll_node_recovery(
+            &self,
+            request: tonic::Request<PollNodeRecoveryRequestV1>,
+        ) -> Result<tonic::Response<PollNodeRecoveryResponseV1>, Status> {
+            let control_json = self.answer(&request, "control");
+            assert_eq!(
+                request.into_inner().scope,
+                Some(content_scope("execution-one", 2))
+            );
+            Ok(tonic::Response::new(PollNodeRecoveryResponseV1 {
+                control_json,
+            }))
+        }
+        async fn acknowledge_node_recovery(
+            &self,
+            request: tonic::Request<AcknowledgeNodeRecoveryRequestV1>,
+        ) -> Result<tonic::Response<AcknowledgeNodeRecoveryResponseV1>, Status> {
+            let outcome_json = self.answer(&request, "ack");
+            let request = request.into_inner();
+            assert_eq!(request.scope, Some(content_scope("execution-one", 2)));
+            let value: Value = serde_json::from_slice(&request.ack_json).expect("ack body");
+            if let Some(expected) = &self.expected_ack {
+                assert_eq!(&value, expected);
+            } else {
+                for field in [
+                    "continuation_receipt",
+                    "terminal_stop_reason",
+                    "failure_route_continuation",
+                ] {
+                    assert!(value.get(field).expect("required nullable").is_null());
+                }
+            }
+            Ok(tonic::Response::new(AcknowledgeNodeRecoveryResponseV1 {
+                outcome_json,
+            }))
+        }
+    }
+    fn client_for(rpc: ReplyRpc) -> InputContentClient {
         InputContentClient::with_rpc(
-            ReplyRpc {
-                reply,
-                calls,
-                operation,
-                expected_ack: None,
-            },
+            rpc,
             super::super::InputContentConfig {
                 origin: "https://content.invalid".into(),
                 deadline: Duration::from_secs(1),
@@ -811,6 +765,18 @@ mod tests {
             },
         )
         .expect("client")
+    }
+    fn client(
+        reply: Value,
+        operation: &'static str,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> InputContentClient {
+        client_for(ReplyRpc {
+            reply,
+            calls,
+            operation,
+            expected_ack: None,
+        })
     }
     #[tokio::test]
     async fn actual_control_poll_rejects_changed_visit_and_unowned_action_without_dispatch() {
@@ -913,20 +879,12 @@ mod tests {
             if case == 1 {
                 reply["recovery_resume_authorized"] = json!(true);
             }
-            let client = InputContentClient::with_rpc(
-                ReplyRpc {
-                    reply,
-                    calls: calls.clone(),
-                    operation: "ack",
-                    expected_ack: Some(serde_json::to_value(&request).unwrap()),
-                },
-                super::super::InputContentConfig {
-                    origin: "https://content.invalid".into(),
-                    deadline: Duration::from_secs(1),
-                    max_materialized_bytes: 8192,
-                },
-            )
-            .unwrap();
+            let client = client_for(ReplyRpc {
+                reply,
+                calls: calls.clone(),
+                operation: "ack",
+                expected_ack: Some(serde_json::to_value(&request).unwrap()),
+            });
             let result = client.ack_node_recovery(&authority, &request).await;
             assert_eq!(result.is_ok(), case == 0, "case {case}");
             assert_eq!(
@@ -986,20 +944,12 @@ mod tests {
                 reply["resumption"]["failure_route_continuation"] = Value::Null;
             }
             let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let client = InputContentClient::with_rpc(
-                ReplyRpc {
-                    reply,
-                    calls: calls.clone(),
-                    operation: "ack",
-                    expected_ack: Some(serde_json::to_value(&request).unwrap()),
-                },
-                super::super::InputContentConfig {
-                    origin: "https://content.invalid".into(),
-                    deadline: Duration::from_secs(1),
-                    max_materialized_bytes: 8192,
-                },
-            )
-            .unwrap();
+            let client = client_for(ReplyRpc {
+                reply,
+                calls: calls.clone(),
+                operation: "ack",
+                expected_ack: Some(serde_json::to_value(&request).unwrap()),
+            });
             assert_eq!(
                 client.ack_node_recovery(&authority, &request).await.is_ok(),
                 case == 0

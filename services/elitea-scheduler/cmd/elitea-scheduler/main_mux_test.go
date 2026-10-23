@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 )
 
 // The health port the binary composes serves the write-back metrics: an

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 // SweepBatch is how many rows one sweep step handles.

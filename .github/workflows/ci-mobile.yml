@@ -1,0 +1,94 @@
+name: CI — Mobile app
+
+# apps/elitea-mobile, the Expo / React Native app "Elitea AI". ONE Linux job: the
+# organisation is on the GitHub free plan with a 20-concurrent-job cap, and
+# everything decisive here runs on Linux (typecheck, lint, jest, the node:test
+# script tests, the release-config assertion and the generated-client drift
+# gate). No native build: iOS and Android binaries are built on EAS by the
+# hand-dispatched mobile-eas-build.yml, never on a pull request.
+#
+# Path-filtered to the app and the server spec it generates its client from
+# (services/elitea-main/api/openapi/v2.yaml): a spec edit to an operation the
+# app uses must regenerate apps/elitea-mobile/src/api/generated/elitea.gen.ts in
+# the same change. The app compiles the shared client package from source
+# (libs/ts/client-core: brand defaults, stream parsing), so a change there runs
+# this job too; the package's own tests run in ci-web.yml's static gates.
+
+on:
+  pull_request:
+    paths:
+      - "apps/elitea-mobile/**"
+      - "services/elitea-main/api/openapi/v2.yaml"
+      - "libs/ts/client-core/**"
+      - ".github/workflows/ci-mobile.yml"
+      - ".github/actions/npm-cache/**"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "51 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Main runs are not cancelled: they write the npm cache (pull requests read, main writes).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Generated client, typecheck, lint, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/elitea-mobile
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-mobile/package-lock.json
+
+      # A standalone npm project (own lockfile; .npmrc sets legacy-peer-deps for
+      # the Expo SDK 58 prerelease peers). postinstall applies patches/.
+      - name: Install (locked)
+        run: npm ci --no-audit --no-fund
+
+      - name: Generated client matches services/elitea-main/api/openapi/v2.yaml
+        run: npm run check:generated-client
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Locally Expo writes expo-env.d.ts (ignored), which pulls in the
+      # web-widened style types: check that variant too so both agree (mobile-repo#30).
+      - name: Typecheck with Expo's env types
+        run: |
+          echo '/// <reference types="expo/types" />' > expo-env.d.ts
+          npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test (script tests + jest)
+        run: npm test -- --ci
+
+      # Metro, not jest, resolves @elitea/client-core in the shipped app (tsconfig
+      # paths + watchFolders, metro.config.js). Bundle once, so a resolution break fails here.
+      - name: Bundle (Metro resolves the shared package)
+        run: npx expo export --platform ios --output-dir "$RUNNER_TEMP/expo-export"
+        env:
+          CI: "1"
+
+      - name: Release config has no developer sign-in switch
+        run: npm run check:release-config

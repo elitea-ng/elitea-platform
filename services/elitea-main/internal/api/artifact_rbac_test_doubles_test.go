@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	v2artifacts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // testTokenValidator satisfies apimw.TokenValidator, returning a fixed
@@ -213,6 +213,14 @@ func (alwaysSucceedsArtifactRepo) GetTransferGrant(_ context.Context, id string,
 
 func (alwaysSucceedsArtifactRepo) MarkTransferGrantConsumed(context.Context, string) error {
 	return nil
+}
+
+func (alwaysSucceedsArtifactRepo) ClaimTransferGrant(context.Context, string) (time.Time, error) {
+	return time.Now(), nil
+}
+
+func (alwaysSucceedsArtifactRepo) ReleaseTransferGrantClaim(context.Context, string, time.Time) (bool, error) {
+	return true, nil
 }
 
 // GetTransferGrantByID (S16) returns the same fixed grant as

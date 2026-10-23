@@ -7,7 +7,7 @@ import "elitea/runtime/v1/common.proto";
 import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/output.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/config/v1;configv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/config/v1;configv1";
 
 // RuntimeIdentityV1 describes the immutable implementation artifact rather
 // than current load or mutable process health.

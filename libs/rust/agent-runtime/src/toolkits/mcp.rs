@@ -28,6 +28,8 @@ use adk_tool::mcp::rmcp::transport::streamable_http_client::{
 };
 use adk_tool::{McpToolset, SimpleToolContext};
 use async_trait::async_trait;
+use elitea_platform_rpc::Bearer;
+use elitea_platform_rpc::internal_tools::InternalToolClient;
 use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
@@ -36,6 +38,8 @@ use super::delegated_auth::{
 };
 use super::invocation::admit_materialized_toolset;
 use super::mcp_error::{McpErrorRedaction, model_visible_mcp_error};
+pub use super::mcp_internal::INTERNAL_TOOLS_ORIGIN;
+use super::mcp_internal::{InternalMcpToolset, is_internal_tools_endpoint, scope_of};
 use super::mcp_tool_cache::{
     CachedMcpTool, LiveMcpTools, McpToolDescriptor, McpToolListCache, McpToolListKey,
 };
@@ -210,6 +214,9 @@ pub struct RemoteMcpConfig {
     toolkit_id: Option<u64>,
     /// `None` when `enable_caching` is false: every materialization lists.
     tool_list_ttl: Option<Duration>,
+    /// Main's automatic built-in category (no toolkit row): served by the
+    /// platform's internal tool service, never over HTTP.
+    internal_builder: bool,
 }
 
 impl RemoteMcpConfig {
@@ -301,6 +308,7 @@ impl RemoteMcpConfig {
             // listing could never be reused: caching it would only pin memory.
             tool_list_ttl: (enable_caching && !reference.is_internal_builder())
                 .then(|| Duration::from_secs(cache_ttl)),
+            internal_builder: reference.is_internal_builder(),
         })
     }
 
@@ -379,6 +387,27 @@ impl RemoteMcpConfig {
             headers.insert(reqwest_mcp::header::AUTHORIZATION, value);
         }
         Ok(headers)
+    }
+
+    /// Whether the internal tool service serves this server: an internal
+    /// builder, or an endpoint on its reserved origin.
+    fn served_internally(&self) -> bool {
+        self.internal_builder || is_internal_tools_endpoint(&self.endpoint)
+    }
+
+    /// The bearer of the configured `Authorization: Bearer <token>` header.
+    fn configured_bearer(&self) -> Option<Bearer> {
+        let value = self
+            .static_headers
+            .get(reqwest_mcp::header::AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .trim();
+        let (scheme, token) = value.split_once(' ')?;
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            return None;
+        }
+        Bearer::new(token)
     }
 
     fn access_token(&self) -> Option<&str> {
@@ -477,13 +506,50 @@ fn configured_authorization(headers: &reqwest_mcp::header::HeaderMap) -> bool {
         .is_some_and(|value| !value.as_bytes().iter().all(u8::is_ascii_whitespace))
 }
 
-/// Secure Streamable HTTP connector for ADK's native [`McpToolset`].
-pub struct AdkHttpMcpConnector;
+/// MCP connector: ADK's native [`McpToolset`] over a Streamable HTTP
+/// session for a remote server, and the platform's internal tool service
+/// for its internal categories (`toolkits::mcp_internal`).
+#[derive(Default)]
+pub struct AdkHttpMcpConnector {
+    internal: Option<InternalToolClient>,
+}
 
 impl AdkHttpMcpConnector {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { internal: None }
+    }
+
+    /// Serve the internal categories (the internal builders, and endpoints
+    /// on [`INTERNAL_TOOLS_ORIGIN`]) through `client`: elitea-main's
+    /// `InternalToolService` on its platform listener. Without it they are
+    /// unavailable.
+    #[must_use]
+    pub fn with_internal_tools(mut self, client: InternalToolClient) -> Self {
+        self.internal = Some(client);
+        self
+    }
+
+    /// The internal category's toolset. Its listing is never cached: the
+    /// bearer is minted per execution.
+    fn connect_internal(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<McpSession, McpMaterializationError> {
+        let client = self.internal.clone().ok_or_else(dependency_unavailable)?;
+        let bearer = config
+            .configured_bearer()
+            .ok_or_else(unsupported_authority)?;
+        let scope = scope_of(config.endpoint()).ok_or_else(invalid_configuration)?;
+        Ok(McpSession {
+            toolset: Arc::new(InternalMcpToolset::new(
+                config.toolkit_name(),
+                client,
+                bearer,
+                scope,
+            )),
+            reuses_listings: false,
+        })
     }
 }
 
@@ -502,6 +568,9 @@ impl McpConnector for AdkHttpMcpConnector {
         &self,
         config: &RemoteMcpConfig,
     ) -> Result<McpSession, McpMaterializationError> {
+        if config.served_internally() {
+            return self.connect_internal(config);
+        }
         let client = session_client_builder(config)?
             .build()
             .map_err(|_| invalid_configuration())?;
@@ -528,10 +597,12 @@ impl McpConnector for AdkHttpMcpConnector {
     }
 }
 
-/// The HTTP client every MCP session uses: HTTPS only, the request headers
-/// (static headers and the bearer) as defaults, no automatic replay, and
-/// redirects limited to the frozen endpoint's origin. Factored out so tests
-/// exercise exactly what `connect_session` builds.
+/// The HTTP client every remote MCP session uses: HTTPS only, the request
+/// headers (static headers and the bearer) as defaults, no automatic replay,
+/// and redirects limited to the frozen endpoint's origin. No client identity
+/// is ever presented: a remote MCP server never sees the worker's workload
+/// identity. Factored out so tests exercise exactly what `connect_session`
+/// builds.
 pub(crate) fn session_client_builder(
     config: &RemoteMcpConfig,
 ) -> Result<reqwest_mcp::ClientBuilder, McpMaterializationError> {

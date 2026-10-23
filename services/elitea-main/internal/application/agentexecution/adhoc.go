@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 // CurrentAdhocTurn is the immutable current-chat side of one durable ad-hoc
@@ -161,11 +161,6 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("freeze current ad-hoc snapshot: %w", err)
 	}
-	suggestionPolicy := service.resolveNextInputSuggestionPolicy(
-		ctx,
-		request.ProjectID,
-		request.ActorUserID,
-	)
 	toolkitGuardrails, err := service.resolveToolkitGuardrails(ctx)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -194,7 +189,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	// selected-application path.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	input, err := currentAdhocInput(
-		request, target, frozen, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
+		request, target, frozen, toolkitGuardrails, attachments, memoryRecall.Text,
 		projectContextText,
 	)
 	if err != nil {
@@ -203,10 +198,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	input.ContextSettings = contextSettings
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
-	questionMeta := json.RawMessage(`{}`)
-	if request.InteractionUUID != "" {
-		questionMeta, _ = json.Marshal(map[string]string{"interaction_uuid": request.InteractionUUID})
-	}
+	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
@@ -338,7 +330,6 @@ func currentAdhocInput(
 	request CurrentAdhocStartRequest,
 	target CurrentAdhocTarget,
 	frozen json.RawMessage,
-	nextInputSuggestion json.RawMessage,
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
 	memoryText string,
@@ -426,7 +417,7 @@ func currentAdhocInput(
 		InputAttachments:       currentTurnInputAttachments(attachments),
 		ParallelReconcile:      []byte(`null`),
 		ParallelTerminalErrors: []byte(`[]`),
-		NextInputSuggestion:    bytes.Clone(nextInputSuggestion),
+		NextInputSuggestion:    noNextInputSuggestion(),
 		ToolkitGuardrails:      bytes.Clone(toolkitGuardrails),
 	}
 	if stepsLimit != nil {

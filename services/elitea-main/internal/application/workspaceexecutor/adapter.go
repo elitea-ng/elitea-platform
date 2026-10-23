@@ -19,9 +19,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 // Handoffs is the part of *workspacehandoff.Service the executor uses.
@@ -385,7 +385,8 @@ func (a *Adapter) finish(ctx context.Context, handoff workspacehandoff.Handoff) 
 }
 
 // WrapUpRequested: executionID runs a cloud turn whose thread is being taken
-// back. Read on every lease poll, so it is one indexed lookup.
+// back. Read on every lease poll of an agent execution (the control server
+// skips every other kind), so it is one indexed lookup.
 func (a *Adapter) WrapUpRequested(ctx context.Context, executionID string) (bool, error) {
 	if executionID == "" || len(executionID) > 64 {
 		return false, nil

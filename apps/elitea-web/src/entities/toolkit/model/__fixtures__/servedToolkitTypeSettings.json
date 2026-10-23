@@ -69,12 +69,6 @@
         ],
         "title": "Limit"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "project": {
         "title": "Project",
         "type": "string"
@@ -192,12 +186,6 @@
           }
         ],
         "title": "Limit"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "project": {
         "title": "Project",
@@ -327,12 +315,6 @@
         "configuration_model": "embedding",
         "title": "Embedding Model"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "project": {
         "title": "Project",
         "type": "string"
@@ -453,12 +435,6 @@
         ],
         "configuration_model": "embedding",
         "title": "Embedding Model"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "project": {
         "title": "Project",
@@ -628,12 +604,6 @@
       },
       "embedding_model": {
         "type": "string"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "selected_tools": {
         "args_schemas": {
@@ -994,12 +964,6 @@
         "configuration_model": "embedding",
         "title": "Embedding Model"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "project": {
         "title": "Project",
         "type": "string"
@@ -1224,12 +1188,6 @@
       "number_of_retries": {
         "title": "Number Of Retries",
         "type": "integer"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "selected_tools": {
         "args_schemas": {
@@ -1661,12 +1619,6 @@
         ],
         "title": "Number Of Threads"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "selected_tools": {
         "args_schemas": {
           "analyze_file": {
@@ -1704,8 +1656,7 @@
       }
     },
     "required": [
-      "figma_configuration",
-      "pgvector_configuration"
+      "figma_configuration"
     ],
     "title": "figma",
     "type": "object"
@@ -1808,12 +1759,6 @@
           "github"
         ]
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "repository": {
         "title": "Repository",
         "type": "string"
@@ -1908,12 +1853,6 @@
         "$ref": "#/$defs/gitlab",
         "configuration_types": [
           "gitlab"
-        ]
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
         ]
       },
       "repository": {
@@ -2177,12 +2116,6 @@
       },
       "password": {
         "type": "string"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "selected_tools": {
         "args_schemas": {
@@ -2530,12 +2463,6 @@
         "title": "Namespace",
         "type": "string"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "selected_tools": {
         "args_schemas": {
           "delete_memory": {
@@ -2565,8 +2492,7 @@
       }
     },
     "required": [
-      "namespace",
-      "pgvector_configuration"
+      "namespace"
     ],
     "title": "memory",
     "type": "object"
@@ -2795,12 +2721,6 @@
           }
         ],
         "title": "No Of Tests Shown In Dql Search"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "qtest_configuration": {
         "$ref": "#/$defs/qtest",
@@ -3249,12 +3169,6 @@
         "configuration_model": "embedding",
         "title": "Embedding Model"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "selected_tools": {
         "args_schemas": {
           "create_list_item": {
@@ -3591,12 +3505,6 @@
         "configuration_model": "embedding",
         "title": "Embedding Model"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "selected_tools": {
         "args_schemas": {
           "add_case": {
@@ -3821,12 +3729,6 @@
         ],
         "title": "Limit"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "selected_tools": {
         "args_schemas": {
           "add_attachment_to_test_step": {
@@ -4030,12 +3932,6 @@
         "configuration_model": "embedding",
         "title": "Embedding Model"
       },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
-      },
       "selected_tools": {
         "args_schemas": {
           "add_steps": {
@@ -4120,12 +4016,6 @@
         ],
         "configuration_model": "embedding",
         "title": "Embedding Model"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "selected_tools": {
         "args_schemas": {
@@ -4215,12 +4105,6 @@
       "max_results": {
         "title": "Max Results",
         "type": "integer"
-      },
-      "pgvector_configuration": {
-        "$ref": "#/$defs/pgvector",
-        "configuration_types": [
-          "pgvector"
-        ]
       },
       "selected_tools": {
         "args_schemas": {

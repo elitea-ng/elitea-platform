@@ -6,9 +6,9 @@ package admin
 // can only ever edit the cells of a table whose columns already exist. Nothing
 // in this service could add a column, rename one, or take one away.
 //
-// pylon can. `legacy/plugins/admin/api/v2/roles.py` is full CRUD over
-// `auth_core__role` for any mode, and over `auth_core__project_role` for one
-// project. Go had the two GET routes only
+// The legacy runtime can. `legacy/plugins/admin/api/v2/roles.py` is full CRUD
+// over `auth_core__role` for any mode, and over `auth_core__project_role` for
+// one project. Go had the two GET routes only
 // (`GET /admin/roles/{mode}/{projectID}`, eliteacore.Roles), so a deployment
 // that wanted a `security_reviewer` role had to INSERT it by hand — and because
 // `projectprovisioning.createProjectPermissions` copies the central default-mode
@@ -79,7 +79,7 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -87,8 +87,8 @@ import (
 
 /* ── permission names ──────────────────────────────────────────────────── */
 
-// The three permissions pylon's roles.py declares, transcribed verbatim. They
-// are separate from `configuration.roles.permissions.*`, which governs the
+// The three permissions the legacy roles.py declares, transcribed verbatim.
+// They are separate from `configuration.roles.permissions.*`, which governs the
 // MATRIX: an operator may be trusted to move a checkbox without being trusted
 // to delete the role the column belongs to.
 //
@@ -126,19 +126,21 @@ const matrixRowNameKey = "name"
 // roleNamePattern is deliberately narrow. A role name is a JSON object key in
 // the matrix response, a path-free identifier in every client, and a value
 // joined on by name across `auth_core__role` and `auth_core__project_role`.
-// pylon validates nothing at all, which is how a role called `admin ` (with a
-// trailing space) becomes a role that looks like `admin` and grants nothing.
+// The legacy runtime validates nothing at all, which is how a role called
+// `admin ` (with a trailing space) becomes a role that looks like `admin` and
+// grants nothing.
 var roleNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // centralRoleModes are the modes a central role can be created in.
 //
-// pylon accepts any string. A role in a mode no route reads is invisible work,
-// so it is refused rather than stored.
+// The legacy runtime accepts any string. A role in a mode no route reads is
+// invisible work, so it is refused rather than stored.
 //
 // `developer` is refused too (#6880). No route, no UI and no worker gates on a
-// developer-mode permission, and no user holds a developer role. pylon seeded
-// the mode for every registered permission, and the admin console already
-// hides it. A role created in it could never grant anything to anybody.
+// developer-mode permission, and no user holds a developer role. The legacy
+// runtime seeded the mode for every registered permission, and the admin
+// console already hides it. A role created in it could never grant anything to
+// anybody.
 var centralRoleModes = map[string]struct{}{
 	"default":        {},
 	"administration": {},
@@ -148,9 +150,9 @@ var centralRoleModes = map[string]struct{}{
 const centralRoleModesHint = "expected default or administration"
 
 // retiredRoleModes are modes in which a role can no longer be created or
-// renamed, but can still be DELETED. pylon seeded developer-mode roles on
-// every legacy database. If a delete refused them too, no API path could
-// remove those rows.
+// renamed, but can still be DELETED. The legacy runtime seeded developer-mode
+// roles on every legacy database. If a delete refused them too, no API path
+// could remove those rows.
 var retiredRoleModes = map[string]struct{}{
 	"developer": {},
 }
@@ -166,7 +168,7 @@ const (
 
 /* ── request bodies ────────────────────────────────────────────────────── */
 
-// roleWriteRequest is the body all three writes share. pylon reads
+// roleWriteRequest is the body all three writes share. The legacy runtime reads
 // `request.json["name"]` in all of them and `["new_name"]` in the PUT, so the
 // field names are its own.
 type roleWriteRequest struct {
@@ -177,7 +179,7 @@ type roleWriteRequest struct {
 // decodeRoleRequest reads the body, falling back to the `name` query parameter.
 //
 // The fallback is for DELETE alone in practice: a request body on DELETE is
-// legal and is what pylon's client sends, but intermediaries drop it often
+// legal and is what the legacy client sends, but intermediaries drop it often
 // enough that a delete which silently becomes "no name given" is a real
 // failure mode. An explicit body always wins.
 func decodeRoleRequest(r *http.Request) (roleWriteRequest, error) {
@@ -295,11 +297,11 @@ func refuseBuiltIn(name, what string) error {
 // AdminRoleCreate serves `POST /admin/roles/{scope}/{mode}`.
 //
 // Body: `{"name": "security_reviewer"}`. Answers 201 `{"ok": true, "name": …}`.
-// pylon's project handler answers 201 and its central handler 200 for the same
-// act; one status is used for both here, and `ok` is kept so the legacy admin
-// client reads the result it expects.
+// The legacy project handler answers 201 and its central handler 200 for the
+// same act; one status is used for both here, and `ok` is kept so the legacy
+// admin client reads the result it expects.
 //
-// A new role starts with NO permissions. That is deliberate and is pylon's
+// A new role starts with NO permissions. That is deliberate and is the legacy
 // behaviour too: the operator grants them on the matrix this page already
 // shows, where every grant is one auditable change.
 func (h *Handler) AdminRoleCreate(w http.ResponseWriter, r *http.Request) {
@@ -345,7 +347,7 @@ func (h *Handler) insertRole(ctx context.Context, target roleTarget, name string
 
 // AdminRoleRename serves `PUT /admin/roles/{scope}/{mode}`.
 //
-// Body: `{"name": "old", "new_name": "new"}` — pylon's field names.
+// Body: `{"name": "old", "new_name": "new"}` — the legacy field names.
 //
 // # Why one UPDATE is enough, and what it is NOT enough for
 //
@@ -471,7 +473,7 @@ WHERE stale.name = $1
 // AdminRoleDelete serves `DELETE /admin/roles/{scope}/{mode}`.
 //
 // Body: `{"name": "security_reviewer"}`, or `?name=` when an intermediary drops
-// the body. Answers 200 `{"ok": true, …}`, not 204: pylon's project handler
+// the body. Answers 200 `{"ok": true, …}`, not 204: the legacy project handler
 // returns 204 WITH a body, which no client can read, and the counts below are
 // the part an operator acts on.
 //
@@ -500,7 +502,7 @@ func (h *Handler) AdminRoleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A built-in name is refused because this service names that role in its
-	// own SQL and Go. No code names a role in a RETIRED mode, so pylon's
+	// own SQL and Go. No code names a role in a RETIRED mode, so the legacy
 	// developer-mode `admin` or `super_admin` is a leftover and can go.
 	if _, retired := retiredRoleModes[target.mode]; !retired || !target.central() {
 		if err := refuseBuiltIn(body.Name, "deleted"); err != nil {

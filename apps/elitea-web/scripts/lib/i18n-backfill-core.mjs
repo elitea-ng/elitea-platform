@@ -213,6 +213,11 @@ export function planBackfill(existingEn, allEntries) {
 export const ROUTE_CATALOGUES = [
   // The web chat's notice of a handed-off Local work thread (ADR-0034).
   { file: 'src/pages/chat/i18n/en.chatCloud.json', prefix: 'pages.chat.cloud.' },
+  // A project's Send to cloud switch (ADR-0034 decision 11): the admin
+  // Projects page's dialog and the project settings section. The control's
+  // module registers it; the table's row action is rendered only by the page
+  // that also imports the dialog.
+  { file: 'src/features/cloud-executor-switch/i18n/en.cloudExecutorSwitch.json', prefix: 'features.cloudExecutorSwitch.' },
 ];
 
 /** Keys in the wrong place for the route catalogues: `[{ key, problem }]`. */
@@ -237,6 +242,7 @@ const DESKTOP_ONLY_PREFIXES = [
   'src/features/workspace/',
   'src/features/workspace-handoff/',
   'src/features/workspace-index/',
+  'src/features/workspace-rules/',
   'src/pages/workspace/',
   'src/shared/desktop/',
   'src/widgets/desktop-shell/',

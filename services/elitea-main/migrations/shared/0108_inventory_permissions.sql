@@ -8,9 +8,9 @@
 --
 -- CHOSEN, NOT RECOVERED — the third file here to do that, after 0104 and 0106,
 -- and for the same reason 0106 gives: the legacy `inventory_plugin` has no
--- `api/` package and no `check_api` call. Its routes were reached by the pylon
--- provider hub over mTLS and authorised by the HOP, never by a project role,
--- so there is nothing in the legacy catalogue to transcribe.
+-- `api/` package and no `check_api` call. Its routes were reached by the legacy
+-- runtime provider hub over mTLS and authorised by the HOP, never by a project
+-- role, so there is nothing in the legacy catalogue to transcribe.
 --
 -- The split mirrors 0106's read/generate for the same reason: reading capacity
 -- is what a screen polls to decide whether to offer a control, and gating that

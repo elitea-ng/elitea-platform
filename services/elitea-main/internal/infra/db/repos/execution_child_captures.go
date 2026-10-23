@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 )
 

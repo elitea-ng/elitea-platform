@@ -7,9 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // --- stubs -------------------------------------------------------------------
@@ -256,8 +257,7 @@ func TestForwardedHeadersAloneAreRefusedThroughTheRouter(t *testing.T) {
 	for _, path := range []string{"/llm/v1/chat/completions", "/api/v2/projects"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		req.RemoteAddr = "127.0.0.1:12345"
-		req.Header.Set("X-Auth-Type", "user")
-		req.Header.Set("X-Auth-Id", "1")
+		authtest.SignIn(req, "1")
 		rec := httptest.NewRecorder()
 
 		r.ServeHTTP(rec, req)

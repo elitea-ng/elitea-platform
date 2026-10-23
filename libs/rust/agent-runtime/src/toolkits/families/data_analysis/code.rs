@@ -50,6 +50,9 @@ pub enum AnalysisCodeFailure {
     Cancelled,
     /// Completion could not be confirmed; the program may have run.
     Uncertain,
+    /// The sandbox running the program was lost (node loss, eviction, a
+    /// platform kill) before it finished. Not an error in the program.
+    Interrupted,
 }
 
 /// A failed run: the cause, and the program's own diagnostic text when it has
@@ -97,6 +100,9 @@ pub(crate) fn failure_sentence(failure: AnalysisCodeFailure) -> &'static str {
         AnalysisCodeFailure::Cancelled => "The run was cancelled before it finished.",
         AnalysisCodeFailure::Uncertain => {
             "The sandbox did not confirm whether the program finished. It may have run; do not assume it did not. Tell the user."
+        }
+        AnalysisCodeFailure::Interrupted => {
+            "The sandbox running the program was lost before it finished (an infrastructure fault, not an error in the code). The program has no network, so running the same code again is safe."
         }
     }
 }

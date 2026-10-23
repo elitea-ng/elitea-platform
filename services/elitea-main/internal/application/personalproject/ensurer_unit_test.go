@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 )
 
 // The name is a CONTRACT with two readers: internal/api/v2/social/handler.go's

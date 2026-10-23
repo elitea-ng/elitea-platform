@@ -1,9 +1,11 @@
 name: Build stack images
 description: >-
-  Builds every `build:` service of the given compose files with buildx bake,
-  loads the results into the runner's image store, carries the BuildKit cache
-  mounts (cargo, Go, pip) across runs, and asserts every image is present so
-  compose can never fall through to a registry pull.
+  Builds `build:` services of the given compose files with buildx bake, over a
+  registry layer cache and the BuildKit cache mounts (cargo, Go, pip) carried
+  across runs. Load mode (the default) loads every result into the runner's
+  image store and asserts each is present, so compose can never fall through
+  to a registry pull. Push mode (`push-prefix`) pushes each result to a
+  CI-only registry name and writes the digests for .github/actions/pull-stack-images.
 #
 # ── Why this exists (measured 2026-09-02) ───────────────────────────────────
 #
@@ -14,9 +16,21 @@ description: >-
 # of those mounts died with the runner. A push to main then built the same
 # images twice more, under two unrelated GHA cache scopes.
 #
-# This action makes the three consumers share ONE content-addressed layer
-# cache per image (scope `<image>-linux-amd64`, the name publish.yml's amd64
-# build already uses) and persists the cache mounts through actions/cache.
+# This action makes the consumers share ONE content-addressed layer cache per
+# image — since 2026-10-20 a registry ref, `ghcr.io/elitea-ng/ci-cache-<image>`
+# (deploy/ci/bake-cache.hcl says why it left the 10 GB Actions cache) — and
+# persists the cache mounts through actions/cache.
+#
+# ── Two modes ───────────────────────────────────────────────────────────────
+#
+# PUSH (ci-web-e2e.yml's build-once jobs): build the named targets once per
+# commit and push each to `<push-prefix><image>:<push-tag>`; the digests go to
+# `digests-file` and every journey lane pulls them by digest through
+# .github/actions/pull-stack-images instead of building the stack itself.
+#
+# LOAD (the default; a fork pull request's lanes, which cannot write packages,
+# and the workflows outside ci-web-e2e.yml): build into the runner's image
+# store, as before.
 #
 # ── What it does NOT change ─────────────────────────────────────────────────
 #
@@ -48,21 +62,58 @@ inputs:
     description: Extra suffix for the cache-mount key, so lanes with different mount contents (python vs rust worker) keep separate entries.
     required: false
     default: ""
+  push-prefix:
+    description: >-
+      Push mode: the registry name prefix, e.g. `ghcr.io/elitea-ng/ci-`. Each
+      built target is pushed as `<prefix><image>:<push-tag>`, where <image> is
+      the last path segment of the compose service's `image:`. The caller
+      logs in. Empty (the default) is load mode.
+    required: false
+    default: ""
+  push-tag:
+    description: >-
+      Push mode only. The tag every pushed image gets. It must be unique to
+      the run and attempt (`<sha>-<run_id>-<attempt>`): the digest is read
+      back from it after the push, and a tag another run could push to would
+      let that read race.
+    required: false
+    default: ""
+  digests-file:
+    description: >-
+      Push mode only. Where to write the JSON map
+      {<image>: {ref, digest, build}} that pull-stack-images reads; `build` is
+      the compose build spec (context, dockerfile, target, args) the image was
+      built from, so a lane whose compose names a different variant fails
+      instead of running the wrong image.
+    required: false
+    default: ""
   cache-write:
     description: >-
       Whether this run may WRITE caches: export every layer (mode=max) and save
-      the cargo/Go/pip mounts. Defaults to "a push to main"; every other run
+      the cargo/Go/pip mounts. Defaults to "a run on main" (the nightly); every other run
       (a pull request, a schedule or a dispatch on the main ref) reads main's
       caches and writes none. A caller may pass "false" to state that intent
-      itself; scripts/ci/check_workflow_cache_writes.py fails a caller that
+      itself; scripts/ci/check-workflow-cache-writes.mjs fails a caller that
       passes anything else.
     required: false
-    default: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    default: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+  mount-cache-writer:
+    description: >-
+      "true" on the ONE job per mount-cache-suffix that saves the cargo/Go/pip
+      mounts on a run on main; every other caller leaves it unset. Measured
+      2026-10-20: six main jobs baked the same rust mounts, all six tried to
+      save the same run-scoped key, five failed with "Unable to reserve" after
+      ~5.7 min each extracting ~3.5 GB out of the builder. A non-writer skips
+      that extraction entirely. It never widens `cache-write`: a pull request
+      still writes nothing (scripts/ci/check-workflow-cache-writes.mjs also
+      holds "at most one writer per suffix in a workflow").
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
     # Third-party (non-`build:`) images the compose files reference — postgres,
-    # nats, pgvector, rustfs, traefik, the oidc-mock base, otel, etc. — pulled
+    # nats, qdrant, rustfs, the oidc-mock base, otel, etc. — pulled
     # up front with a bounded retry, before buildx even starts.
     #
     # Why: three CI runs in one day died before any test ran with a Docker Hub
@@ -78,6 +129,8 @@ runs:
     # a build-tagged image here would paper over a #154 guard failure with a
     # stale registry tag instead of failing loud.
     - name: Pull third-party images with retry
+      # Load mode only: a push-mode build runs no stack.
+      if: inputs.push-prefix == ''
       shell: bash
       working-directory: ${{ github.workspace }}/deploy
       env:
@@ -163,6 +216,7 @@ runs:
       shell: bash
       env:
         WRITE: ${{ inputs.cache-write }}
+        MOUNT_WRITER: ${{ inputs.mount-cache-writer }}
         # The mount-cache key, computed ONCE: a writer and a reader that
         # spelled it separately could drift apart and never hit each other.
         #
@@ -197,8 +251,18 @@ runs:
         # become permanent again. `-v2-` is only what abandons the poisoned
         # `buildkit-mounts-Linux-rust-…` entry that is already out there; it
         # will be evicted by LRU on its own.
-        MOUNT_BASE: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum', 'services/elitea-worker-python/pyproject.toml', 'services/elitea-deepwiki-engine/Cargo.lock') }}
-        MOUNT_PREFIX: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
+        #
+        # `-v3-` (2026-10-20): the cargo target mounts are per image now
+        # (`.buildkit-mounts/cargo-target-<image>`, below). A v2 entry restored
+        # through the suffix-only prefix would carry the old shared
+        # `cargo-target` directory, which nothing maps any more, and a writer
+        # would re-save it for ever. The hash is EVERY Cargo.lock and go.sum in
+        # the tree, by glob: a hand list named only the worker's and DeepWiki's
+        # lockfiles and three of five go.sum files, so a dependency bump in an
+        # unlisted one hit the old key. A lockfile no image builds from only
+        # costs a new key, which restores from the prefix like any other.
+        MOUNT_BASE: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('**/Cargo.lock', '**/go.sum', '!**/node_modules/**') }}
+        MOUNT_PREFIX: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
         RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
         echo "mount-base=$MOUNT_BASE" >> "$GITHUB_OUTPUT"
@@ -207,7 +271,14 @@ runs:
         # happens; readers never name it and fall through to the prefix.
         echo "mount-write-key=$MOUNT_BASE-$RUN_ID" >> "$GITHUB_OUTPUT"
         if [ "$WRITE" = "true" ]; then
-          echo "write-mounts=true" >> "$GITHUB_OUTPUT"; echo "layer-mode=max" >> "$GITHUB_OUTPUT"
+          echo "layer-mode=max" >> "$GITHUB_OUTPUT"
+          # One mount writer per suffix (the input's description says why).
+          if [ "$MOUNT_WRITER" = "true" ]; then
+            echo "write-mounts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "write-mounts=false" >> "$GITHUB_OUTPUT"
+            echo "mount cache: read-only here; the job passing mount-cache-writer: true saves it"
+          fi
         else
           # `none`: the overlay below then carries no cache-to at all.
           echo "write-mounts=false" >> "$GITHUB_OUTPUT"; echo "layer-mode=none" >> "$GITHUB_OUTPUT"
@@ -223,7 +294,7 @@ runs:
     # step. A save that runs as a main step therefore uploads six empty
     # directories, the key then exists, and every later run hits it, skips
     # extraction and never populates it (measured on the first version of this
-    # action). So a writer uses the full `actions/cache@v4` — whose save is a
+    # action). So a writer uses the full `actions/cache@v6` — whose save is a
     # post step — registered BEFORE the dance: post steps run in reverse, the
     # dance extracts first, the cache saves second. Readers restore only.
     # The cost, stated: actions/cache saves only when the JOB succeeds, so a
@@ -233,10 +304,10 @@ runs:
     - name: Restore and later save BuildKit cache mounts (writers)
       # The ref/event half restates the cache-write default literally, so a
       # caller that passed `cache-write: true` from a pull request still
-      # cannot save (scripts/ci/check_workflow_cache_writes.py reads it).
-      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # cannot save (scripts/ci/check-workflow-cache-writes.mjs reads it).
+      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
       id: mounts-rw
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: .buildkit-mounts
         # RUN-SCOPED, so this key CANNOT already exist and the post-step save
@@ -256,7 +327,7 @@ runs:
     - name: Restore BuildKit cache mounts (readers)
       if: steps.policy.outputs.write-mounts != 'true'
       id: mounts-ro
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .buildkit-mounts
         # Deliberately NOT a key any writer uses: readers want the newest
@@ -267,10 +338,32 @@ runs:
           ${{ steps.policy.outputs.mount-base }}-
           ${{ steps.policy.outputs.mount-prefix }}
 
+    # ── The size cap (writers only) ───────────────────────────────────────
+    #
+    # The cap applies to what is SAVED, so it runs between the dance's post
+    # extraction and actions/cache's post save. Registered HERE — after the
+    # writer's actions/cache, before the dance — its post step runs in exactly
+    # that slot (post steps run in reverse). cap-saved-mounts/cap.sh holds the
+    # policy: above 4 GB, drop the largest cargo-target-<image> directory from
+    # the saved entry, so that image builds cold ONCE and is saved fresh. A
+    # restore-time cap (the first version of this) left the saved entry
+    # uncapped and made the trimmed image cold on every main run.
+    - name: Cap the saved cache mounts (writers, post step)
+      if: steps.policy.outputs.write-mounts == 'true'
+      uses: ./.github/actions/build-stack-images/cap-saved-mounts
+      with:
+        path: .buildkit-mounts
+        cap-mb: "4096"
+
     # Injects the restored directories into the builder's cache mounts before
     # the build and, only when this run will save them, extracts them back
-    # after it (a post step). Mount ids default to their target path, which is
-    # how every Containerfile in this repository declares them.
+    # after it (a post step). Mount ids default to their target path, except
+    # the per-image cargo target mount: a Rust Containerfile that still builds
+    # on a /cargo-target mount names `id=<image>-cargo-target` (so builds do
+    # not queue on one `sharing=locked` lock), and the id is mapped to its own
+    # directory here. Only the worker's sandbox supervisor does today; the
+    # five stack images build their dependencies in a LAYER (the registry
+    # layer cache), so they have no target mount to map.
     - name: Inject cache mounts into the builder
       uses: reproducible-containers/buildkit-cache-dance@v3
       with:
@@ -286,7 +379,7 @@ runs:
           {
             ".buildkit-mounts/cargo-registry": "/usr/local/cargo/registry",
             ".buildkit-mounts/cargo-git": "/usr/local/cargo/git",
-            ".buildkit-mounts/cargo-target": "/cargo-target",
+            ".buildkit-mounts/cargo-target-worker-rust": {"target": "/cargo-target", "id": "elitea-worker-rust-cargo-target"},
             ".buildkit-mounts/go-mod": "/go/pkg/mod",
             ".buildkit-mounts/go-build": "/root/.cache/go-build",
             ".buildkit-mounts/pip": "/root/.cache/pip"
@@ -312,28 +405,32 @@ runs:
         n_from=0
         while IFS= read -r f; do
           [ -n "$f" ] || continue
-          this=$(grep -c 'cache-from = \["type=gha,scope=' "$f" || true)
+          this=$(grep -c 'cache-from = \["type=registry,ref=' "$f" || true)
           # Per FILE, not only in total: a file that contributes zero scopes
           # lowers both counts equally and the total check below stays green
           # while that file's image builds with no layer cache at all.
           [ "$this" -gt 0 ] || { echo "::error::$f declares no cache-from scope; nothing to derive a cache-to from"; exit 1; }
           n_from=$(( n_from + this ))
           # One `target "<name>" { cache-to = [...] }` block per cache-from line,
-          # named after the target block the line sits in.
-          # ignore-error=true: the image is already built when the export runs, and the
-          # 10 GB Actions cache evicts entries mid-write ("cache entry no longer
-          # exists"); a lost cache write must cost the next run time, not fail this one.
+          # named after the target block the line sits in, writing the SAME ref
+          # it reads.
+          # image-manifest=true + oci-mediatypes=true: the cache is stored as an
+          # ordinary OCI image manifest, the shape ghcr serves reliably (a bare
+          # BuildKit cache index is what registries have rejected).
+          # ignore-error=true: the image is already built (and, on the build-once
+          # job, already pushed) when the export runs; a lost cache write must
+          # cost the next run time, not fail this one.
           awk -v mode="$MODE" '
             /^target "/ { name = $2 }
-            /cache-from = \["type=gha,scope=/ {
-              sub(/.*scope=/, ""); sub(/".*/, "")
-              printf "target %s {\n  cache-to = [\"type=gha,mode=%s,scope=%s,ignore-error=true\"]\n}\n", name, mode, $0
+            /cache-from = \["type=registry,ref=/ {
+              sub(/.*ref=/, ""); sub(/".*/, "")
+              printf "target %s {\n  cache-to = [\"type=registry,ref=%s,mode=%s,image-manifest=true,oci-mediatypes=true,ignore-error=true\"]\n}\n", name, $0, mode
             }' "$f" >> "$out"
         done <<< "$CACHE_HCL"
         if [ "$MODE" = "none" ]; then
           # A reader. The scopes were still counted, so a file that declares
           # none fails above as before; the overlay then writes nothing.
-          printf '%s\n' "// read-only run: no cache-to (only a push to main writes the layer cache)" > "$out"
+          printf '%s\n' "// read-only run: no cache-to (only a run on main writes the layer cache)" > "$out"
           echo "layer cache: read-only, ${n_from} scope(s) read, none written"
           echo "file=$out" >> "$GITHUB_OUTPUT"
           exit 0
@@ -345,33 +442,196 @@ runs:
         echo "layer cache: mode=$MODE, $n_to scope(s)"
         echo "file=$out" >> "$GITHUB_OUTPUT"
 
+    # Push mode: one tag per requested target, named after the compose
+    # service's image (`ghcr.io/elitea-ng/elitea-main:standalone` →
+    # `<prefix>elitea-main:<tag>`), plus each target's build spec for the
+    # digest map.
+    - name: Name the images this run pushes
+      if: inputs.push-prefix != ''
+      id: push
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+        TARGETS: ${{ inputs.targets }}
+        PREFIX: ${{ inputs.push-prefix }}
+        TAG: ${{ inputs.push-tag }}
+        DIGESTS_FILE: ${{ inputs.digests-file }}
+        SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        REVISION: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        [ -n "$TAG" ] || { echo "::error::push mode needs push-tag"; exit 1; }
+        [ -n "$DIGESTS_FILE" ] || { echo "::error::push mode needs digests-file"; exit 1; }
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=(-f "$f")
+        done <<< "$COMPOSE_FILES"
+        docker compose "${args[@]}" config --format json > "${RUNNER_TEMP}/stack-config.json"
+        # Targets are compose SERVICE names, comma- or space-separated.
+        read -r -a targets <<< "${TARGETS//,/ }"
+        [ "${#targets[@]}" -gt 0 ] || { echo "::error::push mode needs explicit targets"; exit 1; }
+        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" plan \
+          "${RUNNER_TEMP}/stack-config.json" "$GITHUB_WORKSPACE" "$PREFIX" "$TAG" \
+          "${RUNNER_TEMP}/stack-push-plan.json" "${targets[@]}" > "${RUNNER_TEMP}/stack-push-set.txt"
+        {
+          echo "set<<__SET__"
+          cat "${RUNNER_TEMP}/stack-push-set.txt"
+          for t in "${targets[@]}"; do
+            echo "${t}.labels.org.opencontainers.image.source=${SOURCE}"
+            echo "${t}.labels.org.opencontainers.image.revision=${REVISION}"
+          done
+          echo "__SET__"
+        } >> "$GITHUB_OUTPUT"
+        cat "${RUNNER_TEMP}/stack-push-set.txt"
+
     # bake reads the compose files as its definition, merges the HCL's
     # per-target cache scopes onto the same-named services, and `load: true`
     # writes every result into the runner's image store (the #154 guard).
-    # `source: .` builds from the checked-out tree, not from a fresh git
-    # context; `workdir: deploy` puts bake where the compose files are, so their
-    # relative contexts resolve as compose resolves them.
+    # `source: ./deploy` is a local path: bake builds from the checked-out
+    # tree, not from a fresh git context, and runs from deploy/ (as
+    # `cd deploy && docker buildx bake`), where the compose files are, so
+    # their relative contexts resolve as compose resolves them.
+    # Load mode reads the registry layer cache. The ci-cache-* packages are
+    # public (the step after the bake asserts it wherever one is written), so
+    # this login is not what makes a fork's read work; it only means a
+    # package that somehow went private still reads with the job's
+    # packages:read token instead of costing a cold build. Allowed to fail:
+    # a token without that scope must not stop a build that can go cold.
+    - name: Log in to the registry to read the layer cache
+      if: inputs.push-prefix == ''
+      continue-on-error: true
+      shell: bash
+      env:
+        TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
     - name: Bake the stack images
-      uses: docker/bake-action@v6
+      uses: docker/bake-action@v7
       with:
-        source: .
-        workdir: deploy
+        source: ./deploy
         builder: ${{ steps.buildx.outputs.name }}
         files: |
           ${{ inputs.compose-files }}
           ${{ inputs.cache-hcl }}
           ${{ steps.overlay.outputs.file }}
         targets: ${{ inputs.targets }}
-        load: true
+        # Load mode loads into the runner's store (the #154 guard below);
+        # push mode pushes, and the lanes pull by digest.
+        load: ${{ inputs.push-prefix == '' }}
+        push: ${{ inputs.push-prefix != '' }}
         provenance: false
         set: |
           *.platform=linux/amd64
+          ${{ steps.push.outputs.set }}
+
+    # The digest of each tag just pushed, read back from the registry. Not
+    # from bake's `metadata` output: for a multi-target leg it exceeds the
+    # 128 KiB a single environment variable may hold ("Argument list too
+    # long", measured on the mocks leg) — the metadata was right, only too
+    # big to hand to a step. The tag is unique to this run and attempt
+    # (push-tag), so nothing else can have pushed to it: it names exactly
+    # what this step's bake pushed.
+    - name: Record the pushed digests
+      if: inputs.push-prefix != ''
+      shell: bash
+      env:
+        DIGESTS_FILE: ${{ inputs.digests-file }}
+      run: |
+        set -euo pipefail
+        plan="${RUNNER_TEMP}/stack-push-plan.json"
+        meta="${RUNNER_TEMP}/stack-pushed-digests.json"
+        echo '{}' > "$meta"
+        node -e 'const fs = require("fs"); for (const e of JSON.parse(fs.readFileSync(process.argv[1], "utf8"))) console.log(e.service, e.ref + ":" + e.tag)' "$plan" \
+          | while read -r service image; do
+              digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+              node -e 'const fs = require("fs"); const [file, service, digest] = process.argv.slice(1); const m = JSON.parse(fs.readFileSync(file, "utf8")); m[service] = { "containerimage.digest": digest }; fs.writeFileSync(file, JSON.stringify(m))' \
+                "$meta" "$service" "$digest"
+            done
+        mkdir -p "$(dirname "$DIGESTS_FILE")"
+        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" record "$plan" "$meta" > "$DIGESTS_FILE"
+        cat "$DIGESTS_FILE"
+
+    # The layer-cache refs THIS leg's targets read (and, on main, write: the
+    # overlay's cache-to is derived ref-for-ref from the same cache-from
+    # lines). `bake --print` resolves the targets the way the bake did. Runs
+    # on every push-mode leg, pull requests included, so CI exercises it even
+    # though only main uses the result below.
+    - name: Resolve the layer-cache refs of this leg's targets
+      if: inputs.push-prefix != ''
+      id: legrefs
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+        CACHE_HCL: ${{ inputs.cache-hcl }}
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=(-f "$f")
+        done <<< "${COMPOSE_FILES}"$'\n'"${CACHE_HCL}"
+        read -r -a targets <<< "${TARGETS//,/ }"
+        # cache-from prints as strings ("type=registry,ref=…") on older buildx
+        # and as objects on newer; read the ref out of either.
+        refs="$(docker buildx bake "${args[@]}" --print "${targets[@]}" \
+          | jq -r '.target[] | .["cache-from"][]? | if type == "string" then (capture("ref=(?<r>[^,]+)").r // empty) else (.ref // empty) end' \
+          | sort -u)"
+        [ -n "$refs" ] || { echo "::error::bake resolves no layer-cache ref for targets: ${TARGETS}"; exit 1; }
+        echo "$(wc -l <<< "$refs" | tr -d ' ') layer-cache ref(s) for ${TARGETS}:"
+        echo "$refs"
+        { echo "refs<<__REFS__"; echo "$refs"; echo "__REFS__"; } >> "$GITHUB_OUTPUT"
+
+    # A fork's pull request builds in its job and reads this cache with no
+    # usable token, so the cache is only worth writing if it is PUBLIC. GHCR
+    # has no API to set a package's visibility (PATCH is a 404), and the
+    # org's default is what decided it on the first push; assert it here,
+    # on every run that wrote, instead of assuming it. Anonymous token + tag
+    # list is exactly what an unauthenticated BuildKit does.
+    - name: The layer cache this run wrote is publicly readable
+      if: inputs.push-prefix != '' && steps.policy.outputs.layer-mode != 'none'
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        # Only this leg's refs: the overlay carries a cache-to for every
+        # target in the cache HCL, and checking the other legs' refs warned
+        # "not written" on every leg that finished before them.
+        REFS: ${{ steps.legrefs.outputs.refs }}
+        OVERLAY: ${{ steps.overlay.outputs.file }}
+      run: |
+        set -euo pipefail
+        [ -n "$REFS" ] || { echo "::error::no layer-cache ref resolved for this leg"; exit 1; }
+        # Each must also be one the overlay exports, or it was never written.
+        refs=""
+        for ref in $REFS; do
+          grep -qF "ref=${ref}," "$OVERLAY" || { echo "::error::${ref} is read by this leg but the overlay exports no cache-to for it"; exit 1; }
+          refs+="${ref}"$'\n'
+        done
+        bad=0
+        for ref in $refs; do
+          repo="${ref#ghcr.io/}"; repo="${repo%:*}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r '.token // empty' || true)"
+          if [ -n "$token" ] && curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" "https://ghcr.io/v2/${repo}/tags/list"; then
+            echo "public: ${ref}"
+          elif docker buildx imagetools inspect "$ref" > /dev/null 2>&1; then
+            echo "::error::${ref} exists but an anonymous client cannot read it: make ghcr.io/${repo} public (package settings), or every fork pull request builds cold"
+            bad=1
+          else
+            # ignore-error=true lets an export fail without failing the bake;
+            # a ref that does not exist is a lost write, not a private one.
+            echo "::warning::${ref} was not written by this run (export failed); the next main run writes it"
+          fi
+        done
+        exit "$bad"
 
     # The guard. Reads the image tags compose would build from the SAME files
     # and requires each to exist locally. A tag that is missing here would
     # otherwise surface as a registry `denied` from compose, minutes later,
     # with the wrong name on it.
     - name: Every image compose would build is in the local store
+      if: inputs.push-prefix == ''
       shell: bash
       # Explicit: a calling workflow's `defaults.run.working-directory` must
       # not move this off the repository root the compose paths are relative to.

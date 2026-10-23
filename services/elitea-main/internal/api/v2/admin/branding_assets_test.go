@@ -19,14 +19,27 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 type memoryObjectStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
+	mu       sync.Mutex
+	objects  map[string][]byte
+	modified map[string]time.Time
+}
+
+// age backdates every stored object whose key contains fragment, so a test
+// can put an object past the collection grace period (#1057).
+func (m *memoryObjectStore) age(fragment string, by time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.objects {
+		if strings.Contains(key, fragment) {
+			m.modified[key] = m.modified[key].Add(-by)
+		}
+	}
 }
 
 func (m *memoryObjectStore) Put(_ context.Context, ref storage.ObjectRef, body io.Reader, _ storage.PutOptions) (storage.ObjectInfo, error) {
@@ -38,8 +51,10 @@ func (m *memoryObjectStore) Put(_ context.Context, ref storage.ObjectRef, body i
 	defer m.mu.Unlock()
 	if m.objects == nil {
 		m.objects = map[string][]byte{}
+		m.modified = map[string]time.Time{}
 	}
 	m.objects[ref.StorageKey("")] = data
+	m.modified[ref.StorageKey("")] = time.Now()
 	return storage.ObjectInfo{Key: ref.Key(), Size: int64(len(data))}, nil
 }
 func (m *memoryObjectStore) Get(_ context.Context, ref storage.ObjectRef, _ *storage.ByteRange) (io.ReadCloser, storage.ObjectInfo, error) {
@@ -55,6 +70,7 @@ func (m *memoryObjectStore) Delete(_ context.Context, ref storage.ObjectRef) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.objects, ref.StorageKey(""))
+	delete(m.modified, ref.StorageKey(""))
 	return nil
 }
 func (m *memoryObjectStore) List(_ context.Context, q storage.ListQuery) (storage.ListPage, error) {
@@ -63,7 +79,7 @@ func (m *memoryObjectStore) List(_ context.Context, q storage.ListQuery) (storag
 	var page storage.ListPage
 	for key := range m.objects {
 		if rest, ok := strings.CutPrefix(key, q.Bucket.BucketPrefix("")); ok {
-			page.Objects = append(page.Objects, storage.ObjectInfo{Key: rest})
+			page.Objects = append(page.Objects, storage.ObjectInfo{Key: rest, LastModified: m.modified[key]})
 		}
 	}
 	return page, nil

@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	applicationskillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 // UI-DC-2: WHAT THE ATTACHED-SKILLS READ ANSWERS WHEN SKILLS ARE OFF.
@@ -51,8 +52,8 @@ func TestAttachedSkillsReadIsServedWhenTheRouteIsComposed(t *testing.T) {
 	route, err := applicationskillsapi.NewCurrentApplicationSkillsRoute(
 		&productionApplicationSkillsReader{},
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionApplicationSkillsPermissionResolver{},
 	)

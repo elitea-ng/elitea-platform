@@ -1,0 +1,37 @@
+[package]
+name = "elitea-platform-rpc"
+description = "The clients of elitea.runtime.v1.ArtifactObjectService and InternalToolService (elitea-main's platform listener): the worker's and the engines' artifact objects and the worker's internal MCP tools, over gRPC."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# In-process fake services (an in-memory artifact store, a programmable
+# internal tool server) on a loopback gRPC listener, for the callers' tests
+# (`testing::serve`). Nothing in an image enables it.
+testing = ["tonic/server", "tonic/router", "dep:tokio", "dep:tokio-stream"]
+
+[dependencies]
+bytes = "1.12.1"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+prost = "0.14.4"
+# No TLS feature here: the caller builds the mutual-TLS `Channel` with the
+# crypto provider it already links (the worker ring, the engines aws-lc).
+tonic = { version = "0.14.6", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14.6"
+zeroize = "1.9.0"
+tokio = { version = "1.53.1", default-features = false, features = ["net", "rt", "sync"], optional = true }
+tokio-stream = { version = "0.1.19", default-features = false, features = ["net"], optional = true }
+
+[build-dependencies]
+protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+# The crate's own fake services, for its end-to-end tests.
+elitea-platform-rpc = { path = ".", features = ["testing"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -89,6 +89,12 @@ func (r *CurrentModelsRepository) List(
 ) ([]configurationapp.CurrentModelCatalogItem, error) {
 	if err := validateCurrentModelRepositoryRequest(ctx, projectID, section); err != nil {
 		return nil, err
+	}
+	// The vector storage section held `pgvector` rows only, and that type is
+	// retired (application/configurations/retired.go): a stored row is kept
+	// but never offered, so the section's catalogue is always empty.
+	if section == configurationapp.CurrentModelSectionVectorStorage {
+		return []configurationapp.CurrentModelCatalogItem{}, nil
 	}
 
 	rows := []sqlcgen.ListCurrentModelConfigurationsRow{}

@@ -33,20 +33,21 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/spi"
 	"github.com/go-chi/chi/v5"
 )
 
 // Env names. Spelled out, because the env-drift gate and the chart are both
 // searched by the literal string.
 const (
-	GitAllowlistEnv     = "ELITEA_INVENTORY_GIT_ALLOWLIST"
-	CallbackBaseURLEnv  = "ELITEA_INVENTORY_CALLBACK_BASE_URL"
-	CallbackTokenTTLEnv = "ELITEA_INVENTORY_CALLBACK_TOKEN_TTL_MINUTES"
-	SourceTypesEnv      = "ELITEA_INVENTORY_SOURCE_TYPES"
+	GitAllowlistEnv = "ELITEA_INVENTORY_GIT_ALLOWLIST"
+	// RetiredCallbackBaseURLEnv is refused (#1359 U5): the engine calls back
+	// over the platform gRPC listener, at no configured origin.
+	RetiredCallbackBaseURLEnv = "ELITEA_INVENTORY_CALLBACK_BASE_URL"
+	CallbackTokenTTLEnv       = "ELITEA_INVENTORY_CALLBACK_TOKEN_TTL_MINUTES"
+	SourceTypesEnv            = "ELITEA_INVENTORY_SOURCE_TYPES"
 )
 
 // ExpandingTools are the three tools whose args_schema names a source toolkit.
@@ -108,11 +109,10 @@ func NewSources(
 	grants material.GrantRecorder,
 	cfg SourcesConfig,
 ) (*Sources, error) {
-	base := strings.TrimRight(strings.TrimSpace(cfg.CallbackBaseURL), "/")
-	if toolkits == nil || settings == nil || minter == nil || grants == nil || base == "" {
+	if toolkits == nil || settings == nil || minter == nil || grants == nil {
 		return nil, fmt.Errorf(
-			"%w: a toolkit reader, a settings resolver, a callback minter, a grant recorder and %s are required",
-			material.ErrSourceUnavailable, CallbackBaseURLEnv)
+			"%w: a toolkit reader, a settings resolver, a callback minter and a grant recorder are required",
+			material.ErrSourceUnavailable)
 	}
 	return &Sources{SourceRewriter: material.SourceRewriter{
 		Provider: "inventory",
@@ -126,7 +126,7 @@ func NewSources(
 			AllowlistEnv: SourceTypesEnv,
 		},
 		Minter:       minter,
-		CallbackBase: base,
+		CallbackBase: material.PlatformRouteBase,
 		Lifetime:     cfg.CallbackTokenTTL,
 		OwnerField:   "application_id",
 		SourceArg:    "toolkit_id",

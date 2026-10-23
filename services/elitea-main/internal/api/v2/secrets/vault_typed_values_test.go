@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// typedHeaderValues are the non-string JSON values a pylon-written vault can
+// typedHeaderValues are the non-string JSON values a legacy-written vault can
 // hold under any name — `value: Optional[str] = None` stores null.
 var typedHeaderValues = []string{`null`, `true`, `false`, `0`, `42`, `[]`, `{}`}
 

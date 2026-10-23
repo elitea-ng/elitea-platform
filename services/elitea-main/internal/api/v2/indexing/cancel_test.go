@@ -7,10 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const currentGoIndexExecutionID = "0123456789abcdef0123456789abcdef"
@@ -34,12 +35,6 @@ func TestCurrentIndexCancelRouteBindsCurrentContractAndSecurityBeforeUseCase(t *
 	route := currentIndexCancelRouteForTest(
 		t,
 		canceller,
-		func(request *http.Request) error {
-			if request.RemoteAddr != "10.0.0.8:43120" {
-				return errors.New("untrusted peer")
-			}
-			return nil
-		},
 		func(_ context.Context, user auth.User, mode, projectID string) (auth.PermissionResolution, error) {
 			permissionCalls++
 			if user.UserID != "11" || mode != auth.PermissionModeDefault || projectID != "7" {
@@ -88,8 +83,8 @@ func TestCurrentIndexCancelRouteRejectsUntrustedUnauthorizedAndInvalidRequests(t
 		path          string
 		wantStatus    int
 	}{
-		"untrusted peer": {
-			remoteAddress: "192.0.2.9:443",
+		"forged X-Auth-* identity without a session": {
+			remoteAddress: forgedIdentityAddress,
 			permissions:   []string{"models.applications.task.delete"},
 			path:          "/api/v2/elitea_core/index_cancel/prompt_lib/7/9/documents/" + currentGoIndexExecutionID,
 			wantStatus:    http.StatusUnauthorized,
@@ -125,12 +120,6 @@ func TestCurrentIndexCancelRouteRejectsUntrustedUnauthorizedAndInvalidRequests(t
 			route := currentIndexCancelRouteForTest(
 				t,
 				canceller,
-				func(request *http.Request) error {
-					if request.RemoteAddr != "10.0.0.8:43120" {
-						return errors.New("untrusted peer")
-					}
-					return nil
-				},
 				func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 					return auth.PermissionResolution{UserID: 11, Permissions: test.permissions}, nil
 				},
@@ -153,7 +142,6 @@ func TestCurrentIndexCancelRouteReturns204ForNoTransition(t *testing.T) {
 	route := currentIndexCancelRouteForTest(
 		t,
 		canceller,
-		func(*http.Request) error { return nil },
 		func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 			return auth.PermissionResolution{
 				UserID:      11,
@@ -179,7 +167,6 @@ func TestCurrentIndexCancelRouteRejectsIncompleteCompositionAndOtherMethods(t *t
 	principal := principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := forwardedPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
@@ -188,10 +175,10 @@ func TestCurrentIndexCancelRouteRejectsIncompleteCompositionAndOtherMethods(t *t
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
-		"missing use case":    {authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing principal":   {canceller: canceller, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing use case":    {authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}, permissions: permissions},
+		"missing principal":   {canceller: canceller, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing peer proof":  {canceller: canceller, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
-		"missing permissions": {canceller: canceller, authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}},
+		"missing permissions": {canceller: canceller, authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}},
 	} {
 		name, test := name, test
 		t.Run(name, func(t *testing.T) {
@@ -205,7 +192,6 @@ func TestCurrentIndexCancelRouteRejectsIncompleteCompositionAndOtherMethods(t *t
 	route := currentIndexCancelRouteForTest(
 		t,
 		canceller,
-		func(*http.Request) error { return nil },
 		func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 			return auth.PermissionResolution{
 				UserID:      11,
@@ -227,7 +213,6 @@ func TestCurrentIndexCancelRouteRejectsIncompleteCompositionAndOtherMethods(t *t
 func currentIndexCancelRouteForTest(
 	t *testing.T,
 	canceller handler.CurrentIndexCanceller,
-	verifyPeer func(*http.Request) error,
 	resolvePermissions func(context.Context, auth.User, string, string) (auth.PermissionResolution, error),
 ) *handler.CurrentIndexCancelRoute {
 	t.Helper()
@@ -237,7 +222,7 @@ func currentIndexCancelRouteForTest(
 			PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(verifyPeer),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissionResolverFunc(resolvePermissions),
 	)
@@ -247,6 +232,10 @@ func currentIndexCancelRouteForTest(
 	return route
 }
 
+// forgedIdentityAddress makes serveCurrentIndexCancel send the forged X-Auth-*
+// identity instead of a Form session.
+const forgedIdentityAddress = "192.0.2.9:443"
+
 func serveCurrentIndexCancel(
 	route http.Handler,
 	method string,
@@ -254,8 +243,12 @@ func serveCurrentIndexCancel(
 	remoteAddress string,
 ) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	if remoteAddress == forgedIdentityAddress {
+		// The retired edge projection, and no session (#1359).
+		authtest.ForgeXAuth(request, "11")
+	} else {
+		authtest.SignIn(request, "11")
+	}
 	request.RemoteAddr = remoteAddress
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, request)

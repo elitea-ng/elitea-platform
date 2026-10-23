@@ -9,8 +9,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -2057,7 +2057,7 @@ CREATE TABLE p_1.entity_skill_mapping (
 );
 -- The eight chat tables are created by newMigratedPostgresIntegrationPool, for
 -- the same reason skills / skill_versions above are: tenant/0123 took ownership
--- of them (#287) so a pylon-free deployment has them at all, and this seed's
+-- of them (#287) so a fresh deployment has them at all, and this seed's
 -- callers run that migration first. Re-creating them here would be a duplicate
 -- relation.
 INSERT INTO p_1.applications (id, name, description, owner_id) VALUES

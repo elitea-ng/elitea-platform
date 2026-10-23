@@ -64,7 +64,8 @@ func TestVaultDataExposesNonStringValuesAsText(t *testing.T) {
 }
 
 // The risk the plan names: a write-back must keep the integer an integer, or
-// LookupRegularProjectID and pylon read a string where they expect an int.
+// LookupRegularProjectID and the legacy runtime read a string where they expect
+// an int.
 func TestVaultDataWriteBackKeepsTheStoredJSONType(t *testing.T) {
 	t.Parallel()
 	v := decodeVault(t, intModelVault)
@@ -108,7 +109,7 @@ func TestVaultDataNumericStringStaysAString(t *testing.T) {
 	}
 }
 
-// Hide moves the value as it is, as pylon does.
+// Hide moves the value as it is, as the legacy runtime does.
 func TestVaultDataHideCarriesTheStoredType(t *testing.T) {
 	t.Parallel()
 	v := decodeVault(t, intModelVault)

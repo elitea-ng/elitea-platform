@@ -269,7 +269,7 @@ async fn call(tools: &[Arc<dyn Tool>], name: &str, arguments: Value) -> Value {
 #[test]
 fn configuration_keeps_the_instance_path_and_redacts_the_credential() {
     let parsed = config();
-    assert!(parsed.selected_tools().is_empty());
+    assert_eq!(parsed.selected_tools(), []);
     for invalid in [
         json!({}),
         json!({"testrail_configuration":{"url":"https://tr.example.test","email":"a"}}),
@@ -876,7 +876,7 @@ async fn add_file_to_case_validates_before_touching_the_store_or_provider() {
         let error = refusal(&tools, arguments.clone()).await;
         assert_eq!(error.category, ErrorCategory::InvalidInput, "{arguments}");
     }
-    assert!(transport.endpoints().is_empty());
+    assert_eq!(transport.endpoints(), [] as [String; 0]);
 }
 
 #[tokio::test]
@@ -907,7 +907,7 @@ async fn add_file_to_case_reports_host_failures_before_sending_anything() {
     let denied = failure(&tools, ask("/bucket/a.txt")).await;
     assert!(denied.contains("refused access"), "{denied}");
     assert!(denied.contains("Nothing was sent"), "{denied}");
-    assert!(transport.endpoints().is_empty());
+    assert_eq!(transport.endpoints(), [] as [String; 0]);
 }
 
 #[tokio::test]

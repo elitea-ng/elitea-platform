@@ -9,7 +9,7 @@ package repos
 // held a `canvas_message`, so the very next send answered 422 "This agent turn
 // requires the current execution path." for direct model chats and agents
 // alike. The resolvers now project a canvas's NEWEST version into the history
-// the model is shown (pylon's chat_history.py:57-66), and a reply carved
+// the model is shown (the legacy chat_history.py:57-66), and a reply carved
 // entirely into a canvas still counts as the completed reply that keeps its
 // question in the history.
 //
@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -132,7 +132,7 @@ func TestPostgresAnAdhocTurnAfterACodeCanvasIsAdmittedAndSeesTheFencedCode(t *te
 	if err != nil {
 		t.Fatalf("a direct model chat holding a canvas refuses its next turn: %v", err)
 	}
-	// Pylon's rendering of a canvas with a language, byte for byte.
+	// The legacy rendering of a canvas with a language, byte for byte.
 	assertCanvasHistory(t, row.ChatHistoryJson, []canvasHistoryEntry{
 		historyEntry("user", "print hello"),
 		historyEntry("assistant", "```python\n\nprint('hello')\n\n```"),

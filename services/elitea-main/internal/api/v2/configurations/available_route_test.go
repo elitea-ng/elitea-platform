@@ -8,10 +8,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentAvailableCatalogStub struct {
@@ -43,7 +44,7 @@ func TestCurrentAvailableRoutePreservesCurrentPathsAndSectionFilters(t *testing.
 			Type string `json:"type"`
 		}
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &entries) != nil ||
-			len(entries) != 2 || entries[0].Type != "s3" || entries[1].Type != "pgvector" {
+			len(entries) != 1 || entries[0].Type != "s3" {
 			t.Fatalf("GET %s status=%d body=%s", target, response.Code, response.Body.String())
 		}
 	}
@@ -60,26 +61,28 @@ func TestCurrentAvailableRouteFailsClosedBeforeCatalogAndForPartialSnapshot(t *t
 		t.Fatalf("partial status=%d body=%q", response.Code, response.Body.String())
 	}
 
+	// The forged X-Auth-* identity of the retired edge projection, and no
+	// session: refused before the catalog is read (#1359).
 	request := currentAvailableRequest(handler.CurrentAvailableSlashPath)
-	request.RemoteAddr = "203.0.113.8:43120"
+	request.Header.Del("Cookie")
+	authtest.ForgeXAuth(request, "11")
 	response = httptest.NewRecorder()
 	route.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || len(stub.sections) != 0 {
-		t.Fatalf("untrusted status=%d sections=%v body=%s", response.Code, stub.sections, response.Body.String())
+		t.Fatalf("forged status=%d sections=%v body=%s", response.Code, stub.sections, response.Body.String())
 	}
 }
 
 func TestCurrentAvailableRouteRejectsIncompleteDependencies(t *testing.T) {
 	catalog := &currentAvailableCatalogStub{}
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(*http.Request) error { return nil })
 
 	for name, test := range map[string]struct {
 		catalog handler.CurrentAvailableCatalogReader
 		auth    apimw.AuthConfig
 	}{
-		"missing catalog":      {auth: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}},
-		"missing principal":    {catalog: catalog, auth: apimw.AuthConfig{ForwardedIdentityVerifier: peer}},
+		"missing catalog":      {auth: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}},
+		"missing principal":    {catalog: catalog, auth: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}},
 		"no credential reader": {catalog: catalog, auth: apimw.AuthConfig{PrincipalValidator: principal}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -96,15 +99,9 @@ func newCurrentAvailableRoute(
 ) *handler.CurrentAvailableRoute {
 	t.Helper()
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	route, err := handler.NewCurrentAvailableRoute(
 		catalog,
-		apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -114,8 +111,7 @@ func newCurrentAvailableRoute(
 
 func currentAvailableRequest(target string) *http.Request {
 	request := httptest.NewRequest(http.MethodGet, target, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

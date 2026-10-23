@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps"
-	deepwikirun "github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
-	inventoryrun "github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps"
+	deepwikirun "github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	inventoryrun "github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 func TestEveryRegisteredApplicationIsWholeAndDistinct(t *testing.T) {
@@ -230,5 +230,42 @@ func TestComposeCarriesTheEntryOntoTheRunner(t *testing.T) {
 	}
 	if len(app.Toolkits.Families) != len(entry.Toolkits.Families) {
 		t.Fatalf("toolkits: %d vs %d", len(app.Toolkits.Families), len(entry.Toolkits.Families))
+	}
+}
+
+// The durable store's schema is the one each engine's migrations create the
+// invocation tables in: Inventory's own schema, DeepWiki's unqualified names.
+// The Inventory runner has no slot limit; DeepWiki's generation holds one.
+func TestEachApplicationNamesItsStoreSchemaAndSlotHolders(t *testing.T) {
+	for key, schema := range map[string]string{"inventory": "inventory_graph", "deepwiki": "", "echo": ""} {
+		app, err := apps.Lookup(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.StoreSchema != schema {
+			t.Errorf("%s: store schema %q, want %q", key, app.StoreSchema, schema)
+		}
+	}
+	if _, ok := any(&inventoryrun.Runner{}).(spi.SlotHolder); ok {
+		t.Error("the Inventory runner holds slots: its ingests would be refused at MAX_PARALLEL_WORKERS")
+	}
+	deepwikiRunner := deepwikirun.NewFixtureRunner(spi.Settings{}, 0)
+	entry, _ := apps.Lookup("deepwiki")
+	main, err := entry.Toolkits.Resolve("Wikis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := entry.Toolkits.Resolve("deepwiki_query")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		family spi.Family
+		tool   string
+		holds  bool
+	}{{main, "generate_wiki", true}, {main, "ask", false}, {main, "deep_research", false}, {query, "generate_wiki", false}} {
+		if got := deepwikiRunner.HoldsSlot(spi.Invoke{Family: c.family, Tool: c.tool}); got != c.holds {
+			t.Errorf("%s/%s holds a slot: %v, want %v", c.family.Name, c.tool, got, c.holds)
+		}
 	}
 }

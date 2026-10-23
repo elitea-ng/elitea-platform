@@ -63,7 +63,7 @@ describe('IndexHistory', () => {
 
 /**
  * The report pane. Its data is already on every history row (the index_meta
- * `metadata` map is copied verbatim out of PgVector), so this is a render of
+ * `metadata` map is copied verbatim out of the index registry), so this is a render of
  * data the tab was previously throwing away.
  */
 describe('IndexHistory indexing report', () => {

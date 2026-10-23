@@ -14,12 +14,12 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 )
 
 // bootstrapPresenceBucket creates the presence bucket with the settings
-// deploy/helm/nats-bootstrap/files/bootstrap.sh gives it, on a plaintext test
+// deploy/helm/elitea/files/nats-bootstrap.sh gives it, on a plaintext test
 // server that has no bootstrap of its own.
 func bootstrapPresenceBucket(t *testing.T, conn *nats.Conn) {
 	t.Helper()

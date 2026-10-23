@@ -71,8 +71,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -224,7 +224,7 @@ func (h *Handler) ListGlobalModels(w http.ResponseWriter, r *http.Request) {
 	// The credential names are read FIRST, so every row can be reported with
 	// whether its link resolves. Reading them per row would be one query per
 	// model for a fact that is the same for all of them.
-	credentials, credErr := h.globalCredentialTitles(ctx, schema)
+	credentials, credentialTypes, credErr := h.globalCredentials(ctx, schema)
 
 	sections, types := globalModelSectionArgs()
 	rows, err := h.pool.Query(ctx, fmt.Sprintf(listGlobalModelsSQL, schema), sections, types)
@@ -256,6 +256,10 @@ func (h *Handler) ListGlobalModels(w http.ResponseWriter, r *http.Request) {
 		// The credentials a model may name, so the form offers them instead of
 		// asking an operator to retype a title exactly.
 		"credential_names": credentials,
+		// Each credential's type, by title. The model dialog shows the DIAL
+		// protocol select only when the chosen credential is ai_dial, because
+		// the gateway reads `dial_protocol` for that type alone.
+		"credential_types": credentialTypes,
 	}
 	if credErr != nil {
 		// Stated rather than swallowed. Without it an empty credential list
@@ -272,27 +276,38 @@ func (h *Handler) ListGlobalModels(w http.ResponseWriter, r *http.Request) {
 // Titles, not ids: a model row names its credential by `elitea_title`
 // (`modelCredentialRef.title()`), so the title is what has to match.
 func (h *Handler) globalCredentialTitles(ctx context.Context, schema string) ([]string, error) {
+	titles, _, err := h.globalCredentials(ctx, schema)
+	return titles, err
+}
+
+// globalCredentials reads the titles of the platform's shared credentials and
+// each one's type, keyed by title.
+func (h *Handler) globalCredentials(
+	ctx context.Context, schema string,
+) ([]string, map[string]string, error) {
 	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
-		SELECT COALESCE(elitea_title, '')
+		SELECT COALESCE(elitea_title, ''), COALESCE(type, '')
 		  FROM %s.configuration
 		 WHERE section = '`+GlobalProviderSection+`' AND shared = true
 		 ORDER BY elitea_title`, schema))
 	if err != nil {
-		return nil, fmt.Errorf("read platform credentials: %w", err)
+		return nil, nil, fmt.Errorf("read platform credentials: %w", err)
 	}
 	defer rows.Close()
 
 	titles := make([]string, 0)
+	types := make(map[string]string)
 	for rows.Next() {
-		var title string
-		if scanErr := rows.Scan(&title); scanErr != nil {
-			return nil, fmt.Errorf("read platform credentials: %w", scanErr)
+		var title, configType string
+		if scanErr := rows.Scan(&title, &configType); scanErr != nil {
+			return nil, nil, fmt.Errorf("read platform credentials: %w", scanErr)
 		}
 		if title != "" {
 			titles = append(titles, title)
+			types[title] = configType
 		}
 	}
-	return titles, rows.Err()
+	return titles, types, rows.Err()
 }
 
 // scanGlobalModel turns one row into its report.

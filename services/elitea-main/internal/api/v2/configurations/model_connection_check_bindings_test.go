@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // These tests pin the security-relevant bindings of the llm_model test: which
@@ -214,6 +214,53 @@ func TestLLMModelCheck_PlatformCredentialTestsOnlyAPublishedModel(t *testing.T) 
 	}
 }
 
+// TestLLMModelCheck_KeylessPlatformCredentialIsSignedAsThePublicProject: the
+// gateway admits a keyless probe only for the public project, and the runtime
+// serves the shared keyless row to every project. A tenant's test of a model
+// the platform publishes on that row is therefore signed as the public
+// project; a keyed platform credential and a tenant credential keep the path
+// project.
+func TestLLMModelCheck_KeylessPlatformCredentialIsSignedAsThePublicProject(t *testing.T) {
+	keyless := platformCredential()
+	credential := keyless["ai_credentials"].(map[string]any)
+	credential["configuration_type"] = "ai_dial"
+	credential["auth_mode"] = "workload_identity"
+	delete(credential, "api_key")
+	credential["api_base"] = "https://dial.example.com"
+
+	cases := []struct {
+		name     string
+		resolved map[string]any
+		want     string
+	}{
+		{"keyless platform credential", keyless, "1"},
+		{"keyed platform credential", platformCredential(), "7"},
+		{"project credential", resolvedOpenAICredential(), "7"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := okGateway(t)
+			handler := modelCheckHandler(stub, &recordingStoredResolver{resolved: tc.resolved})
+			handler.publicProjectID = 1
+			handler.platformModelExposed = func(context.Context, string, string) (bool, error) { return true, nil }
+			if recorder, body := postModelCheck(t, handler, modelCheckForm); recorder.Code != http.StatusOK {
+				t.Fatalf("status %d body %v", recorder.Code, body)
+			}
+			if len(stub.projects) != 1 || stub.projects[0] != tc.want {
+				t.Fatalf("signed projects = %v, want %q", stub.projects, tc.want)
+			}
+		})
+	}
+	// The unpublished-model refusal still runs first for the keyless row.
+	stub := okGateway(t)
+	handler := modelCheckHandler(stub, &recordingStoredResolver{resolved: keyless})
+	handler.publicProjectID = 1
+	handler.platformModelExposed = func(context.Context, string, string) (bool, error) { return false, nil }
+	if recorder, _ := postModelCheck(t, handler, modelCheckForm); recorder.Code != http.StatusBadRequest || stub.hits.Load() != 0 {
+		t.Fatalf("status %d, gateway hits %d: an unpublished model reached the keyless probe", recorder.Code, stub.hits.Load())
+	}
+}
+
 func TestLLMModelCheck_ProjectCredentialIsNotAPlatformCredential(t *testing.T) {
 	handler := modelCheckHandler(okGateway(t), &recordingStoredResolver{resolved: resolvedOpenAICredential()})
 	handler.publicProjectID = 1
@@ -385,7 +432,7 @@ func TestLLMModelCheck_RefusesAnInvalidDialProtocol(t *testing.T) {
 func TestLLMModelCheck_SignsTheCallerIntoTheGatewayIdentity(t *testing.T) {
 	var userHeader string
 	stub := newGatewayStub(t, http.StatusOK, `{"success":true,"probe":"completion"}`)
-	stub.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	stub.override = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userHeader = r.Header.Get("X-Elitea-User-Id")
 		_, _ = w.Write([]byte(`{"success":true,"probe":"completion"}`))
 	})

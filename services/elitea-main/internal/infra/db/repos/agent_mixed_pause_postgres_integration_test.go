@@ -2,7 +2,7 @@ package repos
 
 import (
 	"encoding/json"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"testing"
 )
 

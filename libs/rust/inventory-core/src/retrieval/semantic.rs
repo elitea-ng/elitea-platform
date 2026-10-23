@@ -15,8 +15,9 @@
 //! gateway, and [`check_space`] (v1's `embeddings.check`) refuses a call
 //! whose configured model differs from the stamp.
 //!
-//! PostgreSQL ranks the entities (pgvector's cosine distance over `float4`
-//! vectors, as numpy compared `float32` ones: `store::vectors::rank`); this
+//! The store ranks the entities ([`crate::store::GraphStore::rank`]: the
+//! server's in Qdrant behind elitea-vector, exact cosine over `float32`
+//! vectors, as numpy compared them; the desktop's in SQLite); this
 //! module filters the ranking to what the caller's view holds and what the
 //! query asks for, rounds the score to 4 decimals and words the answer.
 //!

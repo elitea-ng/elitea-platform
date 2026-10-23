@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -164,6 +164,66 @@ func (r *CurrentSecretVaultRepository) SealProjectHiddenSecrets(
 			return createErr
 		}
 		vault, err = lockCurrentSecretVault(ctx, executor, "project-"+project)
+	}
+	if err != nil {
+		return err
+	}
+	defer vault.destroy()
+	return vault.mutate(ctx, executor, r.masterKey, vaultMutations)
+}
+
+// PurgeProjectHiddenSecrets deletes hidden secrets from one project vault
+// inside the transaction the caller owns (#1204).
+//
+// It is the inverse of SealProjectHiddenSecrets: a configuration delete
+// removes the row and the secrets only that row referenced, and both commit
+// together. The caller decides which names are no longer referenced; this
+// method only removes them, and only from the hidden collection, so a
+// user-named secret of the same name in the visible list is never touched.
+//
+// A project with no vault holds no secret to remove, so that answer is nil.
+// No vault is created for a purge. The caller commits or rolls back.
+func (r *CurrentSecretVaultRepository) PurgeProjectHiddenSecrets(
+	ctx context.Context,
+	tx pgx.Tx,
+	projectID int64,
+	names []string,
+) error {
+	if r == nil {
+		return ErrCurrentVaultUnavailable
+	}
+	if ctx == nil || tx == nil || projectID <= 0 {
+		return ErrInvalidCurrentVaultMutation
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	if len(names) > maxCurrentVaultMutations {
+		return ErrInvalidCurrentVaultMutation
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	vaultMutations := make([]centrysecrets.Mutation, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			return ErrInvalidCurrentVaultMutation
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		vaultMutations = append(vaultMutations, centrysecrets.Mutation{
+			Collection: centrysecrets.HiddenSecrets,
+			Name:       name,
+			Delete:     true,
+		})
+	}
+	executor := pgxExecutor{queryer: tx}
+	vault, err := lockCurrentSecretVault(ctx, executor, "project-"+strconv.FormatInt(projectID, 10))
+	if errors.Is(err, errCurrentVaultAbsent) {
+		return nil
 	}
 	if err != nil {
 		return err

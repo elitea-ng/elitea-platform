@@ -7,26 +7,24 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
-	"mime/multipart"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/textproto"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -80,29 +78,12 @@ func TestPythonSandboxBundleSharedStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var body bytes.Buffer
-		writer := multipart.NewWriter(&body)
-		part, err := writer.CreatePart(textproto.MIMEHeader{"Content-Disposition": {`form-data; name="bundle"`}, "Content-Type": {"application/json"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := part.Write(native); err != nil {
-			t.Fatal(err)
-		}
-		part, err = writer.CreatePart(textproto.MIMEHeader{"Content-Disposition": {`form-data; name="file"; filename="` + name + `"`}, "Content-Type": {"application/octet-stream"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := part.Write(file); err != nil {
-			t.Fatal(err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatal(err)
-		}
-		transfer.request(t, http.MethodPut, "/files/"+name, writer.FormDataContentType(), body.Bytes(), http.StatusNoContent)
+		transfer.upload(t, ctx, native, name, file)
 	}
-	transfer.request(t, http.MethodPost, "", "application/json", native, http.StatusNoContent)
-	transfer.server.Close()
+	if _, err := transfer.client.PublishSandboxBundle(ctx, &runtimev1.PublishSandboxBundleRequestV1{Kind: pythonKind, Root: root, SignedGrant: transfer.grant, BundleJson: native}); err != nil {
+		t.Fatal(err)
+	}
+	transfer.server.Stop()
 	if err := os.Remove(spool); err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +97,11 @@ func TestPythonSandboxBundleSharedStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	transfer = newBundleTransfer(t, replacement, tenant, root)
-	metadata := transfer.request(t, http.MethodGet, "", "", nil, http.StatusOK)
-	if !bytes.Equal(metadata, native) {
+	got, err := transfer.client.GetSandboxBundle(ctx, &runtimev1.GetSandboxBundleRequestV1{Kind: pythonKind, Root: root, SignedGrant: transfer.grant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.GetBundleJson(), native) {
 		t.Fatal("shared metadata differs")
 	}
 	loaded, err := replacement.OpenBundle(ctx, scope, root)
@@ -128,7 +112,7 @@ func TestPythonSandboxBundleSharedStore(t *testing.T) {
 		t.Fatal("replacement returned a different root")
 	}
 	for _, name := range loaded.FileNames() {
-		content := transfer.request(t, http.MethodGet, "/files/"+name, "", nil, http.StatusOK)
+		content := transfer.fetch(t, ctx, name)
 		original, err := os.ReadFile(filepath.Join(directory, name))
 		if err != nil {
 			t.Fatal(err)
@@ -169,12 +153,27 @@ func (key bundleTransferKeys) ResolveEd25519PublicKey(_ context.Context, id stri
 	return ed25519.PublicKey(key), nil
 }
 
+const pythonKind = runtimev1.SandboxBundleKindV1_SANDBOX_BUNDLE_KIND_V1_PYTHON
+
 type bundleTransfer struct {
-	server *httptest.Server
-	client *http.Client
-	grant  string
-	root   string
-	ca     []byte
+	server   *grpc.Server
+	client   runtimev1.RuntimeContentServiceClient
+	origin   string
+	clientID tls.Certificate
+	grant    []byte
+	root     string
+	ca       []byte
+}
+
+// refuseInputs keeps the ordinary input plane closed: bundle calls never use it.
+type refuseInputs struct{}
+
+func (refuseInputs) AuthorizeContent(context.Context, storage.ContentClaim) (storage.ContentAuthorization, error) {
+	return storage.ContentAuthorization{}, storage.ErrContentUnauthorized
+}
+
+func (refuseInputs) OpenContent(context.Context, string, string, string, string) (io.ReadCloser, error) {
+	return nil, storage.ErrContentUnauthorized
 }
 
 func newBundleTransfer(t *testing.T, store *storage.SandboxBundleStore, tenant, root string) *bundleTransfer {
@@ -224,21 +223,27 @@ func newBundleTransfer(t *testing.T, store *storage.SandboxBundleStore, tenant, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewUnstartedServer(service.Routes())
-	mux := http.NewServeMux()
-	mux.Handle("/sandbox-bundles/", http.StripPrefix("/sandbox-bundles", service.Routes()))
-	server.Config.Handler = mux
-	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool,
-		Certificates: []tls.Certificate{{Certificate: [][]byte{serverCert}, PrivateKey: serverPrivate}}}
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	client := server.Client()
-	transport := client.Transport.(*http.Transport).Clone()
-	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
-	transport.TLSClientConfig.RootCAs = pool
-	transport.TLSClientConfig.Certificates = []tls.Certificate{{Certificate: [][]byte{clientCert}, PrivateKey: clientPrivate}}
-	client = &http.Client{Transport: transport, Timeout: 15 * time.Second}
-	t.Cleanup(transport.CloseIdleConnections)
+	content, err := storage.NewContentServer(refuseInputs{}, refuseInputs{}, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content.WithSandboxBundles(service)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{serverCert}, PrivateKey: serverPrivate}}, NextProtos: []string{"h2"}})))
+	content.Register(server)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	clientID := tls.Certificate{Certificate: [][]byte{clientCert}, PrivateKey: clientPrivate}
+	conn, err := grpc.NewClient("passthrough:///"+listener.Addr().String(), grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: "localhost", Certificates: []tls.Certificate{clientID}})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
 	digest, err := hex.DecodeString(root)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +263,7 @@ func newBundleTransfer(t *testing.T, store *storage.SandboxBundleStore, tenant, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &bundleTransfer{server: server, client: client, grant: base64.StdEncoding.EncodeToString(envelope), root: root, ca: ca}
+	return &bundleTransfer{server: server, client: runtimev1.NewRuntimeContentServiceClient(conn), origin: "https://" + listener.Addr().String(), clientID: clientID, grant: envelope, root: root, ca: ca}
 }
 
 func (transfer *bundleTransfer) runRustClient(t *testing.T, ctx context.Context, binary, source string) {
@@ -267,17 +272,13 @@ func (transfer *bundleTransfer) runRustClient(t *testing.T, ctx context.Context,
 	if err := os.Chmod(material, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	transport := transfer.client.Transport.(*http.Transport)
-	client := transport.TLSClientConfig.Certificates[0]
+	client := transfer.clientID
 	key, err := x509.MarshalPKCS8PrivateKey(client.PrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	combined := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: client.Certificate[0]}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})...)
-	envelope, err := base64.StdEncoding.DecodeString(transfer.grant)
-	if err != nil {
-		t.Fatal(err)
-	}
+	envelope := transfer.grant
 	for name, body := range map[string][]byte{
 		"client-combined.pem": combined,
 		"ca.pem":              pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: transfer.ca}),
@@ -288,7 +289,7 @@ func (transfer *bundleTransfer) runRustClient(t *testing.T, ctx context.Context,
 		}
 	}
 	command := exec.CommandContext(ctx, binary, "sandbox::dependency_content::tests::live_native_mtls_download_and_publication", "--exact", "--ignored", "--nocapture")
-	command.Env = append(os.Environ(), "ELITEA_TEST_BUNDLE_ORIGIN="+transfer.server.URL,
+	command.Env = append(os.Environ(), "ELITEA_TEST_BUNDLE_ORIGIN="+transfer.origin,
 		"ELITEA_TEST_BUNDLE_TLS="+material, "ELITEA_TEST_BUNDLE_SOURCE="+source)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -297,32 +298,53 @@ func (transfer *bundleTransfer) runRustClient(t *testing.T, ctx context.Context,
 	t.Logf("Rust client verifies native download, publication, authority rejection, and staging cleanup: %s", output)
 }
 
-func (transfer *bundleTransfer) request(t *testing.T, method, suffix, mediaType string, body []byte, expected int) []byte {
+func (transfer *bundleTransfer) upload(t *testing.T, ctx context.Context, native []byte, name string, file []byte) {
 	t.Helper()
-	request, err := http.NewRequest(method, transfer.server.URL+"/sandbox-bundles/"+transfer.root+suffix, bytes.NewReader(body))
+	stream, err := transfer.client.UploadSandboxBundleFile(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set(storage.SandboxBundleGrantHeader, transfer.grant)
-	if mediaType != "" {
-		request.Header.Set("Content-Type", mediaType)
+	if err := stream.Send(&runtimev1.UploadSandboxBundleFileRequestV1{Part: &runtimev1.UploadSandboxBundleFileRequestV1_Header{Header: &runtimev1.UploadSandboxBundleFileHeaderV1{Kind: pythonKind, Root: transfer.root, Name: name, SignedGrant: transfer.grant, BundleJson: native}}}); err != nil {
+		t.Fatal(err)
 	}
-	response, err := transfer.client.Do(request)
+	for len(file) > 0 {
+		size := min(len(file), 64*1024)
+		if err := stream.Send(&runtimev1.UploadSandboxBundleFileRequestV1{Part: &runtimev1.UploadSandboxBundleFileRequestV1_Chunk{Chunk: file[:size]}}); err != nil {
+			t.Fatal(err)
+		}
+		file = file[size:]
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (transfer *bundleTransfer) fetch(t *testing.T, ctx context.Context, name string) []byte {
+	t.Helper()
+	stream, err := transfer.client.FetchSandboxBundleFile(ctx, &runtimev1.FetchSandboxBundleFileRequestV1{Kind: pythonKind, Root: transfer.root, Name: name, SignedGrant: transfer.grant})
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, err := io.ReadAll(response.Body)
-	closed := response.Body.Close()
-	if err != nil {
-		t.Fatal(err)
+	var header *runtimev1.SandboxContentFileHeaderV1
+	var content []byte
+	for {
+		message, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if message.GetHeader() != nil {
+			header = message.GetHeader()
+			continue
+		}
+		content = append(content, message.GetChunk()...)
 	}
-	if closed != nil {
-		t.Fatal(closed)
+	if header == nil || header.GetLength() != uint64(len(content)) {
+		t.Fatal("bundle file stream does not match its header")
 	}
-	if response.StatusCode != expected {
-		t.Fatalf("bundle transfer status %d; expected %d", response.StatusCode, expected)
-	}
-	return native
+	return content
 }
 
 type bundleRecordingStore struct {

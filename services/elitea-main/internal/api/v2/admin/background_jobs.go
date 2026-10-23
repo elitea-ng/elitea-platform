@@ -6,9 +6,8 @@ package admin
 //
 // legacy/plugins/admin's Tasks page reads an in-process Arbiter `task_node`
 // (api/v2/tasks.py, gated `runtime.plugins` in `administration` mode). That
-// surface has no equivalent here and `/admin/tasks/{mode}` keeps answering 501
-// — see arbiterTaskNodeUnavailable in handler.go. This is NOT that surface
-// under a new name.
+// surface has no equivalent here and no route for it is mounted. This is NOT
+// that surface under a new name.
 //
 // It answers the QUESTION that page answered: what is running on this platform,
 // who started it, when, and can it be stopped. The rows come from the
@@ -24,11 +23,11 @@ package admin
 //
 // # The row shape
 //
-// The four keys legacy's listing carries are kept verbatim — `task_id`,
+// The four keys the legacy runtime's listing carries are kept verbatim — `task_id`,
 // `status`, `started_at`, `user` — so an operator's existing tooling still
 // reads. `kind`, `name`, `finished_at`, `project_id` and `cancellable` are
-// added, because pylon had one kind of task, one project, no completion time
-// and a stop button that was always offered.
+// added, because the legacy runtime had one kind of task, one project, no
+// completion time and a stop button that was always offered.
 //
 // `cancellable` is computed per row rather than per kind. A settled job cannot
 // be stopped and a scheduled occurrence never can, so the page can render the
@@ -45,8 +44,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // BackgroundJobsStore is the read and the runtime cancel this page needs.
@@ -71,8 +70,7 @@ type EvalRunCanceller interface {
 
 // WithBackgroundJobs supplies the Tasks page's store. Unassigned, the two
 // routes answer 503 rather than an empty list: "nothing is running" and "this
-// deployment cannot see what is running" must not render identically, which is
-// the exact correction handler.go's arbiterTaskNodeUnavailable records.
+// deployment cannot see what is running" must not render identically.
 func WithBackgroundJobs(store BackgroundJobsStore) Option {
 	return func(h *Handler) { h.backgroundJobs = store }
 }

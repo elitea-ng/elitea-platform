@@ -3,8 +3,8 @@ package runtimecomposition
 import (
 	"path/filepath"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 // CodePlatformConfig is explicit deployment composition, never authored Code YAML.

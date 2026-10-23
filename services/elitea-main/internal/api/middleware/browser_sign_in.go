@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // BrowserSignInRequired adapts an authentication middleware for a BROWSER page
@@ -63,7 +63,7 @@ func BrowserSignInRequired(
 
 func browserPrincipal(r *http.Request) bool {
 	source, ok := auth.AuthenticationSourceFromContext(r.Context())
-	if !ok || (source != auth.AuthenticationSourceSession && source != auth.AuthenticationSourceForwarded) {
+	if !ok || source != auth.AuthenticationSourceSession {
 		return false
 	}
 	user, ok := auth.UserFromContext(r.Context())

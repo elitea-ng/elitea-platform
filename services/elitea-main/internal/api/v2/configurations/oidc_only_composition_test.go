@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // TestCurrentConfigurationRoutesComposeOnAnOIDCOnlyDeployment holds the boot of
@@ -24,9 +24,8 @@ import (
 // start. Nothing in the unit suite saw it, because every existing case builds
 // the Form shape.
 //
-// A nil verifier is safe at request time: apimw.tryTraefikHeaders refuses every
-// X-Auth-* header when it is absent, so the forwarded-identity plane is closed
-// rather than open.
+// A nil FormSessions is safe at request time: apimw.Auth then reads no Form
+// cookie at all.
 func TestCurrentConfigurationRoutesComposeOnAnOIDCOnlyDeployment(t *testing.T) {
 	principal := currentReadPrincipalValidatorFunc(
 		func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },

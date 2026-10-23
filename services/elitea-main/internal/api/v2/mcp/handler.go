@@ -16,14 +16,14 @@
 //
 // # Legacy module → Go route
 //
-// Transport (pylon `routes/mcp_sse.py`, served under the app blueprint):
+// Transport (legacy `routes/mcp_sse.py`, served under the app blueprint):
 //
 //	GET|POST /<pid>/mcp                    → GET|POST /app/{projectID}/mcp
 //	GET|POST /<pid>/mcp/<openapi_tag>      → GET|POST /app/{projectID}/mcp/{category}
 //	GET|POST /<pid>/mcp/<entity>/<ver_id>  → GET|POST /app/{projectID}/mcp/{entity}/{entityVersionID}
 //	GET      /<pid>/sse + POST /<pid>/messages → NOT PORTED, see "The SSE pair" below
 //
-// REST (pylon `api/v2/`), under /api/v2/elitea_core:
+// REST (legacy `api/v2/`), under /api/v2/elitea_core:
 //
 //	tools_list              → GET  /tools_list/{projectID}
 //	                          GET  /tools_list/default/{projectID}
@@ -81,11 +81,11 @@
 //
 // # Internal API categories are explicit, not inferred
 //
-// pylon's listing has a third source besides agents and toolkits:
-// `openapi_registry.get_mcp_api_tools()`, which republishes pylon's own REST
-// endpoints as MCP tools — 90 endpoints across seven plugins opt in with
-// `mcp_tool=True`, and `McpApiToolExecutor` runs them by re-entering the Flask
-// WSGI app with the caller's cookies and headers.
+// The legacy listing has a third source besides agents and toolkits:
+// `openapi_registry.get_mcp_api_tools()`, which republishes the legacy
+// runtime's own REST endpoints as MCP tools — 90 endpoints across seven plugins
+// opt in with `mcp_tool=True`, and `McpApiToolExecutor` runs them by
+// re-entering the Flask WSGI app with the caller's cookies and headers.
 //
 // That source is not reproduced generically here, for two reasons that are not
 // "no time":
@@ -94,7 +94,7 @@
 //     external MCP client may drive is a security decision made one endpoint at
 //     a time; `api/openapi/v2.yaml` carries no such marker, and inferring one
 //     from "every operation in the document" would publish the admin surface to
-//     any PAT holder. Several of the pylon opt-ins (the configurations and
+//     any PAT holder. Several of the legacy opt-ins (the configurations and
 //     projects plugins) have no Go REST counterpart to mark in the first place.
 //  2. Execution would be a self-dispatch bridge — a request re-entered into
 //     this service's own router with forwarded credentials — with its own
@@ -105,27 +105,27 @@
 // explicit schemas, permissions, project clamping, and an in-process executor.
 // Applications, skills, toolkits, configurations, notifications, project
 // context, and secrets currently meet that bar. Anything else is a 400 that
-// names the valid set, which is how pylon answers an unknown tag too. See
-// scope.go.
+// names the valid set, which is how the legacy runtime answers an unknown tag
+// too. See scope.go.
 //
 // # The SSE pair is dropped, not deferred
 //
-// pylon also serves the pre-2025 MCP transport: `GET /<pid>/sse` opens an event
-// stream that emits an `endpoint` event, and the client then POSTs each message
-// to `/<pid>/messages?session_id=…`. That pair is deprecated in the MCP
-// specification in favour of streamable HTTP, which is what every current
-// client speaks and what this package implements. Issue 252 P4 asks for a
-// decision rather than code: it is DROPPED, superseded by streamable HTTP. It
+// The legacy runtime also serves the pre-2025 MCP transport: `GET /<pid>/sse`
+// opens an event stream that emits an `endpoint` event, and the client then
+// POSTs each message to `/<pid>/messages?session_id=…`. That pair is deprecated
+// in the MCP specification in favour of streamable HTTP, which is what every
+// current client speaks and what this package implements. Issue 252 P4 asks for
+// a decision rather than code: it is DROPPED, superseded by streamable HTTP. It
 // gets ported only if a named client turns up that cannot speak the current
 // transport, and that client's name is what would justify the session store the
-// pair needs (pylon keeps one `SseSession` per connection in process memory,
-// which is also why the pair cannot survive more than one replica).
+// pair needs (the legacy runtime keeps one `SseSession` per connection in
+// process memory, which is also why the pair cannot survive more than one replica).
 //
 // # Statelessness
 //
 // The MCP specification lets a server operate without sessions, and this one
 // does: no `Mcp-Session-Id` is issued, so no client is ever required to send
-// one back, and no request depends on a predecessor. pylon's streamable-HTTP
+// one back, and no request depends on a predecessor. The legacy streamable-HTTP
 // path is effectively the same — `create_http_session` builds a throwaway
 // `HttpSession` per request — but it reaches that state by accident rather than
 // by contract. Being stateless by contract is what lets this run behind more
@@ -141,21 +141,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	configurationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	draftsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
-	eliteacoreapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
-	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	configurationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	draftsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
+	eliteacoreapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	notificationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	toolkitsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
@@ -180,7 +180,7 @@ type Handler struct {
 	// It is what `tools_list` reads (registry.go, issue 335).
 	registry *mcpregistry.Store
 	// personal resolves the caller's personal project, whose registered servers
-	// pylon unions into every listing.
+	// the legacy runtime unions into every listing.
 	personal PersonalProjectResolver
 	// start admits one agent turn. NIL on a deployment whose runtime plane is
 	// off (`runtime.enabled`), which is why every use of it is guarded — see
@@ -200,9 +200,9 @@ type Handler struct {
 	//
 	// The endpoint as a whole is gated at the MEMBERSHIP tier
 	// (apimw.RequireProjectAccess), which is the right tier for reading a tool
-	// listing and is what pylon applies to the whole surface. RUNNING an agent
-	// is a different act — it spends the project's model budget and can drive
-	// the agent's toolkits — and the chat surface requires
+	// listing and is what the legacy runtime applies to the whole surface. RUNNING
+	// an agent is a different act — it spends the project's model budget and can
+	// drive the agent's toolkits — and the chat surface requires
 	// `models.chat.messages.create` for exactly that. Executing through MCP at
 	// a weaker tier than through chat would make this endpoint a way around
 	// that permission, so the check lives HERE, per call, rather than on the
@@ -355,7 +355,7 @@ type AgentStartUseCase interface {
 // Declared here as the narrow interface this package needs, rather than
 // importing the middleware package, so the dependency points one way. The
 // production implementation is `middleware.DBPersonalProjectResolver`, which
-// mirrors pylon's `projects_get_personal_project_id`.
+// mirrors the legacy `projects_get_personal_project_id`.
 type PersonalProjectResolver interface {
 	PersonalProjectID(ctx context.Context, userID string) (int, error)
 }
@@ -450,7 +450,7 @@ func (h *Handler) mcpEnabled(ctx context.Context) bool {
 	return values.Bool(platformconfig.KeyMCPEnabled, true)
 }
 
-// mcpDisabledMessage is pylon's wording, byte for byte
+// mcpDisabledMessage is the legacy wording, byte for byte
 // (`legacy/plugins/elitea_core/routes/mcp_sse.py:_check_mcp_enabled`). Existing
 // clients of these paths were written against that sentence.
 const mcpDisabledMessage = "MCP exposure is disabled on this deployment"

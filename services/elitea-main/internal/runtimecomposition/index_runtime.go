@@ -4,21 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -29,7 +27,6 @@ const (
 )
 
 // currentIndexExactFinder is the one-index read the schedule inspector makes.
-// indexmetaapp.ExactService answers it from the project's pgvector database;
 // indexregistry.Service answers it from the registry.
 type currentIndexExactFinder interface {
 	FindSnapshot(
@@ -57,25 +54,6 @@ type currentIndexRuntime struct {
 	scheduleUpdate *indexscheduleapp.Service
 	scheduleDelete *indexscheduleapp.DeleteService
 	scheduleAction *currentIndexScheduleDueWork
-}
-
-// durableIndexMetaFrozenToolkitClaimer preserves temporary materialization
-// failures for retry while making rejected immutable content a permanent
-// initialization failure. Without this boundary, an invalid frozen intent
-// would retain the active target through an endless retry loop.
-type durableIndexMetaFrozenToolkitClaimer struct {
-	delegate indexingapp.FrozenToolkitConfigurationClaimer
-}
-
-func (c durableIndexMetaFrozenToolkitClaimer) ClaimFrozenToolkitConfiguration(
-	ctx context.Context,
-	claim indexingapp.FrozenToolkitConfigurationClaim,
-) (json.RawMessage, error) {
-	content, err := c.delegate.ClaimFrozenToolkitConfiguration(ctx, claim)
-	if errors.Is(err, storage.ErrContentRejected) {
-		return nil, indexingapp.ErrCurrentIndexMetaInitializationInvalid
-	}
-	return content, err
 }
 
 // newCurrentIndexRuntime composes the current index_data preparation path from
@@ -273,39 +251,6 @@ type indexRegistryComposition struct {
 	// remove_index (the claim remover) all run the same one. Built once by
 	// newIndexRegistryService in the composition root.
 	service *indexregistryapp.Service
-}
-
-func newConfiguredCurrentIndexMetaDeleteService(
-	indexDispatchEnabled bool,
-	pool *pgxpool.Pool,
-	toolkits indexingapp.CurrentToolkitReader,
-	settings indexingapp.CurrentToolkitSettingsValidator,
-) (*indexmetaapp.DeleteService, error) {
-	if !indexDispatchEnabled {
-		return nil, nil
-	}
-	if pool == nil || toolkits == nil || settings == nil {
-		return nil, errors.New(
-			"current index metadata delete composition dependencies are required",
-		)
-	}
-	schedules, err := repos.NewCurrentIndexMetaScheduleRepository(pool)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"construct current index metadata schedule repository: %w",
-			err,
-		)
-	}
-	service, err := indexmetaapp.NewDeleteService(
-		toolkits,
-		settings,
-		pgvector.NewCurrentIndexMetaRemover(),
-		schedules,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("construct current index metadata delete service: %w", err)
-	}
-	return service, nil
 }
 
 func currentRuntimeID() (string, error) {

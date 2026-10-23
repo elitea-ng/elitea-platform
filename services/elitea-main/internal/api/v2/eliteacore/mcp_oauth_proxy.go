@@ -18,8 +18,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 const (
@@ -489,6 +489,22 @@ func (h *Handler) resolveMCPOAuthCredentials(
 		}
 		return credentials, nil
 	}
+	// A secret the toolkit's settings supplied is the toolkit's OWN only when
+	// it was built from literals, the project's vault and the project's own
+	// configurations (#1286). A global secret ({{secret.NAME}} that only the
+	// admin vault holds) or a configuration another project owns (a shared
+	// public-project one, or the caller's personal one) belongs to someone the
+	// toolkit's editor is not. Such a secret goes only to a token endpoint
+	// written by that same owner: the endpoint fields of the configuration it
+	// came from. Never to the toolkit's own token settings, and never to
+	// discovery from the toolkit's url, both of which the editor writes.
+	if !oauthSecretIsProjectOwned(projectID, storedSecret, resolved.Settings, resolved.ProjectOwnedSettings) {
+		if owner := oauthForeignConfigurationLayer(projectID, resolved.Settings); owner != nil &&
+			oauthTokenEndpointIsBound(tokenEndpoint, []map[string]any{owner}) {
+			return credentials, nil
+		}
+		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
+	}
 	if oauthTokenEndpointIsBound(tokenEndpoint, layers) {
 		return credentials, nil
 	}
@@ -588,14 +604,116 @@ func effectiveOAuthToolkitType(storedType, requestedType string, settings map[st
 	return "", errMCPProxyInvalidRequest
 }
 
+// oauthNestedLayerKeys are the configuration fields oauthSettingsLayers reads
+// after the toolkit's own settings, in order.
+var oauthNestedLayerKeys = []string{"sharepoint_configuration", "openapi_configuration"}
+
 func oauthSettingsLayers(settings map[string]any) []map[string]any {
 	layers := []map[string]any{settings}
-	for _, key := range []string{"sharepoint_configuration", "openapi_configuration"} {
+	for _, key := range oauthNestedLayerKeys {
 		if nested, ok := settings[key].(map[string]any); ok && nested != nil {
 			layers = append(layers, nested)
 		}
 	}
 	return layers
+}
+
+// oauthSecretSource returns the client_secret firstOAuthText picks from these
+// settings and the layer that held it ("" for the toolkit's own settings).
+func oauthSecretSource(settings map[string]any) (secret string, layerKey string, layer map[string]any) {
+	if settings == nil {
+		return "", "", nil
+	}
+	if value, ok := settings["client_secret"].(string); ok && value != "" {
+		return value, "", settings
+	}
+	for _, key := range oauthNestedLayerKeys {
+		nested, ok := settings[key].(map[string]any)
+		if !ok || nested == nil {
+			continue
+		}
+		if value, ok := nested["client_secret"].(string); ok && value != "" {
+			return value, key, nested
+		}
+	}
+	return "", "", nil
+}
+
+// oauthSecretIsProjectOwned reports whether the released client secret was
+// built only from material the toolkit's project owns (#1286).
+//
+// Three facts must all hold, and anything that cannot be established reads as
+// NOT owned:
+//
+//  1. The secret being released is the one the claim-mode settings hold. A
+//     value something else substituted has no provenance here.
+//  2. When it came from an expanded configuration, that configuration belongs
+//     to this project. configuration_project_id is written by the expansion
+//     AFTER the configuration's data is merged and a reference object must be
+//     exactly {elitea_title, private}, so the editor cannot forge it on a layer
+//     that carries a redeemed value.
+//  3. The project-owned resolution (no admin-vault fallback) produced the SAME
+//     value from the SAME layer. A difference means a {{secret.NAME}} the
+//     project vault does not hold was redeemed from the admin vault — at any
+//     nesting, and whether the reference is the whole value or embedded in it.
+func oauthSecretIsProjectOwned(
+	projectID int32,
+	released string,
+	settings map[string]any,
+	projectOwned map[string]any,
+) bool {
+	if released == "" || projectOwned == nil {
+		return false
+	}
+	secret, layerKey, layer := oauthSecretSource(settings)
+	if secret == "" || secret != released {
+		return false
+	}
+	if layerKey != "" {
+		if owner, expanded := oauthConfigurationProjectID(layer); expanded && owner != int64(projectID) {
+			return false
+		}
+	}
+	ownedSecret, ownedLayerKey, _ := oauthSecretSource(projectOwned)
+	return ownedLayerKey == layerKey && ownedSecret == secret
+}
+
+// oauthForeignConfigurationLayer returns the configuration layer the client
+// secret came from when another project owns that configuration. Its own
+// endpoint fields were written by the same owner as its secret, so they are
+// the only endpoints such a secret may follow. nil for every other source.
+func oauthForeignConfigurationLayer(projectID int32, settings map[string]any) map[string]any {
+	_, layerKey, layer := oauthSecretSource(settings)
+	if layerKey == "" {
+		return nil
+	}
+	owner, expanded := oauthConfigurationProjectID(layer)
+	if !expanded || owner == int64(projectID) {
+		return nil
+	}
+	return layer
+}
+
+// oauthConfigurationProjectID reads the owner the configuration expansion
+// stamped on a layer.
+func oauthConfigurationProjectID(layer map[string]any) (int64, bool) {
+	switch value := layer["configuration_project_id"].(type) {
+	case int32:
+		return int64(value), true
+	case int64:
+		return value, true
+	case int:
+		return int64(value), true
+	case float64:
+		if value == float64(int64(value)) {
+			return int64(value), true
+		}
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 func firstOAuthText(layers []map[string]any, keys ...string) string {

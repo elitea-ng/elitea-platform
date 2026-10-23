@@ -30,7 +30,7 @@ function toApplicationId(appId: string | undefined): number | undefined {
  * ADR-0024 WP8: the baseline's `iframeUrl` / `iframeKey` / `hasCustomUI`
  * (`useAppDetail.hooks.js:35-47`, the `/ui_host/{provider}/{route}/…`
  * custom-UI frame) are gone. No Go handler serves `/ui_host`, the meta keys
- * behind it belong to the retired pylon plugin runtime, and passing context
+ * behind it belong to the retired legacy plugin runtime, and passing context
  * in a frame URL is what ADR-0013 forbids — see `pages/apps/AppDetail.tsx`.
  */
 export interface AppDetailState {

@@ -10,8 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // audio_limits.go — the edge bounds for the /llm/v1/audio routes.
@@ -144,11 +147,11 @@ var audioRouteLimits = map[string]audioRouteLimit{
 }
 
 // audioRefusal is the request-scoped record of why the edge stopped an audio
-// request. The reverse proxy reports a body that hit the ceiling and a
+// request. The Gateway call reports a body that hit the ceiling and a
 // deadline that expired as plain transport errors, and the two are not
 // reliably distinguishable from a dead gateway by the error value alone. The
 // limiter therefore records the reason where it happens, and the proxy's
-// ErrorHandler reads it back.
+// writeHopError reads it back.
 type audioRefusal struct {
 	bodyTooLarge atomic.Bool
 }
@@ -236,7 +239,11 @@ func writeAudioRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 		writeAudioBodyTooLarge(w)
 		return true
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+	// gRPC sends the edge deadline to the gateway, whose own timer can fire a
+	// moment before this side's: the hop then fails with a DeadlineExceeded
+	// status while r.Context() has not ended yet. That is the same deadline.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) ||
+		status.Code(err) == codes.DeadlineExceeded {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGatewayTimeout)
 		_, _ = w.Write([]byte(`{"error":{"message":"the audio request did not complete in time","type":"api_error","code":"upstream_timeout"}}`))

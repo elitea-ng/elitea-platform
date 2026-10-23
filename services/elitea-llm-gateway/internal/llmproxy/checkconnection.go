@@ -14,7 +14,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // checkconnection.go implements POST /llm/v1/check_connection (#319): a real,
@@ -121,6 +121,20 @@ type checkConnectionRequest struct {
 	// the route this protocol selects, which is the route the runtime uses.
 	// The credential probe and every other type ignore it.
 	DialProtocol string `json:"dial_protocol,omitempty"`
+
+	// AuthMode is the credential's data.auth_mode: "key" (also when absent)
+	// or "workload_identity" for a keyless platform credential
+	// (checkconnection_workload_identity.go). TokenAudience is the ai_dial
+	// ID-token audience; empty means the api_base origin.
+	AuthMode      string `json:"auth_mode,omitempty"`
+	TokenAudience string `json:"token_audience,omitempty"`
+
+	// keyless and bearer are NEVER decoded from the body. admitProbeAuthMode
+	// sets keyless after it admitted the payload, and mintProbeToken sets
+	// bearer after every destination passed the egress allowlist, so no probe
+	// reads auth_mode itself.
+	keyless bool
+	bearer  string
 }
 
 // jsonTextField decodes a field that arrives either as a JSON string or as a
@@ -376,6 +390,13 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// The auth mode is decided before any target is resolved: a keyless
+	// payload changes which hosts the probe contacts (vertex_ai then has no
+	// token endpoint of its own), and a refused one must contact none.
+	if fe := h.admitProbeAuthMode(r, &req); fe != nil {
+		writeJSON(w, http.StatusOK, checkConnectionResponse{Success: false, Reason: fe.reason, Detail: fe.detail})
+		return
+	}
 	// Resolve every host the probe will contact BEFORE anything is dialled.
 	// A payload that cannot name a legitimate destination at all (no
 	// api_base, no aws_region_name, a credential document that is not a
@@ -431,6 +452,10 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), checkConnectionProbeTimeout)
 	defer cancel()
 
+	if fe := h.mintProbeToken(ctx, &req); fe != nil {
+		writeJSON(w, http.StatusOK, checkConnectionResponse{Success: false, Reason: fe.reason, Detail: fe.detail})
+		return
+	}
 	if err := provider.probe(ctx, client, req); err != nil {
 		reason, detail := classifyCheckConnectionProbeError(err)
 		h.logger.WarnContext(r.Context(), "check_connection: provider probe failed",
@@ -492,11 +517,7 @@ func probeAzureDeployments(ctx context.Context, client *http.Client, req checkCo
 		apiVersion = defaultAzureAPIVersion
 	}
 	target := checkConnectionJoinURL(req.APIBase, "/openai/deployments") + "?api-version=" + url.QueryEscape(apiVersion)
-	headers := map[string]string{}
-	if req.APIKey != "" {
-		headers["api-key"] = req.APIKey
-	}
-	return checkConnectionProbeGET(ctx, client, target, headers)
+	return checkConnectionProbeGET(ctx, client, target, azureAuthHeaders(req))
 }
 
 // probeOllamaTags validates a self-hosted Ollama credential with GET

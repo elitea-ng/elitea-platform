@@ -3,9 +3,9 @@ package run
 import (
 	"context"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // Inventory over the engine sidecar (ADR-0023 H4c stage I3). The
@@ -83,7 +83,7 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 		// they are not in Tools.
 		DeleteGraph:         call(DeleteGraphTool),
 		DeleteProjectGraphs: call(DeleteProjectGraphsTool),
-		Artifacts:           ArtifactClientFrom(settings.CallbackCA()),
+		Artifacts:           ArtifactClientFrom(settings.Callback()),
 		// The native engine keys every graph by the project: only the
 		// verified identity may name it (see Runner.RequireVerifiedProject).
 		RequireVerifiedProject: true,

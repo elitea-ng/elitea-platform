@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -110,7 +110,7 @@ func TestStaticContinuationReusesFrozenInputWithoutAHITLAction(t *testing.T) {
 	_ = json.Unmarshal(input.Application, &app)
 	resolver.target.VersionDetails = app.VersionDetails
 	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{ExecutionID: "static-resume", CommandID: "static-command", Created: true}}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestStaticContinuationRejectsNewVersionAndDifferentOccurrenceBeforeAdmissio
 	resolver := pipelineHITLResolver([]string{"approve"})
 	resolver.continuationTarget = CurrentContinuationTarget{ContinuationKind: CurrentContinuationStatic, Kind: CurrentRegenerationApplication, TargetParticipantID: 21, QuestionID: "ee92ccbd-3312-4c72-b20b-fddf224e7c0e", UserInput: "original task", ThreadID: input.GetThreadId(), ExecutionGeneration: input.GetExecutionGeneration(), PipelineStaticPause: pause}
 	admissions := &currentApplicationAdmissionStub{}
-	service, _ := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, _ := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	request := CurrentContinuationRequest{ProjectID: 7, ActorUserID: 11, ConversationUUID: input.GetConversationId(), ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a", Kind: CurrentContinuationStatic, StaticPauseID: pause.Proof.PauseID, StaticInputText: "continue"}
 	resolver.target.ApplicationVersionID = 42
 	if _, err := service.ContinueCurrentAgent(context.Background(), request); err == nil || len(admissions.requests) != 0 {

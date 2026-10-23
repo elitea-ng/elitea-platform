@@ -5,11 +5,12 @@ import type { AppIpc } from '@/shared/desktop/appEvents';
 import { needsAttention, type DoctorIpc } from '@/shared/desktop/doctorIpc';
 import type { HostBridge, HostDeployment, HostState } from '@/shared/desktop/hostBridge';
 import { t } from '@/shared/i18n';
-import { DoctorPanel } from '@/widgets/desktop-shell';
+import { BrandLogoFull } from '@/shared/ui/brand-logo';
+import { DoctorPanel, useActivityFeed } from '@/widgets/desktop-shell';
 
 import { launchApp } from './launchApp';
 
-const HEADING = { fontWeight: 600 } as const;
+const HEADING = { fontWeight: 600, fontSize: '1.0625rem', textAlign: 'center' } as const;
 
 type Phase =
   | { kind: 'loading' }
@@ -36,7 +37,10 @@ function AppHost({ bridge, state, launch }: { bridge: HostBridge; state: HostSta
     // Signed out (refresh failed, or the device was revoked): the host has
     // already dropped the session. A reload is the thorough reset — it clears
     // every in-memory store and lands on the connect screen.
-    const reboot = (): void => window.location.reload();
+    const reboot = (): void => {
+      useActivityFeed.getState().reset();
+      window.location.reload();
+    };
     const launched = launch({
       bridge,
       state,
@@ -267,7 +271,7 @@ function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensPr
               required
             />
             {phase.error !== undefined && <ErrorAlert text={phase.error} onDiagnose={onDiagnose} />}
-            <Button type="submit" variant="contained">Continue</Button>
+            <Button type="submit" variant="contained" size="large">Continue</Button>
           </Stack>
         </Box>
       </Centered>
@@ -279,7 +283,7 @@ function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensPr
     <Centered>
       <Stack spacing={2} sx={{ width: '100%' }}>
         <Typography component="h1" sx={HEADING}>{deployment.displayName}</Typography>
-        <Typography color="text.secondary">{deployment.origin}</Typography>
+        <Typography color="text.secondary" sx={{ textAlign: 'center', fontSize: '0.75rem' }}>{deployment.origin}</Typography>
         {phase.kind === 'confirm' && phase.error !== undefined && <ErrorAlert text={phase.error} onDiagnose={onDiagnose} />}
         {phase.kind === 'signing-in' ? (
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
@@ -289,7 +293,7 @@ function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensPr
           </Stack>
         ) : (
           <>
-            <Button variant="contained" onClick={() => signIn(deployment)}>Sign in with your browser</Button>
+            <Button variant="contained" size="large" onClick={() => signIn(deployment)}>Sign in with your browser</Button>
             <Button onClick={() => setPhase({ kind: 'connect' })}>Use a different address</Button>
           </>
         )}
@@ -298,10 +302,31 @@ function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensPr
   );
 }
 
+/** The welcome card: brand mark, then the step — centred, ~480px, under a draggable title strip. */
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}>
-      <Box sx={{ width: '100%', maxWidth: 420 }}>{children}</Box>
+    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: 'background.default' }}>
+      <Box data-tauri-drag-region sx={{ position: 'fixed', top: 0, left: 0, right: 0, height: 38 }} />
+      <Box
+        data-testid="welcome-card"
+        sx={{
+          width: '100%',
+          maxWidth: 480,
+          px: 5,
+          py: 5,
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: '12px',
+          bgcolor: 'background.paper',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 3,
+        }}
+      >
+        <BrandLogoFull style={{ height: '1.75rem', width: 'auto' }} />
+        <Box sx={{ width: '100%' }}>{children}</Box>
+      </Box>
     </Box>
   );
 }

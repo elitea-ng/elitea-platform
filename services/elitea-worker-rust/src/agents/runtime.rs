@@ -24,7 +24,7 @@ use super::attachment_tools::AttachmentLibrary;
 use super::attachments;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecisionSet, DirectHitlError,
-    DirectHitlErrorCode, DirectHitlRunInput,
+    DirectHitlRunInput,
 };
 use super::events::{
     AgentEventProjectionError, AgentEventProjector, CompletedAgentBrowserOutput,
@@ -141,6 +141,16 @@ impl From<RuntimeContextError> for NativeAgentAssemblyError {
 pub(crate) trait NativeAgentCompletionSelector: Send {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>;
 
+    /// The run stopped at a static pause of a tool-invoked saved pipeline. It
+    /// completes with that pause (the projector supplies the content and the
+    /// inventory), not with a final model text the turn never wrote.
+    ///
+    /// Required, with no default: a wrapper that forgot to forward it would
+    /// fall back to `select` and fail the turn with no final text.
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>;
+
     /// The run paused for input (a HITL interrupt) and `select` will not be
     /// called. A cloud-executor turn publishes its work so far here
     /// (ADR-0034 decision 7); every other turn has nothing to do.
@@ -189,6 +199,25 @@ pub(crate) struct AuthorizedNativeAssembly<'a> {
 }
 
 impl<'a> AuthorizedNativeAssembly<'a> {
+    /// Test-only: the same authority over another request (a lifecycle test
+    /// whose fixed input fixture needs saved tools attached).
+    #[cfg(test)]
+    pub(crate) fn with_request(
+        self,
+        request: &AgentExecutionRequest,
+    ) -> AuthorizedNativeAssembly<'_> {
+        AuthorizedNativeAssembly {
+            sandbox: self.sandbox,
+            request,
+            runtime_context: self.runtime_context,
+            session: self.session,
+            state_writer_lease: self.state_writer_lease,
+            command: self.command,
+            attachments: self.attachments,
+            attachment_library: self.attachment_library,
+        }
+    }
+
     pub(crate) fn sandbox_authority(
         &self,
     ) -> Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>> {
@@ -236,9 +265,9 @@ impl<'a> AuthorizedNativeAssembly<'a> {
     /// It is deliberately INFALLIBLE. Every failure this can meet — a file
     /// elitea-main has no text for, a stale reference, a refused conversation,
     /// a transport error — leaves the attachment rendered by its header and a
-    /// note that says it was not read and why, which is pylon's own rule for a
-    /// file the platform cannot read (`rpc/chat_all.py:384-386`). A turn must
-    /// never die because of a file the question may not even be about.
+    /// note that says it was not read and why, which is the legacy runtime's own
+    /// rule for a file the platform cannot read (`rpc/chat_all.py:384-386`). A
+    /// turn must never die because of a file the question may not even be about.
     ///
     /// What is read is rendered within the turn's attachment budget
     /// (`attachment_context`): whole when it fits, an overview otherwise.
@@ -766,16 +795,7 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
 }
 
 fn direct_hitl_admission_error(error: &DirectHitlError) -> NativeAgentAssemblyError {
-    let code = match error.code() {
-        DirectHitlErrorCode::InvalidInput
-        | DirectHitlErrorCode::StaleDecision
-        | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
-    };
-    NativeAgentAssemblyError::new(code, "the direct sensitive-tool continuation is malformed")
+    super::direct_hitl::assembly_error(error, "the direct sensitive-tool continuation is malformed")
 }
 
 fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAssemblyError {
@@ -783,7 +803,9 @@ fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAsse
         PipelineResumeErrorCode::InvalidInput
         | PipelineResumeErrorCode::StaleDecision
         | PipelineResumeErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        PipelineResumeErrorCode::UnsupportedCapability => {
+        // Admission parses a payload; it never resolves a dispatch.
+        PipelineResumeErrorCode::UnsupportedCapability
+        | PipelineResumeErrorCode::MayHaveStarted => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
@@ -1217,7 +1239,7 @@ impl NativeAgentInvocation {
         }
     }
 
-    /// Seal a read-only direct-HITL replay prepared from one persisted call.
+    /// Seal a direct-HITL replay prepared from one persisted call.
     pub(crate) fn new_direct_hitl(
         runner: Runner,
         user_id: UserId,

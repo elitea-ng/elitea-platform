@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func authorName(t *testing.T, routes http.Handler, userID int64, email string) string {

@@ -1,19 +1,19 @@
 //! One-attempt mTLS fan-out decision fetch and ACK (contract
 //! `libs/proto/contracts/fanout-interrupt-decisions-v1.md` §7).
 //!
-//! Same transport as node recovery control: the private content listener,
-//! `X-Elitea-Claim-Id` and `X-Elitea-Fence`, HTTP/2, one bounded attempt, no
-//! redirects. Every fetched decision's `decision_sha256` is recomputed over
+//! Same transport as node recovery control: the `RuntimeContentService` of the
+//! private content listener (gRPC over mTLS, #1359), the claim id and fence in
+//! the request metadata, one bounded attempt. Every fetched decision's `decision_sha256` is recomputed over
 //! the contract canonical form before the runner sees it, and the ACK echoes
 //! it. Nothing here logs or formats a decision value or credential reference.
 
 use super::{
-    Body, CLAIM_HEADER, CONTENT_LENGTH, CONTENT_TYPE, Duration, FENCE_HEADER, InputContentClient,
-    InputContentError, Method, PATH_SEGMENT, Request, StatusCode, Version, timeout,
-    utf8_percent_encode,
+    Code, Duration, InputContentClient, InputContentError, Status, claim_request, content_scope,
+    is_transport_status, timeout,
 };
-use base64::Engine as _;
-use http_body_util::BodyExt as _;
+use crate::protocol::elitea::runtime::v1::{
+    AcknowledgeExecutionInterruptRequestV1, FetchExecutionInterruptsRequestV1,
+};
 use ring::digest;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -248,7 +248,8 @@ impl InputContentClient {
         Ok(FanoutAckOutcome::Recorded(reply))
     }
 
-    /// `Ok(None)` only for a conflicting ACK (409), which Main already resolved.
+    /// `Ok(None)` only for a conflicting ACK (`AlreadyExists`), which Main
+    /// already resolved.
     async fn fanout_post(
         &self,
         authority: &FanoutDecisionAuthority,
@@ -257,84 +258,36 @@ impl InputContentClient {
         limit: usize,
         is_ack: bool,
     ) -> Result<Option<Vec<u8>>, InputContentError> {
-        let uri = format!(
-            "/executions/{}/generations/{}/interrupts/{operation}",
-            utf8_percent_encode(&authority.execution_id, PATH_SEGMENT),
-            authority.generation
-        );
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri(uri)
-            .header(CLAIM_HEADER, authority.claim_id.as_str())
-            .header(
-                FENCE_HEADER,
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(authority.fence.as_slice()),
-            )
-            .header(CONTENT_TYPE, "application/json")
-            .header(CONTENT_LENGTH, payload.len())
-            .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                payload,
-            ))))
-            .map_err(|_| invalid())?;
+        let scope = Some(content_scope(&authority.execution_id, authority.generation));
+        let (claim_id, fence) = (authority.claim_id.as_str(), authority.fence.as_slice());
+        let mut rpc = self.rpc();
         timeout(self.config.deadline.min(Duration::from_secs(10)), async {
-            let mut response = self
-                .rpc
-                .get(request)
-                .await
-                .map_err(InputContentError::Transport)?;
-            match response.status() {
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                    return Err(InputContentError::AuthorizationFailed(
-                        "the fan-out decision authority is no longer current",
-                    ));
-                }
-                // A fetch refused for its fence is a lost claim. A conflicting
-                // ACK means Main already resolved the card: nothing to retry.
-                StatusCode::CONFLICT if !is_ack => {
-                    return Err(InputContentError::AuthorizationFailed(
-                        "the fan-out decision authority is no longer current",
-                    ));
-                }
-                StatusCode::CONFLICT => return Ok(None),
-                StatusCode::OK => {}
-                _ => {
-                    return Err(InputContentError::DependencyUnavailable(
-                        "the fan-out decision route is unavailable",
-                    ));
-                }
-            }
-            if response.version() != Version::HTTP_2
-                || response
-                    .headers()
-                    .get(CONTENT_TYPE)
-                    .and_then(|header| header.to_str().ok())
-                    .is_none_or(|header| header.split(';').next() != Some("application/json"))
-            {
-                return Err(invalid());
-            }
-            let mut result = Vec::new();
-            while let Some(frame) = response.body_mut().frame().await {
-                let frame = frame.map_err(|_| {
-                    InputContentError::DependencyUnavailable(
-                        "the fan-out decision response was interrupted",
-                    )
-                })?;
-                if frame.is_trailers() {
-                    return Err(invalid());
-                }
-                if let Ok(bytes) = frame.into_data() {
-                    if result
-                        .len()
-                        .checked_add(bytes.len())
-                        .is_none_or(|length| length > limit)
-                    {
-                        return Err(InputContentError::ResourceExhausted(
-                            "the fan-out decision response exceeds its bound",
-                        ));
-                    }
-                    result.extend_from_slice(&bytes);
-                }
+            let result = if operation == "ack" {
+                let request = AcknowledgeExecutionInterruptRequestV1 {
+                    scope,
+                    ack_json: payload,
+                };
+                let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                rpc.acknowledge_execution_interrupt(request)
+                    .await
+                    .map(|response| response.into_inner().outcome_json)
+            } else {
+                let request = FetchExecutionInterruptsRequestV1 { scope };
+                let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                rpc.fetch_execution_interrupts(request)
+                    .await
+                    .map(|response| response.into_inner().fetch_json)
+            };
+            let result = match result {
+                Ok(result) => result,
+                // A conflicting ACK means Main already resolved the card.
+                Err(status) if is_ack && status.code() == Code::AlreadyExists => return Ok(None),
+                Err(status) => return Err(decision_status(&status, is_ack)),
+            };
+            if result.len() > limit {
+                return Err(InputContentError::ResourceExhausted(
+                    "the fan-out decision response exceeds its bound",
+                ));
             }
             if result.is_empty() {
                 return Err(invalid());
@@ -343,6 +296,23 @@ impl InputContentClient {
         })
         .await
         .map_err(|_| InputContentError::Timeout("the fan-out decision request timed out"))?
+    }
+}
+
+/// Contract §7.1: a refused claim or fence is a lost lease (a fetch refused for
+/// its fence answers `AlreadyExists`); anything else is a transient failure the
+/// runner retries on its next tick.
+fn decision_status(status: &Status, is_ack: bool) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied => {
+            InputContentError::AuthorizationFailed("the fan-out decision authority is no longer current")
+        }
+        Code::AlreadyExists if !is_ack => {
+            InputContentError::AuthorizationFailed("the fan-out decision authority is no longer current")
+        }
+        Code::DeadlineExceeded => InputContentError::Timeout("the fan-out decision request timed out"),
+        _ if is_transport_status(status) => InputContentError::transport(status.clone()),
+        _ => InputContentError::DependencyUnavailable("the fan-out decision route is unavailable"),
     }
 }
 

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexer"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexer"
 )
 
 func TestNewServiceIsConstructible(t *testing.T) {

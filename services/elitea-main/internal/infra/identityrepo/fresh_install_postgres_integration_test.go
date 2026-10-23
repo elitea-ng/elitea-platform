@@ -3,7 +3,7 @@ package identityrepo
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -11,17 +11,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	bootstrapschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrations"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	bootstrapschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // A FRESH INSTALL, not the sqlc baseline.
 //
 // Every other test in this package seeds its database from
 // dbschema.AuthCoreBaselineSQLCProjection, which is sqlc compiler input and
-// carries pylon tables the Go install never creates (auth_core__group and
+// carries legacy tables the Go install never creates (auth_core__group and
 // auth_core__user_group among them). A database built only by elitea-migrate
 // (Bootstrap + ApplyShared, the Helm and standalone-full path) has no such
 // tables, so a provisioning step that writes one rolled back every first login
@@ -70,7 +70,7 @@ func TestPostgresIdentityProvisioningFreshInstallNewUser(t *testing.T) {
 
 // newFreshInstallIdentityDatabase creates a private empty database and runs
 // migrate.Bootstrap + ApplyShared on it, the same two calls cmd/elitea-migrate
-// makes on a first install. It proves the pylon-only group table is absent, so
+// makes on a first install. It proves the legacy-only group table is absent, so
 // the test keeps discriminating if the schema source ever changes.
 func newFreshInstallIdentityDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
@@ -111,9 +111,6 @@ func newFreshInstallIdentityDatabase(t *testing.T, ctx context.Context) *pgxpool
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
-		t.Fatalf("create the vector extension: %v", err)
-	}
 	applied, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial)
 	if err != nil {
 		t.Fatalf("bootstrap the fresh-install schema: %v", err)

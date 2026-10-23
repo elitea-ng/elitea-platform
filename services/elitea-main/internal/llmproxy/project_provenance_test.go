@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // This file proves two rules of the /llm edge over the real chain: the project
@@ -47,7 +48,7 @@ type gatewaySpy struct {
 func provenanceStack(t *testing.T, spy *gatewaySpy, allow map[int32]bool) http.Handler {
 	t.Helper()
 
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		spy.called = true
 		spy.headers = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
@@ -60,7 +61,7 @@ func provenanceStack(t *testing.T, spy *gatewaySpy, allow map[int32]bool) http.H
 		PublicProjectID: 1,
 		Membership:      middleware.NewProjectMembershipWith(stubMemberQuerier{allow: allow}),
 	})
-	return mw(proxyTo(t, backend.URL, "sekret"))
+	return mw(proxyTo(t, backend, "sekret"))
 }
 
 func edgeBody() *strings.Reader {
@@ -110,14 +111,13 @@ func TestEdge_UnprovenancedIdentityIsRefusedBeforeTheGateway(t *testing.T) {
 }
 
 // TestEdge_EveryTrustedProvenanceReachesTheGateway is direction 2 of issue
-// #461, end to end. Each of the four accepted provenance values reaches the
+// #461, end to end. Each of the three accepted provenance values reaches the
 // gateway, and each carries the correct signed project.
 func TestEdge_EveryTrustedProvenanceReachesTheGateway(t *testing.T) {
 	cases := map[string]auth.AuthenticationSource{
-		"forwarded": auth.AuthenticationSourceForwarded,
-		"api key":   auth.AuthenticationSourceAPIKey,
-		"token":     auth.AuthenticationSourceToken,
-		"session":   auth.AuthenticationSourceSession,
+		"api key": auth.AuthenticationSourceAPIKey,
+		"token":   auth.AuthenticationSourceToken,
+		"session": auth.AuthenticationSourceSession,
 	}
 
 	for name, source := range cases {
@@ -170,7 +170,7 @@ func TestEdge_PrincipalNameForeignProjectNeverReachesTheGatewayIdentity(t *testi
 }
 
 // TestEdge_PrincipalNameMemberProjectReachesTheGatewayIdentity is direction 2
-// of issue #459, end to end. The Pylon system project-user still bills the
+// of issue #459, end to end. The legacy system project-user still bills the
 // project its name asks for, because it belongs to that project.
 func TestEdge_PrincipalNameMemberProjectReachesTheGatewayIdentity(t *testing.T) {
 	spy := &gatewaySpy{}

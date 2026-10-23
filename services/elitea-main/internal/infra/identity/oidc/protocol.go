@@ -25,9 +25,9 @@ import (
 	coreoidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
 const (
@@ -297,8 +297,9 @@ func (v *assertionVerifier) Verify(
 	}
 	expiresAt := verifiedToken.Expiry.UTC()
 	if v.protocol.expirationOverride > 0 {
-		// Current pylon_auth can extend beyond signed exp. This correction allows
-		// only a shorter local session and never weakens the signed lifetime.
+		// The legacy auth plugin can extend beyond signed exp. This correction
+		// allows only a shorter local session and never weakens the signed
+		// lifetime.
 		override := verificationTime.Add(v.protocol.expirationOverride)
 		if override.Before(expiresAt) {
 			expiresAt = override

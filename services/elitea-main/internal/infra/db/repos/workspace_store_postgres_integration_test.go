@@ -23,9 +23,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore/workspacestoretest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore/workspacestoretest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func ptr(value string) *string { return &value }
@@ -75,6 +75,23 @@ WHERE b.bucket_type = 'workspace' AND b.name = $1 AND g.key = $2 AND g.max_bytes
 		want := workspacestore.ObjectRoutePrefix + "1/" + fixture.thread.ConversationUUID + "/" + sha
 		if grant.PutURL != want {
 			t.Fatalf("facade URL = %q, want %q", grant.PutURL, want)
+		}
+	})
+	t.Run("S3 with presigning off streams every size through the facade", func(t *testing.T) {
+		// S3_PRESIGN=false: checksums and copies stay, presigned URLs and
+		// part URLs go. Even a multipart-sized segment gets the facade URL,
+		// and a backend that still reports multipart does not get parts.
+		store := workspacestoretest.New(false)
+		store.Checksum, store.Multipart = true, true
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		big := digestOf([]byte("big over the facade"))
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: big, Bytes: 130 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := workspacestore.ObjectRoutePrefix + "1/" + fixture.thread.ConversationUUID + "/" + big
+		if grant.Multipart != nil || grant.PutURL != want {
+			t.Fatalf("grant = %+v, want the facade URL %q and no multipart", grant, want)
 		}
 	})
 	t.Run("multipart above 64 MiB", func(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // The card a PIPELINE attached to an agent as a tool raises (#973).
@@ -64,7 +64,7 @@ func TestCurrentContinuationCarriesAPipelineNodeDecisionWithoutAToolCall(t *test
 				Created: true, AdmittedAt: admittedAt, Deadline: admittedAt.Add(time.Minute),
 			}}
 			service, err := NewCurrentApplicationStartService(
-				resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+				resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
 				&currentApplicationVersionFreezerStub{}, admissions)
 			if err != nil {
 				t.Fatal(err)
@@ -131,7 +131,7 @@ func TestCurrentContinuationRefusesARouteThePipelineCardDidNotOffer(t *testing.T
 	resolver := pipelineHITLResolver([]string{"approve", "reject"})
 	admissions := &currentApplicationAdmissionStub{}
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
 		&currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)

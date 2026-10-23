@@ -7,6 +7,13 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
+# The rustls crypto provider of the mTLS channel `VectorClient::connect_lazy`
+# builds: ring (the worker's, the default) or aws-lc (the engines', whose
+# other TLS hops already link it). A host takes exactly one, so its binary
+# links one provider and nothing has to pick a process default.
+default = ["tls-ring"]
+tls-ring = ["tonic/tls-ring"]
+tls-aws-lc = ["tonic/tls-aws-lc"]
 # Also generates the elitea.vector.v1 SERVER, for the in-process fake the
 # tests serve. Nothing in a shipped binary needs it.
 test-server = ["dep:tokio", "tokio-stream/net"]
@@ -36,13 +43,14 @@ sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["net", "rt"], optional = true }
 tokio-stream = "0.1.19"
-# mTLS to elitea-vector, with ring like the worker (`tls-ring`). No
-# reqwest: this crate makes gRPC calls only; model calls go through the
-# `QueryEmbedder` and `StepbackModel` traits the worker implements.
-tonic = { version = "0.14.6", features = ["tls-ring"] }
+# mTLS to elitea-vector: the provider is the `tls-ring` / `tls-aws-lc`
+# feature above. No reqwest: this crate makes gRPC calls only; model calls go
+# through the `QueryEmbedder` and `StepbackModel` traits the worker implements.
+tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tracing = "0.1.44"
-uuid = { version = "1", default-features = false, features = ["v4"] }
+# v4: memory point ids; v5: the engines' namespace ids (`ids`).
+uuid = { version = "1", default-features = false, features = ["v4", "v5"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3.2.0"

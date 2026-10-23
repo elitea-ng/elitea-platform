@@ -19,7 +19,7 @@ retargeted to `main` after #1143 merges. Brief:
 Taken:
 - **Who may decide.** The conversation author or the question author, who must still be a user participant of the
   conversation. This is the rule of today's continuation (`internal/db/queries/agent_chat.sql`
-  `ResolveCurrentContinuation`, which mirrors EliteaUI and Pylon chat continuation). Project RBAC is checked with
+  `ResolveCurrentContinuation`, which mirrors EliteaUI and the legacy runtime's chat continuation). Project RBAC is checked with
   `models.chat.messages.create` (POST) and `models.applications.task.get` (GET), the same permissions node recovery
   uses.
 - **Action vocabulary.** approve, reject, edit, block_with_comment, answer, authorize, skip, plus `continue` for a

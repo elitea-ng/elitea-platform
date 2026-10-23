@@ -328,7 +328,7 @@ adminTest('J34: the activity drawer reads the audit trail scoped to one user', a
  *
  * `GET /admin/auth_users/{mode}` used to have no permission middleware at all:
  * any authenticated session could read every row of `auth_core__user` — id,
- * name, email, last_login, suspended, administration role — while its pylon
+ * name, email, last_login, suspended, administration role — while its legacy
  * original gates `get()` on `admin.auth.users`, the same permission it requires
  * for `post()`. A14 gated only the writes, because at the time no deployment
  * had an administration-mode role to hold and gating a read would have meant
@@ -364,11 +364,12 @@ adminTest.describe('member persona', () => {
 /*
  * ── J39: the cross-project bulk membership invite (issue 247) ────────────────
  *
- * pylon serves this as two admin console pages, `invites_bulkusers` and
- * `invites_bulkprojects`. This platform had no path at all: membership was one
- * address at a time. The route the dialog posts to answers **200 even when
- * pairs fail**, so the only thing that separates "forty invited" from "forty
- * refused" is the per-pair report — which is exactly what this journey reads.
+ * The legacy runtime served this as two admin console pages,
+ * `invites_bulkusers` and `invites_bulkprojects`. This platform had no path at
+ * all: membership was one address at a time. The route the dialog posts to
+ * answers **200 even when pairs fail**, so the only thing that separates "forty
+ * invited" from "forty refused" is the per-pair report — which is exactly what
+ * this journey reads.
  *
  * ITS OWN PROJECT AND ITS OWN ACCOUNTS, one project per engine
  * (`scripts/e2e-stack.sh`, `e2e-bulkinvite-<engine>`). Not project 1, where
@@ -535,7 +536,7 @@ adminTest('J39: a bulk invite writes every pair and the second run reports them 
   expect(emails).toContain(BULK_INVITEE_B);
 
   // Idempotence. Running the same batch again is what an operator who is not
-  // sure the first one landed actually does, and pylon's write REPLACED the
+  // sure the first one landed actually does, and the legacy write REPLACED the
   // role set — so a second run there could quietly demote somebody.
   const second = await postBulkInvite(page, {
     users: [userA ?? 0, userB ?? 0],
@@ -553,7 +554,7 @@ adminTest('J39: a bulk invite writes every pair and the second run reports them 
 adminTest('J39b: a bulk invite refuses a personal project and an unknown account, and writes neither', async ({ page }) => {
   const [userA] = await bulkUserIds(page);
   // `project_user_90001`, seeded for admin.projects.spec.ts's personal tab. A
-  // personal project is one account's own space; pylon's "add every user"
+  // personal project is one account's own space; the legacy "add every user"
   // form would have written the whole platform into it.
   const personalProjectId = await bulkProjectId(page, 'project_user_90001');
   const unknownUserId = 90999901;

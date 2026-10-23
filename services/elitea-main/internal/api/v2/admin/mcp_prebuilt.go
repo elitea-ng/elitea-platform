@@ -8,7 +8,7 @@ package admin
 // The section is one field of type `object` whose value is the whole
 // `mcp_servers` block, and the plugin-configuration write path stores a
 // section's fields as plaintext JSONB rows in `centry.platform_config`. The
-// catalogue carries `client_secret` — pylon's own documented example block does
+// catalogue carries `client_secret` — the legacy documented example block does
 // — and `config_values.go:rejectCredentialField` refuses credentials into those
 // rows, correctly: they are readable by every holder of `runtime.plugins`.
 //
@@ -20,9 +20,9 @@ package admin
 // # The permission is the one the page it replaces already used
 //
 // `runtime.plugins`, resolved in administration mode, gates every route here.
-// pylon's `plugin_config_values.py` declares the same string, so an operator who
-// could edit the section can edit the catalogue and no new grant is needed —
-// which also means no new way for the grant gate in
+// The legacy `plugin_config_values.py` declares the same string, so an operator
+// who could edit the section can edit the catalogue and no new grant is needed
+// — which also means no new way for the grant gate in
 // `internal/api/router_permission_grant_gate_test.go` to be tripped.
 //
 // # What a caller can and cannot see
@@ -42,8 +42,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // PrebuiltSecretStore is the vault seam this surface writes catalogue

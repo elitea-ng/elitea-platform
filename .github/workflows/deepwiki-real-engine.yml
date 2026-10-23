@@ -44,15 +44,13 @@ name: CI — DeepWiki real engine
 #
 #   gh workflow run deepwiki-real-engine.yml --ref <branch>
 #
-# There is no push arm at all, which the workflow-branch-coverage gate
-# (scripts/ci/check_workflow_branch_coverage.py) requires to be a recorded
-# decision rather than a silence — the entry for this file is in that script's
-# EXEMPT_WORKFLOWS table.
+# There is no push arm, as in every workflow here
+# (scripts/ci/check-no-push-triggers.mjs).
 
 on:
   schedule:
     # Sundays, 04:23 UTC. Deliberately far from ci-web-mutation.yml's Wednesday
-    # 08:47 and from ci-image-scan.yml's daily 05:17, so the three heavy cadence
+    # 08:47 and from nightly-image-scan.yml's daily 05:17, so the three heavy cadence
     # jobs never contend for the same runner window.
     - cron: "23 4 * * 0"
   workflow_dispatch:
@@ -89,7 +87,7 @@ concurrency:
   # One at a time. Two of these on the same ref would each want the fixed
   # oidc-mock port 9400, and both would want the whole runner's disk.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -112,7 +110,7 @@ jobs:
       # overlay's own default tag (which no step builds) reads as an image to
       # PULL, fails five attempts and fails the job. The bake below writes
       # exactly these tags (TAG=local, the bake file's default REGISTRY).
-      DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || 'ghcr.io/eliteaai/elitea-deepwiki-engine-native:local' }}
+      DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || 'ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local' }}
       # On `schedule` the inputs are null and the fallbacks apply; keep the
       # commit in step with the input default above.
       DEEPWIKI_NATIVE_REF: ${{ inputs.native_ref || 'main' }}
@@ -170,16 +168,16 @@ jobs:
           timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
             || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will retry it"
 
-      - name: Build the engine image (bake, GHA layer cache)
+      - name: Build the engine image (bake, registry layer cache)
         # `docker buildx bake <target>` rather than a bare `docker build`: the
         # bake target `elitea-deepwiki-engine-native` (the Rust binary on
         # distroless) is the ONE definition of the engine build, and it
-        # already declares its `type=gha` cache scope, which is the cache the
-        # publish matrix uses for every other image. A second copy of the build
+        # already declares its registry cache refs (the release's and the E2E
+        # stacks', both read only). A second copy of the build
         # line here would be free to drift from what a release would produce.
         #
         # TAG=local makes bake write
-        # `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local` — byte for
+        # `ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local` — byte for
         # byte DEEPWIKI_ENGINE_IMAGE above, which the overlay and the runner
         # script read, so nothing has to be retagged.
         # `--set '*.platform=linux/amd64'` also narrows the target's
@@ -195,9 +193,10 @@ jobs:
         if: ${{ !inputs.engine_image }}
         env:
           TAG: local
-        # `*.cache-to=` (empty) clears docker-bake.hcl's mode=max export:
-        # this workflow never runs on a push to main, so it reads the shared
-        # scope and writes nothing (scripts/ci/check_workflow_cache_writes.py).
+        # `*.cache-to=` (empty) keeps this a reader even if docker-bake.hcl
+        # ever declares an export again (it declares none today): this
+        # workflow never runs on a push to main, so it reads the shared
+        # cache and writes nothing (scripts/ci/check-workflow-cache-writes.mjs).
         run: docker buildx bake --set '*.platform=linux/amd64' --set '*.cache-to=' --load elitea-deepwiki-engine-native
 
       - name: Pull the supplied engine image

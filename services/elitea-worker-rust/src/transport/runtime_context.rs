@@ -4,7 +4,7 @@
 //! crossed `AuthorizeInvocation`. Main currently validates the live claim,
 //! fence, desired state and project but does not independently inspect the
 //! invocation-state transition for this endpoint. This transport owns one
-//! bounded mTLS HTTP/2 attempt and accepts only the opaque authority minted by
+//! bounded mTLS gRPC attempt and accepts only the opaque authority minted by
 //! the worker's durable transition. Response bodies, fence tokens and PATs
 //! never enter an error message or tracing field.
 
@@ -13,23 +13,24 @@
 use std::fmt;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Version};
-use http_body_util::BodyExt as _;
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use tokio::time::timeout;
-use tonic::body::Body;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
-use tower::ServiceExt as _;
+use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+use tonic::{Code, Status};
 use zeroize::Zeroizing;
 
+use super::input_content::{
+    ContentRpc, channel_transport, claim_request, content_rpc, content_scope, is_transport_status,
+};
 use crate::protocol::control::{
     ClaimBoundRuntimeContextAuthority, RuntimeContextRedemptionBinding,
+};
+use crate::protocol::elitea::runtime::v1::{
+    DeleteArtifactRequestV1, GetApplicationVersionRequestV1, GetAttachmentObjectRequestV1,
+    GetEliteaClientTokenRequestV1, ListArtifactsRequestV1, ReadArtifactRequestV1,
+    RuntimeContentScopeV1, WriteArtifactRequestV1, WriteProjectContextRequestV1,
+    WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
 };
 use crate::workspace_run::context::{
     RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
@@ -44,10 +45,6 @@ const APPLICATION_VERSION_SCHEMA: &str = "elitea.runtime.application-version.v1"
 /// been upgraded yet.
 const ATTACHMENT_OBJECT_SCHEMA_V1: &str = "elitea.runtime.attachment-object.v1";
 const ATTACHMENT_OBJECT_SCHEMA_V2: &str = "elitea.runtime.attachment-object.v2";
-/// The 422 body: why a stored attachment has no text main can serve.
-const ATTACHMENT_UNREADABLE_SCHEMA: &str = "elitea.runtime.attachment-unreadable.v1";
-/// A 422 body larger than this is not the small reason document main sends.
-const MAX_ATTACHMENT_UNREADABLE_BYTES: usize = 4 * 1_024;
 /// The refusal reasons main may send, as `'static` strings so that a
 /// `RuntimeContextError::Rejected` can carry one. Anything else is reported
 /// as `unreadable`.
@@ -120,44 +117,10 @@ const MAX_APPLICATION_VERSION_BYTES: usize = 1_024 * 1_024;
 pub(crate) const MAX_ATTACHMENT_OBJECT_BYTES: usize = 6 * 1_024 * 1_024;
 const MAX_TOKEN_BYTES: usize = 16 * 1_024;
 const MAX_RUNTIME_CONTEXT_DEADLINE: Duration = Duration::from_mins(5);
-const CLAIM_HEADER: HeaderName = HeaderName::from_static("x-elitea-claim-id");
 /// The optional runtime-context fields this worker reads (Main's
-/// `runtimeContextAcceptHeader`): only `workspace` (ADR-0034). The
-/// `secrets-header-value` field is not read by this worker, so it is not
-/// asked for.
-const ACCEPT_HEADER: HeaderName = HeaderName::from_static("x-elitea-runtime-context-accept");
-const FENCE_HEADER: HeaderName = HeaderName::from_static("x-elitea-fence");
-const PRAGMA_HEADER: HeaderName = HeaderName::from_static("pragma");
-const PATH_SEGMENT: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'!')
-    .add(b'"')
-    .add(b'#')
-    .add(b'$')
-    .add(b'%')
-    .add(b'&')
-    .add(b'\'')
-    .add(b'(')
-    .add(b')')
-    .add(b'*')
-    .add(b'+')
-    .add(b',')
-    .add(b'/')
-    .add(b':')
-    .add(b';')
-    .add(b'<')
-    .add(b'=')
-    .add(b'>')
-    .add(b'?')
-    .add(b'@')
-    .add(b'[')
-    .add(b'\\')
-    .add(b']')
-    .add(b'^')
-    .add(b'`')
-    .add(b'{')
-    .add(b'|')
-    .add(b'}');
+/// `accept_fields`): only `workspace` (ADR-0034). The `secrets-header-value`
+/// field is not read by this worker, so it is not asked for.
+const ACCEPT_FIELDS: [&str; 1] = [WORKSPACE_FIELD];
 
 /// Immutable policy for the dedicated runtime-context channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -302,6 +265,8 @@ impl std::error::Error for RuntimeContextError {
 pub(crate) enum RuntimeContextTransportError {
     Unavailable,
     Tonic(tonic::transport::Error),
+    /// A call the channel failed; the status keeps its source chain.
+    Status(Box<Status>),
 }
 
 impl fmt::Debug for RuntimeContextTransportError {
@@ -321,6 +286,7 @@ impl std::error::Error for RuntimeContextTransportError {
         match self {
             Self::Unavailable => None,
             Self::Tonic(error) => Some(error),
+            Self::Status(status) => Some(status.as_ref()),
         }
     }
 }
@@ -403,41 +369,14 @@ impl ClaimScopedEliteaContext {
     }
 }
 
-#[async_trait]
-pub(crate) trait RuntimeContextRpc: Send + Sync {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError>;
-}
-
-#[derive(Clone)]
-struct TonicRuntimeContextRpc {
-    channel: Channel,
-}
-
-#[async_trait]
-impl RuntimeContextRpc for TonicRuntimeContextRpc {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        self.channel
-            .clone()
-            .oneshot(request)
-            .await
-            .map_err(RuntimeContextTransportError::Tonic)
-    }
-}
-
 /// One-attempt origin-bound runtime-context client.
 pub(crate) struct RuntimeContextClient {
-    rpc: Box<dyn RuntimeContextRpc>,
+    rpc: ContentRpc,
     config: RuntimeContextConfig,
 }
 
 impl RuntimeContextClient {
-    /// Connect one dedicated mTLS HTTP/2 channel from the validated origin.
+    /// Connect one dedicated mTLS channel from the validated origin.
     pub(crate) async fn connect(
         mut config: RuntimeContextConfig,
         private_ca: Certificate,
@@ -459,21 +398,27 @@ impl RuntimeContextClient {
             .map_err(RuntimeContextError::Transport)?;
         config.origin = origin;
         Ok(Self {
-            rpc: Box::new(TonicRuntimeContextRpc { channel }),
+            rpc: content_rpc(channel_transport(channel)),
             config,
         })
     }
 
+    /// A client over an in-process content service.
     #[cfg(test)]
     pub(crate) fn with_rpc(
-        rpc: impl RuntimeContextRpc + 'static,
+        fake: impl super::input_content::content_fake::ContentFake,
         mut config: RuntimeContextConfig,
     ) -> Result<Self, RuntimeContextError> {
         config.origin = config.validate()?;
         Ok(Self {
-            rpc: Box::new(rpc),
+            rpc: content_rpc(super::input_content::content_fake::in_process(fake)),
             config,
         })
+    }
+
+    /// A fresh handle on the shared channel for one call.
+    fn rpc(&self) -> ContentRpc {
+        self.rpc.clone()
     }
 
     /// Redeem one ephemeral actor PAT from the exact authorized claim.
@@ -483,8 +428,27 @@ impl RuntimeContextClient {
     ) -> Result<ClaimScopedEliteaContext, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let request = build_request(&binding)?;
-        let operation = redeem_response(self.rpc.as_ref(), request, &binding, &self.config);
+        let request = scoped(
+            &binding,
+            GetEliteaClientTokenRequestV1 {
+                scope: Some(scope(&binding)),
+                accept_fields: ACCEPT_FIELDS.map(str::to_owned).to_vec(),
+            },
+            "the runtime context request authority is malformed",
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .get_elitea_client_token(request)
+                .await
+                .map_err(|status| context_status(status, None))?
+                .into_inner()
+                .context_json;
+            redeem_response(
+                &bounded_document(body, self.config.max_response_bytes)?,
+                &binding,
+            )
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the runtime context request timed out"))?
@@ -492,13 +456,13 @@ impl RuntimeContextClient {
 
     /// Load one exact child definition through the same live claim and fence.
     ///
-    /// Main serves this route from the private content listener
-    /// (`ContentServer.PostApplicationVersion` in
+    /// Main serves this RPC from the private content listener
+    /// (`ContentServer.GetApplicationVersion` in
     /// `services/elitea-main/internal/infra/storage/content_server.go`), returning
     /// a definition already frozen by the same freeze the parent's own start
     /// applies. There is deliberately no fallback: the mutable public version
     /// endpoint and the legacy `X-SECRET` expansion path would both hand back an
-    /// unfrozen document, so a missing route has to fail the turn rather than
+    /// unfrozen document, so a missing RPC has to fail the turn rather than
     /// quietly resolve a different one.
     pub(crate) async fn load_application_version(
         &self,
@@ -517,15 +481,30 @@ impl RuntimeContextClient {
         }
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let request = build_application_request(&binding, application_id, version_id)?;
-        let operation = load_application_response(
-            self.rpc.as_ref(),
-            request,
+        let request = scoped(
             &binding,
-            application_id,
-            version_id,
-            &self.config,
-        );
+            GetApplicationVersionRequestV1 {
+                scope: Some(scope(&binding)),
+                application_id,
+                version_id,
+            },
+            "the nested application request authority is malformed",
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .get_application_version(request)
+                .await
+                .map_err(|status| context_status(status, None))?
+                .into_inner()
+                .version_json;
+            load_application_response(
+                &bounded_document(body, self.config.max_application_response_bytes)?,
+                &binding,
+                application_id,
+                version_id,
+            )
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the nested application request timed out"))?
@@ -534,17 +513,15 @@ impl RuntimeContextClient {
     /// Read one stored chat attachment's TEXT through the same live claim.
     ///
     /// Main serves this from the private content listener
-    /// (`ContentServer.PostAttachmentObject` in
+    /// (`ContentServer.GetAttachmentObject`, backed by
     /// `services/elitea-main/internal/infra/storage/runtime_attachment_object.go`),
     /// and it authorizes on the CLAIM's own project and conversation: the
     /// `(bucket, name)` pair below only selects INSIDE them, so a key belonging
     /// to another chat is refused there rather than trusted here.
     ///
     /// `name` is the object key and it contains slashes
-    /// (`{conversationUUID}/{filename}`). It is percent-encoded into ONE path
-    /// segment — `PATH_SEGMENT` encodes `/` — because main routes on
-    /// `r.URL.RawPath` and unescapes the segment itself, the same mechanism the
-    /// immutable input route already uses for its content id.
+    /// (`{conversationUUID}/{filename}`); it travels as one message field,
+    /// exactly as stored.
     pub(crate) async fn load_attachment_object(
         &self,
         authority: &ClaimBoundRuntimeContextAuthority,
@@ -558,15 +535,36 @@ impl RuntimeContextClient {
         }
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let request = build_attachment_request(&binding, bucket, name)?;
-        let operation = load_attachment_response(
-            self.rpc.as_ref(),
-            request,
+        let request = scoped(
             &binding,
-            bucket,
-            name,
-            &self.config,
-        );
+            GetAttachmentObjectRequestV1 {
+                scope: Some(scope(&binding)),
+                bucket: bucket.to_owned(),
+                name: name.to_owned(),
+            },
+            "the attachment request authority is malformed",
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let outcome = rpc
+                .get_attachment_object(request)
+                .await
+                .map_err(attachment_status)?
+                .into_inner()
+                .outcome;
+            match outcome {
+                Some(Outcome::DocumentJson(body)) => load_attachment_response(
+                    &bounded_document(body, self.config.max_attachment_response_bytes)?,
+                    &binding,
+                    bucket,
+                    name,
+                ),
+                Some(Outcome::UnreadableReason(reason)) => Err(attachment_rejection(&reason)),
+                None => Err(RuntimeContextError::InvalidResponse(
+                    "the attachment response is malformed",
+                )),
+            }
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the attachment request timed out"))?
@@ -592,10 +590,27 @@ impl RuntimeContextClient {
     ) -> Result<SkillWriteOutcome, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let body = encode_builder_body(request)?;
-        let http_request = build_builder_request(&binding, "skills", body, "the skill write")?;
-        let operation =
-            write_skill_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        let request = scoped(
+            &binding,
+            WriteSkillRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_builder_body(request)?,
+            },
+            "the skill write request authority is malformed",
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .write_skill(request)
+                .await
+                .map_err(|status| context_status(status, Some(builder_rejection())))?
+                .into_inner()
+                .response_json;
+            write_skill_response(
+                &bounded_document(body, self.config.max_response_bytes)?,
+                &binding,
+            )
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the skill write request timed out"))?
@@ -607,7 +622,7 @@ impl RuntimeContextClient {
     /// whole transport. They keep every property the reads above have — one
     /// bounded attempt, one origin, the claim and fence as the only authority
     /// — and the project is still main's to decide: nothing in these requests
-    /// names one. What main adds that the other routes do not need is the
+    /// names one. What main adds that the other calls do not need is the
     /// per-bucket ACCESS LIST, applied to the claim's own actor, so a bucket
     /// the person who started the turn may not touch is refused there rather
     /// than trusted here.
@@ -618,10 +633,24 @@ impl RuntimeContextClient {
     ) -> Result<ArtifactListOutcome, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let http_request =
-            build_artifact_request(&binding, "list", encode_artifact_body(request)?)?;
-        let operation =
-            artifact_list_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        let request = scoped(
+            &binding,
+            ListArtifactsRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_artifact_body(request)?,
+            },
+            ARTIFACT_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .list_artifacts(request)
+                .await
+                .map_err(artifact_status)?
+                .into_inner()
+                .response_json;
+            artifact_list_response(&self.artifact_document(body)?, &binding)
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the artifact listing timed out"))?
@@ -629,10 +658,10 @@ impl RuntimeContextClient {
 
     /// Read one artifact's TEXT through the same live claim.
     ///
-    /// An over-cap file is NOT an error on this route: main answers 200 with
+    /// An over-cap file is NOT an error on this call: main answers OK with
     /// `over_limit` and the measurement, because the tool's answer to the model
-    /// has to name the cap and the actual size. A 422 here would mean the file
-    /// is not text at all.
+    /// has to name the cap and the actual size. `FailedPrecondition` here would
+    /// mean the file is not text at all.
     pub(crate) async fn read_artifact(
         &self,
         authority: &ClaimBoundRuntimeContextAuthority,
@@ -640,10 +669,24 @@ impl RuntimeContextClient {
     ) -> Result<ArtifactReadOutcome, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let http_request =
-            build_artifact_request(&binding, "read", encode_artifact_body(request)?)?;
-        let operation =
-            artifact_read_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        let request = scoped(
+            &binding,
+            ReadArtifactRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_artifact_body(request)?,
+            },
+            ARTIFACT_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .read_artifact(request)
+                .await
+                .map_err(artifact_status)?
+                .into_inner()
+                .response_json;
+            artifact_read_response(&self.artifact_document(body)?, &binding)
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the artifact read timed out"))?
@@ -661,10 +704,24 @@ impl RuntimeContextClient {
     ) -> Result<ArtifactWriteOutcome, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let http_request =
-            build_artifact_request(&binding, "write", encode_artifact_body(request)?)?;
-        let operation =
-            artifact_write_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        let request = scoped(
+            &binding,
+            WriteArtifactRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_artifact_body(request)?,
+            },
+            ARTIFACT_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .write_artifact(request)
+                .await
+                .map_err(artifact_status)?
+                .into_inner()
+                .response_json;
+            artifact_write_response(&self.artifact_document(body)?, &binding)
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the artifact write timed out"))?
@@ -678,10 +735,24 @@ impl RuntimeContextClient {
     ) -> Result<ArtifactDeleteOutcome, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let http_request =
-            build_artifact_request(&binding, "delete", encode_artifact_body(request)?)?;
-        let operation =
-            artifact_delete_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        let request = scoped(
+            &binding,
+            DeleteArtifactRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_artifact_body(request)?,
+            },
+            ARTIFACT_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .delete_artifact(request)
+                .await
+                .map_err(artifact_status)?
+                .into_inner()
+                .response_json;
+            artifact_delete_response(&self.artifact_document(body)?, &binding)
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the artifact delete timed out"))?
@@ -695,20 +766,38 @@ impl RuntimeContextClient {
     ) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
         let binding = authority.redemption_binding();
         validate_binding(&binding)?;
-        let body = encode_builder_body(request)?;
-        let http_request = build_builder_request(
+        let request = scoped(
             &binding,
-            "project-context",
-            body,
-            "the project context write",
+            WriteProjectContextRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_builder_body(request)?,
+            },
+            "the project context write request authority is malformed",
         )?;
-        let operation =
-            write_project_context_response(self.rpc.as_ref(), http_request, &binding, &self.config);
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .write_project_context(request)
+                .await
+                .map_err(|status| context_status(status, Some(builder_rejection())))?
+                .into_inner()
+                .response_json;
+            write_project_context_response(
+                &bounded_document(body, self.config.max_response_bytes)?,
+                &binding,
+            )
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| {
                 RuntimeContextError::Timeout("the project context write request timed out")
             })?
+    }
+
+    /// One artifact response document, within the artifact family's own
+    /// envelope ceiling.
+    fn artifact_document(&self, body: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
+        bounded_document(body, self.config.max_artifact_response_bytes)
     }
 }
 
@@ -884,91 +973,66 @@ fn validate_binding(
     Ok(())
 }
 
-fn build_request(
-    binding: &RuntimeContextRedemptionBinding<'_>,
-) -> Result<Request<Body>, RuntimeContextError> {
-    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
-    let path = format!(
-        "/executions/{execution}/generations/{}/runtime-context/elitea-client-token",
-        binding.generation
-    );
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri(path)
-        .body(Body::empty())
-        .map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the runtime context request authority is malformed",
-            )
-        })?;
-    request.headers_mut().insert(
-        CLAIM_HEADER,
-        HeaderValue::from_str(binding.claim_id).map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the runtime context request authority is malformed",
-            )
-        })?,
-    );
-    request.headers_mut().insert(
-        FENCE_HEADER,
-        HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(binding.fence_token)).map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the runtime context request authority is malformed",
-            )
-        })?,
-    );
-    request
-        .headers_mut()
-        .insert(ACCEPT_HEADER, HeaderValue::from_static(WORKSPACE_FIELD));
-    Ok(request)
+/// The execution and generation every call on this channel is made under.
+fn scope(binding: &RuntimeContextRedemptionBinding<'_>) -> RuntimeContentScopeV1 {
+    content_scope(binding.execution_id, binding.generation)
 }
 
-fn build_application_request(
+/// `message` under the binding's claim and fence. `malformed` names the call
+/// whose authority could not be attached.
+fn scoped<T>(
     binding: &RuntimeContextRedemptionBinding<'_>,
-    application_id: u64,
-    version_id: u64,
-) -> Result<Request<Body>, RuntimeContextError> {
-    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
-    let path = format!(
-        "/executions/{execution}/generations/{}/runtime-context/applications/{application_id}/versions/{version_id}",
-        binding.generation
-    );
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri(path)
-        .body(Body::empty())
-        .map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the nested application request authority is malformed",
-            )
-        })?;
-    insert_claim_headers(&mut request, binding)?;
-    Ok(request)
+    message: T,
+    malformed: &'static str,
+) -> Result<tonic::Request<T>, RuntimeContextError> {
+    claim_request(message, binding.claim_id, binding.fence_token)
+        .ok_or(RuntimeContextError::AuthorizationFailed(malformed))
 }
 
-fn build_attachment_request(
-    binding: &RuntimeContextRedemptionBinding<'_>,
-    bucket: &str,
-    name: &str,
-) -> Result<Request<Body>, RuntimeContextError> {
-    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
-    let bucket_segment = utf8_percent_encode(bucket, PATH_SEGMENT);
-    let name_segment = utf8_percent_encode(name, PATH_SEGMENT);
-    let path = format!(
-        "/executions/{execution}/generations/{}/runtime-context/attachments/{bucket_segment}/{name_segment}",
-        binding.generation
-    );
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri(path)
-        .body(Body::empty())
-        .map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the attachment request authority is malformed",
-            )
-        })?;
-    insert_claim_headers(&mut request, binding)?;
-    Ok(request)
+/// What a refused or failed runtime-context call means, by status code.
+///
+/// `rejected` is the call's own `FailedPrecondition` outcome — the DOCUMENT is
+/// refused, not the claim — for the calls that have one. Without it that code
+/// is one more answer Main did not serve. `NotFound` and `Unimplemented` are
+/// both the terminal "this reference does not resolve here" a missing route
+/// always meant on this channel.
+fn context_status(status: Status, rejected: Option<RuntimeContextError>) -> RuntimeContextError {
+    if status.code() == Code::FailedPrecondition
+        && let Some(rejected) = rejected
+    {
+        return rejected;
+    }
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied => {
+            RuntimeContextError::AuthorizationFailed("the claim-bound runtime context was rejected")
+        }
+        Code::NotFound | Code::Unimplemented => RuntimeContextError::NotFound(
+            "the claim-bound runtime context reference no longer exists",
+        ),
+        Code::DeadlineExceeded => {
+            RuntimeContextError::Timeout("the runtime context transfer was interrupted")
+        }
+        _ if is_transport_status(&status) => {
+            RuntimeContextError::Transport(RuntimeContextTransportError::Status(Box::new(status)))
+        }
+        _ => RuntimeContextError::DependencyUnavailable(
+            "the runtime context service did not accept the request",
+        ),
+    }
+}
+
+/// One response document within `max_response_bytes`, erased on drop.
+fn bounded_document(
+    body: Vec<u8>,
+    max_response_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
+    let body = Zeroizing::new(body);
+    if body.is_empty() || body.len() > max_response_bytes {
+        return Err(RuntimeContextError::ResourceExhausted(
+            "the runtime context exceeds the approved limit",
+        ));
+    }
+    Ok(body)
 }
 
 fn encode_builder_body<T: serde::Serialize>(request: &T) -> Result<Vec<u8>, RuntimeContextError> {
@@ -983,73 +1047,19 @@ fn encode_builder_body<T: serde::Serialize>(request: &T) -> Result<Vec<u8>, Runt
     Ok(body)
 }
 
-fn build_builder_request(
+/// `FailedPrecondition` on a builder write means the DOCUMENT is refused, not
+/// the claim — see `RuntimeContextError::Rejected`. Everything else maps the
+/// way every call on this channel does, which for this one code would turn
+/// "write less" into "try the identical body again".
+const fn builder_rejection() -> RuntimeContextError {
+    RuntimeContextError::Rejected("the builder document cannot be stored as written")
+}
+
+fn write_skill_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-    resource: &str,
-    body: Vec<u8>,
-    subject: &'static str,
-) -> Result<Request<Body>, RuntimeContextError> {
-    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
-    let path = format!(
-        "/executions/{execution}/generations/{}/runtime-context/{resource}",
-        binding.generation
-    );
-    let length = body.len();
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri(path)
-        .header(CONTENT_TYPE, "application/json")
-        .header(CONTENT_LENGTH, length)
-        .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-            body,
-        ))))
-        .map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(builder_authority_message(subject))
-        })?;
-    insert_claim_headers(&mut request, binding)?;
-    Ok(request)
-}
-
-/// The authority-malformed message for one builder route.
-///
-/// Both messages are `&'static str` literals chosen by the caller's `subject`
-/// rather than formatted, because `RuntimeContextError` carries only static
-/// strings — deliberately, so a failure can never smuggle claim, fence or
-/// tenant data into a log line.
-const fn builder_authority_message(subject: &str) -> &'static str {
-    match subject.as_bytes() {
-        b"the skill write" => "the skill write request authority is malformed",
-        _ => "the project context write request authority is malformed",
-    }
-}
-
-/// 422 means the DOCUMENT is refused, not the claim — see
-/// `RuntimeContextError::Rejected`. It is checked before the shared head
-/// validation because that function maps every non-success status onto the
-/// retryable dependency-unavailable branch, which for this one status would
-/// turn "write less" into "try the identical body again".
-fn builder_rejection(response: &Response<Body>) -> Option<RuntimeContextError> {
-    (response.status() == StatusCode::UNPROCESSABLE_ENTITY).then_some(
-        RuntimeContextError::Rejected("the builder document cannot be stored as written"),
-    )
-}
-
-async fn write_skill_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
-    binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<SkillWriteOutcome, RuntimeContextError> {
-    let response = rpc
-        .post(request)
-        .await
-        .map_err(RuntimeContextError::Transport)?;
-    if let Some(rejected) = builder_rejection(&response) {
-        return Err(rejected);
-    }
-    let declared_length = validate_response_head(&response, config)?;
-    let body = collect_body(response, declared_length, config.max_response_bytes).await?;
-    let decoded: SkillWriteResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: SkillWriteResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the skill write response is malformed")
     })?;
     // The project is re-checked against the ACCEPTED execution, the same way
@@ -1074,22 +1084,11 @@ async fn write_skill_response(
     })
 }
 
-async fn write_project_context_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+fn write_project_context_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
-    let response = rpc
-        .post(request)
-        .await
-        .map_err(RuntimeContextError::Transport)?;
-    if let Some(rejected) = builder_rejection(&response) {
-        return Err(rejected);
-    }
-    let declared_length = validate_response_head(&response, config)?;
-    let body = collect_body(response, declared_length, config.max_response_bytes).await?;
-    let decoded: ProjectContextWriteResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: ProjectContextWriteResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the project context write response is malformed")
     })?;
     if decoded.schema_version != PROJECT_CONTEXT_WRITE_SCHEMA
@@ -1119,83 +1118,38 @@ fn encode_artifact_body<T: serde::Serialize>(request: &T) -> Result<Vec<u8>, Run
     Ok(body)
 }
 
-fn build_artifact_request(
-    binding: &RuntimeContextRedemptionBinding<'_>,
-    operation: &str,
-    body: Vec<u8>,
-) -> Result<Request<Body>, RuntimeContextError> {
-    let execution = utf8_percent_encode(binding.execution_id, PATH_SEGMENT);
-    let path = format!(
-        "/executions/{execution}/generations/{}/runtime-context/artifacts/{operation}",
-        binding.generation
-    );
-    let length = body.len();
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri(path)
-        .header(CONTENT_TYPE, "application/json")
-        .header(CONTENT_LENGTH, length)
-        .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-            body,
-        ))))
-        .map_err(|_| {
-            RuntimeContextError::AuthorizationFailed("the artifact request authority is malformed")
-        })?;
-    insert_claim_headers(&mut request, binding)?;
-    Ok(request)
-}
+const ARTIFACT_AUTHORITY_MALFORMED: &str = "the artifact request authority is malformed";
 
-/// 422 on an artifact route means the DOCUMENT is refused, not the claim — a
-/// file that is not text, or one the model wrote that main will not store. It
-/// is checked before the shared head validation for the reason
-/// `builder_rejection` gives: that function maps every non-success status onto
-/// the retryable dependency branch, which here would turn "write less" into
-/// "send the identical body again".
-fn artifact_rejection(response: &Response<Body>) -> Option<RuntimeContextError> {
-    (response.status() == StatusCode::UNPROCESSABLE_ENTITY).then_some(
-        RuntimeContextError::Rejected("the artifact cannot be served or stored as written"),
+/// `FailedPrecondition` on an artifact call means the DOCUMENT is refused, not
+/// the claim — a file that is not text, or one the model wrote that main will
+/// not store — for the reason `builder_rejection` gives.
+fn artifact_status(status: Status) -> RuntimeContextError {
+    context_status(
+        status,
+        Some(RuntimeContextError::Rejected(
+            "the artifact cannot be served or stored as written",
+        )),
     )
 }
 
-/// Reads one artifact response body after the shared head validation, and
-/// proves it belongs to the ACCEPTED execution.
+/// Every artifact response is re-checked against the ACCEPTED execution.
 ///
-/// The project is re-checked the way every route on this channel re-checks it:
+/// The project is re-checked the way every call on this channel re-checks it:
 /// main derives it from the claim, so a response naming a different project
 /// means the two ends disagree about what was authorized — and two of these
-/// four routes CHANGE a bucket, so a silent mismatch would be a write into a
+/// four calls CHANGE a bucket, so a silent mismatch would be a write into a
 /// tenant this turn never had.
-async fn artifact_response_body(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
-    config: &RuntimeContextConfig,
-) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
-    let response = rpc
-        .post(request)
-        .await
-        .map_err(RuntimeContextError::Transport)?;
-    if let Some(rejected) = artifact_rejection(&response) {
-        return Err(rejected);
-    }
-    let declared =
-        validate_response_head_with_limit(&response, config.max_artifact_response_bytes)?;
-    collect_body(response, declared, config.max_artifact_response_bytes).await
-}
-
 fn artifact_identity_failure() -> RuntimeContextError {
     RuntimeContextError::AuthorizationFailed(
         "the artifact response does not match the accepted execution",
     )
 }
 
-async fn artifact_list_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+fn artifact_list_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<ArtifactListOutcome, RuntimeContextError> {
-    let body = artifact_response_body(rpc, request, config).await?;
-    let decoded: ArtifactListResponse = serde_json::from_slice(&body)
+    let decoded: ArtifactListResponse = serde_json::from_slice(body)
         .map_err(|_| RuntimeContextError::InvalidResponse("the artifact listing is malformed"))?;
     if decoded.schema_version != ARTIFACT_LIST_SCHEMA
         || decoded.project_id == 0
@@ -1220,14 +1174,11 @@ async fn artifact_list_response(
     })
 }
 
-async fn artifact_read_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+fn artifact_read_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<ArtifactReadOutcome, RuntimeContextError> {
-    let body = artifact_response_body(rpc, request, config).await?;
-    let decoded: ArtifactReadResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: ArtifactReadResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the artifact read response is malformed")
     })?;
     if decoded.schema_version != ARTIFACT_READ_SCHEMA
@@ -1259,14 +1210,11 @@ async fn artifact_read_response(
     })
 }
 
-async fn artifact_write_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+fn artifact_write_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<ArtifactWriteOutcome, RuntimeContextError> {
-    let body = artifact_response_body(rpc, request, config).await?;
-    let decoded: ArtifactWriteResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: ArtifactWriteResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the artifact write response is malformed")
     })?;
     if decoded.schema_version != ARTIFACT_WRITE_SCHEMA
@@ -1285,14 +1233,11 @@ async fn artifact_write_response(
     })
 }
 
-async fn artifact_delete_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+fn artifact_delete_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<ArtifactDeleteOutcome, RuntimeContextError> {
-    let body = artifact_response_body(rpc, request, config).await?;
-    let decoded: ArtifactDeleteResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: ArtifactDeleteResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the artifact delete response is malformed")
     })?;
     if decoded.schema_version != ARTIFACT_DELETE_SCHEMA
@@ -1309,42 +1254,11 @@ async fn artifact_delete_response(
     })
 }
 
-fn insert_claim_headers(
-    request: &mut Request<Body>,
+fn redeem_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
-) -> Result<(), RuntimeContextError> {
-    request.headers_mut().insert(
-        CLAIM_HEADER,
-        HeaderValue::from_str(binding.claim_id).map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the runtime context request authority is malformed",
-            )
-        })?,
-    );
-    request.headers_mut().insert(
-        FENCE_HEADER,
-        HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(binding.fence_token)).map_err(|_| {
-            RuntimeContextError::AuthorizationFailed(
-                "the runtime context request authority is malformed",
-            )
-        })?,
-    );
-    Ok(())
-}
-
-async fn redeem_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
-    binding: &RuntimeContextRedemptionBinding<'_>,
-    config: &RuntimeContextConfig,
 ) -> Result<ClaimScopedEliteaContext, RuntimeContextError> {
-    let response = rpc
-        .post(request)
-        .await
-        .map_err(RuntimeContextError::Transport)?;
-    let declared_length = validate_response_head(&response, config)?;
-    let body = collect_body(response, declared_length, config.max_response_bytes).await?;
-    let decoded: RuntimeContextResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: RuntimeContextResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the runtime context response is malformed")
     })?;
     if decoded.schema_version != TOKEN_CONTEXT_SCHEMA
@@ -1376,27 +1290,13 @@ async fn redeem_response(
     })
 }
 
-async fn load_application_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+fn load_application_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
     application_id: u64,
     version_id: u64,
-    config: &RuntimeContextConfig,
 ) -> Result<RuntimeApplicationVersion, RuntimeContextError> {
-    let response = rpc
-        .post(request)
-        .await
-        .map_err(RuntimeContextError::Transport)?;
-    let declared_length =
-        validate_response_head_with_limit(&response, config.max_application_response_bytes)?;
-    let body = collect_body(
-        response,
-        declared_length,
-        config.max_application_response_bytes,
-    )
-    .await?;
-    let decoded: ApplicationVersionResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: ApplicationVersionResponse = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the nested application response is malformed")
     })?;
     if decoded.schema_version != APPLICATION_VERSION_SCHEMA
@@ -1424,44 +1324,29 @@ async fn load_application_response(
     })
 }
 
-async fn load_attachment_response(
-    rpc: &dyn RuntimeContextRpc,
-    request: Request<Body>,
+/// The attachment call's own refusals.
+///
+/// A missing OBJECT is `NotFound`. A deployment with no Go object store does
+/// not serve the RPC at all (`Unimplemented`): there the file exists and this
+/// deployment simply cannot read it, so telling the model the file "no longer
+/// exists" would be false — it is a terminal rejection with its own reason,
+/// never an outage to retry. A `FailedPrecondition` is a file main has no text
+/// for, whose reason did not come back.
+fn attachment_status(status: Status) -> RuntimeContextError {
+    match status.code() {
+        Code::NotFound => RuntimeContextError::NotFound("the attachment object no longer exists"),
+        Code::Unimplemented => RuntimeContextError::Rejected("unsupported_deployment"),
+        _ => context_status(status, Some(RuntimeContextError::Rejected("unreadable"))),
+    }
+}
+
+fn load_attachment_response(
+    body: &[u8],
     binding: &RuntimeContextRedemptionBinding<'_>,
     bucket: &str,
     name: &str,
-    config: &RuntimeContextConfig,
 ) -> Result<RuntimeAttachmentObject, RuntimeContextError> {
-    let response = rpc
-        .post(request)
-        .await
-        .map_err(RuntimeContextError::Transport)?;
-    // 422 is checked BEFORE the shared head validation, because that function
-    // maps every non-success status onto the retryable dependency-unavailable
-    // branch. A file main has no text for is not an outage: retrying reads the
-    // same file and fails the same way, and logging it as
-    // `dependency_unavailable` sends an operator after a healthy service.
-    if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
-        return Err(attachment_rejection(response).await);
-    }
-    // A 404 is two different answers. Main answers a missing OBJECT with the
-    // reason document (reason `not_found`). A 404 without it is the ROUTE:
-    // a deployment with no Go object store builds its listener without the
-    // attachment route, and there the file exists and this deployment simply
-    // cannot read it. Telling the model the file "no longer exists" would be
-    // false.
-    if response.status() == StatusCode::NOT_FOUND {
-        return Err(attachment_not_found(response).await);
-    }
-    let declared_length =
-        validate_response_head_with_limit(&response, config.max_attachment_response_bytes)?;
-    let body = collect_body(
-        response,
-        declared_length,
-        config.max_attachment_response_bytes,
-    )
-    .await?;
-    let decoded: Value = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: Value = serde_json::from_slice(body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the attachment response is malformed")
     })?;
     let malformed = || RuntimeContextError::InvalidResponse("the attachment response is malformed");
@@ -1532,47 +1417,17 @@ async fn load_attachment_response(
     })
 }
 
-/// Read main's 422 body for its reason. Any body that is not the small,
-/// well-formed reason document still yields a terminal rejection, with the
-/// reason `unreadable`: the status alone already says "this file has no text",
-/// and that must never turn into a retryable outage because a body was odd.
-async fn attachment_rejection(response: Response<Body>) -> RuntimeContextError {
-    let fallback = RuntimeContextError::Rejected("unreadable");
-    let Some(reason) = attachment_reason(response).await else {
-        return fallback;
-    };
+/// Main's reason a stored attachment has no text. Any reason this worker does
+/// not know still yields a terminal rejection, with the reason `unreadable`:
+/// the answer already says "this file has no text", and that must never turn
+/// into a retryable outage because a reason was new.
+fn attachment_rejection(reason: &str) -> RuntimeContextError {
     ATTACHMENT_UNREADABLE_REASONS
         .iter()
         .find(|known| **known == reason)
-        .map_or(fallback, |reason| RuntimeContextError::Rejected(reason))
-}
-
-/// Read a 404 from the attachment route. The reason document with
-/// `not_found` is a missing object; anything else is a deployment without
-/// the route, which is a terminal rejection with its own reason, never an
-/// outage to retry.
-async fn attachment_not_found(response: Response<Body>) -> RuntimeContextError {
-    if attachment_reason(response).await.as_deref() == Some("not_found") {
-        return RuntimeContextError::NotFound("the attachment object no longer exists");
-    }
-    RuntimeContextError::Rejected("unsupported_deployment")
-}
-
-/// The reason in main's small reason document
-/// (`elitea.runtime.attachment-unreadable.v1`), or `None` when the body is
-/// not that document.
-async fn attachment_reason(response: Response<Body>) -> Option<String> {
-    let declared = response
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|length| *length > 0 && *length <= MAX_ATTACHMENT_UNREADABLE_BYTES)?;
-    let body = collect_body(response, declared, MAX_ATTACHMENT_UNREADABLE_BYTES)
-        .await
-        .ok()?;
-    let document = serde_json::from_slice::<AttachmentUnreadableResponse>(&body).ok()?;
-    (document.schema_version == ATTACHMENT_UNREADABLE_SCHEMA).then_some(document.reason)
+        .map_or(RuntimeContextError::Rejected("unreadable"), |reason| {
+            RuntimeContextError::Rejected(reason)
+        })
 }
 
 /// The unit map must describe the served text exactly: ordered, disjoint,
@@ -1603,148 +1458,6 @@ fn valid_attachment_layout(content: &str, layout: &AttachmentTextLayout) -> bool
             .all(|number| *number >= 1 && *number <= layout.units.len())
         && layout.format.len() <= MAX_SAFE_TEXT_BYTES
         && layout.partial_reason.len() <= MAX_SAFE_TEXT_BYTES
-}
-
-fn validate_response_head(
-    response: &Response<Body>,
-    config: &RuntimeContextConfig,
-) -> Result<usize, RuntimeContextError> {
-    validate_response_head_with_limit(response, config.max_response_bytes)
-}
-
-fn validate_response_head_with_limit(
-    response: &Response<Body>,
-    max_response_bytes: usize,
-) -> Result<usize, RuntimeContextError> {
-    if response.version() != Version::HTTP_2 {
-        return Err(RuntimeContextError::DependencyUnavailable(
-            "the runtime context service did not negotiate HTTP/2",
-        ));
-    }
-    match response.status() {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(RuntimeContextError::AuthorizationFailed(
-                "the claim-bound runtime context was rejected",
-            ));
-        }
-        StatusCode::NOT_FOUND => {
-            return Err(RuntimeContextError::NotFound(
-                "the claim-bound runtime context reference no longer exists",
-            ));
-        }
-        status if status.is_redirection() => {
-            return Err(RuntimeContextError::DependencyUnavailable(
-                "the runtime context service attempted an unsupported redirect",
-            ));
-        }
-        status if !status.is_success() => {
-            return Err(RuntimeContextError::DependencyUnavailable(
-                "the runtime context service did not accept the request",
-            ));
-        }
-        _ => {}
-    }
-    let headers = response.headers();
-    let media_type = single_header(headers, &CONTENT_TYPE)?;
-    if !media_type
-        .split(';')
-        .next()
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
-    {
-        return Err(RuntimeContextError::InvalidResponse(
-            "the runtime context response type is malformed",
-        ));
-    }
-    validate_cache_policy(headers)?;
-    let declared = single_header(headers, &CONTENT_LENGTH)?;
-    if declared.is_empty() || !declared.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(RuntimeContextError::InvalidResponse(
-            "the runtime context length is malformed",
-        ));
-    }
-    let declared = declared.parse::<usize>().map_err(|_| {
-        RuntimeContextError::ResourceExhausted("the runtime context exceeds the approved limit")
-    })?;
-    if declared == 0 || declared > max_response_bytes {
-        return Err(RuntimeContextError::ResourceExhausted(
-            "the runtime context exceeds the approved limit",
-        ));
-    }
-    Ok(declared)
-}
-
-fn validate_cache_policy(headers: &HeaderMap) -> Result<(), RuntimeContextError> {
-    let cache = single_header(headers, &CACHE_CONTROL)?;
-    let mut no_store = false;
-    let mut no_cache = false;
-    for directive in cache.split(',').map(str::trim) {
-        no_store |= directive.eq_ignore_ascii_case("no-store");
-        no_cache |= directive.eq_ignore_ascii_case("no-cache");
-    }
-    let pragma = single_header(headers, &PRAGMA_HEADER)?;
-    if !no_store || !no_cache || !pragma.trim().eq_ignore_ascii_case("no-cache") {
-        return Err(RuntimeContextError::InvalidResponse(
-            "the runtime context cache policy is malformed",
-        ));
-    }
-    Ok(())
-}
-
-async fn collect_body(
-    mut response: Response<Body>,
-    declared_length: usize,
-    max_response_bytes: usize,
-) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
-    let mut body = Zeroizing::new(Vec::with_capacity(declared_length));
-    while let Some(frame) = response.body_mut().frame().await {
-        let frame = frame.map_err(|_| {
-            RuntimeContextError::DependencyUnavailable(
-                "the runtime context response was interrupted",
-            )
-        })?;
-        if frame.is_trailers() {
-            return Err(RuntimeContextError::InvalidResponse(
-                "the runtime context response contains unexpected trailers",
-            ));
-        }
-        if let Ok(chunk) = frame.into_data() {
-            let length = body.len().checked_add(chunk.len()).ok_or(
-                RuntimeContextError::ResourceExhausted(
-                    "the runtime context exceeds the approved limit",
-                ),
-            )?;
-            if length > declared_length || length > max_response_bytes {
-                return Err(RuntimeContextError::InvalidResponse(
-                    "the runtime context length is malformed",
-                ));
-            }
-            body.extend_from_slice(&chunk);
-        }
-    }
-    if body.len() != declared_length {
-        return Err(RuntimeContextError::InvalidResponse(
-            "the runtime context length is malformed",
-        ));
-    }
-    Ok(body)
-}
-
-fn single_header<'a>(
-    headers: &'a HeaderMap,
-    name: &HeaderName,
-) -> Result<&'a str, RuntimeContextError> {
-    let mut values = headers.get_all(name).iter();
-    let value = values.next().ok_or(RuntimeContextError::InvalidResponse(
-        "the runtime context response metadata is missing",
-    ))?;
-    if values.next().is_some() {
-        return Err(RuntimeContextError::InvalidResponse(
-            "the runtime context response metadata is ambiguous",
-        ));
-    }
-    value.to_str().map_err(|_| {
-        RuntimeContextError::InvalidResponse("the runtime context response metadata is malformed")
-    })
 }
 
 fn canonical_https_origin(value: &str) -> Result<String, RuntimeContextError> {
@@ -1866,13 +1579,6 @@ struct AttachmentObjectResponseV2 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AttachmentUnreadableResponse {
-    schema_version: String,
-    reason: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SkillWriteResponse {
     schema_version: String,
     project_id: u64,
@@ -1987,7 +1693,7 @@ impl<'de> Deserialize<'de> for OptionalFrozenDefinitionDigest {
             }
         };
         let mut digest = [0_u8; 32];
-        for (output, pair) in digest.iter_mut().zip(bytes.chunks_exact(2)) {
+        for (output, pair) in digest.iter_mut().zip(bytes.as_chunks::<2>().0) {
             *output = (nibble(pair[0]) << 4) | nibble(pair[1]);
         }
         Ok(Self(Some(digest)))

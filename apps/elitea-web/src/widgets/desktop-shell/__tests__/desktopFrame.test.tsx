@@ -79,7 +79,8 @@ describe('DesktopFrame sidebar', () => {
     const { router } = mount();
 
     const folders = await screen.findAllByTestId('shell-folder');
-    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing', 'docsNo project']);
+    // A folder with threads shows their count after its name.
+    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing2', 'docsNo project']);
     const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     expect(threads.map((thread) => thread.textContent)).toEqual(['quick overview', 'fix the build']);
 
@@ -149,16 +150,59 @@ describe('DesktopFrame sidebar', () => {
     expect(await within(sidebar).findByText('new')).toBeInTheDocument();
   });
 
-  it('reaches the Elitea pages and Settings, and offers the way back to the folders', async () => {
+  it('reaches the Elitea pages and Settings; the title row names the page and has no way "back"', async () => {
     const user = userEvent.setup();
     const { router } = mount();
     const sidebar = await screen.findByTestId('desktop-sidebar');
     await user.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
     expect(await screen.findByTestId('catalog')).toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
     await user.click(within(sidebar).getByRole('button', { name: 'Settings' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
-    await user.click(screen.getByRole('button', { name: 'Local work' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Settings');
+    // The sidebar is the way to everything: the title row carries no "back to Local work" button.
+    const main = screen.getByRole('main');
+    expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
+    expect(within(main).getAllByTestId('title-bar')).toHaveLength(1);
+    // With the sidebar hidden, the row offers it back, and still no "back" button.
+    act(() => useDesktopLayout.getState().setSidebarOpen(false));
+    expect(within(main).getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
+    expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DesktopFrame context menus', () => {
+  it('pops the native menu on a thread row and acts on the choice', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    const { router } = mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const thread = await within(folders[0] as HTMLElement).findByTestId('shell-thread');
+    appIpc.chooseFromContextMenu('chat');
+    fireEvent.contextMenu(thread);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link']);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
+  });
+
+  it('pops the native menu on a folder row: reveal, copy, projects, remove', async () => {
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    fireEvent.contextMenu(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+    expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
+    const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing']);
+  });
+
+  it('leaves the browser alone without a host', async () => {
+    mount({ appIpc: null });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    within(folders[0] as HTMLElement).getAllByRole('button')[0]?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 });
 

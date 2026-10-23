@@ -1,0 +1,9 @@
+{{- if .Values.deepwiki.enabled }}
+{{- /*
+  The DeepWiki host's autoscaler, disruption budget and PodMonitor
+  (elitea.scaling.subappAutoscaler). The host's database secret is the
+  invocation store the keda-postgresql trigger counts.
+*/ -}}
+{{- $db := get (fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL"))) "ELITEA_DEEPWIKI_DATABASE_URL" }}
+{{- include "elitea.scaling.subappAutoscaler" (dict "ctx" . "key" "deepwiki" "fullname" (include "elitea-deepwiki.fullname" .) "labels" (include "elitea-deepwiki.labels" .) "selector" (include "elitea-deepwiki.selectorLabels" .) "dbSecret" ($db | default "")) }}
+{{- end }}

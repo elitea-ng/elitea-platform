@@ -67,10 +67,10 @@ VALUES (sqlc.arg(token_id)::integer, sqlc.arg(project_id)::integer);
 -- Token deletion deletes the binding explicitly, in the same transaction, and
 -- does NOT rely on ON DELETE CASCADE (spec-llm-project-scope §3.1). Migration
 -- 0071 guards its foreign key with to_regclass, because elitea-migrate can run
--- before pylon creates auth_core. When the guard skips, the migration is still
--- ledgered as applied and no later run adds the constraint, so that database
--- has no cascade for its whole life. The constraint stays as the second of two
--- independent guarantees; this query is the first.
+-- before the legacy runtime creates auth_core. When the guard skips, the
+-- migration is still ledgered as applied and no later run adds the constraint,
+-- so that database has no cascade for its whole life. The constraint stays as
+-- the second of two independent guarantees; this query is the first.
 -- name: DeleteTokenProjectBinding :exec
 DELETE FROM elitea_identity.token_project_binding
 WHERE token_id = sqlc.arg(token_id)::integer;

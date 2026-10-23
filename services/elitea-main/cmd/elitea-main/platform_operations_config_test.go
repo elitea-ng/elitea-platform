@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
 func lookupFrom(values map[string]string) func(string) (string, bool) {
@@ -18,26 +18,28 @@ func lookupFrom(values map[string]string) func(string) (string, bool) {
 }
 
 var (
-	enabledDeepWiki = v2deepwiki.Config{Enabled: true, ClientCertFile: "/c/client.crt",
+	enabledDeepWiki = v2deepwiki.Config{Enabled: true, Target: "elitea-deepwiki:9443", ClientCertFile: "/c/client.crt",
 		ClientKeyFile: "/c/client.key", CAFile: "/c/ca.crt", ServerName: "elitea-deepwiki", Timeout: 30 * time.Second}
-	enabledInventory = facade.Config{Enabled: true, ClientCertFile: "/c/client.crt",
+	enabledInventory = facade.Config{Enabled: true, Target: "elitea-inventory:9443", ClientCertFile: "/c/client.crt",
 		ClientKeyFile: "/c/client.key", CAFile: "/c/ca.crt", Timeout: 5 * time.Minute}
 )
 
-func TestNoTargetsMeansNoClients(t *testing.T) {
+// No facade, no client: the target is the facade's (#1359), and there is
+// nothing to dial for a provider this deployment does not run.
+func TestNoFacadesMeansNoClients(t *testing.T) {
 	t.Parallel()
-	configs, err := platformOperationsConfigs(enabledDeepWiki, enabledInventory, lookupFrom(nil))
+	configs, err := platformOperationsConfigs(v2deepwiki.Config{}, facade.Config{}, lookupFrom(nil))
 	if err != nil || len(configs) != 0 {
 		t.Fatalf("configs=%v err=%v", configs, err)
 	}
 }
 
-func TestATargetReusesItsFacadesMaterial(t *testing.T) {
+// An enabled facade always has its deletion client: the provider SPI and
+// the platform operations share one listener, so the facade's target is
+// the client's, with the facade's material.
+func TestAnEnabledFacadeAlwaysWiresItsDeletionClient(t *testing.T) {
 	t.Parallel()
-	configs, err := platformOperationsConfigs(enabledDeepWiki, enabledInventory, lookupFrom(map[string]string{
-		deepwikiPlatformTargetEnv:  " elitea-deepwiki:9443 ",
-		inventoryPlatformTargetEnv: "elitea-inventory:9443",
-	}))
+	configs, err := platformOperationsConfigs(enabledDeepWiki, enabledInventory, lookupFrom(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,9 +80,9 @@ func TestATargetBesideADisabledFacadeIsABootError(t *testing.T) {
 func TestAMalformedTargetIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, target := range []string{"https://elitea-deepwiki:9443", "elitea-deepwiki", ":9443"} {
-		if _, err := platformOperationsConfigs(enabledDeepWiki, enabledInventory, lookupFrom(map[string]string{
-			deepwikiPlatformTargetEnv: target,
-		})); err == nil {
+		deepwiki := enabledDeepWiki
+		deepwiki.Target = target
+		if _, err := platformOperationsConfigs(deepwiki, enabledInventory, lookupFrom(nil)); err == nil {
 			t.Errorf("target %q was accepted", target)
 		}
 	}

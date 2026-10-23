@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 const (
@@ -45,7 +45,7 @@ func NewActiveIndexConflictError(taskID string) error {
 	return &ActiveIndexConflictError{TaskID: taskID}
 }
 
-// IndexMetaMaterializer owns the idempotent external PgVector write for the
+// IndexMetaMaterializer owns the idempotent index registry write for the
 // exact admission identity. It must reproduce the approved current initial
 // metadata contract and return only after that row is durably visible. It does
 // not open the command dispatch gate. Implementations must propagate and
@@ -162,7 +162,7 @@ func (c IndexMetaInitializationReconcilerConfig) validate() error {
 
 // DurableIndexMetaInitializer is the single immediate/recovery implementation.
 // PostgreSQL leases allow multiple Main replicas to run it safely, while the
-// bounded worker set prevents PgVector/configuration fan-out from exceeding the
+// bounded worker set prevents registry/configuration fan-out from exceeding the
 // pool-derived composition limit.
 type DurableIndexMetaInitializer struct {
 	store        IndexMetaInitializationRepository

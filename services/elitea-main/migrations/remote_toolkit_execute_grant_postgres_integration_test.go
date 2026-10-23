@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 )
 
 const remoteToolkitExecutePermission = desktopops.RemoteToolkitPermission

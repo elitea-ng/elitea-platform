@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 )
 
 // CodePlatformOwner is implemented by the fixed authenticated Main owner client.

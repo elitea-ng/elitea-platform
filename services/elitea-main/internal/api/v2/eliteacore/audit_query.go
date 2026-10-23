@@ -2,8 +2,8 @@ package eliteacore
 
 // Query construction for the four admin audit-trail reads (unit A14, #200).
 //
-// The wire contract is not invented: it mirrors the pylon handlers the existing
-// admin_ui client already speaks to —
+// The wire contract is not invented: it mirrors the legacy handlers the
+// existing admin_ui client already speaks to —
 //   legacy/plugins/elitea_core/api/v2/audit.py
 //   legacy/plugins/elitea_core/api/v2/audit_traces.py
 //   legacy/plugins/elitea_core/api/v2/audit_heatmap.py
@@ -38,7 +38,7 @@ import (
 const auditTable = `centry.audit_events`
 
 // auditFilters is the parsed query string, shared by all four endpoints
-// because pylon accepts the same filter set on all four.
+// because the legacy runtime accepts the same filter set on all four.
 type auditFilters struct {
 	search      string
 	eventTypes  []string
@@ -105,9 +105,9 @@ func writeInvalidDateRange(w http.ResponseWriter) {
 	})
 }
 
-// splitEventTypes accepts pylon's comma-separated list. The page always sends
-// one — the active tab's whole set ("api,socketio,rpc,agent,tool,llm") when no
-// type is chosen — so a single-element result is the exception, not the rule.
+// splitEventTypes accepts the legacy comma-separated list. The page always
+// sends one — the active tab's whole set ("api,socketio,rpc,agent,tool,llm")
+// when no type is chosen — so a single-element result is the exception, not the rule.
 func splitEventTypes(raw string) []string {
 	if raw == "" {
 		return nil
@@ -139,8 +139,8 @@ func optionalFloat(raw string) *float64 {
 }
 
 // optionalTime accepts what `Date.prototype.toISOString()` emits (the page's
-// only format) as well as the offset-bearing and naive forms pylon's
-// `datetime.fromisoformat` took, so an existing admin_ui client keeps working.
+// only format) as well as the offset-bearing and naive forms the legacy
+// runtime's `datetime.fromisoformat` took, so an existing admin_ui client keeps working.
 func optionalTime(raw string) *time.Time {
 	if raw == "" {
 		return nil
@@ -261,7 +261,7 @@ var sortableTraceColumns = map[string]string{
 // orderBy resolves `sort_by`/`sort_order` against an allow-list and appends
 // `tiebreak` as a final, always-unique sort key.
 //
-// The tiebreaker is a DELIBERATE addition to the pylon original, not a porting
+// The tiebreaker is a DELIBERATE addition to the legacy original, not a porting
 // slip. `ORDER BY timestamp DESC` alone is not a total order — audit rows are
 // written in bursts and ties are common — and PostgreSQL is free to return tied
 // rows in a different order for each LIMIT/OFFSET page. That makes rows repeat
@@ -328,7 +328,7 @@ func pickInterval(rangeSeconds int64) bucketInterval {
 // maxHeatmapBuckets caps the response size. Past 30 days the bucket width stops
 // growing (1 day), so the slot count grows without bound with the requested
 // range — a 500-year `date_from` would otherwise ask this handler to build ~1M
-// slots × 5 bands in memory. pylon has no such cap.
+// slots × 5 bands in memory. The legacy runtime has no such cap.
 const maxHeatmapBuckets = 5000
 
 // bucketExpression floors `column`'s epoch seconds to the interval grid.

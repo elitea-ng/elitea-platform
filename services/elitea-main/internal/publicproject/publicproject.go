@@ -49,7 +49,7 @@ import (
 	"strconv"
 )
 
-// Default mirrors pylon's elitea_config "ai_project_id" default (1).
+// Default mirrors the legacy elitea_config "ai_project_id" default (1).
 const Default = 1
 
 // Canonical is the one variable an operator should set. It is the name the LLM

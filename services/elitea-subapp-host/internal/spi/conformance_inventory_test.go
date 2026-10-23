@@ -25,8 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 const (
@@ -56,15 +57,17 @@ func inventorySettings(t *testing.T, pairs map[string]string) spi.Settings {
 	return settings
 }
 
-func inventoryHost(t *testing.T, runner spi.Runner, pairs map[string]string) *spi.Server {
+func inventoryHost(t *testing.T, runner spi.Runner, pairs map[string]string) http.Handler {
 	t.Helper()
 	server, err := spi.NewServer(inventorySettings(t, pairs), inventory.App(runner), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(context.Background())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
-	return server
+	return spitest.Handler(t, server)
 }
 
 func inventoryFixture(t *testing.T, parts ...string) []byte {

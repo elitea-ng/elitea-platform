@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"

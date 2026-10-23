@@ -381,6 +381,7 @@ export function PlatformModelsPanel(): ReactNode {
         editing={editor.row}
         modelTypes={data?.model_types ?? []}
         credentialNames={data?.credential_names ?? []}
+        credentialTypes={data?.credential_types}
         isSaving={createModel.isPending || updateModel.isPending}
         serverError={saveError}
         onClose={() => {

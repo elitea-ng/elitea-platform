@@ -1,8 +1,8 @@
 -- 0094_mcp_prebuilt_catalogue.sql — the PRE-BUILT MCP server catalogue: the
 -- platform-wide list of MCP servers an operator offers as ready-made toolkits.
 --
--- WHAT THIS REPLACES. In pylon the catalogue is a block of the indexer_worker
--- plugin's YAML descriptor:
+-- WHAT THIS REPLACES. In the legacy runtime the catalogue is a block of the
+-- indexer_worker plugin's YAML descriptor:
 --
 --     mcp_servers:
 --       Epam Presales:
@@ -27,14 +27,14 @@
 -- is that catalogue.
 --
 -- WHY A TABLE AND NOT A `centry.platform_config` ROW. The catalogue holds
--- credentials — pylon's own example block carries `client_secret` in clear
--- text. `internal/api/v2/admin/config_values.go:rejectCredentialField` refuses
--- any credential into a plaintext platform-configuration row, and that rule is
--- right: those rows are readable by every holder of `runtime.plugins`. So the
--- secret does NOT live here either. `client_secret_ref` names an entry in the
--- GLOBAL secret vault (`centry.secrets_key`/`secrets_data`, vault id `admin`),
--- and the value is sealed there by the admin write path. This table holds the
--- reference, never the secret.
+-- credentials — the legacy runtime's own example block carries `client_secret`
+-- in clear text. `internal/api/v2/admin/config_values.go:rejectCredentialField`
+-- refuses any credential into a plaintext platform-configuration row, and that
+-- rule is right: those rows are readable by every holder of `runtime.plugins`.
+-- So the secret does NOT live here either. `client_secret_ref` names an entry
+-- in the GLOBAL secret vault (`centry.secrets_key`/`secrets_data`, vault id
+-- `admin`), and the value is sealed there by the admin write path. This table
+-- holds the reference, never the secret.
 --
 -- HTTP ONLY, AND THAT IS NOT AN OMISSION. The reference page's field help says
 -- the section "supports stdio (local subprocess) and http (remote) server
@@ -46,16 +46,16 @@
 -- refuses a stdio definition with that reason rather than accepting it into a
 -- column nobody reads.
 --
--- WHY SHARED. The catalogue is platform-wide by construction: pylon's copy is
--- one dictionary per deployment, offered to every project. A per-tenant table
--- would make one platform fact into N copies that drift.
+-- WHY SHARED. The catalogue is platform-wide by construction: the legacy
+-- runtime's copy is one dictionary per deployment, offered to every project. A
+-- per-tenant table would make one platform fact into N copies that drift.
 --
 -- catalogue_key IS THE NORMALISED NAME, and it is what a toolkit type is
--- matched against. pylon normalises on both sides — the producer lowercases the
--- YAML key and turns spaces into underscores, and `normalize_mcp_toolkit_name`
--- additionally strips a leading `mcp_` from the toolkit type before the lookup.
--- Storing the normalised form is what makes the lookup a single indexed read
--- instead of a scan with a transform.
+-- matched against. The legacy runtime normalises on both sides — the producer
+-- lowercases the YAML key and turns spaces into underscores, and
+-- `normalize_mcp_toolkit_name` additionally strips a leading `mcp_` from the
+-- toolkit type before the lookup. Storing the normalised form is what makes the
+-- lookup a single indexed read instead of a scan with a transform.
 --
 -- NO FOREIGN KEYS. The table references nothing. 0073 records the same for
 -- `project_id`, and this table has no project at all.
@@ -70,22 +70,24 @@ CREATE TABLE IF NOT EXISTS elitea_mcp.prebuilt_servers (
     -- catalogue_key is the normalised lookup key: lowercase, spaces replaced by
     -- underscores, trimmed, with any leading `mcp_` removed.
     catalogue_key     text        NOT NULL,
-    -- display_name is pylon's `original_name` — the key exactly as the operator
-    -- wrote it, kept so the admin page can show "Epam Presales" rather than
-    -- "epam_presales".
+    -- display_name is the legacy runtime's `original_name` — the key exactly as
+    -- the operator wrote it, kept so the admin page can show "Epam Presales"
+    -- rather than "epam_presales".
     display_name      text        NOT NULL,
-    -- server_url is pylon's `url`: the MCP endpoint tools are discovered from.
+    -- server_url is the legacy runtime's `url`: the MCP endpoint tools are
+    -- discovered from.
     server_url        text        NOT NULL DEFAULT '',
-    -- base_url is pylon's `base_url`, a separate field in its example block and
-    -- carried for the toolkits whose settings expect it.
+    -- base_url is the legacy runtime's `base_url`, a separate field in its
+    -- example block and carried for the toolkits whose settings expect it.
     base_url          text        NOT NULL DEFAULT '',
     client_id         text        NOT NULL DEFAULT '',
     -- client_secret_ref names the entry in the GLOBAL vault. Empty means the
     -- catalogue entry has no client secret, which is distinct from "the secret
     -- is empty".
     client_secret_ref text        NOT NULL DEFAULT '',
-    -- timeout_seconds is pylon's `timeout`. Zero means "not configured", so the
-    -- caller's own default applies rather than a zero-second timeout.
+    -- timeout_seconds is the legacy runtime's `timeout`. Zero means "not
+    -- configured", so the caller's own default applies rather than a
+    -- zero-second timeout.
     timeout_seconds   integer     NOT NULL DEFAULT 0,
     -- headers are the non-secret HTTP headers merged into a discovery request.
     headers           jsonb       NOT NULL DEFAULT '{}'::jsonb,
@@ -106,8 +108,8 @@ CREATE TABLE IF NOT EXISTS elitea_mcp.prebuilt_servers (
         CHECK (jsonb_typeof(headers) = 'object')
 );
 
--- One entry per normalised key. That is pylon's dictionary key, so a second
--- definition of the same name replaces the first rather than adding a duplicate
--- that the lookup would resolve arbitrarily.
+-- One entry per normalised key. That is the legacy runtime's dictionary key, so
+-- a second definition of the same name replaces the first rather than adding a
+-- duplicate that the lookup would resolve arbitrarily.
 CREATE UNIQUE INDEX IF NOT EXISTS prebuilt_servers_key_uniq
     ON elitea_mcp.prebuilt_servers (catalogue_key);

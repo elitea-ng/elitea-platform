@@ -13,7 +13,7 @@
   "control_target": "elitea-main:9443",
   "output_target": "elitea-main:9444",
   "content_origin": "https://elitea-main:9445",
-  "platform_origin": "https://elitea-platform-edge",
+  "platform_origin": "https://elitea-main:9446",
   "ca_path": "/run/elitea-runtime/runtime-ca.crt",
   "certificate_path": "/run/elitea-runtime/agent-worker-client.crt",
   "private_key_path": "/run/elitea-runtime/agent-worker-client.key",

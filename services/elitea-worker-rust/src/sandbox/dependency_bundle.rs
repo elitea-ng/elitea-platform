@@ -246,11 +246,13 @@ impl DependencyBundle {
             Self::NativeV2(v) => v.record_json(),
         }
     }
+    /// The bundle kind Main's content service stores this bundle under.
     #[must_use]
-    pub fn route(&self) -> &str {
+    pub fn kind(&self) -> crate::protocol::elitea::runtime::v1::SandboxBundleKindV1 {
+        use crate::protocol::elitea::runtime::v1::SandboxBundleKindV1;
         match self {
-            Self::PythonV1(_) => "sandbox-bundles",
-            Self::NativeV2(_) => "sandbox-native-bundles",
+            Self::PythonV1(_) => SandboxBundleKindV1::Python,
+            Self::NativeV2(_) => SandboxBundleKindV1::Native,
         }
     }
     #[must_use]

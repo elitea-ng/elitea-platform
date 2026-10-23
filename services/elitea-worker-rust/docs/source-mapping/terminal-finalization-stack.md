@@ -3,7 +3,7 @@
 ## Source mapping
 
 Current SDK `projects/elitea-sdk/elitea_sdk/runtime/tools/application.py` creates the nested `AgentResponse` result.
-Current worker `projects/centry/pylon_indexer/plugins/indexer_worker/utils/agent_execution_common.py` emits `agent_response` and `full_message`.
+Current worker `legacy/centry/<indexer runtime>/plugins/indexer_worker/utils/agent_execution_common.py` emits `agent_response` and `full_message`.
 Current worker `methods/agent_common.py` also projects the final message.
 The Rust worker owns these transitions in `src/execution/native_agent_lifecycle.rs`.
 Main acknowledges the terminal frame before settlement and Redis retirement.

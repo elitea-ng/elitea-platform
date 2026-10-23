@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 // stubProviderSource answers Enabled from a map, or with one error.

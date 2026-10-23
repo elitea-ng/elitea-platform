@@ -7,12 +7,12 @@ import (
 	"math"
 	"strings"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/toolkitnaming"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
 const maxToolkitIdentityBytes = 1024

@@ -7,9 +7,7 @@
  *
  *  - the REQUEST the control produced (a toggle that sends the wrong id, or
  *    that smuggles a field, looks identical on screen to one that does not);
- *  - that a control the server would refuse is not offered as though it worked;
- *  - that a tab with no backend says so, rather than rendering an empty table
- *    that reads as "nothing is running".
+ *  - that a control the server would refuse is not offered as though it worked.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -372,35 +370,18 @@ describe('AdminSchedulesTasks — authorisation is presentation only', () => {
   });
 });
 
-describe('AdminSchedulesTasks — the tabs with no backend', () => {
-  it.each([
-    ['Tasks'],
-    ['Active Tasks'],
-  ])('%s says why it is unavailable instead of rendering an empty list', async (tab) => {
-    const user = userEvent.setup();
+describe('AdminSchedulesTasks — schedules only', () => {
+  // The reference page's Tasks and Active Tasks tabs read a plugin runtime's
+  // task registry this platform does not have; Admin › Tasks answers that
+  // question from the platform's own tables. This page must not grow them back
+  // as tabs that render nothing.
+  it('renders no tab strip and requests nothing about tasks', async () => {
     renderAdminRoute(<AdminSchedulesTasks />);
     await waitForSchedules();
 
-    await user.click(screen.getByRole('tab', { name: tab }));
-
-    const notice = await screen.findByTestId('admin-task-nodes-unavailable');
-    // The reason names the system, so an operator can tell "this platform
-    // cannot see them" from "there are none".
-    expect(notice).toHaveTextContent('Pylon plugin runtime');
-    expect(notice).toHaveTextContent('Arbiter task node');
-    // And there is no table pretending to be an empty one.
-    expect(screen.queryByRole('table')).not.toBeInTheDocument();
-    // Nothing was requested for these tabs — there is no endpoint to request.
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.getByTestId('admin-schedules-search')).toBeInTheDocument();
     expect(recorded.filter((entry) => entry.url.includes('tasks'))).toHaveLength(0);
-  });
-
-  it('hides the schedule search box on a tab it cannot filter', async () => {
-    const user = userEvent.setup();
-    renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
-
-    await user.click(screen.getByRole('tab', { name: 'Tasks' }));
-    expect(screen.queryByTestId('admin-schedules-search')).not.toBeInTheDocument();
   });
 });
 

@@ -240,18 +240,20 @@ mod tests {
 
     #[tokio::test]
     async fn the_origin_guard_admits_exactly_the_platform_origin() {
-        let platform = Url::parse("https://elitea-platform-edge:8443").expect("url");
+        // elitea-main's internal platform listener; the same host serves
+        // other listeners (9443-9445) that are not the platform origin.
+        let platform = Url::parse("https://elitea-main:9446").expect("url");
         let guard = OriginGuard::new(&platform, Arc::new(Counting(AtomicUsize::new(0))));
         for (url, want) in [
-            ("https://elitea-platform-edge:8443/api/v2/artifacts/x", true),
-            ("https://ELITEA-PLATFORM-EDGE:8443/x", true),
-            ("https://elitea-platform-edge:9443/x", false),
-            ("https://elitea-platform-edge/x", false),
-            ("http://elitea-platform-edge:8443/x", false),
-            ("https://elitea-platform-edge.evil.example:8443/x", false),
-            ("https://evil-elitea-platform-edge:8443/x", false),
+            ("https://elitea-main:9446/api/v2/artifacts/x", true),
+            ("https://ELITEA-MAIN:9446/x", true),
+            ("https://elitea-main:9443/x", false),
+            ("https://elitea-main/x", false),
+            ("http://elitea-main:9446/x", false),
+            ("https://elitea-main.evil.example:9446/x", false),
+            ("https://evil-elitea-main:9446/x", false),
             ("https://api.github.com/x", false),
-            ("https://elitea-platform-edge:8443@evil.example/x", false),
+            ("https://elitea-main:9446@evil.example/x", false),
         ] {
             let url = Url::parse(url).expect("url");
             assert_eq!(guard.permits_url(&url), want, "{url}");

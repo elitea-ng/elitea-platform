@@ -4,7 +4,7 @@
 // It is a gateway-local copy of elitea-main's pkg/ssewriter (they live in
 // separate Go modules): the /llm SSE loop (design §6.3) MUST reuse a helper
 // that sets X-Accel-Buffering: no and Connection: keep-alive, otherwise
-// Traefik buffers the stream and the incremental-flush spike (BF0.3a) is a
+// a buffering proxy holds the stream and the incremental-flush spike (BF0.3a) is a
 // false positive. New wires an http.ResponseController so the streaming loop
 // can clear the per-connection write deadline (§9.5) without hard-killing an
 // active SSE response.

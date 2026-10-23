@@ -328,6 +328,10 @@ fn store_error(error: &StoreError) -> EngineError {
         return EngineError::new(ErrorType::Runtime, message.clone())
             .with_code(elitea_engine_core::errors::codes::TOOLKIT_DELETED);
     }
+    if let StoreError::Contended(message) = error {
+        return EngineError::new(ErrorType::Runtime, message.clone())
+            .with_code(elitea_engine_core::errors::codes::BUSY);
+    }
     EngineError::new(
         ErrorType::Runtime,
         format!("the graph store failed: {error}"),
@@ -443,8 +447,32 @@ pub async fn run(
     options: &RunOptions,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
+    run_in(
+        &PgGraphStore::new(pool.clone()),
+        key,
+        source,
+        settings,
+        options,
+        context,
+    )
+    .await
+}
+
+/// [`run`] into `graphs`, which carries the invocation's vector access (the
+/// completed graph's entity vectors are published through it).
+///
+/// # Errors
+///
+/// See [`run`].
+pub async fn run_in(
+    graphs: &PgGraphStore,
+    key: GraphKey,
+    source: &Source,
+    settings: &IngestSettings,
+    options: &RunOptions,
+    context: &Context,
+) -> Result<Outcome, EngineError> {
     // Every store access of a run goes through the `GraphStore` trait.
-    let graphs = PgGraphStore::new(pool.clone());
     // The lease is also the deletion fence: a toolkit deleted meanwhile is
     // refused here (`code: toolkit_deleted`), before anything is written.
     let Some(_lease) = graphs.lease(key).await.map_err(|e| store_error(&e))? else {
@@ -473,7 +501,7 @@ pub async fn run(
         .start(key, &status)
         .await
         .map_err(|e| store_error(&e))?;
-    let outcome = run_started(&graphs, key, source, settings, options, context).await;
+    let outcome = run_started(graphs, key, source, settings, options, context).await;
     if let Err(error) = &outcome {
         // The run's own error is what the caller sees; a failure to record
         // it as well is only logged.

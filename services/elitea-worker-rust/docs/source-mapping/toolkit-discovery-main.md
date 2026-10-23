@@ -7,9 +7,9 @@ The SDK returns tool names, descriptions, and argument schemas.
 
 | Current source | Replacement source | Contract |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/elitea_core/api/v2/toolkit_available_tools.py` | `services/elitea-main/internal/api/v2/toolkits/handler.go` | Authorize the actor and use the saved toolkit ID. |
-| `projects/centry/pylon_main/plugins/elitea_core/rpc/application.py:get_toolkit_available_tools` | `services/elitea-main/internal/application/toolkitdiscovery/` | Admit a durable discovery command and wait for its accepted result. |
-| `projects/centry/pylon_indexer/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py` | `services/elitea-worker-rust/src/toolkits/` | Discover tools through the selected worker implementation. |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/toolkit_available_tools.py` | `services/elitea-main/internal/api/v2/toolkits/handler.go` | Authorize the actor and use the saved toolkit ID. |
+| `legacy/centry/<main runtime>/plugins/elitea_core/rpc/application.py:get_toolkit_available_tools` | `services/elitea-main/internal/application/toolkitdiscovery/` | Admit a durable discovery command and wait for its accepted result. |
+| `legacy/centry/<indexer runtime>/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py` | `services/elitea-worker-rust/src/toolkits/` | Discover tools through the selected worker implementation. |
 | `projects/elitea-sdk/elitea_sdk/tools/__init__.py:get_toolkit_available_tools` | `services/elitea-worker-rust/src/toolkits/` | Return `tools` and `args_schemas` from the actual settings. |
 | Main `internal/application/toolkitcalltool/`, origin `d23c51bf` (#823); later `7244490c`, `0a7de34d` | `internal/application/toolkitdiscovery/`, `internal/infra/db/repos/toolkit_available_tools_*` | Preserve atomic admission and durable signed-envelope selection. |
 

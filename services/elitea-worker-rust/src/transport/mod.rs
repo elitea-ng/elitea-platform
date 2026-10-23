@@ -1,6 +1,7 @@
 pub(crate) mod anthropic_facade;
 #[cfg(test)]
 mod anthropic_facade_tests;
+pub(crate) mod artifact_objects;
 pub mod command_bus;
 pub mod control_grpc;
 pub(crate) mod embeddings_facade;

@@ -44,22 +44,36 @@ because the container's own refusal is a CrashLoopBackOff an operator has to
 go read logs for, and this is a message in the terminal that ran the command.
 */}}
 {{/*
-elitea-deepwiki.callbackBaseUrl — the origin the provider calls back to: an
-explicit main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL, else platform-edge when
-deepwiki.callbackViaPlatformEdge is on, else empty (which validateDeepWiki
-refuses for an enabled facade).
+elitea-deepwiki.modelCalls — "true" when this release runs the engine sidecar
+(deepwiki.enabled, ELITEA_DEEPWIKI_RUNNER native) with the native engine
+(deepwiki.engine.runner native; the fixture runner calls no model), the
+container that makes DeepWiki's model calls. Those go over elitea.llm.v1.ModelService on
+elitea-main's platform listener (#1359 U2) — the listener serves no HTTP, and
+the engine refuses a cleartext model origin.
 */}}
-{{- define "elitea-deepwiki.callbackBaseUrl" -}}
-{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
-{{- if $explicit -}}
-{{- $explicit -}}
-{{- else if .Values.deepwiki.callbackViaPlatformEdge -}}
-{{- .Values.worker.runtime.platformOrigin -}}
+{{- define "elitea-deepwiki.modelCalls" -}}
+{{- if .Values.deepwiki.enabled -}}
+{{- if and (eq (include "elitea-deepwiki.sidecar" .) "native") (eq (.Values.deepwiki.engine.runner | toString) "native") -}}true{{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+elitea-deepwiki.callbackMaterial — "true" whenever DeepWiki runs: the HOST
+container uploads and reads wiki artifacts over ArtifactObjectService on
+elitea-main's platform listener (#1359 U5) and the engine sidecar makes its
+model calls and artifact-folder reads there, so the pod always mounts the
+runtime CA and the callback client certificate.
+*/}}
+{{- define "elitea-deepwiki.callbackMaterial" -}}
+{{- if .Values.deepwiki.enabled -}}true{{- end -}}
 {{- end -}}
 
 {{/* Where both containers find the runtime CA for the callback hop. */}}
 {{- define "elitea-deepwiki.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
+
+{{/* Where the callback hop's client certificate (tls.crt / tls.key of
+     deepwiki.callbackClient.secretName) is mounted. */}}
+{{- define "elitea-deepwiki.callbackClientPath" -}}/run/elitea-callback-client{{- end -}}
 
 {{/*
 elitea-deepwiki.platformGrpc — "true" when the platform gRPC service is on:
@@ -79,7 +93,7 @@ configmap.yaml derives ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET from it.
 */}}
 {{- define "elitea-deepwiki.platformGrpcTarget" -}}
 {{- if and .Values.deepwiki.enabled (include "elitea-deepwiki.platformGrpc" .) -}}
-{{- printf "%s:%d" .Values.deepwiki.service.name (.Values.deepwiki.platformGrpc.port | int) -}}
+{{- printf "%s:%d" (.Values.deepwiki.service.grpcName | default .Values.deepwiki.service.name) (.Values.deepwiki.platformGrpc.port | int) -}}
 {{- end -}}
 {{- end -}}
 
@@ -116,6 +130,43 @@ elitea-main
 {{- end -}}
 
 {{- define "elitea-deepwiki.validateGuards" -}}
+{{- /*
+  The provider's one listener is gRPC over mutual TLS (#1359): the SPI and the
+  platform operations, every caller authorised by its verified client
+  certificate. So mtls is mandatory, the allowlist cannot be empty, and the
+  HTTPS SPI port is gone.
+*/ -}}
+{{- /*
+  More than one replica (scaling): a poll, a cancel, a deletion and the
+  generation slots are fleet-wide only through the shared invocation store
+  (the invocations and host_replicas tables, engine migration 0009). Without
+  the database each replica keeps its invocations in memory: a poll that
+  reaches another replica answers not-found, and each replica admits its own
+  slots. So more than one replica needs the database secret.
+*/ -}}
+{{- if and (gt (int (include "elitea.scaling.maxReplicas" .Values.deepwiki)) 1) (not (get (fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL"))) "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
+{{- fail (printf "deepwiki can run %d replicas (%s), but its host has no invocation store: no database secret is configured (deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL or postgresql.existingSecret). Without it each replica keeps its invocations and its slots in memory, and a poll that reaches another replica answers not-found for a running generation. Configure the database, or keep one replica (deepwiki.autoscaling.enabled=false)." (int (include "elitea.scaling.maxReplicas" .Values.deepwiki)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.deepwiki) "true"))) -}}
+{{- end -}}
+{{- if hasKey (.Values.deepwiki.service | default dict) "port" -}}
+{{- fail "deepwiki.service.port was removed with the HTTPS SPI (#1359): the provider serves gRPC only, on deepwiki.platformGrpc.port. Remove service.port (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if not .Values.deepwiki.mtls.enabled -}}
+{{- fail "deepwiki.mtls.enabled is false, but the provider serves gRPC over mutual TLS only (#1359) and refuses to start without its server certificate and client CA. Enable mtls." -}}
+{{- end -}}
+{{- /*
+  The native engine keeps every wiki's dense vectors in elitea-vector (ADR-0031; PostgreSQL holds
+  none) and REFUSES to start without ELITEA_DEEPWIKI_VECTOR_URL. The chart sets it
+  from this release's elitea-vector, so a native runner needs vector.enabled,
+  or deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL naming one deployed elsewhere (whose
+  certificate the runtime CA signs and whose client CA trusts the callback
+  identity). Without this guard the refusal is a sidecar in CrashLoopBackOff.
+*/ -}}
+{{- if and (include "elitea-deepwiki.modelCalls" .) (not .Values.vector.enabled) (not (get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_VECTOR_URL")) -}}
+{{- fail "deepwiki.engine.runner is \"native\" but vector.enabled is false and deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL is unset. The native engine keeps every wiki's dense vectors in elitea-vector (ADR-0031) and refuses to start without it; PostgreSQL holds no vector. Enable vector (this chart's elitea-vector and Qdrant), name an external elitea-vector in deepwiki.env.ELITEA_DEEPWIKI_VECTOR_URL, or use runner fixture." -}}
+{{- end -}}
+{{- if not (include "elitea-deepwiki.platformGrpc" .) -}}
+{{- fail "deepwiki.platformGrpc.clients is empty, so the provider's one listener admits nobody and elitea-main's facade is refused on every call (#1359). The default is [elitea-main]." -}}
+{{- end -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
 
 {{/*
@@ -126,9 +177,6 @@ elitea-main
 {{- if include "elitea-deepwiki.platformGrpc" . -}}
 {{- if not .Values.deepwiki.mtls.enabled -}}
 {{- fail "deepwiki.platformGrpc.clients is set, but deepwiki.mtls.enabled is false: the platform service authorises a caller by its verified client certificate and refuses to start without mutual TLS. Enable mtls, or empty platformGrpc.clients." -}}
-{{- end -}}
-{{- if eq (.Values.deepwiki.platformGrpc.port | int) 8080 -}}
-{{- fail "deepwiki.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
 {{- end -}}
 {{- /*
   The allowlist must name the identity elitea-main presents on this hop. When
@@ -155,24 +203,49 @@ elitea-main
 {{- if or (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") -}}
 {{- fail "deepwiki.env sets ELITEA_DEEPWIKI_PLATFORM_CLIENTS or ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR; the chart renders both from deepwiki.platformGrpc (clients, port). Remove them from env." -}}
 {{- end -}}
+{{- if hasKey $env "ELITEA_DEEPWIKI_ADMIN_ADDR" -}}
+{{- fail "deepwiki.env sets ELITEA_DEEPWIKI_ADMIN_ADDR; the chart renders it from deepwiki.admin.port, which the probes and the NetworkPolicy also use. Remove it from env." -}}
+{{- end -}}
+{{- if eq ((.Values.deepwiki.admin | default dict).port | int) (.Values.deepwiki.platformGrpc.port | int) -}}
+{{- fail "deepwiki.admin.port equals deepwiki.platformGrpc.port; the plain-HTTP admin port and the mutual-TLS gRPC listener cannot share a port." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
-  Guard #0: the callback hop through platform-edge (ADR-0027). The edge is a
-  worker component, so without the worker there is nothing to dial; and an
-  explicit callback URL that is not the edge would leave the runtime CA
-  mounted for a hop that never uses it.
+  Guard #0: the callback hop. It is always gRPC on elitea-main's platform
+  listener now (#1359 U5): the host's artifact uploads and reads over
+  ArtifactObjectService, the engine's model calls and artifact-folder reads
+  over ModelService and ArtifactObjectService. The two switches that once
+  chose the hop are refused whatever their value: callbackViaPlatformEdge
+  (ADR-0027, gone with platform-edge) and callbackViaPlatformListener (the
+  only path now, so nothing is left to choose).
 */}}
 {{- if .Values.deepwiki.callbackViaPlatformEdge -}}
-{{- if not (and .Values.worker.enabled .Values.worker.platformEdge.enabled) -}}
-{{- fail "deepwiki.callbackViaPlatformEdge is on, but platform-edge is not rendered: it needs worker.enabled and worker.platformEdge.enabled. Turn those on, or leave the callback hop on main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL (cleartext in-cluster)." -}}
+{{- fail "deepwiki.callbackViaPlatformEdge was removed with platform-edge (#1359). The callback hop is always gRPC on elitea-main's platform listener now: remove the key and mint the callback client certificate into deepwiki.callbackClient.secretName (docs/UPGRADING.md)." -}}
 {{- end -}}
-{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
-{{- if and $explicit (ne $explicit (.Values.worker.runtime.platformOrigin | toString)) -}}
-{{- fail (printf "deepwiki.callbackViaPlatformEdge is on, so the callback hop is %s, but main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL says %q. Leave it unset (the chart fills it in) or turn the flag off." .Values.worker.runtime.platformOrigin $explicit) -}}
+{{- if hasKey .Values.deepwiki "callbackViaPlatformListener" -}}
+{{- fail "deepwiki.callbackViaPlatformListener was removed (#1359 U5): DeepWiki's artifact hop is always gRPC (elitea.runtime.v1.ArtifactObjectService) on elitea-main's platform listener, with the runtime CA and deepwiki.callbackClient, so there is nothing left to choose. Remove the key, and remove main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL too (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if .Values.deepwiki.enabled -}}
+{{- if not .Values.main.runtime.enabled -}}
+{{- fail "deepwiki.enabled needs main.runtime.enabled: the provider host uploads and reads wiki artifacts over elitea.runtime.v1.ArtifactObjectService, and the engine makes its model calls over elitea.llm.v1.ModelService, both on elitea-main's platform gRPC listener (#1359 U2/U5), which only the runtime opens. Turn the runtime on (main.runtime.enabled)." -}}
+{{- end -}}
+{{- if not .Values.deepwiki.callbackClient.secretName -}}
+{{- fail "deepwiki.enabled needs deepwiki.callbackClient.secretName: the provider host and engine reach elitea-main's platform listener (#1359 U2/U5), which requires a client certificate the runtime CA signed, admitted as dns:elitea-subapp-callback. Create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key) and name it there." -}}
 {{- end -}}
 {{- end -}}
-
+{{/*
+  Guard #0a: the platform-listener settings. Guard #0 already requires the
+  listener (main.runtime) and the callback client certificate for any
+  DeepWiki install, sidecar or not. The chart owns the host's artifact-hop
+  and the engine's model-hop settings, so deepwiki.env may not repeat them: a
+  name in both is a duplicate env entry whose winner is decided by order.
+*/}}
+{{- range $name := list "ELITEA_DEEPWIKI_MODEL_SERVICE_URL" "ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL" "ELITEA_DEEPWIKI_CALLBACK_CA_FILE" "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE" "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE" -}}
+{{- if hasKey $env $name -}}
+{{- fail (printf "deepwiki.env sets %s, which the chart renders itself: the host's artifact calls and the engine's model and artifact calls go to elitea-main's platform listener (worker.runtime.platformOrigin) with the runtime CA and deepwiki.callbackClient. Remove it from deepwiki.env." $name) -}}
+{{- end -}}
+{{- end -}}
 {{/*
   Guard #1: the git-host allowlist.
 

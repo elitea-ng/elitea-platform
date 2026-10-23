@@ -13,7 +13,7 @@ package mcpregistry_test
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -22,7 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 func TestPrebuiltStoreRoundTrip(t *testing.T) {
@@ -86,9 +86,9 @@ func TestPrebuiltStoreLookupAcceptsEveryFormOfTheName(t *testing.T) {
 	}
 }
 
-// An upsert REPLACES the definition. pylon rebuilds its catalogue from the
-// descriptor on every reload, so a save means "this is the definition now" and
-// not "merge this into whatever was there".
+// An upsert REPLACES the definition. The legacy runtime rebuilds its catalogue
+// from the descriptor on every reload, so a save means "this is the definition
+// now" and not "merge this into whatever was there".
 func TestPrebuiltStoreUpsertReplacesRatherThanMerges(t *testing.T) {
 	pool := newCataloguePool(t)
 	store := mcpregistry.NewPrebuiltStore(pool)

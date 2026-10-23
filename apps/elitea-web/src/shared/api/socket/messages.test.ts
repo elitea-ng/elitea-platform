@@ -8,16 +8,18 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { FRAME_TYPE } from '@elitea/client-core/stream';
+
 import { SOCKET_MESSAGE_TYPES, parseSocketMessage, socketMessageSchema } from './messages';
 
 describe('SOCKET_MESSAGE_TYPES', () => {
-  it('catalogues exactly the 34 discriminants from constants.js:157-193', () => {
-    expect(SOCKET_MESSAGE_TYPES).toHaveLength(34);
-    expect(new Set(SOCKET_MESSAGE_TYPES).size).toBe(34);
+  it('is exactly @elitea/client-core FRAME_TYPE, in its declaration order', () => {
+    expect(SOCKET_MESSAGE_TYPES).toEqual(Object.values(FRAME_TYPE));
+    expect(new Set(SOCKET_MESSAGE_TYPES).size).toBe(SOCKET_MESSAGE_TYPES.length);
   });
 
-  it('includes the full verbatim list from spec §5.5', () => {
-    const expected = [
+  it('still includes the full verbatim baseline list from spec §5.5 (constants.js:157-193)', () => {
+    const baseline = [
       'agent_start', 'agent_response', 'agent_exception', 'agent_tool_start', 'agent_tool_end',
       'agent_tool_error', 'agent_requires_confirmation', 'agent_hitl_interrupt', 'mcp_authorization_required',
       'agent_llm_start', 'agent_llm_chunk', 'agent_llm_end', 'agent_on_function_tool_node', 'agent_on_tool_node',
@@ -27,7 +29,11 @@ describe('SOCKET_MESSAGE_TYPES', () => {
       'chat_predict_summary_finished', 'swarm_child_message', 'agent_swarm_agent_start',
       'agent_swarm_agent_response', 'agent_swarm_handoff',
     ];
-    expect([...SOCKET_MESSAGE_TYPES].sort()).toEqual([...expected].sort());
+    expect(SOCKET_MESSAGE_TYPES).toEqual(expect.arrayContaining(baseline));
+  });
+
+  it('has one schema variant per discriminant, no more', () => {
+    expect(socketMessageSchema.options).toHaveLength(SOCKET_MESSAGE_TYPES.length);
   });
 });
 
@@ -42,7 +48,7 @@ describe('socketMessageSchema — discriminated union', () => {
     expect(socketMessageSchema.safeParse({ content: 'hi' }).success).toBe(false);
   });
 
-  it('rejects a message whose `type` is not one of the 34 discriminants', () => {
+  it('rejects a message whose `type` is not one of the discriminants', () => {
     expect(socketMessageSchema.safeParse({ type: 'totally_made_up_event' }).success).toBe(false);
   });
 

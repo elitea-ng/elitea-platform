@@ -4,7 +4,7 @@
  * decisions a registered `NativeTransport` changes, as pure functions of
  * their inputs, so the browser path in `http.ts` reads as it always did.
  */
-import type { NativeTransport } from './nativeTransport';
+import { getNativeTransport, type NativeTransport } from './nativeTransport';
 import { credentialRefusalCode, isDeviceRevoked, resourceAuthorizationBody } from './reauth-policy';
 
 /**
@@ -137,4 +137,57 @@ async function replayAfterRefresh(attempt: NativeAttempt): Promise<NativeAnswer>
   if (await isDeviceRevoked(response)) native.signOut('device_revoked');
   const body = await resourceAuthorizationBody(response);
   return body !== undefined ? resourceAuth(response, body) : sessionEnded(response);
+}
+
+/**
+ * The send of the raw-fetch modules (`shared/api/artifacts.ts`,
+ * `shared/lib/download.ts`), which need a `Response` the typed client cannot
+ * give them (a `Blob` body, a `Content-Disposition` header, a multipart
+ * request). Without a transport it is `browserFetch(url, init)`, unchanged.
+ * With one it is the native request path of `http.ts`: the URL resolved
+ * against the deployment origin (a relative `/api/v2/...` against the
+ * bundled page's `tauri://` origin reaches nothing), the bearer, no cookies,
+ * no redirects, one refresh on a 401.
+ *
+ * A failure the judge returns is turned back into what `fetch` would have
+ * done, so callers keep their one `Response` branch: an HTTP refusal is a
+ * `Response` with its status and body, a network failure is a `TypeError`
+ * and an abort is an `AbortError`.
+ */
+/** The browser `fetch`, passed in: only the sanctioned raw-fetch modules name the global. */
+export type BrowserFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+export async function sendRaw(browserFetch: BrowserFetch, url: string, init: RequestInit = {}): Promise<Response> {
+  const native = getNativeTransport();
+  if (native === undefined) return browserFetch(url, init);
+  const absolute = new URL(url, native.origin ?? window.location.origin).toString();
+  const bearer = await native.accessToken();
+  const headers = new Headers(init.headers);
+  applyAuthHeaders(headers, bearerFor(native, absolute, bearer), native);
+  const nativeInit: RequestInit = { ...init, ...requestInit(init.method ?? 'GET', headers, 'omit', native) };
+  const send = (): Promise<Response> => (native.fetch ?? browserFetch)(absolute, nativeInit);
+  const answer = await judgeNativeResponse({
+    native,
+    first: await send(),
+    bearer,
+    init: nativeInit,
+    send,
+    url: absolute,
+    signal: init.signal ?? undefined,
+  });
+  if (answer.kind === 'response') return answer.response;
+  const { failure } = answer;
+  switch (failure.kind) {
+    case 'http':
+      return new Response(failure.body === undefined ? null : JSON.stringify(failure.body), {
+        status: failure.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    case 'auth':
+      return new Response(null, { status: failure.status });
+    case 'aborted':
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    case 'network':
+      throw new TypeError(failure.message);
+  }
 }

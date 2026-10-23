@@ -33,10 +33,11 @@ describe('orderedProjectOptions', () => {
 
   /*
    * `resolvePersonalProjectID` (elitea-main, social handler) has a branch
-   * pylon does not: when the caller has no `project_user_<uid>` project yet it
-   * answers the lowest-id project they hold a role in, so `personal_project_id`
-   * can address an ORDINARY TEAM PROJECT. Renaming by id alone replaced that
-   * project's real name with "Private" everywhere the switcher's name is read.
+   * the legacy runtime does not: when the caller has no `project_user_<uid>`
+   * project yet it answers the lowest-id project they hold a role in, so
+   * `personal_project_id` can address an ORDINARY TEAM PROJECT. Renaming by id
+   * alone replaced that project's real name with "Private" everywhere the
+   * switcher's name is read.
    */
   it('keeps the real name of a personal-project id that addresses an ordinary project', () => {
     const projects = [project(3, 'Zulu'), project(1, 'Default Project')];

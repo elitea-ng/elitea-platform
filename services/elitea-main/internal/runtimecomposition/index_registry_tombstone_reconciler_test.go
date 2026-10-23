@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
+	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
 )
 
 // The sweeper presumes a non-terminal job dead once it has outlived

@@ -133,7 +133,7 @@ const (
 // watcher.
 //
 // It does NOT create the bucket (#1076). The nats-bootstrap Job owns every
-// JetStream asset (deploy/helm/nats-bootstrap; compose runs the same script
+// JetStream asset (deploy/helm/elitea natsBootstrap; compose runs the same script
 // as the nats-bootstrap service), and elitea-main's NATS identity may not
 // create or update a stream. A missing bucket is a startup error naming that
 // Job, rather than a store that quietly makes its own with settings nobody
@@ -149,7 +149,7 @@ func NewNATSStore(ctx context.Context, js jetstream.JetStream, cfg NATSStoreConf
 	kv, err := js.KeyValue(ctx, bucket)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrBucketNotFound) {
-			return nil, fmt.Errorf("canvaspresence: %w: KV bucket %s is created by the nats-bootstrap Job (deploy/helm/nats-bootstrap; in compose, the nats-bootstrap service) — run it before elitea-main", ErrBucketMissing, bucket)
+			return nil, fmt.Errorf("canvaspresence: %w: KV bucket %s is created by the nats-bootstrap Job (deploy/helm/elitea natsBootstrap; in compose, the nats-bootstrap service) — run it before elitea-main", ErrBucketMissing, bucket)
 		}
 		return nil, fmt.Errorf("canvaspresence: bind KV bucket %s: %w", bucket, err)
 	}

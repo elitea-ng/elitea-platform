@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -64,7 +65,30 @@ type artifactTransferGrantQueries interface {
 	GetArtifactTransferGrant(context.Context, sqlcgen.GetArtifactTransferGrantParams) (sqlcgen.GetArtifactTransferGrantRow, error)
 	GetArtifactTransferGrantByID(context.Context, string) (sqlcgen.GetArtifactTransferGrantByIDRow, error)
 	MarkArtifactTransferGrantConsumed(context.Context, string) (int64, error)
+	ClaimArtifactTransferGrantForCommit(context.Context, string) (pgtype.Timestamptz, error)
+	ReleaseArtifactTransferGrantClaim(context.Context, sqlcgen.ReleaseArtifactTransferGrantClaimParams) (int64, error)
 	ClaimExpiredArtifactTransferGrants(context.Context, sqlcgen.ClaimExpiredArtifactTransferGrantsParams) ([]sqlcgen.ClaimExpiredArtifactTransferGrantsRow, error)
+	ListExpiredArtifactGrantStaging(context.Context, sqlcgen.ListExpiredArtifactGrantStagingParams) ([]sqlcgen.ListExpiredArtifactGrantStagingRow, error)
+	ClearArtifactGrantStaging(context.Context, sqlcgen.ClearArtifactGrantStagingParams) error
+}
+
+// GrantStagingSuffix makes a presigned single-shot grant's staging key:
+// the grant id plus this suffix (api/v2/artifacts grantStagingKey). The
+// ListExpiredArtifactGrantStaging query spells the same literal.
+const GrantStagingSuffix = ".upload"
+
+// IsGrantStagingKey reports whether key is the staging key of grant id.
+func IsGrantStagingKey(id, key string) bool {
+	return key == id+GrantStagingSuffix
+}
+
+// GrantStagingRow is one expired grant whose staging object the sweeper
+// reclaims (ListExpiredGrantStaging).
+type GrantStagingRow struct {
+	ID        string
+	ProjectID int64
+	BucketID  int64
+	Key       string
 }
 
 // ArtifactTransferGrantsRepository is the metadata store for
@@ -169,6 +193,35 @@ func (r *ArtifactTransferGrantsRepository) MarkTransferGrantConsumed(ctx context
 	return nil
 }
 
+// ClaimTransferGrant stamps consumed_at like MarkTransferGrantConsumed, but
+// up front: a single-shot commit claims the grant before it writes the
+// grant's final key, so two concurrent commits can never both copy into it.
+// It returns the stamp ReleaseTransferGrantClaim needs. An already consumed
+// (or already claimed) grant returns storage.ErrAlreadyExists.
+func (r *ArtifactTransferGrantsRepository) ClaimTransferGrant(ctx context.Context, id string) (time.Time, error) {
+	claimedAt, err := r.queries.ClaimArtifactTransferGrantForCommit(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, storage.ErrAlreadyExists
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("claim artifact transfer grant: %w", err)
+	}
+	return claimedAt.Time, nil
+}
+
+// ReleaseTransferGrantClaim hands back a claim ClaimTransferGrant took, after
+// a commit that did not complete, so the caller can retry on the same grant.
+// It reports whether the claim was still this commit's to release.
+func (r *ArtifactTransferGrantsRepository) ReleaseTransferGrantClaim(ctx context.Context, id string, claimedAt time.Time) (bool, error) {
+	rows, err := r.queries.ReleaseArtifactTransferGrantClaim(ctx, sqlcgen.ReleaseArtifactTransferGrantClaimParams{
+		ID: id, ClaimedAt: pgtype.Timestamptz{Time: claimedAt, Valid: true},
+	})
+	if err != nil {
+		return false, fmt.Errorf("release artifact transfer grant claim: %w", err)
+	}
+	return rows > 0, nil
+}
+
 // ClaimExpiredTransferGrants marks a bounded batch of expired, unconsumed
 // grants consumed and returns them for byte reclamation. See the wrapped
 // sqlc query for why the claim and the read are one statement.
@@ -192,4 +245,31 @@ func (r *ArtifactTransferGrantsRepository) ClaimExpiredTransferGrants(ctx contex
 		})
 	}
 	return out, nil
+}
+
+// ListExpiredGrantStaging returns a bounded batch of expired grants whose
+// presigned staging object may still exist. See the wrapped sqlc query.
+// olderThan must include the same grace margin ClaimExpiredTransferGrants
+// gets, so no URL that could still write is reclaimed under.
+func (r *ArtifactTransferGrantsRepository) ListExpiredGrantStaging(ctx context.Context, olderThan time.Time, limit int32) ([]GrantStagingRow, error) {
+	rows, err := r.queries.ListExpiredArtifactGrantStaging(ctx, sqlcgen.ListExpiredArtifactGrantStagingParams{
+		OlderThan: toTimestamptz(&olderThan),
+		RowLimit:  limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list expired artifact grant staging: %w", err)
+	}
+	out := make([]GrantStagingRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, GrantStagingRow{ID: row.ID, ProjectID: row.ProjectID, BucketID: row.BucketID, Key: row.Key})
+	}
+	return out, nil
+}
+
+// ClearGrantStaging records that a grant's staging object is gone.
+func (r *ArtifactTransferGrantsRepository) ClearGrantStaging(ctx context.Context, id, key string) error {
+	if err := r.queries.ClearArtifactGrantStaging(ctx, sqlcgen.ClearArtifactGrantStagingParams{ID: id, Key: key}); err != nil {
+		return fmt.Errorf("clear artifact grant staging: %w", err)
+	}
+	return nil
 }

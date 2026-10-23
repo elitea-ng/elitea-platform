@@ -122,8 +122,8 @@ services:
       - <worker-1-spool>:/mnt/index-worker-1/output-spool:ro
 ```
 
-Centry owns the concrete service composition, secret objects, network policy
-and complete replica-specific volume list.
+Your deployment owns the concrete service composition, secret objects,
+network policy and complete replica-specific volume list.
 
 ## Stage B: activate version 2
 
@@ -153,7 +153,7 @@ Machines here use **podman**: `podman compose`, not `docker compose`.
 ### Status: the mixed (centry-hybrid) deployment is retired
 
 Stage C was written for the mixed deployment in `deploy/centry-hybrid`, which
-put `pylon_indexer` in an `index-v1` Compose profile, shipped a
+put the legacy indexer in an `index-v1` Compose profile, shipped a
 `cutover-rehearsal.sh` walk-through and a `rollback/index-v1.yml` overlay. That
 directory is gone (see `docs/UPGRADING.md`, "runtime-redis removed"): it
 depended on the private legacy centry repository, and its runtime still wrote
@@ -161,31 +161,31 @@ the Redis command-bus fields that both workers now refuse. The command bus is
 NATS JetStream (`docs/runtime-command-bus.md`), so there is no version-1 Redis
 stream or consumer group left to drain, and no version-1 rollback overlay.
 
-`services/pylon-indexer/` is deleted too, with its bake target, its publish
+The legacy indexer's service directory is deleted too, with its bake target, its publish
 matrix entries, its scan matrix entry and its image-scan exemption. #509
 recorded 604 findings in the base image and said the exemption ends when the
 service goes away rather than by repairing an image we delete.
 
 A deployment still running the legacy index plane migrates by Stages A and B
-against its own stack, then stops `pylon_indexer` there. Version-2 admission
+against its own stack, then stops the legacy indexer there. Version-2 admission
 has no binary rollback to version 1, which was Stage B's rule all along.
 
 ### The four plugins, and what covers each
 
-`pylon_indexer` loaded four. None is dropped by accident:
+The legacy indexer loaded four. None is dropped by accident:
 
 | plugin | what now serves it |
 | --- | --- |
-| `indexer_worker` | `services/elitea-worker-python` — the agent worker serves index ingest on the same command stream and consumer group as agent execution |
+| `indexer_worker` | `services/elitea-worker-rust` — the agent worker serves index ingest on the same command stream and consumer group as agent execution (the Python worker that first took it over was retired in #1312) |
 | `worker_core` | the worker's own runtime; replaced with it |
 | `provider_worker` | ADR-0012 P3. The Go successor owns provider descriptors, and no hybrid route reaches this plugin |
 | `runtime_engine_litellm` | **dropped**, and already dropped before this change (#323). It ran a LiteLLM proxy inside the container — a second LLM data plane with no budget and no billing. The LLM data plane is `elitea-llm-gateway`, reached through `elitea-main` at `/llm/v1`. Nothing in the repository configures it any more |
 
 ### Retired with the service: the vault-parity gate
 
-`services/elitea-main/tests/vaultparity` asserted that pylon-indexer and
+`services/elitea-main/tests/vaultparity` asserted that the legacy indexer and
 elitea-main read one `SECRETS_MASTER_KEY` and could read each other's Fernet
-vaults (issue 418). With `services/pylon-indexer` and its rollback
+vaults (issue 418). With the legacy indexer and its rollback
 profile deleted, elitea-main is the only compose service that carries the
 key, so the package's subject no longer exists and it
 was removed in the same change rather than left to fail on a path that is

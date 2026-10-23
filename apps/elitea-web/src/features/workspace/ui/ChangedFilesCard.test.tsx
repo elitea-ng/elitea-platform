@@ -141,7 +141,7 @@ describe('ChangedFilesCard', () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByText('src/a.ts')).toBeInTheDocument();
-    expect(screen.getByText('1 files, +1 -1')).toBeInTheDocument();
+    expect(screen.getByText('1 file, +1 -1')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Undo turn' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Revert/ })).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();

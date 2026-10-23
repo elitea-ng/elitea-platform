@@ -188,6 +188,10 @@ pub struct Settings {
     pub publish: PublishSettings,
     /// The model client's process-wide settings.
     pub model: ModelEnvSettings,
+    /// `ELITEA_DEEPWIKI_VECTOR_URL` and the callback TLS material: where the
+    /// wikis' dense vectors are (elitea-vector). The native runner requires
+    /// it; the fixture and unavailable runners never read it.
+    pub vector: Option<VectorSettings>,
     /// The `generate_wiki` worker child's limits.
     pub worker: WorkerSettings,
     /// `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` (default 8, at most 256): the
@@ -202,6 +206,75 @@ pub struct Settings {
 pub const CALLBACK_CA_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CA_FILE";
 /// The listener's CA, which the callback hop trusted before the split.
 pub const TLS_CA_SETTING: &str = "ELITEA_DEEPWIKI_TLS_CA_FILE";
+/// The client certificate the callback hop presents (see
+/// [`ModelEnvSettings::callback_identity`]).
+pub const CALLBACK_CERT_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE";
+/// Its private key.
+pub const CALLBACK_KEY_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE";
+/// The model service origin (see [`ModelEnvSettings::model_service`]).
+pub const MODEL_SERVICE_SETTING: &str = "ELITEA_DEEPWIKI_MODEL_SERVICE_URL";
+
+/// elitea-vector's origin (see [`VectorSettings`]).
+pub const VECTOR_URL_SETTING: &str = "ELITEA_DEEPWIKI_VECTOR_URL";
+/// The name elitea-vector's certificate is verified against.
+pub const VECTOR_SERVER_NAME_SETTING: &str = "ELITEA_DEEPWIKI_VECTOR_SERVER_NAME";
+
+/// How the engine reaches elitea-vector (ADR-0031 D1-D3, #1359): gRPC over
+/// mutual TLS, with the callback hop's CA and client identity
+/// (`ELITEA_DEEPWIKI_CALLBACK_CA_FILE`, `_CERT_FILE`, `_KEY_FILE`, the
+/// identity elitea-main's platform listener already admits), and the
+/// invocation's callback bearer on every call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSettings {
+    /// `ELITEA_DEEPWIKI_VECTOR_URL`: `https://elitea-vector:9470`. `http://`
+    /// is accepted for a loopback host only (tests), and then no TLS
+    /// material is used.
+    pub url: String,
+    /// `ELITEA_DEEPWIKI_VECTOR_SERVER_NAME`: the name verified against the
+    /// server certificate. Unset: the URL's host.
+    pub server_name: Option<String>,
+    /// The CA that signed elitea-vector's certificate (the runtime CA): the
+    /// callback hop's ([`ModelEnvSettings::tls_ca_file`]).
+    pub ca_file: Option<PathBuf>,
+    /// Which variable `ca_file` came from.
+    pub ca_setting: &'static str,
+    /// The client certificate and key (the callback identity).
+    pub identity: Option<crate::llm::ClientIdentityFiles>,
+    /// A plaintext loopback URL (tests only).
+    pub insecure_loopback: bool,
+}
+
+fn vector_settings(
+    raw: &impl Fn(&str) -> Option<String>,
+    model: &ModelEnvSettings,
+) -> Result<Option<VectorSettings>, ConfigError> {
+    let Some(url) = raw("VECTOR_URL").map(|url| url.trim().trim_end_matches('/').to_owned()) else {
+        return Ok(None);
+    };
+    let insecure_loopback = is_loopback_http(&url);
+    let parsed = reqwest::Url::parse(&url).ok();
+    let origin_only = parsed.as_ref().is_some_and(|parsed| {
+        parsed.host_str().is_some_and(|host| !host.is_empty())
+            && matches!(parsed.path(), "" | "/")
+            && parsed.query().is_none()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+    });
+    if !(url.starts_with("https://") || insecure_loopback) || !origin_only {
+        return Err(ConfigError(format!(
+            "{VECTOR_URL_SETTING} must be the https origin of elitea-vector (https://elitea-vector:9470), got '{url}'"
+        )));
+    }
+    let server_name = raw("VECTOR_SERVER_NAME").map(|name| name.trim().to_owned());
+    Ok(Some(VectorSettings {
+        url,
+        server_name,
+        ca_file: model.tls_ca_file.clone(),
+        ca_setting: model.tls_ca_setting,
+        identity: model.callback_identity.clone(),
+        insecure_loopback,
+    }))
+}
 
 /// What the environment decides about model calls; the invocation's
 /// `llm_settings` decide the rest (`llm::settings`).
@@ -210,14 +283,28 @@ pub struct ModelEnvSettings {
     /// A PEM bundle trusted in addition to the platform roots on the
     /// callback hop (the model gateway and the artifact API behind
     /// `llm_settings.api_base`): `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` — the
-    /// runtime CA when that hop is TLS through platform-edge (ADR-0027) —
-    /// else `ELITEA_DEEPWIKI_TLS_CA_FILE`, what it read before the two were
-    /// separated. The Go host reads the same pair in the same order
+    /// runtime CA when that hop is elitea-main's internal mTLS platform
+    /// listener — else `ELITEA_DEEPWIKI_TLS_CA_FILE`, what it read before the
+    /// two were separated. The Go host reads the same pair in the same order
     /// (`spi.Settings.CallbackCA`).
     pub tls_ca_file: Option<PathBuf>,
     /// Which of the two variables `tls_ca_file` came from, so an unreadable
     /// bundle names the setting to fix.
     pub tls_ca_setting: &'static str,
+    /// The runtime-CA client certificate the callback hop presents:
+    /// `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` and
+    /// `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE`, both or neither. elitea-main's
+    /// platform listener requires one; a cleartext or ordinary TLS callback
+    /// origin never asks for it.
+    pub callback_identity: Option<crate::llm::ClientIdentityFiles>,
+    /// `ELITEA_DEEPWIKI_MODEL_SERVICE_URL`: the origin of elitea-main's
+    /// platform listener (`https://elitea-main:9446`). Every model call
+    /// (`elitea.llm.v1.ModelService`) and every artifact-folder read
+    /// (`elitea.runtime.v1.ArtifactObjectService`, #1359 U5) goes there over
+    /// the callback CA and client certificate; `llm_settings.api_base` only
+    /// names the model route. The native runner requires it; `http://` is
+    /// accepted for a loopback host only (tests).
+    pub model_service: Option<String>,
     /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
     /// inputs per embedding request, default 64.
     pub embed_batch_size: usize,
@@ -233,6 +320,19 @@ pub struct ModelEnvSettings {
     /// `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`: the longest one model
     /// stream may run, default 7200 (Python had no limit).
     pub stream_total: Duration,
+}
+
+/// `http://` to a loopback host: the tests' in-process platform listener.
+fn is_loopback_http(origin: &str) -> bool {
+    reqwest::Url::parse(origin).is_ok_and(|url| {
+        let host = url.host_str().unwrap_or_default();
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        url.scheme() == "http"
+            && (bare.eq_ignore_ascii_case("localhost")
+                || bare
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback()))
+    })
 }
 
 fn model_settings(
@@ -260,6 +360,29 @@ fn model_settings(
                 "{ENV_PREFIX}EMBED_CTX_TOKENS must be a whole number of at least {MIN_SPLIT_TOKENS}, got '{ctx_tokens}'"
             ))
         })?;
+    let model_service = match raw("MODEL_SERVICE_URL") {
+        None => None,
+        Some(origin) if origin.starts_with("https://") || is_loopback_http(&origin) => Some(origin),
+        Some(origin) => {
+            return Err(ConfigError(format!(
+                "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
+            )));
+        }
+    };
+    let callback_identity = match (raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE")) {
+        (None, None) => None,
+        (Some(cert), Some(key)) => Some(crate::llm::ClientIdentityFiles {
+            cert_file: PathBuf::from(cert),
+            cert_file_setting: CALLBACK_CERT_SETTING,
+            key_file: PathBuf::from(key),
+            key_file_setting: CALLBACK_KEY_SETTING,
+        }),
+        _ => {
+            return Err(ConfigError(format!(
+                "{CALLBACK_CERT_SETTING} and {CALLBACK_KEY_SETTING} must be set together"
+            )));
+        }
+    };
     Ok(ModelEnvSettings {
         tls_ca_file: raw("CALLBACK_CA_FILE")
             .or_else(|| raw("TLS_CA_FILE"))
@@ -269,6 +392,8 @@ fn model_settings(
         } else {
             TLS_CA_SETTING
         },
+        callback_identity,
+        model_service,
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
@@ -638,6 +763,7 @@ impl Settings {
             PathBuf::from(raw("ENGINE_SOCKET").unwrap_or_else(|| DEFAULT_SOCKET.to_owned()));
         let ingest = ingest_settings(&raw)?;
         let model = model_settings(&raw, &lookup)?;
+        let vector = vector_settings(&raw, &model)?;
         let database_url = raw("DATABASE_URL")
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty())
@@ -660,6 +786,16 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine stages and publishes every index in the deepwiki PostgreSQL database (ADR-0026 decision 5) and has no other index storage. Set it to the database the migrations ran on, or use 'fixture' or 'unavailable'."
             )));
         }
+        if runner == RunnerKind::Native && model.model_service.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {MODEL_SERVICE_SETTING}: the native engine reaches the model calls and the artifact store only on elitea-main's platform listener (https://elitea-main:9446); llm_settings.api_base never names a host. Set it, or use 'fixture' or 'unavailable'."
+            )));
+        }
+        if runner == RunnerKind::Native && vector.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {VECTOR_URL_SETTING}: the native engine keeps every wiki's dense vectors in elitea-vector (https://elitea-vector:9470, over the callback CA and client certificate); PostgreSQL holds none. Set it, or use 'fixture' or 'unavailable'."
+            )));
+        }
         Ok(Self {
             runner,
             fixture_step,
@@ -670,6 +806,7 @@ impl Settings {
             build_stale_after,
             publish,
             model,
+            vector,
             worker,
             query_pool_size,
         })
@@ -1030,8 +1167,107 @@ mod tests {
                 "postgresql://u:p@db/deepwiki",
             ),
             ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
+            ("ELITEA_DEEPWIKI_VECTOR_URL", "https://elitea-vector:9470"),
         ]);
         assert_eq!(parsed.map(|s| s.runner), Ok(RunnerKind::Native));
+    }
+
+    #[test]
+    fn native_refuses_to_start_without_elitea_vector() {
+        let base = [
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
+        ];
+        let refused = settings(&base);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("ELITEA_DEEPWIKI_VECTOR_URL")),
+            "{refused:?}"
+        );
+        // The other runners never read it.
+        assert!(
+            settings(&[("ELITEA_DEEPWIKI_RUNNER", "fixture")]).is_ok_and(|s| s.vector.is_none())
+        );
+        let with = |url: &'static str, extra: &[(&'static str, &'static str)]| {
+            let mut pairs = base.to_vec();
+            pairs.push(("ELITEA_DEEPWIKI_VECTOR_URL", url));
+            pairs.extend_from_slice(extra);
+            settings(&pairs).map(|s| s.vector)
+        };
+        for (url, accepted) in [
+            ("https://elitea-vector:9470", true),
+            ("https://elitea-vector:9470/", true),
+            ("http://127.0.0.1:9470", true),
+            ("http://elitea-vector:9470", false),
+            ("https://elitea-vector:9470/v1", false),
+            ("elitea-vector:9470", false),
+        ] {
+            assert_eq!(with(url, &[]).is_ok(), accepted, "{url}");
+        }
+        let vector = with(
+            "https://elitea-vector:9470",
+            &[
+                ("ELITEA_DEEPWIKI_VECTOR_SERVER_NAME", "vector.internal"),
+                ("ELITEA_DEEPWIKI_CALLBACK_CA_FILE", "/ca.pem"),
+                ("ELITEA_DEEPWIKI_CALLBACK_CERT_FILE", "/c.crt"),
+                ("ELITEA_DEEPWIKI_CALLBACK_KEY_FILE", "/c.key"),
+            ],
+        );
+        let Ok(Some(vector)) = vector else {
+            panic!("refused: {vector:?}");
+        };
+        assert_eq!(vector.url, "https://elitea-vector:9470");
+        assert_eq!(vector.server_name.as_deref(), Some("vector.internal"));
+        assert_eq!(vector.ca_file, Some(PathBuf::from("/ca.pem")));
+        assert_eq!(vector.ca_setting, CALLBACK_CA_SETTING);
+        assert!(vector.identity.is_some());
+        assert!(!vector.insecure_loopback);
+        let loopback = with("http://127.0.0.1:9470", &[]);
+        assert!(matches!(loopback, Ok(Some(v)) if v.insecure_loopback && v.server_name.is_none()));
+    }
+
+    #[test]
+    fn native_refuses_to_start_without_the_platform_listener() {
+        let refused = settings(&[
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ]);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("ELITEA_DEEPWIKI_MODEL_SERVICE_URL")),
+            "{refused:?}"
+        );
+        // Plaintext only to a loopback host (the tests' listener).
+        for (origin, accepted) in [
+            ("http://127.0.0.1:8080", true),
+            ("http://[::1]:8080", true),
+            ("http://localhost:8080", true),
+            ("http://elitea-main:9446", false),
+        ] {
+            assert_eq!(
+                settings(&[("ELITEA_DEEPWIKI_MODEL_SERVICE_URL", origin)]).is_ok(),
+                accepted,
+                "{origin}"
+            );
+        }
     }
 
     #[test]
@@ -1105,6 +1341,11 @@ mod tests {
                 "postgresql://u:p@db/deepwiki",
             ),
             ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
+            ("ELITEA_DEEPWIKI_VECTOR_URL", "https://elitea-vector:9470"),
         ];
         let with = |extra: &[(&'static str, &'static str)]| {
             let mut pairs = native.to_vec();
@@ -1165,6 +1406,8 @@ mod tests {
             Ok(ModelEnvSettings {
                 tls_ca_file: None,
                 tls_ca_setting: TLS_CA_SETTING,
+                callback_identity: None,
+                model_service: None,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
                 embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
@@ -1177,6 +1420,10 @@ mod tests {
             ("ELITEA_DEEPWIKI_EMBED_CONCURRENCY", "2"),
             ("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", "4096"),
             ("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "10800"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
         ])
         .map(|s| s.model);
         assert_eq!(
@@ -1184,6 +1431,8 @@ mod tests {
             Ok(ModelEnvSettings {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
                 tls_ca_setting: TLS_CA_SETTING,
+                callback_identity: None,
+                model_service: Some("https://elitea-main:9446".to_owned()),
                 embed_batch_size: 16,
                 embed_concurrency: 2,
                 embed_ctx_tokens: 4096,
@@ -1201,6 +1450,41 @@ mod tests {
             split,
             Ok((Some(PathBuf::from("/runtime-ca.pem")), CALLBACK_CA_SETTING))
         );
+        // The model service is the platform listener: https only.
+        assert!(
+            settings(&[(
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "http://elitea-main:8080"
+            )])
+            .is_err()
+        );
+        // The callback client certificate: both halves or neither.
+        let identity = settings(&[
+            ("ELITEA_DEEPWIKI_CALLBACK_CERT_FILE", "/run/callback.crt"),
+            ("ELITEA_DEEPWIKI_CALLBACK_KEY_FILE", "/run/callback.key"),
+        ])
+        .map(|s| s.model.callback_identity);
+        assert_eq!(
+            identity,
+            Ok(Some(crate::llm::ClientIdentityFiles {
+                cert_file: PathBuf::from("/run/callback.crt"),
+                cert_file_setting: CALLBACK_CERT_SETTING,
+                key_file: PathBuf::from("/run/callback.key"),
+                key_file_setting: CALLBACK_KEY_SETTING,
+            }))
+        );
+        for half in [
+            "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE",
+            "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE",
+        ] {
+            let refused = settings(&[(half, "/run/half.pem")]);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("must be set together")),
+                "{half}: {refused:?}"
+            );
+        }
         assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
         for bad in ["0", "255", "-1", "8k"] {
             let refused = settings(&[("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", bad)]);
@@ -1227,6 +1511,8 @@ impl From<&ModelEnvSettings> for crate::llm::TransportSettings {
         Self {
             ca_file: settings.tls_ca_file.clone(),
             ca_file_setting: settings.tls_ca_setting,
+            client_identity: settings.callback_identity.clone(),
+            model_service: settings.model_service.clone(),
             user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
             timeouts: crate::llm::Timeouts {
                 stream_total: settings.stream_total,
@@ -1258,6 +1544,8 @@ mod model_env_tests {
         let settings = ModelEnvSettings {
             tls_ca_file: None,
             tls_ca_setting: TLS_CA_SETTING,
+            callback_identity: None,
+            model_service: None,
             embed_batch_size: 16,
             embed_concurrency: 3,
             embed_ctx_tokens: 4096,

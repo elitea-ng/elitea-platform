@@ -36,7 +36,7 @@ import (
 	"fmt"
 	"strings"
 
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // ToolkitRunUseCase is the narrow slice of the tool-run producer this package
@@ -69,7 +69,7 @@ func (h *Handler) runToolkitTool(
 		ActorUserID: actorUserID,
 		ToolkitID:   tool.toolkitID,
 		// The SDK tool name, not the MCP tool name. `tools/list` publishes
-		// `<toolkit>_<tool>` with pylon's sanitiser applied, and handing that
+		// `<toolkit>_<tool>` with the legacy sanitiser applied, and handing that
 		// composed string to the worker would name a tool no toolkit has.
 		ToolName:  tool.toolkitToolName,
 		Arguments: arguments,

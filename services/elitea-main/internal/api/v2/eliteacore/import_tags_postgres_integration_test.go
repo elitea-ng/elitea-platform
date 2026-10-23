@@ -22,7 +22,7 @@ package eliteacore_test
 //
 // The IMPORT wrote NEITHER table. It read the `tags` key not at all, so an
 // agent exported with its tags came back with none of them, and the document
-// could not survive a second round trip. `meta` cannot stand in: pylon's
+// could not survive a second round trip. `meta` cannot stand in: the legacy
 // `update_version` dumps with `exclude={'tags', 'variables', 'tools'}`, so no
 // tag ever reaches that column.
 //
@@ -49,8 +49,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	applicationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	applicationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 // TestImportedAgentTagsReachEveryReader posts the `tags` array an export

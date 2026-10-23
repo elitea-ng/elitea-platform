@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	toolkitsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	toolkitsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 )
 
 type fakeInternalToolkitRepo struct {

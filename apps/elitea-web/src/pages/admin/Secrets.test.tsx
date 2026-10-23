@@ -9,9 +9,10 @@
  *     `{projectID}` segment while admin_ui sends the placeholder `0` — so a
  *     client that fell back to `default` would silently edit project 0's vault.
  *     Every recorded URL is checked for the mode, not just for the path.
- *  2. **The bodies are pylon's.** Create sends `{secret}`; update sends the
- *     NESTED `{secret:{old_name, value}}`. A control that renders but sends the
- *     wrong shape is the #130/#180 class, and a status assertion cannot see it.
+ *  2. **The bodies are the legacy ones.** Create sends `{secret}`; update sends
+ *     the NESTED `{secret:{old_name, value}}`. A control that renders but sends
+ *     the wrong shape is the #130/#180 class, and a status assertion cannot see
+ *     it.
  *  3. **Plaintext appears only after the operator asks.** The listing carries a
  *     mask; the value must not be on screen until the reveal is clicked.
  *  4. **Internal secrets are read-only** — and shown, not hidden.
@@ -166,7 +167,7 @@ describe('Admin › Secrets', () => {
     expect(reveals[0]?.url).toContain('/secrets/secret/administration/0/shared_marker');
   });
 
-  it('creates a secret with pylon’s {secret} body', async () => {
+  it('creates a secret with the legacy {secret} body', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSecrets />);
     await screen.findByText('shared_marker');
@@ -221,7 +222,7 @@ describe('Admin › Secrets', () => {
     expect(writes()).toHaveLength(0);
   });
 
-  it('updates a value with pylon’s NESTED {secret:{old_name,value}} body', async () => {
+  it('updates a value with the legacy NESTED {secret:{old_name,value}} body', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSecrets />);
     const row = await findUserSecretRow();

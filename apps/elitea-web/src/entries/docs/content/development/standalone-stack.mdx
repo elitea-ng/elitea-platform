@@ -32,7 +32,7 @@ deploy/scripts/standalone-stack.sh build
 deploy/scripts/standalone-stack.sh up
 ```
 
-Schema bootstrap, the vector extension, the artifact bucket, RBAC roles, and the worker's runtime authorization all happen automatically on a fresh `up` — none of the `seed*` subcommands below are required to reach a working, logged-in stack.
+Schema bootstrap, the artifact bucket, RBAC roles, and the worker's runtime authorization all happen automatically on a fresh `up` — none of the `seed*` subcommands below are required to reach a working, logged-in stack.
 
 </Step>
 </Steps>
@@ -52,7 +52,7 @@ None of these are required for a working stack — an operator normally configur
 - **`seed`** — delegates to the E2E seeder (`apps/elitea-web/scripts/e2e-stack.sh seed`) for schema bootstrap, oidc-mock users, and RBAC fixtures, then applies tenant migrations for the newly seeded projects and restarts elitea-main so it backfills their per-project secret header.
 - **`seed-runtime`** — manual fallback to authorize the worker's identity if `up` skipped it.
 - **`seed-llm`** — writes an LLM credential and models via the product API; needs Configurations plane enabled. See [Point the gateway at a real model](#point-the-gateway-at-a-real-model) below.
-- **`seed-index`** — provisions a vector store and an indexable toolkit. It only writes the embedding model row when none exists yet, so it never overwrites the name `seed-llm` wrote.
+- **`seed-index`** — provisions an embedding model and an indexable toolkit. It only writes the embedding model row when none exists yet, so it never overwrites the name `seed-llm` wrote.
 </Accordion>
 <Accordion title="check">
 Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via `chat-smoke.py`), the embedding path, and a real SDK client round trip. It counts passes, failures, **and** skips — a skipped assertion fails the run unless you pass `--allow-skips` — and it also checks that the number of assertions it made matches the number it is written to make. There is no separate `status` subcommand: `check` and `podman compose -p elitea-standalone -f deploy/docker-compose.standalone-full.yml ps` cover that.
@@ -73,7 +73,7 @@ Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via 
 
 | Port | Service | Override |
 |---|---|---|
-| 8084 | Traefik (entry point) | `STANDALONE_PORT` |
+| 8084 | elitea-main, the browser edge (relays `/app` and `/docs` to elitea-web, redirects `/` to `/app/`) | `STANDALONE_PORT` |
 | 8085 | LLM gateway, direct (debug) | `STANDALONE_GATEWAY_PORT` |
 | 15433 | PostgreSQL | `STANDALONE_PG_PORT` |
 | 8090 | llm-mock journal | `STANDALONE_MOCK_PORT` |

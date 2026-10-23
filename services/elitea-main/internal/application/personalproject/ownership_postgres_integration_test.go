@@ -13,7 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 )
 
 func seedProjectRow(t *testing.T, pool *pgxpool.Pool, name string, ownerID int64) string {
@@ -37,8 +37,8 @@ func TestIsOwnPersonalProject(t *testing.T) {
 
 	personal := seedProjectRow(t, pool, personalproject.Name(owner), owner)
 	team := seedProjectRow(t, pool, "Team 6789", owner)
-	// A row that carries the owner's personal NAME but another owner: pylon-era
-	// data and the free-text project name can both produce it.
+	// A row that carries the owner's personal NAME but another owner:
+	// legacy-era data and the free-text project name can both produce it.
 	squatted := seedProjectRow(t, pool, personalproject.Name(other)+"0", other)
 	renamed := seedProjectRow(t, pool, personalproject.Name(owner), other)
 

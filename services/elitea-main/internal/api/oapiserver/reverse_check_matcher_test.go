@@ -23,7 +23,7 @@ package oapiserver_test
 import (
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
 )
 
 // TestMissingFromSpecIgnoresTheServerBase is the RED case of the defect: this
@@ -50,7 +50,7 @@ func TestMissingFromSpecIgnoresTheServerBase(t *testing.T) {
 
 // TestMissingFromSpecKeepsPlaceholderAndLiteralApart is the other direction.
 // Both sides are TEMPLATES, so the spec's {bucket} must not stand for the
-// manifest's literal pylon mode segment `default`. Reading this as covered
+// manifest's literal legacy mode segment `default`. Reading this as covered
 // would have deleted an allowlist line for an endpoint the document does not
 // describe.
 func TestMissingFromSpecKeepsPlaceholderAndLiteralApart(t *testing.T) {

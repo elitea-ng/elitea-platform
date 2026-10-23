@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,9 +31,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -628,9 +628,9 @@ SELECT $1, id FROM public.auth_core__role WHERE name = 'viewer' AND mode = 'admi
 /* ── mode gating (no database needed) ──────────────────────────────────── */
 
 func TestAdminUserWritesAreAdministrationModeOnly(t *testing.T) {
-	// Mirrors pylon's `mode_handlers = {'administration': AdminAPI}`: no other
-	// mode has a handler at all. Checked before the pool is touched, so this
-	// case needs no database.
+	// Mirrors the legacy `mode_handlers = {'administration': AdminAPI}`: no
+	// other mode has a handler at all. Checked before the pool is touched, so
+	// this case needs no database.
 	router := adminUsersRouter(admin.NewHandler(nil), &auth.User{ID: "1", UserID: "1"})
 
 	recorder := adminDo(t, router, http.MethodPost, "/admin/auth_users/default",
@@ -653,8 +653,9 @@ func TestAuthUsersActionRejectsUnknownActions(t *testing.T) {
 
 	id := userID(t, pool, "a14-plain@autotest.local")
 
-	// pylon answers {"ok": true} to `toggle_admin` while doing nothing — the
-	// exact "green toast that lies" shape. This port refuses it instead.
+	// The legacy runtime answers {"ok": true} to `toggle_admin` while doing
+	// nothing — the exact "green toast that lies" shape. This port refuses it
+	// instead.
 	recorder := adminDo(t, router, http.MethodPost, "/admin/auth_users/administration",
 		map[string]any{"action": "toggle_admin", "user_id": id, "is_admin": true})
 	if recorder.Code != http.StatusBadRequest {

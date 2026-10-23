@@ -1,7 +1,7 @@
 package projects
 
 // Project QUOTA and STATISTICS — the two remaining read/write modules of the
-// pylon `projects` plugin's v2 API that this package had no route for.
+// legacy `projects` plugin's v2 API that this package had no route for.
 //
 //	legacy/plugins/projects/api/v2/quota.py       GET/PUT <project_id>
 //	legacy/plugins/projects/api/v2/statistics.py  GET     <project_id>
@@ -18,7 +18,7 @@ package projects
 // out rather than quietly diverged from. `statistics.py` does two things that
 // raise on any current deployment:
 //
-//   - `Statistic.to_json()` calls `self.rpc.call.tasks_count(...)`. No pylon
+//   - `Statistic.to_json()` calls `self.rpc.call.tasks_count(...)`. No legacy
 //     plugin in legacy/plugins registers a `tasks_count` RPC — grep finds the
 //     call site and the Arbiter library's unrelated internals, and no provider.
 //   - it then reads `quota["performance_test_runs"]`,

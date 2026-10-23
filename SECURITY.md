@@ -10,7 +10,7 @@ The latest version of this project has continued support. If a critical vulnerab
 
 When you find a security vulnerability in this project, please perform the following actions:
 
-- [Open an issue](https://github.com/eliteaai/elitea-platform/issues/new?assignees=&labels=bug&title=%5BBUG%5D%20Security%20Vulnerability) on the repository. Ensure that you use `[BUG] Security Vulnerability` as the title and _do not_ mention any vulnerability details in the issue post.
+- [Open an issue](https://github.com/elitea-ng/elitea-platform/issues/new?assignees=&labels=bug&title=%5BBUG%5D%20Security%20Vulnerability) on the repository. Ensure that you use `[BUG] Security Vulnerability` as the title and _do not_ mention any vulnerability details in the issue post.
 
 This initial reporting stage ensures that rapid validation can occur without wasting the time and effort of the reporter. Future communication and vulnerability resolution will be conducted after validating the veracity of the reported issue.
 

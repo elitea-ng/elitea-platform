@@ -1,6 +1,6 @@
 package toolkits
 
-// The provider-hub projection, against pylon's own rules.
+// The provider-hub projection, against the legacy runtime's own rules.
 //
 // Every expected value below was read out of
 // `legacy/plugins/elitea_core/methods/provider_hub_schemas.py`, not invented:
@@ -18,8 +18,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
 type stubManifests struct {
@@ -229,7 +229,7 @@ func TestProviderHubProjectionReportsAnUnreadableManifest(t *testing.T) {
 }
 
 // One provider's broken manifest must not take the others out of the catalogue,
-// which is pylon's own per-provider try/except.
+// which is the legacy runtime's own per-provider try/except.
 func TestProviderHubProjectionKeepsTheProvidersThatDoParse(t *testing.T) {
 	projection := &providerHubProjection{
 		manifests: stubManifests{manifests: []providerhub.AdmittedManifest{
@@ -309,7 +309,7 @@ func TestProviderParameterSchemaTable(t *testing.T) {
 			wantType:  "integer",
 		},
 		{
-			name:      "Float maps to integer, as pylon does",
+			name:      "Float maps to integer, as the legacy projection does",
 			parameter: providerhub.ParameterDescriptor{Type: "Float"},
 			wantType:  "integer",
 		},

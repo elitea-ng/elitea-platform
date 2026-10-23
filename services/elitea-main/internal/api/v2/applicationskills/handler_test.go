@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentApplicationSkillsReaderStub struct {
@@ -117,7 +118,7 @@ func TestCurrentApplicationSkillsRoutePreservesExactCurrentContract(t *testing.T
 
 	// Both halves of the envelope, in one body (#395). `items` is the
 	// published SkillsList contract that apps/elitea-web reads; `skills` and
-	// `max_skills` are the Pylon keys apps/elitea-ui reads, unchanged.
+	// `max_skills` are the legacy keys apps/elitea-ui reads, unchanged.
 	want := "{\"items\":[" +
 		"{\"id\":\"17\",\"project_id\":\"7\",\"name\":\"deploy\"," +
 		"\"description\":\"Deploy safely\",\"type\":\"skill\",\"is_default\":false," +
@@ -170,11 +171,10 @@ func TestCurrentApplicationSkillsRouteAuthenticatesAndAuthorizesBeforeTenantRead
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "untrusted forwarded identity",
+			name:       "forged X-Auth-* identity without a session",
 			method:     http.MethodGet,
 			path:       "/api/v2/elitea_core/application_skills/prompt_lib/7/31",
 			remoteAddr: "192.0.2.9:443",
-			auth:       true,
 			allowed:    true,
 			wantStatus: http.StatusUnauthorized,
 		},
@@ -439,7 +439,6 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 	principal := currentApplicationSkillsPrincipalValidatorFunc(
 		func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },
 	)
-	peer := currentApplicationSkillsPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentApplicationSkillsPermissionResolverFunc(
 		func(
 			context.Context,
@@ -451,8 +450,8 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 		},
 	)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}
 
 	for name, test := range map[string]struct {
@@ -461,7 +460,7 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 		permissions auth.PermissionResolver
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -546,14 +545,7 @@ func newCurrentApplicationSkillsRoute(
 					return user, nil
 				},
 			),
-			ForwardedIdentityVerifier: currentApplicationSkillsPeerVerifierFunc(
-				func(request *http.Request) error {
-					if request.RemoteAddr != "10.0.0.8:43120" {
-						return errors.New("untrusted peer")
-					}
-					return nil
-				},
-			),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -572,8 +564,11 @@ func currentApplicationSkillsRequest(
 	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = remoteAddr
 	if authenticated {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "11")
+		authtest.SignIn(request, "11")
+	} else {
+		// No credential, but the forged X-Auth-* identity the retired edge
+		// projection used: it must authenticate nobody (#1359).
+		authtest.ForgeXAuth(request, "11")
 	}
 	return request
 }
@@ -606,14 +601,6 @@ func (function currentApplicationSkillsPrincipalValidatorFunc) ValidatePrincipal
 	return function(ctx, user)
 }
 
-type currentApplicationSkillsPeerVerifierFunc func(*http.Request) error
-
-func (function currentApplicationSkillsPeerVerifierFunc) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	return function(request)
-}
-
 // TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract pins
 // the half of the envelope that made ELITEA_APPLICATION_SKILLS_ENABLED
 // unturnable (#395).
@@ -621,12 +608,12 @@ func (function currentApplicationSkillsPeerVerifierFunc) VerifyForwardedIdentity
 // The published contract for this path is SkillsList — {items, total, page,
 // page_size, total_pages} — in api/openapi/v2.yaml. apps/elitea-web reads it
 // through shared/api/unwrap.ts, which takes `items` first and reports any
-// other shape as unrecognised. So a body with only the Pylon keys renders as
+// other shape as unrecognised. So a body with only the legacy keys renders as
 // "this agent version has no skills" while the route answers 200 with the
 // right rows, and turning the flag on broke the web client instead of fixing
 // it.
 //
-// The Pylon keys are asserted in the same test on purpose: correcting the
+// The legacy keys are asserted in the same test on purpose: correcting the
 // contract half must not cost the parity half, which apps/elitea-ui reads and
 // the edge cutover needs.
 func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
@@ -691,10 +678,10 @@ func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
 			)
 		}
 	}
-	// The Pylon keys apps/elitea-ui reads must survive beside them.
+	// The legacy keys apps/elitea-ui reads must survive beside them.
 	for _, key := range []string{"skills", "max_skills"} {
 		if _, present := body[key]; !present {
-			t.Fatalf("Pylon key %q lost from the parity envelope: %q", key, response.Body.String())
+			t.Fatalf("legacy key %q lost from the parity envelope: %q", key, response.Body.String())
 		}
 	}
 

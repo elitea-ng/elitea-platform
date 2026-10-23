@@ -11,7 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // recordingVault answers every call and remembers what it was asked to do, so a
@@ -222,9 +222,10 @@ func TestPrebuiltSecretNameIsVaultSafe(t *testing.T) {
 // authenticate with a secret belonging to a different server.
 //
 // The pairs below are the reachable collisions, not invented ones. Padding
-// survives normalisation (pylon strips whitespace only after the spaces have
-// become underscores), and every character outside `[a-z0-9_]` reduces to an
-// underscore, so `a-b` and `a/b` are two storable keys with one readable form.
+// survives normalisation (the legacy runtime strips whitespace only after the
+// spaces have become underscores), and every character outside `[a-z0-9_]`
+// reduces to an underscore, so `a-b` and `a/b` are two storable keys with one
+// readable form.
 func TestPrebuiltSecretNamesAreDistinctPerKey(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"github_copilot", "epam_presales"},

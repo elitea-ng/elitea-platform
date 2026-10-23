@@ -3,9 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	toolkits "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"net/http"
 	"testing"
 )

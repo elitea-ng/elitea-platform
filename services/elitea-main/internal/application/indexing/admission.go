@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -293,7 +293,7 @@ type AtomicAdmissionStore interface {
 
 var ErrIndexMetaInitializationMismatch = errors.New("index metadata initialization identity mismatch")
 
-// IndexMetaInitialization identifies the logical PgVector metadata generation
+// IndexMetaInitialization identifies the logical index metadata generation
 // that must already exist before its durable command becomes dispatchable.
 // Replaying the same transition preserves the first database-owned timestamp.
 type IndexMetaInitialization struct {
@@ -316,7 +316,7 @@ func (i IndexMetaInitialization) Validate() error {
 
 // IndexMetaInitializationStore owns only the durable ready transition. The
 // caller must first idempotently materialize the exact metadata row in the
-// project-owned PgVector store; this interface cannot manufacture that effect.
+// index registry; this interface cannot manufacture that effect.
 type IndexMetaInitializationStore interface {
 	MarkIndexMetaInitialized(context.Context, IndexMetaInitialization) (time.Time, error)
 }

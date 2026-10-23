@@ -7,10 +7,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"io"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

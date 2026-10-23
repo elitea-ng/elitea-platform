@@ -7,10 +7,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/admission"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/registrar"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
+	subappv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/admission"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/registrar"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
 // providerRegistrationInterval is how often a facade re-probes its
@@ -23,7 +25,8 @@ const providerRegistrationInterval = time.Minute
 // returns nil, with the reason logged, when there is nothing to register
 // with — no database, no public project, or a database the admission
 // migration (0107) has not reached — so a deployment without the plane
-// keeps serving the provider exactly as before.
+// keeps serving the provider exactly as before. provider is the facade's own
+// client to the provider (proxy.Proxy.Client): the registrar dials nothing.
 //
 // IT RETURNS THE REGISTRAR, not a bool, because the registrar is the only
 // thing that knows WHAT THE PROVIDER IS CALLED. The provider id is the name
@@ -38,6 +41,7 @@ func startProviderRegistrar(
 	name string,
 	cfg facade.Config,
 	envName string,
+	provider subappv1.ProviderServiceClient,
 ) *registrar.Registrar {
 	if logger == nil {
 		logger = slog.Default()
@@ -58,6 +62,7 @@ func startProviderRegistrar(
 		ProjectID: int64(publicProjectID),
 		Actor:     "facade:" + name,
 		Interval:  providerRegistrationInterval,
+		Provider:  provider,
 	}, log)
 	if err != nil {
 		log.Error("provider registration not started", "error", err)

@@ -38,3 +38,24 @@ func TestHealthcheckURLUsesConfiguredListenerPort(t *testing.T) {
 		t.Fatalf("healthcheck URL = %q", endpoint)
 	}
 }
+
+// TestHealthcheckURLTakesOneProbePath is the chart's exec probe (#1359 P3):
+// `-healthcheck /startupz` reads the startup probe over loopback, which the
+// browser edge would refuse to a kubelet httpGet from the node.
+func TestHealthcheckURLTakesOneProbePath(t *testing.T) {
+	lookup := func(string) (string, bool) { return ":8080", true }
+	for _, path := range []string{"/readyz", "/startupz", "/healthz"} {
+		endpoint, err := healthcheckURL(lookup, path)
+		if err != nil {
+			t.Fatalf("-healthcheck %s: %v", path, err)
+		}
+		if want := "http://localhost:8080" + path; endpoint != want {
+			t.Fatalf("-healthcheck %s = %q, want %q", path, endpoint, want)
+		}
+	}
+	for _, args := range [][]string{{"/api/v2/projects"}, {"readyz"}, {"/readyz?x=1"}, {"/readyz", "/healthz"}} {
+		if endpoint, err := healthcheckURL(lookup, args...); err == nil {
+			t.Fatalf("-healthcheck %v was accepted as %q; only the three probe paths may be read", args, endpoint)
+		}
+	}
+}

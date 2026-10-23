@@ -19,8 +19,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The roles fixture's personal project is `project_user_9` (id 3). A SECOND one
@@ -347,9 +347,9 @@ func TestUserProjectPermissionsSaveTargetsTeamProjectsOnRequest(t *testing.T) {
 
 // TestUserProjectPermissionsRoundTripsItsOwnBody is the case the first
 // implementation could not pass: it rejected any submission naming the `system`
-// role, and its own GET emits one in BOTH shapes — every project pylon creates
-// has a system role (projects/utils/project_steps.py). So the permission editor
-// could load the matrix and never save it.
+// role, and its own GET emits one in BOTH shapes — every project the legacy
+// runtime creates has a system role (projects/utils/project_steps.py). So the
+// permission editor could load the matrix and never save it.
 func TestUserProjectPermissionsRoundTripsItsOwnBody(t *testing.T) {
 	pool, router := newUserProjectPermissionsEnvironment(t)
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // tenantOwnerID converts the project id in an import route's path into the
@@ -45,7 +45,7 @@ func tenantOwnerID(projectID string) (ownership.ProjectID, error) {
 //	null value in column "owner_id" of relation "elitea_tools"
 //	violates not-null constraint (SQLSTATE 23502)
 //
-// A pylon-made schema has no owner_id column on this table at all, which is why
+// A legacy-era schema has no owner_id column on this table at all, which is why
 // the same statement succeeds there and the fault stayed invisible (issue #504).
 //
 // # Which owner, and why

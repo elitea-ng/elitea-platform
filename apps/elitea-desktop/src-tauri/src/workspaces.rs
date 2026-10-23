@@ -46,6 +46,18 @@ pub struct AgentSettings {
     /// `None`: the agent's value, else the default (100).
     #[serde(default)]
     pub step_limit: Option<u32>,
+    /// Whether the person may choose another model than the agent's for a
+    /// turn of this workspace (#1228). `None`: allowed (the default).
+    #[serde(default)]
+    pub allow_model_override: Option<bool>,
+}
+
+impl AgentSettings {
+    /// A model other than the agent's may be chosen for a turn.
+    #[must_use]
+    pub fn model_override_allowed(&self) -> bool {
+        self.allow_model_override != Some(false)
+    }
 }
 
 pub struct WorkspaceStore {
@@ -240,6 +252,7 @@ impl WorkspaceStore {
                 step_limit: settings
                     .step_limit
                     .filter(|limit| STEP_LIMIT_RANGE.contains(limit)),
+                allow_model_override: settings.allow_model_override,
             })
         })
     }
@@ -355,11 +368,13 @@ mod tests {
                 &id,
                 AgentSettings {
                     step_limit: Some(150),
+                    allow_model_override: Some(false),
                 },
             )
             .unwrap();
         assert_eq!(saved.step_limit, Some(150));
         assert_eq!(store.agent_settings(&id).unwrap().step_limit, Some(150));
+        assert!(!store.agent_settings(&id).unwrap().model_override_allowed());
         let file = store.data_dir(&id).join(AGENT_SETTINGS_FILE);
         #[cfg(unix)]
         {
@@ -379,14 +394,15 @@ mod tests {
                     .set_agent_settings(
                         &id,
                         AgentSettings {
-                            step_limit: Some(wrong)
+                            step_limit: Some(wrong),
+                            ..AgentSettings::default()
                         }
                     )
                     .is_err()
             );
         }
         store
-            .set_agent_settings(&id, AgentSettings { step_limit: None })
+            .set_agent_settings(&id, AgentSettings::default())
             .unwrap();
         assert_eq!(store.agent_settings(&id).unwrap().step_limit, None);
         assert!(!folder.path().join(AGENT_SETTINGS_FILE).exists());

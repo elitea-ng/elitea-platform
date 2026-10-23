@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 )
 
 // recordingRepo is an in-memory library. It records what the handler asked it

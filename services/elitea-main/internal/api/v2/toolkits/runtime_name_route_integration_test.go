@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 func TestToolkitDetailsReportsTheRuntimeIdentifierAgainstPostgres(t *testing.T) {

@@ -4,21 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 // attachmentTestConversation is the conversation every claim below resolves.
@@ -75,11 +74,11 @@ func TestAttachmentObjectRouteServesTheClaimedConversationsFile(t *testing.T) {
 		}),
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, attachmentObjectRequest(
+	response := serve(server, attachmentObjectRequest(
 		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "chat-attachments", key,
 	))
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
+	require.Empty(t, response.Unreadable)
 
 	require.EqualValues(t, 4242, sawProject, "the project must come from the claim")
 	require.Equal(t, "chat-attachments", sawBucket)
@@ -88,7 +87,7 @@ func TestAttachmentObjectRouteServesTheClaimedConversationsFile(t *testing.T) {
 		"the source must be told the same ceiling the service enforces")
 
 	var document RuntimeAttachmentObjectContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+	require.NoError(t, json.Unmarshal(response.Body, &document))
 	require.Equal(t, RuntimeAttachmentObjectSchemaVersion, document.SchemaVersion)
 	require.EqualValues(t, 4242, document.ProjectID)
 	require.Equal(t, "chat-attachments", document.Bucket)
@@ -101,17 +100,6 @@ func TestAttachmentObjectRouteServesTheClaimedConversationsFile(t *testing.T) {
 	require.True(t, document.Complete)
 	require.Equal(t, 1, document.UnitCount)
 	require.Equal(t, []RuntimeAttachmentUnit{{Kind: "part", Label: "1", Start: 0, End: 11, HasText: true}}, document.Units)
-
-	// The worker REJECTS a response whose cache policy is not exactly this
-	// (validate_cache_policy in transport/runtime_context.rs), so a missing
-	// header here is a route that answers 200 and is never read.
-	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
-	require.Contains(t, response.Header().Get("Cache-Control"), "no-store")
-	require.Contains(t, response.Header().Get("Cache-Control"), "no-cache")
-	require.Equal(t, "no-cache", response.Header().Get("Pragma"))
-	require.Equal(t, "nosniff", response.Header().Get("X-Content-Type-Options"))
-	digest := sha256.Sum256(response.Body.Bytes())
-	require.Equal(t, formatSHA256Digest(digest), response.Header().Get("Content-Digest"))
 }
 
 // TestAttachmentObjectRouteRefusesAnIndexClaim is the capability gate, asserted
@@ -150,15 +138,14 @@ func TestAttachmentObjectRouteRefusesAnIndexClaim(t *testing.T) {
 		}),
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, attachmentObjectRequest(
+	response := serve(server, attachmentObjectRequest(
 		t,
 		certificateWithURI(identity),
 		bytes.Repeat([]byte{7}, sha256.Size),
 		"chat-attachments",
 		attachmentTestConversation+"/report.txt",
 	))
-	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Equal(t, codes.PermissionDenied, response.Code)
 	require.Contains(t, issued, agentRuntimeContextCapabilityFilter,
 		"the attachment route must authorize through the agent-scoped capability filter")
 	require.NotContains(t, issued, "'index.ingest.v1' AND i.execution_id IS NOT NULL) OR (j.capability_id = 'index.ingest.v1'")
@@ -187,7 +174,7 @@ func TestAttachmentObjectRouteRefusesACrossConversationObject(t *testing.T) {
 		// A traversal back out of the conversation's own prefix.
 		attachmentTestConversation + "/../" + otherConversation + "/report.txt",
 	} {
-		response := httptest.NewRecorder()
+		var response contentResult
 		server := newAttachmentObjectTestServer(
 			t,
 			attachmentTestAuthorizer(t, 4242, attachmentTestConversation),
@@ -198,11 +185,11 @@ func TestAttachmentObjectRouteRefusesACrossConversationObject(t *testing.T) {
 				return AttachmentObjectRecord{}, nil
 			}),
 		)
-		server.Routes().ServeHTTP(response, attachmentObjectRequest(
+		response = serve(server, attachmentObjectRequest(
 			t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "chat-attachments", key,
 		))
 		require.Contains(t,
-			[]int{http.StatusForbidden, http.StatusNotFound},
+			[]codes.Code{codes.PermissionDenied, codes.NotFound},
 			response.Code,
 			"key %q must not be served", key,
 		)
@@ -211,8 +198,8 @@ func TestAttachmentObjectRouteRefusesACrossConversationObject(t *testing.T) {
 
 // TestAttachmentObjectRouteRefusesWhatItCannotServeAsText covers the outcomes
 // that are neither a bad claim nor a missing file, and therefore must not be
-// reported as either. Each 422 names its reason in the body, because the
-// worker turns that reason into the sentence the model reads.
+// reported as either. Each is a successful call naming its reason, because
+// the worker turns that reason into the sentence the model reads.
 func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 	t.Parallel()
 
@@ -220,7 +207,7 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 	oversized := bytes.Repeat([]byte("a"), maxRuntimeAttachmentInputBytes+1)
 	for name, testCase := range map[string]struct {
 		record AttachmentObjectRecord
-		status int
+		status codes.Code
 		reason string
 	}{
 		// A source that ignored its own cap must still not get past the
@@ -230,28 +217,28 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
 				ByteLength: int64(len(oversized)), Content: oversized,
 			},
-			status: http.StatusUnprocessableEntity, reason: "too_large",
+			status: codes.OK, reason: "too_large",
 		},
 		"an image": {
 			record: AttachmentObjectRecord{
 				Bucket: "chat-attachments", Name: key, MediaType: "image/png",
 				ByteLength: 12, Content: []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00"),
 			},
-			status: http.StatusUnprocessableEntity, reason: "unsupported_format",
+			status: codes.OK, reason: "unsupported_format",
 		},
 		"binary": {
 			record: AttachmentObjectRecord{
 				Bucket: "chat-attachments", Name: key, MediaType: "application/octet-stream",
 				ByteLength: 4, Content: []byte{0x00, 0x01, 0x02, 0x03},
 			},
-			status: http.StatusUnprocessableEntity, reason: "unsupported_format",
+			status: codes.OK, reason: "unsupported_format",
 		},
 		"empty": {
 			record: AttachmentObjectRecord{
 				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
 				ByteLength: 0, Content: []byte{},
 			},
-			status: http.StatusUnprocessableEntity, reason: "empty",
+			status: codes.OK, reason: "empty",
 		},
 		// The metadata row and the bytes disagree: neither answer is
 		// trustworthy, so neither is sent. It is a server condition (a read
@@ -261,7 +248,7 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
 				ByteLength: 99, Content: []byte("short"),
 			},
-			status: http.StatusServiceUnavailable,
+			status: codes.Unavailable,
 		},
 		// A source that answered about a different object than was asked for.
 		"identity does not echo the request": {
@@ -269,7 +256,7 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 				Bucket: "chat-attachments", Name: attachmentTestConversation + "/other.txt",
 				MediaType: "text/plain", ByteLength: 2, Content: []byte("hi"),
 			},
-			status: http.StatusNotFound,
+			status: codes.NotFound,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -283,19 +270,12 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 					return testCase.record, nil
 				}),
 			)
-			response := httptest.NewRecorder()
-			server.Routes().ServeHTTP(response, attachmentObjectRequest(
+			response := serve(server, attachmentObjectRequest(
 				t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size),
 				"chat-attachments", key,
 			))
-			require.Equal(t, testCase.status, response.Code, response.Body.String())
-			if testCase.reason != "" {
-				var body RuntimeAttachmentUnreadable
-				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
-				require.Equal(t, RuntimeAttachmentUnreadableSchemaVersion, body.SchemaVersion)
-				require.Equal(t, testCase.reason, body.Reason)
-				require.Equal(t, "application/json", response.Header().Get("Content-Type"))
-			}
+			require.Equal(t, testCase.status, response.Code, string(response.Body))
+			require.Equal(t, testCase.reason, response.Unreadable)
 		})
 	}
 }
@@ -306,10 +286,10 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 func TestAttachmentObjectRouteMapsSourceFailuresToDistinctStatuses(t *testing.T) {
 	t.Parallel()
 
-	for status, failure := range map[int]error{
-		http.StatusNotFound:            ErrContentNotFound,
-		http.StatusUnprocessableEntity: ErrContentRejected,
-		http.StatusServiceUnavailable:  io.ErrUnexpectedEOF,
+	for status, failure := range map[codes.Code]error{
+		codes.NotFound:    ErrContentNotFound,
+		codes.OK:          ErrContentRejected, // served as the generic "unreadable" reason
+		codes.Unavailable: io.ErrUnexpectedEOF,
 	} {
 		server := newAttachmentObjectTestServer(
 			t,
@@ -320,12 +300,14 @@ func TestAttachmentObjectRouteMapsSourceFailuresToDistinctStatuses(t *testing.T)
 				return AttachmentObjectRecord{}, failure
 			}),
 		)
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, attachmentObjectRequest(
+		response := serve(server, attachmentObjectRequest(
 			t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size),
 			"chat-attachments", attachmentTestConversation+"/report.txt",
 		))
 		require.Equal(t, status, response.Code)
+		if status == codes.OK {
+			require.Equal(t, string(ReasonAttachmentUnreadable), response.Unreadable)
+		}
 	}
 }
 
@@ -346,14 +328,13 @@ func TestAttachmentObjectRouteRequiresTheClaimBeforeAnythingElse(t *testing.T) {
 		}),
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, httptest.NewRequest(
-		http.MethodPost,
-		"/executions/execution-1/generations/1/runtime-context/attachments/chat-attachments/"+
-			url.PathEscape(attachmentTestConversation+"/report.txt"),
-		nil,
-	))
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	response := serve(server, func(server *ContentServer) contentResult {
+		response, err := server.GetAttachmentObject(contentPeerContext(context.Background(), nil), &runtimev1.GetAttachmentObjectRequestV1{
+			Scope: contentScope("execution-1", 1), Bucket: "chat-attachments", Name: attachmentTestConversation + "/report.txt",
+		})
+		return resultOf(response.GetDocumentJson(), err)
+	})
+	require.Equal(t, codes.Unauthenticated, response.Code)
 }
 
 // TestAttachmentObjectRouteRefusesAConversationlessClaim covers the claim shape
@@ -375,12 +356,11 @@ func TestAttachmentObjectRouteRefusesAConversationlessClaim(t *testing.T) {
 				return AttachmentObjectRecord{}, nil
 			}),
 		)
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, attachmentObjectRequest(
+		response := serve(server, attachmentObjectRequest(
 			t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size),
 			"chat-attachments", attachmentTestConversation+"/report.txt",
 		))
-		require.Equal(t, http.StatusServiceUnavailable, response.Code,
+		require.Equal(t, codes.Unavailable, response.Code,
 			"conversation %q", conversation)
 	}
 }
@@ -407,12 +387,11 @@ func TestAttachmentObjectRouteIsAbsentWithoutItsService(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, server.runtimeObjects)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, attachmentObjectRequest(
+	response := serve(server, attachmentObjectRequest(
 		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size),
 		"chat-attachments", attachmentTestConversation+"/report.txt",
 	))
-	require.Equal(t, http.StatusNotFound, response.Code)
+	require.Equal(t, codes.Unimplemented, response.Code)
 }
 
 // TestAttachmentObjectServiceRequiresItsDependencies keeps a half-wired service
@@ -515,26 +494,26 @@ func newAttachmentObjectTestServerWithService(
 	return server
 }
 
-// attachmentObjectRequest percent-encodes the KEY into one path segment, which
-// is how the worker addresses it: the key contains slashes
-// (`{conversationUUID}/{filename}`) and chi routes on r.URL.RawPath, so `%2F`
-// stays inside {name} instead of splitting into extra segments.
+// attachmentObjectRequest prepares one GetAttachmentObject call. The key
+// (`{conversationUUID}/{filename}`) travels as a field, slashes and all.
 func attachmentObjectRequest(
 	t *testing.T,
 	certificate *x509.Certificate,
 	fence []byte,
 	bucket string,
 	name string,
-) *http.Request {
+) contentCall {
 	t.Helper()
-	path := strings.Join([]string{
-		"/executions/execution-1/generations/1/runtime-context/attachments",
-		url.PathEscape(bucket),
-		strings.ReplaceAll(url.PathEscape(name), "/", "%2F"),
-	}, "/")
-	request := httptest.NewRequest(http.MethodPost, path, nil)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
-	return request
+	ctx := contentClaimContext(context.Background(), certificate, "claim-1", fence)
+	return func(server *ContentServer) contentResult {
+		response, err := server.GetAttachmentObject(ctx, &runtimev1.GetAttachmentObjectRequestV1{
+			Scope:  contentScope("execution-1", 1),
+			Bucket: bucket,
+			Name:   name,
+		})
+		if err == nil && response.GetUnreadableReason() != "" {
+			return contentResult{Code: codes.OK, Unreadable: response.GetUnreadableReason()}
+		}
+		return resultOf(response.GetDocumentJson(), err)
+	}
 }

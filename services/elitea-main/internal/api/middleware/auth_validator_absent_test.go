@@ -29,8 +29,9 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const absentValidatorSessionSecret = "session-secret-for-this-test"
@@ -64,7 +65,7 @@ func absentValidatorConfig() apimw.AuthConfig {
 		SessionSecret: absentValidatorSessionSecret,
 		// PrincipalValidator is deliberately absent. That is the deployment
 		// shape under test.
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
+		FormSessions: authtest.FormSessions{},
 	}
 }
 
@@ -128,18 +129,13 @@ func TestAnAbsentPrincipalValidatorRefusesABearerToken(t *testing.T) {
 	}
 }
 
-func TestAnAbsentPrincipalValidatorRefusesAForwardedIdentity(t *testing.T) {
-	// This path already refused before the change, via its own inline nil
-	// check. The check is gone and the shared helper covers it now, so this
-	// asserts the behaviour did not move when the duplicate was removed.
+func TestAnAbsentPrincipalValidatorRefusesAFormSession(t *testing.T) {
 	status, reached := refusedWithoutReachingHandler(t, func(r *http.Request) {
-		r.Header.Set("X-Auth-Type", "token")
-		r.Header.Set("X-Auth-Id", "42")
-		r.Header.Set("X-Auth-User-ID", "7")
+		authtest.SignIn(r, "7")
 	})
 
 	if reached {
-		t.Fatal("a forwarded identity authenticated a principal this deployment never validated")
+		t.Fatal("a Form session authenticated a principal this deployment never validated")
 	}
 	if status != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", status)
@@ -158,13 +154,9 @@ func TestEveryPathStillAuthenticatesWhenTheValidatorIsPresent(t *testing.T) {
 		"session cookie": func(r *http.Request) {
 			r.AddCookie(&http.Cookie{Name: "elitea_session", Value: cookie})
 		},
-		"api key": func(r *http.Request) { r.Header.Set("X-API-Key", "a-valid-key") },
-		"bearer":  func(r *http.Request) { r.Header.Set("Authorization", "Bearer a-valid-token") },
-		"forwarded identity": func(r *http.Request) {
-			r.Header.Set("X-Auth-Type", "token")
-			r.Header.Set("X-Auth-Id", "42")
-			r.Header.Set("X-Auth-User-ID", "7")
-		},
+		"api key":      func(r *http.Request) { r.Header.Set("X-API-Key", "a-valid-key") },
+		"bearer":       func(r *http.Request) { r.Header.Set("Authorization", "Bearer a-valid-token") },
+		"form session": func(r *http.Request) { authtest.SignIn(r, "7") },
 	}
 
 	for name, decorate := range cases {

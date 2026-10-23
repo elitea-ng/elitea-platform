@@ -3,24 +3,24 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// cleanState returns a cutoverState where all four post-cutover invariants hold.
+// cleanState returns a cutoverState where all three post-cutover invariants hold.
 // Use it as the base for individual failing-path tests so each test only tweaks
 // one field.
 func cleanState() cutoverState {
 	return cutoverState{
-		Gateway5xxCount:          0,
-		LiteLLMSubprocessPresent: false,
-		LegacySvcTrafficRPS:      0.0,
-		HardBlock402Confirmed:    true,
-		WindowMinutes:            15,
+		Gateway5xxCount:       0,
+		LegacySvcTrafficRPS:   0.0,
+		HardBlock402Confirmed: true,
+		WindowMinutes:         15,
 	}
 }
 
 // TestCutoverVerify_CleanState_Pass asserts that a fully-healthy post-cutover
-// state (zero 5xx, no litellm subprocess, zero legacy traffic, 402 confirmed)
+// state (zero 5xx, zero legacy traffic, 402 confirmed)
 // evaluates to ok=true with no reasons.
 func TestCutoverVerify_CleanState_Pass(t *testing.T) {
 	ok, reasons := evaluateCutover(cleanState())
@@ -29,25 +29,6 @@ func TestCutoverVerify_CleanState_Pass(t *testing.T) {
 	}
 	if len(reasons) != 0 {
 		t.Errorf("expected zero reasons for clean state, got %d: %v", len(reasons), reasons)
-	}
-}
-
-// TestCutoverVerify_LiteLLMStillPresent_Fail asserts that a state where the
-// runtime_engine_litellm subprocess is still present evaluates to ok=false with
-// exactly one reason that mentions the subprocess.
-func TestCutoverVerify_LiteLLMStillPresent_Fail(t *testing.T) {
-	state := cleanState()
-	state.LiteLLMSubprocessPresent = true
-
-	ok, reasons := evaluateCutover(state)
-	if ok {
-		t.Fatal("expected ok=false when LiteLLMSubprocessPresent=true, got true")
-	}
-	if len(reasons) != 1 {
-		t.Fatalf("expected 1 reason, got %d: %v", len(reasons), reasons)
-	}
-	if reasons[0] == "" {
-		t.Error("reason must not be empty")
 	}
 }
 
@@ -105,23 +86,22 @@ func TestCutoverVerify_No402_Fail(t *testing.T) {
 	}
 }
 
-// TestCutoverVerify_AllFailing_FourReasons asserts that a state where all four
-// invariants are broken produces exactly four reasons.
-func TestCutoverVerify_AllFailing_FourReasons(t *testing.T) {
+// TestCutoverVerify_AllFailing_ThreeReasons asserts that a state where all three
+// invariants are broken produces exactly three reasons.
+func TestCutoverVerify_AllFailing_ThreeReasons(t *testing.T) {
 	state := cutoverState{
-		Gateway5xxCount:          7,
-		LiteLLMSubprocessPresent: true,
-		LegacySvcTrafficRPS:      1.5,
-		HardBlock402Confirmed:    false,
-		WindowMinutes:            15,
+		Gateway5xxCount:       7,
+		LegacySvcTrafficRPS:   1.5,
+		HardBlock402Confirmed: false,
+		WindowMinutes:         15,
 	}
 
 	ok, reasons := evaluateCutover(state)
 	if ok {
 		t.Fatal("expected ok=false when all invariants fail, got true")
 	}
-	if len(reasons) != 4 {
-		t.Errorf("expected 4 reasons, got %d: %v", len(reasons), reasons)
+	if len(reasons) != 3 {
+		t.Errorf("expected 3 reasons, got %d: %v", len(reasons), reasons)
 	}
 }
 
@@ -138,9 +118,6 @@ func TestCutoverVerify_FixtureLoad_CleanState(t *testing.T) {
 	// Verify the fixture was deserialised with the expected field values.
 	if state.Gateway5xxCount != 0 {
 		t.Errorf("Gateway5xxCount = %d, want 0", state.Gateway5xxCount)
-	}
-	if state.LiteLLMSubprocessPresent {
-		t.Error("LiteLLMSubprocessPresent = true, want false")
 	}
 	if state.LegacySvcTrafficRPS != 0.0 {
 		t.Errorf("LegacySvcTrafficRPS = %v, want 0.0", state.LegacySvcTrafficRPS)
@@ -161,7 +138,7 @@ func TestCutoverVerify_FixtureLoad_CleanState(t *testing.T) {
 
 // TestCutoverVerify_FixtureLoad_DirtyState asserts that
 // testdata/cutover_state_dirty.json loads correctly and that evaluateCutover
-// fails on it (litellm subprocess present).
+// fails on it (traffic still reaching litellm-svc).
 func TestCutoverVerify_FixtureLoad_DirtyState(t *testing.T) {
 	path := filepath.Join("testdata", "cutover_state_dirty.json")
 	state, err := loadCutoverStateFromFile(path)
@@ -169,8 +146,8 @@ func TestCutoverVerify_FixtureLoad_DirtyState(t *testing.T) {
 		t.Fatalf("loadCutoverStateFromFile(%q): %v", path, err)
 	}
 
-	if !state.LiteLLMSubprocessPresent {
-		t.Error("expected LiteLLMSubprocessPresent=true in dirty fixture")
+	if state.LegacySvcTrafficRPS <= 0 {
+		t.Errorf("expected positive LegacySvcTrafficRPS in dirty fixture, got %v", state.LegacySvcTrafficRPS)
 	}
 
 	ok, reasons := evaluateCutover(state)
@@ -202,6 +179,22 @@ func TestCutoverVerify_FixtureLoad_MalformedJSON(t *testing.T) {
 	_, err := loadCutoverStateFromFile(tmpPath)
 	if err == nil {
 		t.Fatal("expected error for malformed JSON fixture, got nil")
+	}
+}
+
+// TestCutoverVerify_FixtureLoad_UnknownField asserts that a state recorded
+// with a field the gate no longer reads (the removed litellm_subprocess_present
+// invariant) is refused rather than silently passing.
+func TestCutoverVerify_FixtureLoad_UnknownField(t *testing.T) {
+	tmpPath := filepath.Join(t.TempDir(), "old.json")
+	body := `{"litellm_subprocess_present":true,"legacy_svc_traffic_rps":0,"hard_block_402_confirmed":true}`
+	if err := os.WriteFile(tmpPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err := loadCutoverStateFromFile(tmpPath)
+	if err == nil || !strings.Contains(err.Error(), "litellm_subprocess_present") {
+		t.Fatalf("expected an unknown-field error naming litellm_subprocess_present, got %v", err)
 	}
 }
 

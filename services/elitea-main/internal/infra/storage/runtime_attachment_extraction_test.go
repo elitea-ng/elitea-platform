@@ -7,8 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 // These tests pin what the route now does with a document that is not plain
@@ -43,13 +43,11 @@ func fixtureSource(bucket, name string, data []byte, mediaType string) Attachmen
 	})
 }
 
-func serveAttachment(t *testing.T, server *ContentServer, name string) *httptest.ResponseRecorder {
+func serveAttachment(t *testing.T, server *ContentServer, name string) contentResult {
 	t.Helper()
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, attachmentObjectRequest(
+	return serve(server, attachmentObjectRequest(
 		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "chat-attachments", name,
 	))
-	return response
 }
 
 func TestAttachmentObjectRouteServesExtractedPDFText(t *testing.T) {
@@ -61,10 +59,10 @@ func TestAttachmentObjectRouteServesExtractedPDFText(t *testing.T) {
 		fixtureSource("chat-attachments", key, attachmentFixture(t, "report.pdf"), "application/pdf"),
 	)
 	response := serveAttachment(t, server, key)
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
 
 	var document RuntimeAttachmentObjectContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+	require.NoError(t, json.Unmarshal(response.Body, &document))
 	require.Equal(t, "pdf", document.Format)
 	require.Contains(t, document.Content, "FIXTURETOKENPDF1")
 	require.Contains(t, document.Content, "FIXTURETOKENPDF2")
@@ -86,10 +84,8 @@ func TestAttachmentObjectRouteNamesTheReasonForAnEncryptedPDF(t *testing.T) {
 		fixtureSource("chat-attachments", key, attachmentFixture(t, "encrypted.pdf"), "application/pdf"),
 	)
 	response := serveAttachment(t, server, key)
-	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
-	var body RuntimeAttachmentUnreadable
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
-	require.Equal(t, "encrypted", body.Reason)
+	require.Equal(t, codes.OK, response.Code)
+	require.Equal(t, "encrypted", response.Unreadable)
 }
 
 // TestAttachmentObjectRouteSaysWhenItServesOnlyPartOfTheText is the
@@ -111,10 +107,10 @@ func TestAttachmentObjectRouteSaysWhenItServesOnlyPartOfTheText(t *testing.T) {
 	require.NoError(t, err)
 	service.maxServed = 100 << 10
 	response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
 
 	var document RuntimeAttachmentObjectContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+	require.NoError(t, json.Unmarshal(response.Body, &document))
 	require.False(t, document.Complete)
 	require.Equal(t, "served_limit", document.PartialReason)
 	require.LessOrEqual(t, len(document.Content), 100<<10)
@@ -133,8 +129,8 @@ func TestAttachmentObjectRouteDoesNotHTMLEscapeText(t *testing.T) {
 		fixtureSource("chat-attachments", key, []byte("<b>a & b</b>"), "text/html"),
 	)
 	response := serveAttachment(t, server, key)
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Contains(t, response.Body.String(), `"content":"<b>a & b</b>"`)
+	require.Equal(t, codes.OK, response.Code)
+	require.Contains(t, string(response.Body), `"content":"<b>a & b</b>"`)
 }
 
 type fakeExtractionCache struct {
@@ -244,15 +240,15 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		)
 		require.NoError(t, err)
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, codes.OK, response.Code)
 		var document RuntimeAttachmentObjectContext
-		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+		require.NoError(t, json.Unmarshal(response.Body, &document))
 		require.Equal(t, "cached text", document.Content)
 		require.Equal(t, "application/pdf", document.MediaType)
 		require.EqualValues(t, 4, document.ByteLength)
 	})
 
-	t.Run("a cached refusal is served as 422 with its reason", func(t *testing.T) {
+	t.Run("a cached refusal is served with its reason", func(t *testing.T) {
 		t.Parallel()
 		cache := &fakeExtractionCache{
 			version: version,
@@ -266,8 +262,8 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		)
 		require.NoError(t, err)
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-		require.Equal(t, http.StatusUnprocessableEntity, response.Code)
-		require.Contains(t, response.Body.String(), `"reason":"encrypted"`)
+		require.Equal(t, codes.OK, response.Code)
+		require.Equal(t, "encrypted", response.Unreadable)
 	})
 
 	t.Run("a miss extracts once and files the result", func(t *testing.T) {
@@ -283,7 +279,7 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		// The first PDF compiles the PDFium module, which is slow under -race.
 		service.extractionWait = 2 * time.Minute
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, codes.OK, response.Code)
 		require.Len(t, cache.saved, 1)
 		require.False(t, cache.saved[0].Refused)
 		require.Contains(t, cache.saved[0].Document.Text, "FIXTURETOKENPDF1")
@@ -310,8 +306,8 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 			)
 			require.NoError(t, err)
 			response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-			require.Equal(t, http.StatusUnprocessableEntity, response.Code)
-			require.Contains(t, response.Body.String(), `"reason":"`+string(reason)+`"`)
+			require.Equal(t, codes.OK, response.Code)
+			require.Equal(t, string(reason), response.Unreadable)
 			require.Equal(t, filed, len(cache.saved) == 1, "reason %s", reason)
 		}
 	})
@@ -332,8 +328,8 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		require.NoError(t, err)
 		service.extractionWait = 20 * time.Millisecond
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-		require.Equal(t, http.StatusUnprocessableEntity, response.Code)
-		require.Contains(t, response.Body.String(), `"reason":"processing"`)
+		require.Equal(t, codes.OK, response.Code)
+		require.Equal(t, "processing", response.Unreadable)
 
 		// The request is gone; the extraction finishes and files its result
 		// for the next turn.
@@ -345,7 +341,7 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		}, 5*time.Second, 10*time.Millisecond)
 	})
 
-	t.Run("an extractor fault is a 503, not a property of the file", func(t *testing.T) {
+	t.Run("an extractor fault is Unavailable, not a property of the file", func(t *testing.T) {
 		t.Parallel()
 		cache := &fakeExtractionCache{version: version}
 		service, err := NewRuntimeAttachmentObjectService(
@@ -358,7 +354,7 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		)
 		require.NoError(t, err)
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-		require.Equal(t, http.StatusServiceUnavailable, response.Code)
+		require.Equal(t, codes.Unavailable, response.Code)
 		require.Empty(t, cache.saved)
 	})
 
@@ -373,7 +369,7 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		)
 		require.NoError(t, err)
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
-		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, codes.OK, response.Code)
 		require.Empty(t, cache.saved, "nothing is filed without a version")
 	})
 }

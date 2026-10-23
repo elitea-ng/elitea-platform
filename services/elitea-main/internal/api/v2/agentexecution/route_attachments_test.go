@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 )
 
 func TestCurrentApplicationStartRouteCarriesPayloadAttachmentsToTheUseCase(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCurrentAdhocStartRouteCarriesPayloadAttachmentsToTheUseCase(t *testing.
 }
 
 func TestCurrentApplicationStartRouteRejectsMalformedAttachmentFilepathBeforeUseCase(t *testing.T) {
-	// Every one of these fails pylon's parse_filepath: after stripping one
+	// Every one of these fails the legacy parse_filepath: after stripping one
 	// leading slash there is no further slash, or one side of the split is
 	// empty. A start carrying one is refused whole — never admitted with the
 	// offending entry dropped, which would produce a turn the user believes

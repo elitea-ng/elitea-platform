@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 func TestRecoverableToolRequestHeaderAndConflict(t *testing.T) {
@@ -152,8 +152,8 @@ func TestWriteOutcomeRelaysTheResultAsJSON(t *testing.T) {
 	}
 }
 
-// 504, not pylon's 400. The run is durable and STILL GOING; 400 would say the
-// caller's request was wrong, and it was not.
+// 504, not the legacy 400. The run is durable and STILL GOING; 400 would say
+// the caller's request was wrong, and it was not.
 func TestWriteErrorReportsAPendingRunAsAGatewayTimeout(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	WriteError(recorder, &toolkitcalltoolapp.PendingRun{ExecutionID: "exec-9"})

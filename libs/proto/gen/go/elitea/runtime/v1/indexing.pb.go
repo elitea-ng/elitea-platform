@@ -972,7 +972,7 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"0INDEX_INGEST_TERMINAL_STATE_V1_SCHEDULED_REINDEX\x10\x03\x12)\n" +
 	"%INDEX_INGEST_TERMINAL_STATE_V1_FAILED\x10\x04\x121\n" +
 	"-INDEX_INGEST_TERMINAL_STATE_V1_PARTLY_INDEXED\x10\x05\x12,\n" +
-	"(INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED\x10\x06BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"(INDEX_INGEST_TERMINAL_STATE_V1_CANCELLED\x10\x06BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_indexing_proto_rawDescOnce sync.Once

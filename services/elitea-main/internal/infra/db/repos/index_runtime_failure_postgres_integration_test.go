@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -100,7 +100,7 @@ WHERE execution_id = $1 AND projection_project_id = 1`, expected.ExecutionID).Sc
 	if err != nil || replayedReceipt != receipt {
 		t.Fatalf("replay index failure settlement: first=%+v replay=%+v err=%v", receipt, replayedReceipt, err)
 	}
-	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_settlements WHERE execution_id = $1 AND disposition = 'FAILED'`, expected.ExecutionID)
+	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_settlements WHERE execution_id = $1 AND disposition = 'FAILED' AND error_code = 'INTERNAL'`, expected.ExecutionID)
 	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_jobs WHERE execution_id = $1 AND state = 'FAILED'`, expected.ExecutionID)
 	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_claims WHERE execution_id = $1 AND release_reason = 'SETTLED' AND released_at IS NOT NULL`, expected.ExecutionID)
 }

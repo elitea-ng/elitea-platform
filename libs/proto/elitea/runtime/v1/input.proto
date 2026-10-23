@@ -4,7 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // ExecutionInputBundleReferenceV1 is safe for the bounded bus command. It
 // identifies content but cannot itself redeem or fetch that content.

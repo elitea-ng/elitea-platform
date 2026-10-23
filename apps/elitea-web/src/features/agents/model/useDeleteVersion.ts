@@ -206,7 +206,7 @@ export function useDeleteVersion(input: UseDeleteVersionInput): UseDeleteVersion
         // So "Replace & Delete" through that route left every referencing
         // agent pointing at a deleted row. `DELETE /version/...` now honours
         // `replacement_version_id` and repoints those references itself,
-        // which is what pylon's own delete does
+        // which is what the legacy runtime's delete does
         // (`legacy/plugins/elitea_core/rpc/application.py:1936-1961`).
         await queryClient.query(
           getDeleteApplicationVersionQueryOptions(

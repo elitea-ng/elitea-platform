@@ -80,27 +80,27 @@ export interface AdminNavGroup {
  *
  * ## Every item names a permission THIS platform issues, as well
  *
- * The reference gates four items on pylon SECTION names — `projects`,
+ * The reference gates four items on legacy SECTION names — `projects`,
  * `projects.projects`, `configuration`, `configuration.roles` — and one on
- * `configuration.service_descriptors`. Pylon registers those names, so they stay
- * here for a pylon-backed deployment. This platform's own administration mode
+ * `configuration.service_descriptors`. This platform's own administration mode
  * registers none of them: `001_initial.sql` and `migrations/shared/*` seed
  * fully-qualified names only.
  *
  * The nav read that as "the operator lacks the permission" and hid the item.
  * `projects` and `service-descriptors` disappeared from every Go-native admin
  * console, silently, with nothing on screen to explain it. Both now name the
- * permission `internal/api/router.go` resolves for the page they open, beside
- * the pylon name. `roles`, `configuration` and `features` already did.
+ * permission `internal/api/router.go` resolves for the page they open.
+ * `roles`, `configuration` and `features` already did.
  *
  * The defect stayed invisible while `adminui/handler.go` HARDCODED a 37-string
  * permission list that echoed the reference's section names back to the browser.
  * That handler resolves the operator's real grants now, so an unissuable name
  * hides an item for good. Add no gate whose permission no seed grants.
  *
- * The bare `projects` and `configuration` section nodes are gone from every
- * gate: shared migration 0136 retires them (#6874), because the resolver
- * matches exact strings and no code checks either one.
+ * The section names no code checks are gone from every gate: shared migration
+ * 0136 retires the bare `projects` and `configuration` nodes (#6874), and 0172
+ * retires `projects.projects` and `configuration.roles`. The resolver matches
+ * exact strings, so none of them stood in for a fully-qualified name.
  * `internal/api/router_permission_retired_gate_test.go` fails if a web gate
  * names a retired string again.
  */
@@ -121,20 +121,18 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/roles',
           label: t('pages.admin.nav.roles', 'Roles'),
           icon: SecurityOutlinedIcon,
-          anyPermission: ['configuration.roles', 'configuration.roles.permissions.view'],
+          anyPermission: ['configuration.roles.permissions.view'],
         },
         {
           id: 'projects',
           path: '/projects',
           label: t('pages.admin.nav.projects', 'Projects'),
           icon: FolderOutlinedIcon,
-          // `projects.projects` is a pylon SECTION name, and this platform's
-          // administration mode does not issue it. It issues
-          // `projects.projects.projects.view`, which is also the permission
-          // `router.go` resolves for the admin project listing this item opens.
-          // The bare `projects` node is retired (shared/0136, #6874): no code
-          // checks it, so no gate here may name it.
-          anyPermission: ['projects.projects', 'projects.projects.projects.view'],
+          // `projects.projects.projects.view` is the permission `router.go`
+          // resolves for the admin project listing this item opens. The legacy
+          // section names `projects` and `projects.projects` are retired
+          // (shared/0136, shared/0172): no code checks them.
+          anyPermission: ['projects.projects.projects.view'],
         },
         {
           id: 'secrets',
@@ -201,12 +199,11 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/service-descriptors',
           label: t('pages.admin.nav.serviceDescriptors', 'Service Descriptors'),
           icon: HubOutlinedIcon,
-          // `configuration.service_descriptors` is a pylon CONFIGURATION-SECTION
-          // name, and this platform issues it to nobody.
           // `runtime.airun.serviceproviders` is the permission `router.go`
           // resolves for the listing, and 001_initial.sql grants it to both
-          // administration-mode admin roles. Keep both: the section name still
-          // reaches a pylon-backed deployment.
+          // administration-mode admin roles. `configuration.service_descriptors`
+          // is what the Configuration section of the same subsystem requires
+          // (`config_schemas.go`); no seed grants it, but an operator can.
           anyPermission: ['configuration.service_descriptors', 'runtime.airun.serviceproviders'],
         },
         {
@@ -218,11 +215,11 @@ export function navGroups(): readonly AdminNavGroup[] {
           // (`internal/api/router.go`, `central(admin.ToolkitTypeManagePermission)`),
           // and one this platform ISSUES: shared migration 0114 grants
           // `toolkit_catalogue.type.manage` to the administration-mode
-          // super_admin, admin and system. No pylon SECTION name is listed
-          // beside it because pylon has no counterpart surface — its only
-          // toolkit control is the guardrails deny-list on the Configuration
-          // page. See this module's header on why a gate whose permission no
-          // seed grants is a nav item that disappears for good.
+          // super_admin, admin and system. No legacy SECTION name is listed
+          // beside it because the legacy runtime has no counterpart surface —
+          // its only toolkit control is the guardrails deny-list on the
+          // Configuration page. See this module's header on why a gate whose
+          // permission no seed grants is a nav item that disappears for good.
           anyPermission: ['toolkit_catalogue.type.manage'],
         },
         {

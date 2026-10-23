@@ -34,7 +34,7 @@ package migrations_test
 // apps/elitea-web/scripts/e2e-stack.sh grants permissions as PER-PROJECT
 // auth_core__project_role_permission rows. Those rows suppress legacyrbac's
 // central default-mode fallback completely, and supply the permissions
-// directly. A pylon-backed database and a legacy dump hold that same shape. So
+// directly. A legacy dump holds that same shape. So
 // only a clean Go bootstrap breaks, and no seeded suite could see it.
 //
 // So this file asserts against the corpus a real deployment applies, and against
@@ -73,10 +73,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 // The permissions are read from the production constants, not copied, so a
@@ -189,7 +189,7 @@ func TestAViewerIsRefusedTheConfigurationWriteGates(t *testing.T) {
 // gate must refuse them.
 //
 // This case also pins the migration's blast radius. This is the shape of every
-// pylon-backed database, every legacy dump and the end-to-end stack, so the
+// legacy dump and the end-to-end stack, so the
 // migration cannot change what their members may do.
 func TestACallerWithoutTheGrantsIsRefusedAtAllSixGates(t *testing.T) {
 	pool := newMigratedPool(t)

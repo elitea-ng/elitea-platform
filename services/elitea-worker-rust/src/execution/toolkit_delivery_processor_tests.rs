@@ -14,14 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use http::{Request, Response, StatusCode, Version};
-use http_body_util::{BodyExt, Full};
 use prost::Message;
 use ring::{digest, hmac};
 use serde_json::{Value, json};
 use tonic::Status;
-use tonic::body::Body;
 
 use super::agent_preparation::{AgentInputMaterializer, AgentPreparationConfig};
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
@@ -50,11 +46,12 @@ use crate::transport::command_bus::{
     CommandRetirementClient, CommandRetirementClientError, CommandRetirementConfig,
     CommandRetirementRequest, CommandRetirer,
 };
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::output_grpc::test_acknowledged_terminal;
 use crate::transport::platform_client::PlatformClient;
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 use crate::transport::{
     ControlGrpcConfig, ControlRpc, DurablyAckedTerminal, InputContentError, MaterializedInput,
     OutputGrpcConfig, OutputGrpcError, PreparedOutputSpool,
@@ -69,7 +66,9 @@ fn vector(name: &str) -> Vec<u8> {
         .find(|(key, _)| *key == name)
         .expect("fixture");
     hex.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).expect("hex"), 16).expect("byte"))
         .collect()
 }
@@ -325,8 +324,8 @@ impl CommandRetirementClient for CallBus {
     }
 }
 
-/// Main's runtime-context listener: the artifact routes, answered from one
-/// file, recording every path the worker posted to.
+/// Main's runtime-context service: the artifact calls, answered from one
+/// file, recording every call the worker made.
 struct ArtifactRoutes {
     /// The claim's resource project: Main answers inside it, and the worker
     /// refuses an answer about any other.
@@ -335,26 +334,17 @@ struct ArtifactRoutes {
     claim_headers: Mutex<Vec<bool>>,
 }
 
-#[async_trait]
-impl RuntimeContextRpc for ArtifactRoutes {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        let path = request.uri().path().to_owned();
-        self.claim_headers.lock().expect("headers").push(
-            request.headers().contains_key("x-elitea-claim-id")
-                && request.headers().contains_key("x-elitea-fence"),
-        );
-        let sent = request
-            .into_body()
-            .collect()
-            .await
-            .map(http_body_util::Collected::to_bytes)
-            .unwrap_or_default();
-        let sent: Value = serde_json::from_slice(&sent).unwrap_or(Value::Null);
+#[tonic::async_trait]
+impl ContextRoutes for ArtifactRoutes {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, Status> {
+        let path = call.route;
+        self.claim_headers
+            .lock()
+            .expect("headers")
+            .push(!call.claim.is_empty() && call.fence.len() == 32);
+        let sent: Value = serde_json::from_slice(&call.body).unwrap_or(Value::Null);
         self.paths.lock().expect("paths").push(path.clone());
-        let body = if path.ends_with("/artifacts/read") {
+        let body = if path == "artifacts/read" {
             assert_eq!(sent["bucket"], "agent-artifacts", "the toolkit's bucket");
             json!({
                 "schema_version": "elitea.runtime.artifact-read.v1",
@@ -369,7 +359,7 @@ impl RuntimeContextRpc for ArtifactRoutes {
                 "over_limit": false,
                 "content": "hello world",
             })
-        } else if path.ends_with("/artifacts/list") {
+        } else if path == "artifacts/list" {
             json!({
                 "schema_version": "elitea.runtime.artifact-list.v1",
                 "project_id": self.project_id,
@@ -381,28 +371,16 @@ impl RuntimeContextRpc for ArtifactRoutes {
         } else {
             panic!("the direct path posted to {path}");
         };
-        let raw = body.to_string();
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", raw.len())
-            .body(Body::new(Full::new(Bytes::from(raw))))
-            .expect("route response"))
+        Ok(ContextAnswer::from(&body))
     }
 }
 
 struct ArtifactRoutesHandle(Arc<ArtifactRoutes>);
 
-#[async_trait]
-impl RuntimeContextRpc for ArtifactRoutesHandle {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        self.0.post(request).await
+#[tonic::async_trait]
+impl ContextRoutes for ArtifactRoutesHandle {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, Status> {
+        self.0.answer(call).await
     }
 }
 
@@ -439,7 +417,7 @@ struct CallRun {
 
 fn runtime_context_client(routes: &Arc<ArtifactRoutes>) -> RuntimeContextClient {
     RuntimeContextClient::with_rpc(
-        ArtifactRoutesHandle(Arc::clone(routes)),
+        Routes(ArtifactRoutesHandle(Arc::clone(routes))),
         RuntimeContextConfig {
             origin: "https://content.internal:443".to_owned(),
             deadline: Duration::from_secs(1),
@@ -561,11 +539,7 @@ async fn an_artifact_read_tool_runs_on_the_direct_path_under_the_claim() {
         run.summary.result_json
     );
     assert_eq!(run.routes.len(), 1);
-    assert!(
-        run.routes[0].ends_with("/runtime-context/artifacts/read"),
-        "{:?}",
-        run.routes
-    );
+    assert_eq!(run.routes[0], "artifacts/read", "{:?}", run.routes);
     assert!(
         run.claim_headers.iter().all(|present| *present),
         "the claim authorizes the read"
@@ -587,7 +561,7 @@ async fn an_artifact_read_tool_runs_on_the_direct_path_under_the_claim() {
         "{}",
         listed.summary.result_json
     );
-    assert!(listed.routes[0].ends_with("/runtime-context/artifacts/list"));
+    assert_eq!(listed.routes[0], "artifacts/list");
 }
 
 /// The direct path never widens past read-only: an artifact write tool is

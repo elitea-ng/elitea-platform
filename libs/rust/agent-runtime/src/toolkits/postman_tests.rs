@@ -139,7 +139,7 @@ fn nested_configuration_is_exact_origin_secret_safe_and_selection_is_determinist
     for selected in [None, Some(Value::Null), Some(json!([]))] {
         let parsed = PostmanToolkitConfig::parse(&settings(selected))
             .expect("empty selection means all tools");
-        assert!(parsed.selected_tools().is_empty());
+        assert_eq!(parsed.selected_tools(), []);
     }
     let selected = PostmanToolkitConfig::parse(&settings(Some(json!([
         "move_request",
@@ -1252,7 +1252,7 @@ async fn assert_dynamic_execution_success() {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].method, Method::GET);
         assert_eq!(calls[0].url, "https://service.example.test/items");
-        assert!(calls[0].query.is_empty());
+        assert_eq!(calls[0].query, [] as [(String, String); 0]);
         assert!(calls[0].body.is_none());
         assert!(calls[0].headers.iter().any(|(name, value)| {
             name == "authorization" && value == "Bearer environment-secret"

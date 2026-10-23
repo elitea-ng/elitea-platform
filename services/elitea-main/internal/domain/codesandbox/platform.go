@@ -3,8 +3,8 @@ package codesandbox
 import (
 	"math"
 
-	recovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	recovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 const PlatformDomain = "elitea.sandbox.platform-broker-owner-grant.ed25519.v1\x00"

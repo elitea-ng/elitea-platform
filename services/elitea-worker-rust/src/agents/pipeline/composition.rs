@@ -11,9 +11,8 @@ use serde_json::{Map, Value};
 use super::{
     AdmittedToolSnapshot, ClaimBoundRuntimeContextAuthority, FrozenToolKind, FrozenToolSnapshot,
     NativeAgentAssemblyError, NativeAgentAssemblyErrorCode, OrdinaryNoToolProfile,
-    PipelineDefinition, PipelineExecutionProfile, PlatformClient,
-    SCOPED_APPLICATION_CONTINUATION_READY, ToolAdmissionPolicy, invalid_pipeline_tool_scope,
-    unsupported_pipeline_runtime,
+    PipelineDefinition, PipelineExecutionProfile, PlatformClient, ToolAdmissionPolicy,
+    invalid_pipeline_tool_scope,
 };
 
 // Match the existing nested interrupt parser. Do not admit deeper pauses.
@@ -60,7 +59,6 @@ struct CompositionAdmission<'a> {
     versions: BTreeMap<(u64, u64), Map<String, Value>>,
     hops: usize,
     version_bytes: usize,
-    scoped_ready: bool,
 }
 
 type AdmissionFuture<'a> = Pin<
@@ -127,9 +125,7 @@ impl CompositionAdmission<'_> {
                     .map_err(|_| invalid_pipeline_tool_scope())?;
                 profile.validate_tool_snapshot(&frozen, self.policy)?;
                 let admitted = frozen.apply_policy(self.policy);
-                let children = self
-                    .children(&profile, &admitted, depth, self.scoped_ready)
-                    .await?;
+                let children = self.children(&profile, &admitted, depth).await?;
                 let revision = PipelineCheckpointRevision {
                     application_id: identity.0,
                     version_id: identity.1,
@@ -153,7 +149,6 @@ impl CompositionAdmission<'_> {
         profile: &PipelineExecutionProfile,
         snapshot: &AdmittedToolSnapshot<'_>,
         depth: usize,
-        ordinary_agents_supported: bool,
     ) -> Result<BTreeMap<String, Arc<AdmittedSavedPipeline>>, NativeAgentAssemblyError> {
         let aliases = profile
             .definition()
@@ -177,10 +172,8 @@ impl CompositionAdmission<'_> {
                         .ok_or_else(invalid_pipeline_tool_scope)?,
                     reference.application_project_id(),
                 )),
-                Some("agent") if ordinary_agents_supported => {}
-                // A nested ordinary Agent needs a scoped event/catalog owner.
-                // Do not bind a tool whose pause could be lost or misattributed.
-                Some("agent") => return Err(unsupported_pipeline_runtime()),
+                // An ordinary Agent is bound later by its scoped event/catalog owner.
+                Some("agent") => {}
                 _ => return Err(invalid_pipeline_tool_scope()),
             }
         }
@@ -212,9 +205,8 @@ pub(super) async fn admit_root_composition(
         versions: BTreeMap::new(),
         hops: 0,
         version_bytes: 0,
-        scoped_ready: SCOPED_APPLICATION_CONTINUATION_READY,
     };
-    let children = admission.children(profile, snapshot, 0, true).await?;
+    let children = admission.children(profile, snapshot, 0).await?;
     let checkpoint_paths = composition_paths(profile.definition(), &children)?;
     Ok(AdmittedPipelineComposition {
         children,
@@ -232,30 +224,6 @@ pub(super) async fn admit_tool_composition(
     selected_project_id: Option<u64>,
     fallback: &OrdinaryNoToolProfile,
 ) -> Result<Arc<AdmittedSavedPipeline>, NativeAgentAssemblyError> {
-    admit_tool_composition_with_scoped(
-        platform,
-        authority,
-        project_id,
-        policy,
-        identity,
-        selected_project_id,
-        fallback,
-        SCOPED_APPLICATION_CONTINUATION_READY,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)] // Keep the private scoped policy beside frozen authority.
-pub(super) async fn admit_tool_composition_with_scoped(
-    platform: &PlatformClient,
-    authority: &ClaimBoundRuntimeContextAuthority,
-    project_id: u64,
-    policy: &ToolAdmissionPolicy,
-    identity: (u64, u64),
-    selected_project_id: Option<u64>,
-    fallback: &OrdinaryNoToolProfile,
-    scoped_ready: bool,
-) -> Result<Arc<AdmittedSavedPipeline>, NativeAgentAssemblyError> {
     let mut admission = CompositionAdmission {
         platform,
         authority,
@@ -265,7 +233,6 @@ pub(super) async fn admit_tool_composition_with_scoped(
         versions: BTreeMap::new(),
         hops: 0,
         version_bytes: 0,
-        scoped_ready,
     };
     // The tool root is not an ADK subgraph wrapper.
     let admitted = admission
@@ -384,56 +351,41 @@ pub(super) fn composition_definitions_for(
 mod tests {
     use super::*;
     use crate::protocol::control::test_runtime_context_authority;
-    use crate::transport::runtime_context::{
-        RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
+    use crate::transport::input_content::content_fake::{
+        ContextAnswer, ContextCall, ContextRoutes, Routes,
     };
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use http::{Request, Response, StatusCode, Version};
-    use http_body_util::Full;
+    use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
     use serde_json::json;
     use std::fmt::Write as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use tonic::body::Body;
 
     struct FrozenVersions {
         versions: BTreeMap<(u64, u64), Map<String, Value>>,
         reads: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
-    impl RuntimeContextRpc for FrozenVersions {
-        async fn post(
-            &self,
-            request: Request<Body>,
-        ) -> Result<Response<Body>, RuntimeContextTransportError> {
-            let parts = request.uri().path().split('/').collect::<Vec<_>>();
+    #[tonic::async_trait]
+    impl ContextRoutes for FrozenVersions {
+        async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+            let parts = call.route.split('/').collect::<Vec<_>>();
             let version = parts.last().and_then(|value| value.parse::<u64>().ok());
             let application = parts
                 .get(parts.len() - 3)
                 .and_then(|value| value.parse::<u64>().ok());
             let identity = application
                 .zip(version)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture"))?;
             self.reads.fetch_add(1, Ordering::SeqCst);
             let details = self
                 .versions
                 .get(&identity)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture"))?;
             let raw =
                 json!({"schema_version":"elitea.runtime.application-version.v1", "project_id":17,
                 "application_id":identity.0, "version_id":identity.1, "version_details":details})
                 .to_string();
-            Response::builder()
-                .status(StatusCode::OK)
-                .version(Version::HTTP_2)
-                .header("content-type", "application/json")
-                .header("cache-control", "private, no-cache, no-store")
-                .header("pragma", "no-cache")
-                .header("content-length", raw.len())
-                .body(Body::new(Full::new(Bytes::from(raw))))
-                .map_err(|_| RuntimeContextTransportError::Unavailable)
+            Ok(ContextAnswer::Json(raw.into_bytes()))
         }
     }
 
@@ -442,10 +394,10 @@ mod tests {
     ) -> (PlatformClient, Arc<AtomicUsize>) {
         let reads = Arc::new(AtomicUsize::new(0));
         let runtime = RuntimeContextClient::with_rpc(
-            FrozenVersions {
+            Routes(FrozenVersions {
                 versions,
                 reads: reads.clone(),
-            },
+            }),
             RuntimeContextConfig {
                 origin: "https://content.internal".to_owned(),
                 deadline: Duration::from_secs(1),

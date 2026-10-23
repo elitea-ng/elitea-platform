@@ -15,10 +15,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/governance"
-	natsinfra "github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/governance"
+	natsinfra "github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/server"
 )
 
 // TestMainWiring is the "wiring gate": it parses main.go and asserts that each
@@ -46,6 +46,9 @@ func TestMainWiring(t *testing.T) {
 		{"logLoopBreakerMode(", "the backstop's mode is never logged at startup — a disarmed or badly-tuned guard would be invisible to operators, which is how it shipped as a de-facto 5 req/s rate limiter (issue #12)"},
 		{"hopmarker.New(", "the hop marker is never built, so BOTH halves of hop detection are unarmed — the outbound stamp and the inbound recognition read the same value from this one call, and nothing else constructs it (issue #164)"},
 		{"llmproxy.WithHopMarker(", "the inbound half of hop-marker detection is never attached to the handler — the gateway would stamp every outbound provider request and then admit its own request back, so a circular route runs until the amplification backstop happens to fire, which it cannot do at a rate below its threshold (issue #164)"},
+		{"workloadidentity.NewADC(", "no token source is built when GATEWAY_WORKLOAD_IDENTITY_ENABLED is true — the probe routes refuse every keyless platform provider, and the Account would build a second, separately cached source"},
+		{"llmproxy.WithWorkloadIdentity(", "the probe routes never learn the keyless mode — Test connection and the model listing refuse a keyless platform provider that serves /llm traffic"},
+		{"logWorkloadIdentityMode(", "the keyless mode is never stated at startup — an operator cannot see from the log whether the pod lends its Google identity to platform credentials"},
 		{"logHopMarkerMode(", "hop detection's mode is never logged at startup — an install with no GATEWAY_HOP_SECRET is inert, and that is precisely how a previous attempt shipped a guard that defaulted to \"\" and detected nothing anywhere (issue #164)"},
 		{"llmproxy.WithAlertEventPublisher(", "budget.soft_alert is never published to gateway.events.* — the 80% alert would be invisible to subscribers (spec §8.3)"},
 		{"llmproxy.WithStreamGrace(", "the stream-disconnect grace period is never configured — a client that disconnects mid-stream is billed nothing and the hard budget is bypassable (issue #9)"},
@@ -54,7 +57,7 @@ func TestMainWiring(t *testing.T) {
 		{"startupIdentityCheck(", "the identity-secret startup guard is never invoked — the gateway would boot with identity verification disabled while the vault-backed Account resolves per-project credentials from an unauthenticated X-Elitea-Project-Id (issue #11)"},
 		{"shutdownSequence(", "the shutdown sequence is never invoked — stream grace, HTTP drain, billing drain and NATS close would not run in the one order that loses no spend (issue #9)"},
 		{"llmproxy.WithOpsEventPublisher(", "budget.unbilled_stream is never published — a stream the gateway could not bill would be invisible to operators (issue #9)"},
-		{"llmproxy.WithRealtimeDialer(", "the realtime route has no provider side — /llm/v1/realtime answers 501 for every caller, so pylon-indexer keeps the second, unmetered LiteLLM data plane this route exists to delete"},
+		{"llmproxy.WithRealtimeDialer(", "the realtime route has no provider side — /llm/v1/realtime answers 501 for every caller, so the legacy indexer keeps the second, unmetered LiteLLM data plane this route exists to delete"},
 		{"llmproxy.WithRealtimeBudgetRecheck(", "a realtime session is gated ONCE and then runs unbounded — bifrost reports a turn start only for events the only known caller never sends, so the periodic re-check is the ONLY thing that re-asks the budget for a live socket"},
 		{"llmproxy.WithRealtimeSessionLimit(", "concurrent realtime sessions are unbounded — a hijacked connection has its deadlines cleared, so no server timeout can ever reap one"},
 		{"llmproxy.WithRealtimeOrigins(", "the accept-side Origin allowlist is never configured — a WebSocket handshake is not subject to CORS, so this is the only place the operator's browser-origin policy is applied"},
@@ -73,7 +76,10 @@ func TestMainWiring(t *testing.T) {
 		{"llmproxy.WithGovernancePolicy(", "the authored governance definitions are never attached to the handler — every model allowlist, MCP allowlist, rate limit, credential rate policy and CEL routing rule in gateway.governance_config would be read and enforced nowhere, which is the state issue #218 exists to end"},
 		{"policyStore.Start(", "the definition store never performs its first load and never refreshes — the gateway would hold the Empty snapshot for the life of the process and enforce no authored definition"},
 		{"govStore.SetBudgetDefaults(", "an authored budget row is never used as the fallback ceiling — a project with no gateway.project_budget row stays unlimited, so the budget rows on the governance page gate nothing"},
-		{`mux.HandleFunc("/governance/status"`, "the operator cannot ask whether a saved definition is actually loaded — a rejected or inert row would be visible only in the logs of whichever pod happened to read it"},
+		{"makeGovernanceStatusHandler(", "the operator cannot ask whether a saved definition is actually loaded — a rejected or inert row would be visible only in the logs of whichever pod happened to read it"},
+		{"newGatewayGRPC(", "the GatewayService listener is never built — elitea-main reaches /llm and /governance/status over gRPC only (#1359), so every model call would fail"},
+		{"gatewayGRPC.ListenAndServe(", "the GatewayService listener is built but never serves — every elitea-main call to the gateway is refused at connect (#1359)"},
+		{"newGatewayServers(", "the gRPC listener is not part of the shutdown sequence — a rolling deploy would cut live streams without draining them, and realtime sessions would never be stopped (#1359)"},
 		{"startEgressAllowlistPlane(", "the authored egress_allowlist rows are never bound to the account's egress gate — every row would load, appear on /governance/status and govern nothing, so an on-premise model endpoint would still need a chart edit and a pod restart (gap G6). The same call starts the watcher that rebuilds the vLLM and Ollama provider workers, whose SSRF-safe dialer LATCHES AllowPrivateNetwork when the worker is created"},
 		{"drainForShutdown(", "in-flight billing + persist goroutines must be drained before pool.Close() or spend is dropped / a pool races"},
 		{"grace.StopStreamGrace(", "phase 1 of shutdown is missing — the stream grace would extend the pod's termination window (issue #9)"},
@@ -146,6 +152,7 @@ func TestMainWiring(t *testing.T) {
 		call string
 		why  string
 	}{
+		{`mux.Handle("/llm/"`, "the /llm surface is served over gRPC only (#1359). Mounting it on the HTTP mux re-opens a second, HTTP way in that the client allowlist of the gRPC listener does not cover"},
 		{"expvar.Handler(", "expvar.Handler() publishes EVERY variable this process holds, including the process arguments and the memory statistics. /metrics serves a named allowlist instead (issue #465). Add the variable to gatewayMetrics rather than publishing the whole surface"},
 	}
 	for _, f := range forbidden {

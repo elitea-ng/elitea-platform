@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 const (
@@ -124,8 +124,12 @@ func (document ClientApplicationVersion) WithoutProjectContext() (ClientApplicat
 type ClientApplicationVersionService struct {
 	versions CurrentApplicationVersionSource
 	freezer  agentexecutionapp.CurrentApplicationVersionFreezer
-	// guardrails serves AuthorizeRemoteTool only (WithGuardrails).
+	// guardrails serves AuthorizeRemoteTool and the platform MCP servers'
+	// selections (WithGuardrails).
 	guardrails ClientGuardrailResolver
+	// platformTools names each platform MCP server's tools
+	// (WithPlatformTools).
+	platformTools ClientPlatformToolCatalog
 }
 
 func NewClientApplicationVersionService(
@@ -181,7 +185,15 @@ func (service *ClientApplicationVersionService) Resolve(
 		return ClientApplicationVersion{}, ErrContentUnavailable
 	}
 	identity := ClientVersionIdentity{ProjectID: projectID, ApplicationID: int64(applicationID), VersionID: int64(versionID)}
-	projected, withheld, err := ProjectClientApplicationVersion(identity, frozen, record.VersionDetails)
+	platform, err := service.clientPlatformProjectionFor(ctx, projectID, frozen)
+	if err != nil {
+		clearContentBytes(frozen)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return ClientApplicationVersion{}, contextErr
+		}
+		return ClientApplicationVersion{}, ErrContentUnavailable
+	}
+	projected, withheld, err := projectClientApplicationVersion(identity, frozen, record.VersionDetails, platform)
 	clearContentBytes(frozen)
 	if err != nil {
 		return ClientApplicationVersion{}, ErrClientApplicationVersionUnresolvable
@@ -214,7 +226,16 @@ func (service *ClientApplicationVersionService) Resolve(
 // AuthorizeRemoteTool.
 //
 // It also answers the JSON Pointers of every replaced reference, sorted.
+//
+// A platform MCP server is projected without the guardrails' per-tool blocks
+// and without its `tools` here; Resolve adds both (projectClientApplicationVersion).
 func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen, saved json.RawMessage) (json.RawMessage, []string, error) {
+	return projectClientApplicationVersion(identity, frozen, saved, clientPlatformProjection{})
+}
+
+func projectClientApplicationVersion(
+	identity ClientVersionIdentity, frozen, saved json.RawMessage, platform clientPlatformProjection,
+) (json.RawMessage, []string, error) {
 	if !identity.valid() || len(frozen) == 0 ||
 		len(frozen) > maxRuntimeApplicationVersionResponseBytes*8 {
 		return nil, nil, errors.New("frozen application version is invalid")
@@ -242,7 +263,7 @@ func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen, sav
 		if !ok {
 			return nil, nil, errors.New("a frozen tool is not an object")
 		}
-		projectedTool, ok := projectClientTool(identity, tool, savedSelections)
+		projectedTool, ok := projectClientTool(identity, tool, savedSelections, platform)
 		if !ok {
 			return nil, nil, errors.New("a frozen tool could not be projected")
 		}
@@ -294,7 +315,9 @@ func ClientToolkitRef(identity ClientVersionIdentity, toolkitID int64, toolkitTy
 	return ClientToolkitRefPrefix + hex.EncodeToString(digest.Sum(nil)[:16])
 }
 
-func projectClientTool(identity ClientVersionIdentity, tool map[string]any, savedSelections map[int64][]string) (map[string]any, bool) {
+func projectClientTool(
+	identity ClientVersionIdentity, tool map[string]any, savedSelections map[int64][]string, platform clientPlatformProjection,
+) (map[string]any, bool) {
 	toolType, ok := tool["type"].(string)
 	if !ok || toolType == "" {
 		return nil, false
@@ -337,8 +360,25 @@ func projectClientTool(identity ClientVersionIdentity, tool map[string]any, save
 		return projected, true
 	}
 	if _, internal := mcpregistry.InternalBuilderForType(toolType); internal {
+		// A platform MCP server is addressed through executeRemoteToolkitTool
+		// like a saved toolkit (ADR-0029 decision 3, issue 1231): toolkit id
+		// 0 (it is no saved row) and a reference domain-separated by the
+		// builder's type. Its selection is the frozen one (every tool of
+		// the category, as a cloud turn's internal MCP has it) less what the
+		// guardrails block, and `tools` names what it offers.
 		projected := common(ClientToolKindPlatformMCP)
 		projected["server_name"] = toolType
+		selected, allTools, listed := platform.selection(toolType, selectedToolNames(tool))
+		projected["selected_tools"] = selected
+		projected["all_tools"] = allTools
+		if listed != nil {
+			projected["tools"] = clientPlatformToolValues(listed)
+		}
+		projected["toolkit_ref"] = map[string]any{
+			"toolkit_id": int64(0),
+			"project_id": identity.ProjectID,
+			"ref":        ClientToolkitRef(identity, 0, toolType),
+		}
 		return projected, true
 	}
 	toolkitID, ok := positiveClientJSONInteger(tool["id"])

@@ -2,16 +2,12 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
-	"strconv"
 	"unicode/utf8"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"google.golang.org/protobuf/proto"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
 )
 
 const ToolkitDiscoveryArtifactMediaType = "application/vnd.elitea.toolkit-available-tools.v1+json"
@@ -30,95 +26,70 @@ func (s *ContentServer) WithToolkitDiscoveryArtifacts(store ToolkitDiscoveryArti
 	return s
 }
 
-func (s *ContentServer) PutToolkitDiscoveryArtifact(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
+// PutToolkitDiscoveryResult stores the immutable available-tools result of
+// one admitted toolkit input.
+func (s *ContentServer) PutToolkitDiscoveryResult(ctx context.Context, request *runtimev1.PutToolkitDiscoveryResultRequestV1) (*runtimev1.PutToolkitDiscoveryResultResponseV1, error) {
+	if s.toolkitArtifacts == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	defer s.release()
-	claim, err := parseContentClaim(r)
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		return nil, err
 	}
-	// Authorize before reading the bounded request. The write repeats this
-	// check under database locks to fence cancellation and claim replacement.
-	authorization, err := s.authorizer.AuthorizeContent(r.Context(), claim)
+	defer release()
+	claim, err := parseContentClaim(ctx, request.GetScope(), request.GetContentId(), request.GetImmutableVersion())
+	if err != nil {
+		return nil, contentStatus(codes.Unauthenticated)
+	}
+	// Authorize before looking at the document. The write repeats this check
+	// under database locks to fence cancellation and claim replacement.
+	authorization, err := s.authorizer.AuthorizeContent(ctx, claim)
 	if err != nil || authorization.CapabilityID != "toolkit.available_tools.v1" || authorization.SemanticRole != "toolkit.available_tools.settings" {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
+		return nil, contentStatus(codes.PermissionDenied)
 	}
-	if r.ContentLength <= 0 || r.ContentLength > MaxToolkitDiscoveryArtifactBytes {
-		http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
-		return
+	body := request.GetResultJson()
+	if len(body) == 0 || len(body) > MaxToolkitDiscoveryArtifactBytes {
+		return nil, contentStatus(codes.ResourceExhausted)
 	}
-	if r.Header.Get("Content-Type") != ToolkitDiscoveryArtifactMediaType || len(r.TransferEncoding) != 0 {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
+	if !utf8.Valid(body) || !json.Valid(body) {
+		return nil, contentStatus(codes.InvalidArgument)
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, MaxToolkitDiscoveryArtifactBytes+1))
-	defer clearContentBytes(body)
-	if err != nil || int64(len(body)) != r.ContentLength || len(body) > MaxToolkitDiscoveryArtifactBytes || !utf8.Valid(body) || !json.Valid(body) {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-	digest := sha256.Sum256(body)
-	supplied, ok := singleHeader(r.Header, "Content-Digest")
-	if !ok || supplied != formatSHA256Digest(digest) {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-	ref, err := s.toolkitArtifacts.PutToolkitDiscoveryArtifact(r.Context(), claim, body)
+	ref, err := s.toolkitArtifacts.PutToolkitDiscoveryArtifact(ctx, claim, body)
 	if err != nil {
-		toolkitArtifactError(w, err)
-		return
+		return nil, toolkitArtifactStatus(err)
 	}
-	encoded, err := proto.Marshal(ref)
-	if err != nil {
-		toolkitArtifactError(w, ErrContentUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/protobuf")
-	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(sha256.Sum256(encoded)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(encoded)
+	return &runtimev1.PutToolkitDiscoveryResultResponseV1{Reference: ref}, nil
 }
 
-func (s *ContentServer) GetToolkitDiscoveryArtifact(w http.ResponseWriter, r *http.Request) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
+// GetToolkitDiscoveryResult reads that result back under the live claim.
+func (s *ContentServer) GetToolkitDiscoveryResult(ctx context.Context, request *runtimev1.GetToolkitDiscoveryResultRequestV1) (*runtimev1.GetToolkitDiscoveryResultResponseV1, error) {
+	if s.toolkitArtifacts == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	defer s.release()
-	claim, err := parseContentClaim(r)
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		return nil, err
 	}
-	body, err := s.toolkitArtifacts.GetToolkitDiscoveryArtifact(r.Context(), claim)
+	defer release()
+	claim, err := parseContentClaim(ctx, request.GetScope(), request.GetContentId(), request.GetImmutableVersion())
 	if err != nil {
-		toolkitArtifactError(w, err)
-		return
+		return nil, contentStatus(codes.Unauthenticated)
 	}
-	defer clearContentBytes(body)
-	w.Header().Set("Content-Type", ToolkitDiscoveryArtifactMediaType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(sha256.Sum256(body)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	body, err := s.toolkitArtifacts.GetToolkitDiscoveryArtifact(ctx, claim)
+	if err != nil {
+		return nil, toolkitArtifactStatus(err)
+	}
+	return &runtimev1.GetToolkitDiscoveryResultResponseV1{ResultJson: body}, nil
 }
 
-func toolkitArtifactError(w http.ResponseWriter, err error) {
-	status := http.StatusServiceUnavailable
-	if errors.Is(err, ErrContentUnauthorized) {
-		status = http.StatusForbidden
+func toolkitArtifactStatus(err error) error {
+	switch {
+	case errors.Is(err, ErrContentNotFound):
+		return contentStatus(codes.NotFound)
+	case errors.Is(err, ErrContentRejected), errors.Is(err, ErrSystemBucketNameTaken):
+		return contentStatus(codes.Aborted)
+	case errors.Is(err, ErrContentUnauthorized):
+		return contentStatus(codes.PermissionDenied)
 	}
-	if errors.Is(err, ErrContentRejected) || errors.Is(err, ErrSystemBucketNameTaken) {
-		status = http.StatusConflict
-	}
-	if errors.Is(err, ErrContentNotFound) {
-		status = http.StatusNotFound
-	}
-	http.Error(w, http.StatusText(status), status)
+	return contentStatus(codes.Unavailable)
 }

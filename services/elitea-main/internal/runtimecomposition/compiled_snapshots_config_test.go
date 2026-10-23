@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 func compiledTestConfig() CompiledSnapshotConfig {
@@ -141,7 +141,6 @@ func TestCompiledSnapshotMaterialInventoryIncludesOriginalAgentState(t *testing.
 		t.Fatal(err)
 	}
 	c.AgentExecutionDispatchEnabled = true
-	c.CurrentMainBaseURL = "http://127.0.0.1:8080"
 	c.AgentExecutionCommandStream = "ELITEA_RT_V1_AGENT"
 	c.SandboxAudiences = []string{"elitea.supervisor"}
 	cfg := compiledTestConfig()

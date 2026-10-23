@@ -13,13 +13,29 @@
 # ZERO lag, and zero lag scales the fleet DOWN. The failure looks like a
 # healthy, quiet deployment while the backlog grows.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 CHART="deploy/helm/elitea"
 
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-      --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
+      --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
+      # Since S11 the connection budget counts the worker's AgentState pool at
+      # its replica ceiling (10 x 8). A server with room to spare, so the guard
+      # under test here is the autoscaler's and never the budget's.
+      --set postgresql.maxConnections=600)
 KEDA=(--api-versions keda.sh/v1alpha1)
 
 failures=0
@@ -31,19 +47,82 @@ trap 'rm -rf "$work"' EXIT
 
 # ------------------------------------------------------- the capability guard
 #
-# `helm template` reports a fixed default API set, so the guard fires unless
+# `helm template` reports a fixed default API set, so KEDA is not served unless
 # --api-versions supplies keda.sh/v1alpha1. That makes this checkable here in
 # exactly the way it is checkable at install time.
-if helm template ac "$CHART" "${BASE[@]}" --set worker.autoscaling.enabled=true >/dev/null 2>&1; then
-  fail "autoscaling rendered without keda.sh/v1alpha1 available; on a cluster with no KEDA this creates an object no controller ever reads"
+#
+# worker.autoscaling.source picks the scaler. `keda` needs KEDA and is refused
+# without it: a ScaledObject that no controller reads scales nothing. `auto`
+# (the default) takes KEDA when it is served, else a CPU HorizontalPodAutoscaler
+# (templates/worker/hpa.yaml). `cpu` is always the HPA.
+if helm template ac "$CHART" "${BASE[@]}" --set worker.autoscaling.enabled=true \
+    --set worker.autoscaling.source=keda >/dev/null 2>&1; then
+  fail "source=keda rendered without keda.sh/v1alpha1 available; on a cluster with no KEDA this creates an object no controller ever reads"
 else
-  pass "autoscaling is refused when the cluster does not serve keda.sh/v1alpha1"
+  pass "source=keda is refused when the cluster does not serve keda.sh/v1alpha1"
+fi
+if helm template ac "$CHART" "${BASE[@]}" --set worker.autoscaling.enabled=true \
+    --set worker.autoscaling.source=fast >/dev/null 2>&1; then
+  fail "an unknown worker.autoscaling.source rendered"
+else
+  pass "an unknown worker.autoscaling.source is refused"
+fi
+
+# Count the worker's scalers: kind of each object that targets elitea-worker.
+worker_scalers() {
+  yq eval-all 'select((.kind == "ScaledObject" or .kind == "HorizontalPodAutoscaler") and .metadata.name == "elitea-worker") | .kind + "/" + (.metadata.annotations."elitea.ai/autoscaling-source" // "")' "$1" | grep -v '^---$' | tr '\n' ' '
+}
+helm template ac "$CHART" "${BASE[@]}" > "$work/auto-nokeda.yaml"
+got=$(worker_scalers "$work/auto-nokeda.yaml")
+if [ "$got" = "HorizontalPodAutoscaler/cpu " ]; then
+  pass "the default (auto) without KEDA is a CPU HPA and no ScaledObject"
+else
+  fail "the default (auto) without KEDA renders '$got', want one CPU HPA (HorizontalPodAutoscaler/cpu)"
+fi
+hpa_bounds=$(yq eval 'select(.kind == "HorizontalPodAutoscaler" and .metadata.name == "elitea-worker") | (.spec.minReplicas | tostring) + "-" + (.spec.maxReplicas | tostring) + " " + .spec.scaleTargetRef.name' "$work/auto-nokeda.yaml" | grep -v '^---$')
+if [ "$hpa_bounds" = "1-10 elitea-worker" ]; then
+  pass "the CPU HPA scales elitea-worker 1-10"
+else
+  fail "the CPU HPA is '$hpa_bounds', want '1-10 elitea-worker'"
+fi
+helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" > "$work/auto-keda.yaml"
+got=$(worker_scalers "$work/auto-keda.yaml")
+case "$got" in
+  "ScaledObject/"*" ") case "$got" in *HorizontalPodAutoscaler*) fail "auto with KEDA renders a ScaledObject AND an HPA: '$got'";; *) pass "the default (auto) with KEDA is a ScaledObject and no CPU HPA";; esac ;;
+  *) fail "the default (auto) with KEDA renders '$got', want one ScaledObject" ;;
+esac
+helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.source=cpu > "$work/cpu-keda.yaml"
+got=$(worker_scalers "$work/cpu-keda.yaml")
+if [ "$got" = "HorizontalPodAutoscaler/cpu " ]; then
+  pass "source=cpu is a CPU HPA even when KEDA is served"
+else
+  fail "source=cpu with KEDA renders '$got', want one CPU HPA"
 fi
 
 if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true >/dev/null 2>&1; then
   pass "autoscaling renders when KEDA is available"
 else
   fail "autoscaling was refused even with keda.sh/v1alpha1 available; the guard rejects a valid deployment"
+fi
+
+# A values-file number is a float64 to Helm, and a bare quote printed one of a
+# million or more as "1e+06", which KEDA cannot parse. --set would hand the
+# chart an int64 and hide it, hence the file.
+printf 'worker:\n  autoscaling:\n    activationLagThreshold: 1000000\n' > "$work/big.yaml"
+# To a file, not `| grep -q`: under pipefail grep -q exiting at the first
+# match can SIGPIPE helm and fail a render that printed the line.
+helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true -f "$work/big.yaml" \
+  > "$work/big-render.yaml"
+if grep -qF 'activationLagThreshold: "1000000"' "$work/big-render.yaml"; then
+  pass "a values-file activationLagThreshold of 1000000 renders as an integer"
+else
+  fail "activationLagThreshold 1000000 from a values file did not render as \"1000000\""
+fi
+if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true \
+    --set worker.autoscaling.activationLagThreshold=-1 >/dev/null 2>&1; then
+  fail "a negative activationLagThreshold rendered"
+else
+  pass "a negative activationLagThreshold is refused"
 fi
 
 # ---------------------------------------------------------------- the trigger
@@ -88,7 +167,7 @@ scaler_account=$(awk '/type: nats-jetstream/{f=1} f && /^ *account:/{gsub(/.*acc
 if [ "$scaler_account" = "RUNTIME" ]; then
   pass "the scaler reads the RUNTIME account's /jsz"
 else
-  fail "the scaler reads account '$scaler_account', not RUNTIME (deploy/helm/nats accounts); it would see zero lag"
+  fail "the scaler reads account '$scaler_account', not RUNTIME (nats.config.merge.accounts); it would see zero lag"
 fi
 
 # Consumer LAG (num_pending), not a pending-entries count.
@@ -156,17 +235,25 @@ else
   fail "the worker Deployment still sets '$worker_replicas' with autoscaling on; every helm upgrade would fight the autoscaler"
 fi
 
-helm template ac "$CHART" "${BASE[@]}" > "$work/off.yaml"
+# The CPU HPA owns the Deployment too: no `replicas:` there either.
+worker_replicas_cpu=$(awk '/^# Source: elitea\/templates\/worker\/deployment.yaml/{f=1} f && /^ *replicas:/{print; exit} f && /^# Source:/ && !/worker\/deployment/{exit}' "$work/auto-nokeda.yaml")
+if [ -z "$worker_replicas_cpu" ]; then
+  pass "the worker Deployment omits replicas while the CPU HPA owns it"
+else
+  fail "the worker Deployment sets '$worker_replicas_cpu' while the CPU HPA owns it"
+fi
+
+helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=false > "$work/off.yaml"
 worker_replicas_off=$(awk '/^# Source: elitea\/templates\/worker\/deployment.yaml/{f=1} f && /^ *replicas:/{print; exit} f && /^# Source:/ && !/worker\/deployment/{exit}' "$work/off.yaml")
 if [ -n "$worker_replicas_off" ]; then
   pass "the worker Deployment sets replicas when autoscaling is off"
 else
   fail "the worker Deployment omits replicas even with autoscaling off; it would default to 1 with no way to raise it"
 fi
-if grep -q 'kind: ScaledObject' "$work/off.yaml"; then
-  fail "a ScaledObject renders with autoscaling disabled"
+if [ -n "$(worker_scalers "$work/off.yaml")" ]; then
+  fail "a worker autoscaler renders with autoscaling disabled: $(worker_scalers "$work/off.yaml")"
 else
-  pass "no ScaledObject renders with autoscaling off"
+  pass "no ScaledObject and no HPA render with autoscaling off"
 fi
 
 # ------------------------------------------------------------ the route guard

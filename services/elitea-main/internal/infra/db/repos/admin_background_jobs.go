@@ -2,22 +2,21 @@ package repos
 
 // The admin Tasks page's read and its cancel.
 //
-// # What legacy's Tasks page was, and why this is not a copy of it
+// # What the legacy runtime's Tasks page was, and why this is not a copy of it
 //
 // legacy/plugins/admin's Tasks page (module.py:392-421, api/v2/tasks.py) lists
 // an in-process `arbiter.TaskNode`'s `global_task_state` — one-off maintenance
 // operations that plugins register at import time, started and stopped through
 // the Arbiter. There is no such registry here and AGENTS.md says there will not
-// be one, so `/api/v2/admin/tasks/administration` answers 501 and keeps
-// answering it (internal/api/v2/admin/handler.go, arbiterTaskNodeUnavailable).
+// be one, so no route for it is mounted.
 //
 // What the page MEANT to an operator — "what is running on this platform right
 // now, who started it, and can I stop it" — is a real question this platform
 // can answer, from its own tables. That is what this file serves. It keeps the
 // legacy row keys an operator's tooling reads (`task_id`, `status`,
 // `started_at`, `user`) and adds the two the legacy shape had no need for,
-// because pylon had exactly one kind of task and one project: `kind` and
-// `project_id`.
+// because the legacy runtime had exactly one kind of task and one project:
+// `kind` and `project_id`.
 //
 // # The three sources
 //

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // themeRequest serves one request through the real router with a nil pool, so

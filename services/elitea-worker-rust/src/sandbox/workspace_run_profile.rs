@@ -17,6 +17,10 @@
 //!              "egress_dns": ["1.1.1.1"],
 //!              "proxy_network": "elitea-workspace-proxy"}}
 //! ```
+//!
+//! On Kubernetes the backend is `{"kind": "kubernetes", "namespace": ...,
+//! "runtime_class": "gvisor", "node_selector": {...}, "tolerations": [...]}`;
+//! the chart renders it from `sandboxKubernetes.workspaceRuns`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -58,6 +62,9 @@ enum BackendConfig {
         namespace: String,
         runtime_class: String,
         node_selector: BTreeMap<String, String>,
+        /// The sandbox nodes' taints the run Pods tolerate (at most 16).
+        #[serde(default)]
+        tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
     },
 }
 
@@ -162,8 +169,13 @@ impl WorkspaceProfileConfig {
                 namespace,
                 runtime_class,
                 node_selector,
+                tolerations,
             } => {
-                if namespace.is_empty() || runtime_class.is_empty() || node_selector.is_empty() {
+                if namespace.is_empty()
+                    || runtime_class.is_empty()
+                    || node_selector.is_empty()
+                    || tolerations.len() > 16
+                {
                     return Err(StartupError("validate Kubernetes workspace placement"));
                 }
             }
@@ -210,21 +222,45 @@ async fn backend(
             namespace,
             runtime_class,
             node_selector,
+            tolerations,
         } => {
             let cluster = kube::Config::incluster()
                 .map_err(|_| StartupError("load in-cluster Kubernetes identity"))?;
             let client = kube::Client::try_from(cluster)
                 .map_err(|_| StartupError("construct Kubernetes TLS client"))?;
-            Arc::new(
-                super::kubernetes::workspace_run::KubernetesWorkspaceRuns::new(
-                    client,
-                    namespace.clone(),
-                    runtime_class.clone(),
-                    node_selector.clone(),
-                ),
+            kubernetes_backend(
+                client,
+                namespace.clone(),
+                runtime_class.clone(),
+                node_selector.clone(),
+                tolerations.clone(),
             )
+            .await
         }
     })
+}
+
+/// The Kubernetes backend. A `RuntimeClass` that does not (yet) isolate is a
+/// warning here, never a [`StartupError`]: failing startup would crash-loop
+/// the whole supervisor, its Code profiles included. The backend refuses each
+/// workspace run, fail-closed, until the check passes.
+async fn kubernetes_backend(
+    client: kube::Client,
+    namespace: String,
+    runtime_class: String,
+    node_selector: BTreeMap<String, String>,
+    tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+) -> Arc<dyn WorkspaceRunBackend> {
+    Arc::new(
+        super::kubernetes::workspace_run::KubernetesWorkspaceRuns::connect(
+            client,
+            namespace,
+            runtime_class,
+            node_selector,
+        )
+        .await
+        .with_tolerations(tolerations),
+    )
 }
 
 /// Serve one `workspace` profile until `shutdown`.
@@ -318,6 +354,55 @@ mod tests {
         )
     }
 
+    /// A missing `RuntimeClass` at startup does not fail the supervisor
+    /// (a `StartupError` here would end every profile it serves, Code
+    /// profiles included): the backend is built, refuses each workspace run
+    /// fail-closed, and runs once the `RuntimeClass` isolates.
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_runtime_class_does_not_fail_startup() {
+        use super::super::kubernetes::workspace_run::tests::{Class, api_with, launch};
+        use super::super::workspace_run_service::BackendError;
+        let class: Class = Arc::new(std::sync::Mutex::new(None));
+        let (client, _, creates) = api_with(class.clone(), Duration::ZERO);
+        let runs = kubernetes_backend(
+            client,
+            "elitea-execution".into(),
+            "gvisor".into(),
+            BTreeMap::from([("a".to_owned(), "b".to_owned())]),
+            Vec::new(),
+        )
+        .await;
+        assert!(matches!(
+            runs.start(&launch()).await,
+            Err(BackendError::Refused)
+        ));
+        assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+        *class.lock().unwrap() = Some("runsc");
+        tokio::time::advance(Duration::from_secs(6)).await;
+        assert!(
+            runs.start(&launch())
+                .await
+                .expect("starts once it isolates")
+        );
+    }
+
+    /// The profile the chart renders (deploy/helm/tests/render-cloud-executor.sh
+    /// holds the chart's output equal to this file) is one the supervisor
+    /// accepts.
+    #[test]
+    fn the_chart_rendered_profile_parses() {
+        let raw =
+            include_str!("../../../../deploy/runtime/sandbox-workspace.kubernetes.example.json");
+        assert!(is_workspace_profile(raw.as_bytes()));
+        let config = WorkspaceProfileConfig::parse(raw.as_bytes()).expect("the chart's profile");
+        assert_eq!(config.endpoint(), ("workspace-runs", 9470));
+        assert!(matches!(
+            &config.backend,
+            BackendConfig::Kubernetes { runtime_class, tolerations, .. }
+                if runtime_class == "gvisor" && tolerations.len() == 1
+        ));
+    }
+
     #[test]
     fn a_workspace_profile_is_recognised_and_validated() {
         let docker = profile(
@@ -334,6 +419,16 @@ mod tests {
             r#"{"kind":"kubernetes","namespace":"elitea-execution","runtime_class":"gvisor","node_selector":{"sandbox":"true"}}"#,
         );
         assert!(WorkspaceProfileConfig::parse(kube.as_bytes()).is_ok());
+        // Tolerations for a tainted sandbox node; at most 16.
+        let tolerated = profile(
+            r#"{"kind":"kubernetes","namespace":"elitea-execution","runtime_class":"gvisor","node_selector":{"elitea.ai/sandbox":"true"},"tolerations":[{"key":"elitea.ai/sandbox","operator":"Equal","value":"true","effect":"NoSchedule"}]}"#,
+        );
+        assert!(WorkspaceProfileConfig::parse(tolerated.as_bytes()).is_ok());
+        let many = format!(
+            r#"{{"kind":"kubernetes","namespace":"e","runtime_class":"gvisor","node_selector":{{"a":"b"}},"tolerations":[{}]}}"#,
+            vec![r#"{"operator":"Exists"}"#; 17].join(",")
+        );
+        assert!(WorkspaceProfileConfig::parse(profile(&many).as_bytes()).is_err());
         // An egress network without resolvers, or a mutable image, is refused.
         let no_dns = profile(r#"{"kind":"docker","egress_network":"elitea-workspace-egress"}"#);
         assert!(WorkspaceProfileConfig::parse(no_dns.as_bytes()).is_err());

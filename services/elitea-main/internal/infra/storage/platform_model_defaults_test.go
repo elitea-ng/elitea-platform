@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // absentAwareVaultLoader answers ErrVaultAbsent for a scope with no vault, the

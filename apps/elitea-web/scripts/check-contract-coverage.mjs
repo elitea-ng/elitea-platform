@@ -2,8 +2,8 @@
 // check-contract-coverage.mjs — the §5.1 `contract-coverage` check (unit W2).
 // Wired into CI as the "Contract coverage (§5.1)" step of ci-web.yml's
 // `gates` job (.github/workflows/ci-web.yml), which triggers on changes
-// under apps/elitea-web/**, tools/uictl/**, or
-// services/elitea-main/api/openapi/** (a spec-only PR still runs it).
+// under apps/elitea-web/** or services/elitea-main/** (a spec-only PR still
+// runs it).
 //
 // Reads (a) the OpenAPI spec services/elitea-main/api/openapi/v2.yaml and
 // (b) unit P1's endpoint census (apps/elitea-web/parity/manifest.json root

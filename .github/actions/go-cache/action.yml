@@ -2,7 +2,7 @@ name: Go build and module cache (pull requests read, main writes)
 description: >-
   Restores the Go build cache and module cache that `actions/setup-go` used to
   cache itself, keyed the same way (OS, architecture, the resolved Go version,
-  and a hash of the job's go.sum files), and saves them only on a push to main.
+  and a hash of the job's go.sum files), and saves them only on a run on main.
   Use it straight after `actions/setup-go` with `cache: false`.
 #
 # Why setup-go's own cache is off: it saves from EVERY ref. Measured
@@ -69,7 +69,7 @@ runs:
           echo "hash=$hash"
         } >> "$GITHUB_OUTPUT"
         echo "go cache key inputs (${#files[@]} file(s)):"; printf '  %s\n' "${files[@]}" | LC_ALL=C sort -u
-    - name: Restore the Go caches (save on a push to main)
+    - name: Restore the Go caches (save on a run on main)
       id: cache
       if: steps.go.outputs.skip != 'true'
       uses: ./.github/actions/main-write-cache

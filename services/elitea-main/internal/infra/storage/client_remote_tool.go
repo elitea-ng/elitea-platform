@@ -10,10 +10,10 @@ import (
 	"math"
 	"strings"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // Bounds of the nested-agent walk: how deep an `application` tool chain is
@@ -75,6 +75,10 @@ type RemoteToolAuthorization struct {
 type RemoteToolGrant struct {
 	ToolkitType string
 	ToolkitName string
+	// PlatformMCP is set for a platform MCP server (`mcp_elitea_internal_*`,
+	// toolkit id 0): Main runs the tool in process, as the caller, and no
+	// worker or model is involved.
+	PlatformMCP bool
 	// Sensitive is set when the policy marks the tool sensitive: the call may
 	// run only with the caller's confirmation.
 	Sensitive *guardrails.SensitiveAction
@@ -111,6 +115,9 @@ type RemoteToolGrant struct {
 //     version.
 //   - A sensitive tool (the SDK's sensitive-tool HITL classifier) is granted
 //     with its approval copy; the caller must then hold a confirmation.
+//
+// ToolkitID 0 is a platform MCP server (authorizePlatformTool): the same
+// rules over the version's frozen internal builders.
 func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 	ctx context.Context,
 	request RemoteToolAuthorization,
@@ -123,7 +130,7 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 	}
 	identity := ClientVersionIdentity{ProjectID: request.ProjectID, ApplicationID: request.ApplicationID, VersionID: request.VersionID}
 	if !identity.valid() || request.ActorID <= 0 || request.ActorID > math.MaxInt32 ||
-		request.ToolkitID <= 0 || request.ToolkitID > math.MaxInt32 || request.ToolName == "" {
+		request.ToolkitID < 0 || request.ToolkitID > math.MaxInt32 || request.ToolName == "" {
 		return RemoteToolGrant{}, ErrRemoteToolNotInAgent
 	}
 	if request.TurnApplicationID <= 0 || request.TurnVersionID <= 0 {
@@ -145,6 +152,10 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 		return RemoteToolGrant{}, clientFreezeError(ctx, err)
 	}
 	defer clearContentBytes(frozen)
+
+	if request.ToolkitID == 0 {
+		return service.authorizePlatformTool(ctx, identity, request, frozen)
+	}
 
 	// The SAVED entry decides the toolkit's type, so a toolkit the freeze
 	// dropped as blocked is still recognised (and refused as blocked, not as
@@ -200,6 +211,88 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 		grant.Sensitive = &action
 	}
 	return grant, nil
+}
+
+// authorizePlatformTool is AuthorizeRemoteTool for a platform MCP server
+// (toolkit id 0, issue 1231). The reference names the server: it must be the
+// one 5a hands out for one internal builder type of this version. The builder
+// must be one the FROZEN version selects (freezeCurrentInternalMCP, the freeze
+// a cloud turn uses, which already dropped a blocked one); a builder this
+// version could name but does not select is not in the agent, and one the
+// guardrails block is refused as blocked. Its selection is the frozen one
+// (every tool of the category), the tool must not be blocked, and a sensitive
+// tool is granted with its approval copy, as for a saved toolkit.
+func (service *ClientApplicationVersionService) authorizePlatformTool(
+	ctx context.Context,
+	identity ClientVersionIdentity,
+	request RemoteToolAuthorization,
+	frozen json.RawMessage,
+) (RemoteToolGrant, error) {
+	toolkitType := ""
+	for _, builder := range mcpregistry.InternalBuilders() {
+		candidate := mcpregistry.InternalBuilderTypePrefix + builder.Key
+		want := ClientToolkitRef(identity, 0, candidate)
+		if subtle.ConstantTimeCompare([]byte(want), []byte(request.ToolkitRef)) == 1 {
+			toolkitType = candidate
+		}
+	}
+	if toolkitType == "" {
+		return RemoteToolGrant{}, ErrRemoteToolkitRefMismatch
+	}
+	policy, err := service.guardrails.ResolveCurrentAgentGuardrails(ctx)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return RemoteToolGrant{}, contextErr
+		}
+		return RemoteToolGrant{}, ErrContentUnavailable
+	}
+	if policy.ToolkitBlocked(toolkitType) || policy.ToolkitBlocked("mcp") ||
+		policy.ToolBlocked(toolkitType, request.ToolName) {
+		return RemoteToolGrant{}, ErrRemoteToolBlocked
+	}
+	entry, found, err := frozenPlatformEntry(frozen, toolkitType)
+	if err != nil {
+		return RemoteToolGrant{}, ErrClientApplicationVersionUnresolvable
+	}
+	if !found {
+		return RemoteToolGrant{}, ErrRemoteToolNotInAgent
+	}
+	selected, allTools := clientToolkitSelection(nil, entry.selected)
+	if !allTools && !containsExact(selected, request.ToolName) {
+		return RemoteToolGrant{}, ErrRemoteToolNotInAgent
+	}
+	grant := RemoteToolGrant{ToolkitType: toolkitType, ToolkitName: entry.toolkitName, PlatformMCP: true}
+	label := entry.toolkitName
+	if label == "" {
+		label = toolkitType
+	}
+	if action, sensitive := policy.SensitiveAction(request.ToolName, label, toolkitType, toolkitType, entry.toolkitName); sensitive {
+		grant.Sensitive = &action
+	}
+	return grant, nil
+}
+
+// frozenPlatformEntry finds the internal builder of one type among a FROZEN
+// version's tools.
+func frozenPlatformEntry(document json.RawMessage, toolkitType string) (clientToolkitEntry, bool, error) {
+	tools, err := decodeClientTools(document)
+	if err != nil {
+		return clientToolkitEntry{}, false, err
+	}
+	for _, tool := range tools {
+		if tool["type"] != toolkitType {
+			continue
+		}
+		entry := clientToolkitEntry{toolkitType: toolkitType}
+		if name, ok := tool["toolkit_name"].(string); ok && name != "" {
+			entry.toolkitName = name
+		} else if name, ok := tool["name"].(string); ok {
+			entry.toolkitName = name
+		}
+		entry.selected = selectedToolNames(tool)
+		return entry, true, nil
+	}
+	return clientToolkitEntry{}, false, nil
 }
 
 // reachableFromTurn walks the turn's agent and its nested `application`

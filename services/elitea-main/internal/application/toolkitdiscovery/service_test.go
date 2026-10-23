@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	configs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	indexing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	call "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	indexing "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	call "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"google.golang.org/protobuf/proto"
 )
 

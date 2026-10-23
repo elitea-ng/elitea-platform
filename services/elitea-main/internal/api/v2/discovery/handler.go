@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/httpcache"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicorigin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/httpcache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicorigin"
 )
 
 // BrandSource is the branding resolver: one resolver for bootstrap.js,

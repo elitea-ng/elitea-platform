@@ -1,24 +1,27 @@
 package engine
 
 import (
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"context"
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
 )
 
-// healthEngine is an engine on a Unix socket whose GET /engine/health lists
-// the tools it is told to (nil: the field is left out, as an engine of an
-// older release does).
+// healthEngine is an engine on a Unix socket whose Health lists the tools it
+// is told to (nil: none, as an engine that does not list them answers), or
+// fails while down.
 type healthEngine struct {
-	mu     sync.Mutex
-	tools  []string
-	status int
-	calls  int
+	enginev1.UnimplementedEngineServiceServer
+	mu    sync.Mutex
+	tools []string
+	down  bool
+	calls int
 }
 
 func (h *healthEngine) set(tools []string) {
@@ -27,53 +30,20 @@ func (h *healthEngine) set(tools []string) {
 	h.tools = tools
 }
 
-func startHealthEngine(t *testing.T) (*healthEngine, *Client) {
-	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "eng")
-	if err != nil {
-		t.Fatal(err)
+func (h *healthEngine) Health(context.Context, *enginev1.HealthRequest) (*enginev1.HealthResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls++
+	if h.down {
+		return nil, status.Error(codes.Unavailable, "starting")
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "e.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	engine := &healthEngine{status: http.StatusOK}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		engine.mu.Lock()
-		engine.calls++
-		tools, status := engine.tools, engine.status
-		engine.mu.Unlock()
-		if r.URL.Path != "/engine/health" {
-			http.NotFound(w, r)
-			return
-		}
-		if status != http.StatusOK {
-			w.WriteHeader(status)
-			return
-		}
-		body := `{"status":"UP","runner":"native","active":0}`
-		if tools != nil {
-			body = `{"status":"UP","runner":"native","active":0,"tools":["` + joinTools(tools) + `"]}`
-		}
-		_, _ = w.Write([]byte(body))
-	}))
-	server.Listener = listener
-	server.Start()
-	t.Cleanup(server.Close)
-	return engine, NewClient(socket, "DeepWiki")
+	return &enginev1.HealthResponse{Status: "UP", Runner: "native", Tools: append([]string(nil), h.tools...)}, nil
 }
 
-func joinTools(tools []string) string {
-	out := ""
-	for i, tool := range tools {
-		if i > 0 {
-			out += `","`
-		}
-		out += tool
-	}
-	return out
+func startHealthEngine(t *testing.T) (*healthEngine, *Client) {
+	t.Helper()
+	engine := &healthEngine{}
+	return engine, NewClient(enginetest.Serve(t, engine), "DeepWiki")
 }
 
 func TestTheEngineListsItsToolsAndTheHostDecidesFromTheList(t *testing.T) {
@@ -98,8 +68,8 @@ func TestTheEngineListsItsToolsAndTheHostDecidesFromTheList(t *testing.T) {
 	}
 }
 
-// An engine of an older release does not list its tools: the answer is
-// UNKNOWN (and the caller falls back to the call), not "absent".
+// An engine that does not list its tools: the answer is UNKNOWN (and the
+// caller falls back to the call), not "absent".
 func TestAnEngineThatDoesNotListItsToolsIsUnknownNotAbsent(t *testing.T) {
 	_, client := startHealthEngine(t)
 	if served, known := client.Serves(t.Context(), "delete_wiki_index"); known || served {
@@ -110,10 +80,10 @@ func TestAnEngineThatDoesNotListItsToolsIsUnknownNotAbsent(t *testing.T) {
 func TestAnEngineThatCannotBeReadIsUnknown(t *testing.T) {
 	engine, client := startHealthEngine(t)
 	engine.mu.Lock()
-	engine.status = http.StatusServiceUnavailable
+	engine.down = true
 	engine.mu.Unlock()
 	if err := client.RefreshTools(t.Context()); err == nil {
-		t.Fatal("a 503 was taken for a health document")
+		t.Fatal("a failed Health was taken for an answer")
 	}
 	if _, known := client.Serves(t.Context(), "ask"); known {
 		t.Fatal("an unreadable engine was taken for one that lists its tools")

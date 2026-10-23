@@ -40,12 +40,16 @@ engine's `runner::Runner` implements its `Engine` trait (the six tools in
 `ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
 the protocol below.
 
+gRPC over the Unix socket, no TLS (the socket directory is the only way
+in): `elitea.engine.v1.EngineService`, `libs/proto/elitea/engine/v1/engine.proto`
+(#1359 replaced the former NDJSON-over-HTTP protocol).
+
 ```
-POST /engine/invoke                  {invocation_id, tool, arguments}
-  → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
-    then {"result": {…}} | {"error": {message, error_type, error_category}}
-POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool}
-GET  /engine/health                  {"status": "UP", "runner": …, "active": n, "tools": […]}
+Invoke(invocation_id, tool, arguments_json)
+  → stream: thinking and token events interleaved,
+    then result_json | error {message, error_type, error_category, code}
+Stop(invocation_id)   a cooperative stop → {stopped}
+Health()              {status: "UP", runner, active, tools: […]}
 ```
 
 `tools` lists the tools this engine serves (`runner::ENGINE_TOOLS`). The host
@@ -106,7 +110,7 @@ engine's artifacts are bytes a reader downloads.
 `ELITEA_DEEPWIKI_DATABASE_URL`: the engine has no index storage but
 PostgreSQL. Model settings are per invocation (`llm_settings`,
 `embedding_model`); a request without them is refused with the Python
-messages (`llm_settings.api_base is required`). `GET /engine/health` reports
+messages (`llm_settings.api_base is required`). Health reports
 `runner: native`.
 
 ### The pipeline
@@ -174,23 +178,28 @@ the folded `plainto_tsquery` over the staged `fts` column, optionally under
 build's own statistics (document length = the sum of position counts, the
 document frequency of each query lexeme counted once per build and cached),
 negated to FTS5's sign, ties by node id; `phraseto_tsquery` for the phrase
-counts; exact pgvector L2 for dense search, ranked over ALL vectors and
+counts; for dense search the exact L2 distance pgvector computed, over the
+build's own vectors, ranked over ALL vectors and
 filtered by the prefix AFTER the limit (sqlite-vec's order, the owner's
 decision), so fewer than `k` hits can come back. The hub flags and the meta
 entries have no column in the ADR-0022 schema; the store returns them to the
 caller. Each call checks the stop first.
 
 Before Phase 2 the staging tables are `ANALYZE`d (best effort), so the
-planner plans for the rows just staged. Dense search does not scan every
-vector in SQL per orphan: the build's vectors are read into memory once
-(on the first dense search; `nodes × dimensions × 4` bytes, about 600 MB
-for 100k nodes of 1536 dimensions) and each search ranks them in process,
-in parallel. The vectors within 0.1 % of the k-th nearest distance are the
-candidates, and one indexed query over them computes pgvector's own
-distances and order, so the hits are the full-scan query's, row for row and
-bit for bit (`tests/storage_topology.rs` compares both). Measured (release
-build, 5000 nodes × 1536 dimensions, 300 searches): 1.9 s in process,
-including the read, against 72 s for the full-scan query.
+planner plans for the rows just staged. PostgreSQL holds no vector (#1359:
+a wiki's dense vectors are in Qdrant behind elitea-vector, `storage::dense`).
+Dense search never reads them back from there: the build keeps the vectors
+it staged (`Build::vectors`; `nodes × dimensions × 4` bytes, about 600 MB
+for 100k nodes of 1536 dimensions), in memory up to 64 MiB and past that in
+an unlinked file in the job's scratch directory, read back in 4 MiB blocks
+(the page cache, not the worker's heap, holds them), and each search ranks
+them in process, in parallel, with pgvector's `float4` L2 rule, then reads the hits'
+paths in one query. The hits are those of the full-scan SQL query Phase 2
+ran before the vectors left PostgreSQL, row for row and bit for bit
+(`tests/storage_topology.rs` compares them with a brute-force copy of that
+query). Measured when that query still existed (release build, 5000 nodes ×
+1536 dimensions, 300 searches): 1.9 s in process against 72 s for the
+full-scan query.
 
 ### The worker child
 
@@ -357,14 +366,16 @@ worker child downloads the folder into the job directory where a clone would
 go, and everything after that is unchanged.
 
 * **Contract.** The credential is the invocation's callback bearer, read as
-  Python read it (`extract_artifact_settings`): the platform is
-  `llm_settings.api_base` (or `openai_api_base`) without its
-  `/llm[/api][/vN][/]` suffix, the bearer `api_key` (or `openai_api_key`),
-  the project `organization` (or `openai_organization`, `project_id`). The
-  routes are elitea-main's: `GET {platform}/api/v2/artifacts/objects/{project}/{bucket}?prefix={prefix}/&cursor=…`
-  (paged by `next_cursor`; `objects[].key`, `size_bytes`, `modified_at`) and
-  `GET …/{bucket}/{key}`, each with `Authorization: Bearer`. The project in
-  the URL is the grant's, so only the caller's own buckets are reachable.
+  Python read it (`extract_artifact_settings`): the bearer `api_key` (or
+  `openai_api_key`), the project `organization` (or `openai_organization`,
+  `project_id`). The service is elitea-main's
+  `elitea.runtime.v1.ArtifactObjectService` on the platform listener
+  (`ELITEA_DEEPWIKI_MODEL_SERVICE_URL`, the model calls' mutual-TLS channel,
+  #1359 U5): `ListObjects` page by page (`next_cursor`; `key`,
+  `size_bytes`, `modified_at`) and `GetObject` per object, each with the
+  bearer in its metadata. `llm_settings.api_base` names no host. The project
+  is the grant's, so only the caller's own buckets are reachable; a refusal
+  carries the HTTP status the route decided.
 * **Identity.** sha256 over the listing sorted by key, one
   `{key}\0{size}\0{modified}\n` line per object (Python's `listing_digest`,
   byte for byte), in place of the commit sha: `commit_hash` is the 64-hex
@@ -420,8 +431,8 @@ see [Parity](#parity-with-the-python-engine)) wrote
 (parsing, the client's listing over recorded pages, `collect_objects`,
 `check_caps`, `listing_digest`, the directory and marker of
 `materialise_artifact_source`, the generation wiki id, `extract_artifact_settings`);
-`ingest::artifact::tests` replays it and runs the transfer against a mock
-object API. `tests/native_generate.rs` runs a whole generation over a folder,
+`ingest::artifact::tests` replays it and runs the transfer against a
+scripted `ArtifactObjectService`. `tests/native_generate.rs` runs a whole generation over a folder,
 and the Go host's `native_engine_test.go` reads one through the worker child.
 
 ## Parsers and the code graph (`libs/rust/code-parsers`, `src/graph/`)
@@ -612,7 +623,10 @@ runner), `ask` and deep research use it.
   per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
   BOM is skipped.
 - `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` (else `ELITEA_DEEPWIKI_TLS_CA_FILE`) is trusted in addition to the platform
-  roots. Redirects are refused (the bearer key must not follow one).
+  roots. `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` / `_KEY_FILE`, when set, are
+  the client certificate presented on that hop (elitea-main's internal
+  platform listener requires a runtime-CA one). Redirects are refused (the
+  bearer key must not follow one).
 - Errors: timeouts → `timeout_error`; 429/503 after the retries →
   `service_busy`; 402 → `invalid_input`; 404 → `resource_not_found`;
   other refusals and malformed replies → `inference_failed`. The key is
@@ -651,7 +665,8 @@ Migration 0003 (additive, applied by both runners) adds schema
 `deepwiki_build`: `builds (build_id, wiki_id, owner, started_at,
 heartbeat_at)` and UNLOGGED copies of `wiki_nodes` (with the folded
 `deepwiki_porter` tsvector and its GIN index), `wiki_edges` and
-`wiki_node_embeddings` keyed by `build_id`, plus `bm25_docs` /
+`wiki_node_embeddings` keyed by `build_id` (dropped again by 0008: the
+vectors are in elitea-vector), plus `bm25_docs` /
 `bm25_postings` (see below). Every staging row cascades from its `builds`
 row. Migration 0004 (additive) adds the nullable `builds.boot_id`; 0003 is
 never edited, because both runners checksum it. Migration 0005 recreates
@@ -677,9 +692,10 @@ an error).
 `storage/publish.py` maps the `.wiki.db` rows: NULL text becomes `""`,
 flags become booleans, parallel edges collapse onto `(source, target,
 rel_type)` with the first position and the last `edge_class` / `weight`, a
-weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are written as the
-shortest decimal text of each `f64`, the text Python's `repr` gave, so
-pgvector rounds them to the same `float4`.
+weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are not written to
+PostgreSQL: `Build::stage_embeddings` rounds each `f64` to `f32` (the
+`float4` pgvector stored) and writes them to elitea-vector under the build's
+generation, before the publish.
 
 `Build::publish` is one transaction: lock the build row (and check it names
 the project and wiki the build was opened for); queue without a timeout
@@ -694,7 +710,9 @@ replica must use the same number); set `statement_timeout`
 (`…_PUBLISH_WORK_MEM_MB`, default 64, so the slots bound the memory the
 publishes take together); upsert the `wikis` row (`registry_from_result`'s
 fields; an absent field keeps the stored value), refuse an empty build,
-delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes, edges and vectors,
+delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes and edges,
+record the build's elitea-vector generation in `wikis.active_generation` (the
+one it replaces goes to `wiki_stale_generations`, deleted after the commit),
 write the `wiki_bm25_*` statistics of the `'fts'` branch, delete the build, commit. A reader sees
 the old index or the new one. After the commit the live tables are
 `ANALYZE`d one by one, best effort, each with a short `lock_timeout`
@@ -767,9 +785,10 @@ host's `delete_wiki` removed the artifact objects and the index stayed.
 `storage::delete` and the two tools in `runner::maintenance`:
 
 - `delete_wiki_index` deletes one `(project_id, wiki_id)`: the `wikis` row and
-  every row of `wiki_nodes`, `wiki_edges`, `wiki_node_embeddings` and
-  `wiki_bm25_*`, in ONE transaction that first takes the publish's per-wiki
-  advisory lock (`elitea_deepwiki.publish_wiki`). It queues behind a publish
+  every row of `wiki_nodes`, `wiki_edges` and `wiki_bm25_*`, in ONE
+  transaction that first takes the publish's per-wiki advisory lock
+  (`elitea_deepwiki.publish_wiki`); after the commit it deletes the wiki's
+  elitea-vector namespace with the caller's bearer (`storage::delete`). It queues behind a publish
   of that wiki and a publish queues behind it, so the wiki ends whole or
   absent, never half. The queue is BOUNDED: past
   `ELITEA_DEEPWIKI_PUBLISH_DELETE_LOCK_WAIT_SECONDS` (default 30) the tool
@@ -908,7 +927,7 @@ the retry and abandon after a failed publish, the statement and lock
 timeouts, the slot queue, the `ANALYZE` after the commit and two concurrent
 publishes (of one wiki, of two wikis).
 
-The tests need PostgreSQL with pgvector: they skip, with a message, when
+The tests need PostgreSQL (plain, no extension): they skip, with a message, when
 `DEEPWIKI_TEST_DSN` is unset, and fail when `DEEPWIKI_REQUIRE_POSTGRES=1`
 is set as well (CI sets both). Each test creates its own database.
 
@@ -918,7 +937,8 @@ is set as well (CI sets both). Each test creates its own database.
 the graph, stages it, publishes it into `ELITEA_DEEPWIKI_DATABASE_URL` and
 times a few searches. Measured 2026-10-05 (Apple M4 Pro under load, podman
 VM, pgvector 0.8.5 / PostgreSQL 16, 384-dimension pseudo-vectors, before
-the postings were inserted in key order):
+the postings were inserted in key order, and before #1359 moved the vectors
+to elitea-vector):
 
 | Step | Rows | Time |
 | --- | --- | --- |
@@ -1070,7 +1090,7 @@ case and the real diagrams of the design documents and the Mermaid
 README — is byte-identical, fixes and statuses included.
 
 `tests/wiki_pages_golden.rs` runs the same gate without Python over
-`tests/fixtures/wiki/golden` (a repository with Python, C++, a Pylon API,
+`tests/fixtures/wiki/golden` (a repository with Python, C++, a plugin class API,
 Markdown and YAML; a split page; a page whose targets are only on disk or
 outside the checkout). `tests/wiki_contract.rs` holds the export to the
 frozen `conformance/provider/fixtures/deepwiki/generation` fixtures, and
@@ -1522,7 +1542,7 @@ no network.
 
 ## Running
 
-Build with the pinned toolchain (`rust-toolchain.toml`, 1.97.1):
+Build with the pinned toolchain (`rust-toolchain.toml`, 1.99.1):
 
 ```bash
 cd services/elitea-deepwiki-engine
@@ -1533,11 +1553,11 @@ cargo test --locked --all-targets --all-features
 
 The tests run the sidecar on a real Unix socket. Two of them read the
 shared fixtures in `conformance/provider/fixtures/deepwiki/`. The storage
-tests need PostgreSQL with pgvector (they skip without it):
+tests need PostgreSQL, plain `postgres:18` as CI runs (they skip without it):
 
 ```bash
 podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki \
-    -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/pgvector/pgvector:0.8.5-pg16
+    -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/library/postgres:18
 DEEPWIKI_TEST_DSN=postgresql://deepwiki:deepwiki@127.0.0.1:15436/deepwiki \
 DEEPWIKI_REQUIRE_POSTGRES=1 cargo test --locked --all-targets
 ```
@@ -1698,7 +1718,7 @@ What the run uses:
 - `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
   standalone stack. The overlay runs the prebuilt image
   (`DEEPWIKI_ENGINE_IMAGE`, default
-  `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
+  `ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local`, the bake target
   `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and
   the engine, forces `runner native`, and puts the deterministic LLM stub
   (`services/elitea-deepwiki-engine/testdata/llm_stub.py`) at `llm-mock:8090`.
@@ -1777,7 +1797,9 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
 | `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` | `8191` | at least 256; the embedding window in `cl100k_base` tokens. Set it below the embedding model's context when its tokenizer counts more tokens (a refused window is cut and retried, at extra requests) |
 | `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
-| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (model gateway, artifact API): the runtime CA when the hop is TLS through platform-edge (Helm `deepwiki.callbackViaPlatformEdge`, ADR-0027). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (the platform listener's model and artifact services): the runtime CA when the hop is elitea-main's internal mTLS platform listener (`https://elitea-main:9446`). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` / `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE` | unset | the client certificate chain and key presented on the callback hop; both or neither. The platform listener requires a runtime-CA client certificate |
+| `ELITEA_DEEPWIKI_MODEL_SERVICE_URL` | unset; **required** by `RUNNER=native` | the origin of elitea-main's platform listener (`https://elitea-main:9446`): every model call (`elitea.llm.v1.ModelService`) and every artifact-folder read (`elitea.runtime.v1.ArtifactObjectService`, #1359 U5) goes there over the callback CA and client certificate; `llm_settings.api_base` only names the model route. The native runner refuses to start without it. https only (`http://` to a loopback host for tests) |
 | `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the callback hop when `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` is unset (its meaning before the split) |
 | `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
 | `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |

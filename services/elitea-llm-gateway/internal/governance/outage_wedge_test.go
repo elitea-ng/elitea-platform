@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/sony/gobreaker/v2"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
 )
 
 // outage_wedge_test.go is the end-to-end reproduction of issue #515 and the
@@ -459,7 +459,7 @@ func (m *modelPG) ledgerRows(eventID string) int {
 }
 
 // modelMaxDeliver is the budget-writeback consumer's MaxDeliver from
-// deploy/helm/nats-bootstrap/values.yaml before the deferral backoff existed.
+// deploy/helm/elitea/values.yaml natsBootstrap before the deferral backoff existed.
 // The modelled consumer drops a delta after that many deliveries, as JetStream
 // does, so a deferral storm shows up as lost money.
 const modelMaxDeliver = 10

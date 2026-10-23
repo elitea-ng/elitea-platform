@@ -17,9 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 const (
@@ -55,15 +56,17 @@ func (e engine) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (m
 	return e.invoke(ctx, call, tc)
 }
 
-func host(t *testing.T, runner spi.Runner, options ...spi.Option) *spi.Server {
+func host(t *testing.T, runner spi.Runner, options ...spi.Option) http.Handler {
 	t.Helper()
 	server, err := spi.NewServer(settings(), deepwiki.App(runner), nil, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(context.Background())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
-	return server
+	return spitest.Handler(t, server)
 }
 
 func do(h http.Handler, method, path string, body []byte) (*httptest.ResponseRecorder, map[string]any) {
@@ -190,14 +193,17 @@ func TestSlotsCountAnInFlightInvocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(context.Background())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	defer server.Stop()
-	if _, body := do(server, http.MethodGet, "/slots", nil); body["can_start"] != true {
+	wire := spitest.Handler(t, server)
+	if _, body := do(wire, http.MethodGet, "/slots", nil); body["can_start"] != true {
 		t.Fatal("idle host cannot start")
 	}
-	start(t, server, nil)
+	start(t, wire, nil)
 	<-started
-	_, busy := do(server, http.MethodGet, "/slots", nil)
+	_, busy := do(wire, http.MethodGet, "/slots", nil)
 	if busy["active"] != 1.0 || busy["available"] != 0.0 || busy["can_start"] != false || busy["canStart"] != false {
 		t.Fatalf("busy %v", busy)
 	}
@@ -210,7 +216,7 @@ func TestJobsModeRefusesRatherThanReportingSubprocessCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, body := do(server, http.MethodGet, "/slots", nil)
+	_, body := do(spitest.Handler(t, server), http.MethodGet, "/slots", nil)
 	if body["mode"] != "jobs" || body["can_start"] != false || body["canStart"] != false || body["available"] != 0.0 || body["total"] != 5.0 || body["error"] == "" {
 		t.Fatalf("%v", body)
 	}
@@ -476,14 +482,17 @@ func TestTheEchoApplicationWalksTheSamePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(context.Background())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	defer server.Stop()
-	recorder, accepted := do(server, http.MethodPost, "/tools/Echo/echo/invoke", []byte(`{"parameters":{"query":"hello"}}`))
+	wire := spitest.Handler(t, server)
+	recorder, accepted := do(wire, http.MethodPost, "/tools/Echo/echo/invoke", []byte(`{"parameters":{"query":"hello"}}`))
 	if recorder.Code != 200 || accepted["status"] != "Started" {
 		t.Fatalf("%d %v", recorder.Code, accepted)
 	}
 	id := accepted["invocation_id"].(string)
-	body := pollUntilTerminal(t, server, "/tools/Echo/echo/invocations/"+id)
+	body := pollUntilTerminal(t, wire, "/tools/Echo/echo/invocations/"+id)
 	if body["status"] != "Completed" {
 		t.Fatalf("%v", body)
 	}
@@ -492,10 +501,10 @@ func TestTheEchoApplicationWalksTheSamePath(t *testing.T) {
 	if len(objects) != 1 || objects[0]["data"] != `Echo/echo echoed {"query":"hello"}` {
 		t.Fatalf("%v", objects)
 	}
-	if _, health := do(server, http.MethodGet, "/health", nil); health["plugin"] != echo.Name || health["extra_info"].(map[string]any)["runner"] != "echo" {
+	if _, health := do(wire, http.MethodGet, "/health", nil); health["plugin"] != echo.Name || health["extra_info"].(map[string]any)["runner"] != "echo" {
 		t.Fatalf("%v", health)
 	}
-	recorder, _ = do(server, http.MethodGet, "/tools/Echo/nope/invocations/x", nil)
+	recorder, _ = do(wire, http.MethodGet, "/tools/Echo/nope/invocations/x", nil)
 	if recorder.Code != 404 {
 		t.Fatal(recorder.Code)
 	}

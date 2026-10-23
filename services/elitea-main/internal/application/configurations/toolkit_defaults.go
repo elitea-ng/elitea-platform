@@ -28,7 +28,7 @@ package configurations
 //     user who cleared the field.
 //   - A default of `null` is not written. An absent key already reads as null
 //     everywhere downstream, so writing one adds nothing — while a null on a
-//     `configuration_types` field (`pgvector_configuration`, `embedding_model`
+//     `configuration_types` field (`github_configuration`, `embedding_model`
 //     and their kin all default to null) is a REFERENCE the save-time resolver
 //     would then be handed, turning a valid save into a refusal. Only defaults
 //     with a value are filled.

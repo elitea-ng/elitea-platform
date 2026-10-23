@@ -10,24 +10,35 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 	"github.com/go-chi/chi/v5"
 )
 
 // gatewayStub stands in for elitea-llm-gateway's POST /llm/v1/check_connection.
 // It records the decoded request and answers with a fixed body.
 type gatewayStub struct {
-	*httptest.Server
+	*llmproxytest.Server
 	hits     atomic.Int64
 	requests []checkConnectionRequestBody
+	// projects is the signed X-Elitea-Project-Id of each request.
+	projects []string
 	status   int
 	answer   string
+	// gw is the client of the stub; override, when set, answers instead.
+	gw       llmproxy.Gateway
+	override http.Handler
 }
 
 func newGatewayStub(t *testing.T, status int, answer string) *gatewayStub {
 	t.Helper()
 	stub := &gatewayStub{status: status, answer: answer}
-	stub.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	stub.Server = llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		stub.hits.Add(1)
+		if stub.override != nil {
+			stub.override.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path != "/llm/v1/check_connection" {
 			http.NotFound(w, r)
 			return
@@ -35,11 +46,23 @@ func newGatewayStub(t *testing.T, status int, answer string) *gatewayStub {
 		var body checkConnectionRequestBody
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		stub.requests = append(stub.requests, body)
+		stub.projects = append(stub.projects, r.Header.Get("X-Elitea-Project-Id"))
 		w.WriteHeader(stub.status)
 		_, _ = w.Write([]byte(stub.answer))
 	}))
-	t.Cleanup(stub.Close)
+	stub.newClient(t)
 	return stub
+}
+
+// newClient connects a Gateway client to the stub over real mutual TLS.
+func (stub *gatewayStub) newClient(t *testing.T) {
+	t.Helper()
+	client, err := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{Target: stub.Target, IdentitySecret: "secret", TLS: stub.ClientTLS(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	stub.gw = client
 }
 
 func resolvedOpenAICredential() map[string]any {
@@ -59,7 +82,7 @@ func resolvedOpenAICredential() map[string]any {
 func modelCheckHandler(stub *gatewayStub, resolver StoredConfigurationResolver) *Handler {
 	options := []Option{WithStoredConfigurationResolver(resolver)}
 	if stub != nil {
-		options = append(options, WithConnectionChecker(NewGatewayConnectionChecker(stub.URL, http.DefaultTransport, "secret")))
+		options = append(options, WithConnectionChecker(NewGatewayConnectionChecker(stub.gw)))
 	}
 	return NewHandler(nil, options...)
 }

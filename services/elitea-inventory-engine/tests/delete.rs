@@ -289,7 +289,7 @@ async fn a_project_delete_covers_every_toolkit_of_the_project_and_no_other() {
     // Repeated once the run ended, it finishes the job.
     let done = delete::delete_project(&pool, 5).await.expect("delete");
     assert_eq!(done.deleted, vec![2]);
-    assert!(done.busy.is_empty());
+    assert_eq!(done.busy, [] as [i64; 0]);
     assert_eq!(
         done.removed,
         Removed {
@@ -438,6 +438,16 @@ fn runner(database: &str) -> NativeRunner {
         (
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url(database),
+        ),
+        (
+            "ELITEA_INVENTORY_MODEL_SERVICE_URL",
+            "https://elitea-main:9446".to_owned(),
+        ),
+        // Required by the native runner; no deletion here reaches it (the
+        // platform deletes a deleted toolkit's vectors itself).
+        (
+            "ELITEA_INVENTORY_VECTOR_URL",
+            "http://127.0.0.1:9".to_owned(),
         ),
     ]
     .into_iter()
@@ -1111,6 +1121,61 @@ async fn a_source_ingested_after_the_list_guards_its_graph() {
         delete::GuardedDeletion::Newer(_)
     ));
     assert_eq!(rows(&pool, key(4, 40)).await, [1, 3, 2, 1, 2]);
+}
+
+/// An orphan of a live project whose entity vectors are in elitea-vector is
+/// kept: the command cannot delete the vectors, and deleting the rows would
+/// lose the record of them. A deleted project's graph goes whatever it
+/// holds (its vectors go with `DropProject`).
+#[tokio::test]
+async fn an_orphan_holding_vectors_is_left_to_the_platform() {
+    let Some(pool) = common::database("delete_orphan_vectors").await else {
+        return;
+    };
+    let graphs = PgGraphStore::new(pool.clone());
+    commit(&graphs, key(5, 50), &graph("toolkit gone")).await;
+    commit(&graphs, key(6, 60), &graph("project gone")).await;
+    sqlx::query(
+        "UPDATE inventory_graph.graphs SET vector_generation = gen_random_uuid()::text
+          WHERE project_id IN (5, 6)",
+    )
+    .execute(&pool)
+    .await
+    .expect("record generations");
+    let orphan = |project, toolkit, reason| delete::OrphanGraph {
+        key: key(project, toolkit),
+        reason,
+        entities: 0,
+        updated_at: String::new(),
+    };
+    let kept = delete::delete_orphan(&pool, &orphan(5, 50, "toolkit"), None)
+        .await
+        .expect("guarded");
+    assert!(
+        matches!(&kept, delete::GuardedDeletion::VectorsHeld(reason) if reason.contains("elitea-vector")),
+        "{kept:?}"
+    );
+    assert_eq!(rows(&pool, key(5, 50)).await[0], 1, "the graph row stays");
+    assert!(matches!(
+        delete::delete_orphan(&pool, &orphan(6, 60, "project"), None)
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Deleted { .. }
+    ));
+    // Without vectors a live project's orphan goes too.
+    sqlx::query(
+        "UPDATE inventory_graph.graphs SET vector_generation = NULL
+          WHERE project_id = 5",
+    )
+    .execute(&pool)
+    .await
+    .expect("clear");
+    assert!(matches!(
+        delete::delete_orphan(&pool, &orphan(5, 50, "toolkit"), None)
+            .await
+            .expect("guarded"),
+        delete::GuardedDeletion::Deleted { .. }
+    ));
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/conformance/nativeclient/client"
+	"github.com/elitea-ng/elitea-platform/conformance/nativeclient/client"
 )
 
 // The ADR-0025 verification row, in order. The floor check at the end fails

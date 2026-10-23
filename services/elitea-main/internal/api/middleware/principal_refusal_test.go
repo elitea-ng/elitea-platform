@@ -25,9 +25,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // unreachablePrincipalStore builds the production validator over a pool that
@@ -159,18 +160,17 @@ func TestAuthSeparatesTheRefusalReasonsOnEverySource(t *testing.T) {
 			},
 		},
 		{
-			name:   "forwarded identity",
-			source: "forwarded_identity",
+			name:   "form session",
+			source: "form_session_cookie",
 			build: func(_ *testing.T, validator middleware.PrincipalValidator) http.Handler {
 				return middleware.Auth(middleware.AuthConfig{
-					ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(allowForwardedIdentity),
-					PrincipalValidator:        validator,
+					FormSessions:       authtest.FormSessions{},
+					PrincipalValidator: validator,
 				})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 			},
 			request: func() *http.Request {
 				request := httptest.NewRequest(http.MethodGet, "/api/v2/projects", nil)
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "7")
+				authtest.SignIn(request, "7")
 				return request
 			},
 		},

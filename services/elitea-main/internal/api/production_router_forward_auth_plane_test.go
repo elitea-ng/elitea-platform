@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 )
 
 // Exactly one browser-auth plane may own /auth.
@@ -35,10 +35,7 @@ func TestEdgeAuthPrefixHasOneOwner(t *testing.T) {
 		browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
 			writer.WriteHeader(http.StatusNoContent)
 		})
-		main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			writer.WriteHeader(http.StatusNoContent)
-		})
-		routes, err := NewProductionAuthRoutes(browser, main)
+		routes, err := NewProductionAuthRoutes(browser)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,7 +50,7 @@ func TestEdgeAuthPrefixHasOneOwner(t *testing.T) {
 		router := NewRouter(RouterConfig{ProductionAuth: newAuthRoutes(t)})
 
 		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNoContent)
-		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNotFound)
 	})
 
 	t.Run("OIDC session handler takes the prefix", func(t *testing.T) {
@@ -71,10 +68,8 @@ func TestEdgeAuthPrefixHasOneOwner(t *testing.T) {
 		// being unowned. /auth/logout exists only on the OIDC plane's
 		// registration in router.go.
 		assertNotStatus(t, router, http.MethodGet, "/auth/logout", http.StatusNotFound)
-		// The internal endpoint is NOT collateral damage: it is a distinct path,
-		// the auth edge depends on it, and it is what the runtime's
-		// ForwardedIdentityVerifier is paired with.
-		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
+		// The edge's forward-auth endpoint is gone on every plane (#1359).
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNotFound)
 	})
 
 	t.Run("top-level SessionHandler is honoured too", func(t *testing.T) {
@@ -87,7 +82,7 @@ func TestEdgeAuthPrefixHasOneOwner(t *testing.T) {
 		})
 
 		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
-		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNotFound)
 	})
 }
 
@@ -110,37 +105,32 @@ func assertNotStatus(t *testing.T, router http.Handler, method string, path stri
 }
 
 // Form sign-in is OFF by default (ELITEA_FORM_LOGIN_ENABLED). With it off,
-// production authentication still composes — the gateway edge, PAT
-// validation and the runtime's forwarded-identity check all depend on it — but
-// no Form browser route is mounted, so nothing accepts a password.
-func TestEdgeOnlyProductionAuthMountsNoFormSignIn(t *testing.T) {
-	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
-	routes, err := NewEdgeOnlyProductionAuthRoutes(main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewEdgeOnlyProductionAuthRoutes(nil); err == nil {
-		t.Fatal("an edge-only composition without the edge handler was accepted")
+// main.go composes no ProductionAuth at all: no Form browser route is
+// mounted, so nothing accepts a password. The edge-only composition that used
+// to remain — /internal/auth/main for an authenticating edge — is gone with
+// the X-Auth-* projection it produced (#1359).
+func TestFormSignInOffMountsNoBrowserAuthSurface(t *testing.T) {
+	if _, err := NewProductionAuthRoutes(nil); err == nil {
+		t.Fatal("a production auth composition without the Form routes was accepted")
 	}
 
 	t.Run("no single sign-on: every Form path is absent", func(t *testing.T) {
-		router := NewRouter(RouterConfig{ProductionAuth: routes})
-		for _, path := range []string{"/auth/login", "/auth/form/login", "/auth/logout", "/auth/form/logout"} {
+		router := NewRouter(RouterConfig{})
+		for _, path := range []string{
+			"/auth/login", "/auth/form/login", "/auth/logout", "/auth/form/logout",
+			"/auth/check", "/internal/auth/main",
+		} {
 			assertStatus(t, router, http.MethodGet, path, http.StatusNotFound)
 		}
 		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
-		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
 	})
 
 	t.Run("single sign-on still owns the prefix", func(t *testing.T) {
 		router := NewRouter(RouterConfig{
-			ProductionAuth: routes,
-			Auth:           AuthDeps{SessionHandler: v2auth.NewSessionHandler(nil, "test-session-secret")},
+			Auth: AuthDeps{SessionHandler: v2auth.NewSessionHandler(nil, "test-session-secret")},
 		})
 		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
 		assertNotStatus(t, router, http.MethodGet, "/auth/logout", http.StatusNotFound)
-		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNotFound)
 	})
 }

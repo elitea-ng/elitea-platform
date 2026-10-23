@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -46,9 +46,10 @@ func NewCurrentNotificationAPIRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentNotificationAPIRoute, error) {
-	// ForwardedIdentityVerifier is optional. Only a FormGraph supplies one, and
-	// a FormGraph exists only when ELITEA_AUTH_CONFIG_FILE is set. A required
-	// verifier therefore made this route composable under Form authentication
+	// The Form plane is optional. Only a FormGraph supplies one, and a
+	// FormGraph exists only when ELITEA_AUTH_CONFIG_FILE is set. A required
+	// Form-plane field (the forwarded-identity verifier, removed in #1359)
+	// therefore made this route composable under Form authentication
 	// alone, so GET /api/v2/notifications/notifications/prompt_lib/{projectID}
 	// answered 404 on every OIDC-only deployment, the E2E stack included
 	// (#413). The screen showed "No notifications yet" and hid the 404. This is

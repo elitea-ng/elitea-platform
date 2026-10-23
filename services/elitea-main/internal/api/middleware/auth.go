@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
 
 // TokenValidator validates a token string and returns the authenticated user.
@@ -30,14 +30,33 @@ type PrincipalValidator interface {
 	ValidatePrincipal(ctx context.Context, principal auth.User) (auth.User, error)
 }
 
-// ForwardedIdentityPeerVerifier proves that EdgeAuth produced the X-Auth-*
-// projection on this request: browserauth.TrustedProxyResolver requires
-// EdgeAuth's signature over the identity, method and request URI as well as a
-// configured proxy peer. Reloading an active user is not proof that the
-// caller was entitled to assert that user ID.
-type ForwardedIdentityPeerVerifier interface {
-	VerifyForwardedIdentityPeer(*http.Request) error
+// FormSessionAuthenticator resolves the Form plane's own browser session: the
+// opaque cookie /auth/form/authorize sets (`cookie.name` in the auth
+// document, `elitea_browser_auth` in every shipped one).
+//
+// It replaces the X-Auth-* edge projection (#1359). That cookie used to reach
+// elitea-main only as headers an authenticating edge copied from
+// /internal/auth/main, so a Form sign-in authenticated nothing behind an edge
+// that ran no ForwardAuth — which, by the end, was every edge this repository
+// shipped. elitea-main now reads the session itself, and no header a caller or
+// an edge sets is ever an identity.
+//
+// The answer is one of three: a principal; ErrFormSessionAbsent (no Form
+// cookie on the request, so another source decides); ErrFormSessionRejected
+// (a cookie this deployment does not accept: malformed, unknown, expired,
+// signed out, or a Form session while Form sign-in is off). Any other error
+// means the session store did not answer.
+type FormSessionAuthenticator interface {
+	AuthenticateFormSession(*http.Request) (auth.User, error)
 }
+
+var (
+	// ErrFormSessionAbsent reports a request that carries no Form cookie.
+	ErrFormSessionAbsent = errors.New("no form session cookie on the request")
+	// ErrFormSessionRejected reports a Form cookie that names no live
+	// session of an active user.
+	ErrFormSessionRejected = errors.New("form session rejected")
+)
 
 // BrowserSessionValidator resolves the SERVER-SIDE browser session a cookie
 // names, and refuses one that is revoked, expired or idle.
@@ -52,13 +71,15 @@ type BrowserSessionValidator interface {
 
 type AuthConfig struct {
 	// Validator reads a credential back and yields the principal it names.
-	// It is the ONLY token validator now: #383 deleted the pylon Redis-RPC
+	// It is the ONLY token validator now: #383 deleted the legacy Redis-RPC
 	// client that used to fill in when this field was nil, so a nil Validator
 	// admits no bearer or API-key credential at all.
-	Validator                 TokenValidator
-	PrincipalValidator        PrincipalValidator
-	ForwardedIdentityVerifier ForwardedIdentityPeerVerifier
-	SessionSecret             string // HMAC key for session cookies
+	Validator          TokenValidator
+	PrincipalValidator PrincipalValidator
+	// FormSessions reads the Form plane's browser session cookie. Nil (every
+	// deployment without an auth document) reads no Form cookie at all.
+	FormSessions  FormSessionAuthenticator
+	SessionSecret string // HMAC key for session cookies
 	// SessionStore validates the server-side session an `elitea_session`
 	// cookie names (migrations/shared/0117). Nil means this deployment issues
 	// only the legacy signed cookie, which is what every deployment did before
@@ -75,9 +96,13 @@ type AuthConfig struct {
 }
 
 // Auth authenticates every request against exactly four credential sources:
-// forwarded identity, API key, bearer token, and session cookie. There is no
-// fifth source and no configuration that yields a principal without a
-// credential.
+// the Form session cookie, API key, bearer token, and the `elitea_session`
+// cookie. There is no fifth source and no configuration that yields a
+// principal without a credential.
+//
+// No request HEADER is an identity. The X-Auth-* projection an authenticating
+// edge used to copy from /internal/auth/main was the last one, and it is gone
+// (#1359): the Form session it carried is read here, from the cookie itself.
 //
 // In particular there is no environment-variable bypass. The former
 // AUTH_DEV_MODE flag injected an admin principal impersonating database user 1
@@ -96,34 +121,62 @@ type AuthConfig struct {
 // PrincipalValidator never ran on it.
 //
 // A deactivated user who kept access was the smaller failure. The headers were
-// the whole credential. deploy/traefik/dynamic.yml removes no inbound X-Auth-*
-// header. No composition root set the CIDR list, so the TRUSTED_PROXY_CIDRS
+// the whole credential. The compose edge of the time removed no inbound
+// X-Auth-* header. No composition root set the CIDR list, so the TRUSTED_PROXY_CIDRS
 // environment variable was the only switch. An operator who set that variable
 // to the ingress range gave every anonymous caller any user ID.
 //
 // validatePrincipal does not correct that failure. The validator confirms that
 // the claimed user is active. It does not confirm that the caller may claim
-// that user. ForwardedIdentityPeerVerifier draws that distinction. See #390.
-// browserauth.TrustedProxyConfig is a different boundary. It reads the auth
-// configuration file, and this change does not affect it.
+// that user (#390). browserauth.TrustedProxyConfig is a different boundary. It
+// reads the auth configuration file, and this change does not affect it.
 func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if user, ok := tryTraefikHeaders(r, cfg.ForwardedIdentityVerifier); ok {
-				// A forwarded token ID is not an owning user ID. The authoritative
-				// principal check must cross-check both typed IDs and normalize the
-				// compatibility ID before any downstream handler can use it as a
-				// user foreign key.
-				user, err := validatePrincipal(r.Context(), cfg, user)
-				if err != nil {
-					writePrincipalRefusal(w, r, sourceForwarded, err)
+			// The Form session holds the slot the forwarded identity held:
+			// first. It runs only when the request names no explicit
+			// credential, which is the order the forward-auth kernel applied
+			// (an Authorization or X-API-Key credential was decided before the
+			// browser session was read), so a program's bearer is never
+			// overruled by a stale cookie in the same jar.
+			if cfg.FormSessions != nil && r.Header.Get("X-API-Key") == "" && r.Header.Get("Authorization") == "" {
+				user, err := cfg.FormSessions.AuthenticateFormSession(r)
+				switch {
+				case err == nil:
+					user, err = validatePrincipal(r.Context(), cfg, user)
+					if err != nil {
+						writePrincipalRefusal(w, r, sourceFormSession, err)
+						return
+					}
+					// A COOKIE authenticated this request, so it is a session
+					// principal: BrowserWriteOrigin's cross-site write check
+					// and the browser-only routes treat it exactly like the
+					// `elitea_session` cookie.
+					serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
+					return
+				case errors.Is(err, ErrFormSessionAbsent):
+				case errors.Is(err, ErrFormSessionRejected):
+					// A stale Form cookie must not lock out a browser that has
+					// since signed in through single sign-on: the
+					// `elitea_session` cookie below still decides. Without one,
+					// the stale cookie is the request's only credential.
+					if _, cookieErr := r.Cookie(browsersession.CookieName); cookieErr != nil {
+						writeCredentialRefusal(w, r, sourceFormSession, reasonFormSessionRejected)
+						return
+					}
+				default:
+					// The store did not ANSWER, which says nothing about the
+					// caller: 503, as for the server-side session store below.
+					logCredentialRefusal(r, sourceFormSession, reasonServerSessionUnreadable)
+					slog.ErrorContext(r.Context(), "the Form session store could not be read", "err", err)
+					w.Header().Set("Retry-After", "5")
+					writeJSONError(w, http.StatusServiceUnavailable,
+						"server_error", "session_store_unavailable", "session store unavailable")
 					return
 				}
-				serveAuthenticated(next, w, r, user, auth.AuthenticationSourceForwarded)
-				return
 			}
 
-			// X-API-Key header (pylon compatibility)
+			// X-API-Key header (legacy client compatibility)
 			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 				user, err := validateToken(r.Context(), cfg, apiKey)
 				if err != nil {
@@ -257,81 +310,6 @@ func writeJSONError(w http.ResponseWriter, status int, errType, code, message st
 	_ = json.NewEncoder(w).Encode(jsonError{Error: jsonErrorFields{Message: message, Type: errType, Code: code}})
 }
 
-// ForwardedIdentity reads the principal an authenticating edge projected onto
-// this request, or reports that there is none.
-//
-// Exported so the admin-UI HTML handler resolves the SAME identity this
-// middleware does. That handler used to read the `elitea_session` cookie and
-// nothing else, and the runtime deployment does not issue that cookie: the
-// browser logs in through /auth/login, which stores an opaque
-// server-side session under `elitea_browser_auth` and projects the principal
-// onto the upstream request as X-Auth-* (deploy/runtime/platform-edge-dynamic
-// .yml `authResponseHeaders`). The handler therefore injected an empty
-// permission list into every admin page load, and the SPA — which hides a nav
-// item whose permission is absent — rendered a sidebar with no items at all.
-//
-// The verifier argument is not optional and a nil one yields no identity: the
-// headers are the whole credential, so accepting them without proof that the
-// request crossed the header-stripping ingress lets any caller pick a user ID
-// (#390). Callers must still validate the principal (or resolve permissions,
-// which reloads the user and refuses a suspended one) before acting on it.
-func ForwardedIdentity(r *http.Request, verifier ForwardedIdentityPeerVerifier) (auth.User, bool) {
-	return tryTraefikHeaders(r, verifier)
-}
-
-func tryTraefikHeaders(r *http.Request, verifier ForwardedIdentityPeerVerifier) (auth.User, bool) {
-	authType, typePresent, typeValid := uniqueForwardedIdentityHeader(r.Header, "X-Auth-Type")
-	authID, idPresent, idValid := uniqueForwardedIdentityHeader(r.Header, "X-Auth-ID")
-	if !typePresent && !idPresent {
-		return auth.User{}, false
-	}
-	if verifier == nil || !typePresent || !idPresent || !typeValid || !idValid ||
-		verifier.VerifyForwardedIdentityPeer(r) != nil {
-		return auth.User{}, false
-	}
-	// X-Auth-Reference is compatibility routing material and may be a browser
-	// session bearer value. It is never an identity claim; the mandatory
-	// PrincipalValidator reloads mutable email from PostgreSQL.
-
-	if !strings.EqualFold(authType, "token") && !strings.EqualFold(authType, "user") {
-		return auth.User{}, false
-	}
-	authType = strings.ToLower(authType)
-
-	user := auth.User{
-		ID:       authID,
-		AuthType: authType,
-	}
-	if authType == "token" {
-		userID, present, valid := uniqueForwardedIdentityHeader(r.Header, "X-Auth-User-ID")
-		if !present || !valid {
-			return auth.User{}, false
-		}
-		user.TokenID = authID
-		user.UserID = userID
-	} else {
-		user.UserID = authID
-	}
-	return user, true
-}
-
-func uniqueForwardedIdentityHeader(headers http.Header, name string) (string, bool, bool) {
-	var values []string
-	for key, current := range headers {
-		if strings.EqualFold(key, name) {
-			values = append(values, current...)
-		}
-	}
-	if len(values) == 0 {
-		return "", false, true
-	}
-	if len(values) != 1 || values[0] == "" || values[0] != strings.TrimSpace(values[0]) ||
-		strings.ContainsAny(values[0], "\x00\r\n") {
-		return "", true, false
-	}
-	return values[0], true, true
-}
-
 // errPrincipalValidatorAbsent reports a deployment that composed no validator.
 //
 // It is a refusal, not a condition: every caller of validatePrincipal is on an
@@ -378,10 +356,10 @@ func writeInactivePrincipal(w http.ResponseWriter) {
 // The credential source each refusal names. One 401 burst looks the same from
 // the outside on all four paths, so the log has to say which one refused.
 const (
-	sourceForwarded = "forwarded_identity"
-	sourceAPIKey    = "api_key"
-	sourceSession   = "session_cookie"
-	sourceToken     = "bearer_token"
+	sourceFormSession = "form_session_cookie"
+	sourceAPIKey      = "api_key"
+	sourceSession     = "session_cookie"
+	sourceToken       = "bearer_token"
 )
 
 // The reason a CREDENTIAL refusal names — the vocabulary of the 401 that is
@@ -394,8 +372,8 @@ const (
 // no cookie, sent one this deployment could not verify, or sent one that had
 // expired: the branch wrote no log line at all. These reasons separate them.
 const (
-	// reasonNoCredential — no Authorization header, no X-API-Key, no
-	// forwarded identity and no `elitea_session` cookie on the request.
+	// reasonNoCredential — no Authorization header, no X-API-Key, no Form
+	// session cookie and no `elitea_session` cookie on the request.
 	// `cookie_count` on the same line says whether the browser sent ANY
 	// cookie, which is what tells "this client is not signed in" apart from
 	// "this client's cookie jar lost exactly ours".
@@ -446,6 +424,10 @@ const (
 	// reasonDeviceRevoked — a native access token whose device session was
 	// revoked, expired or deactivated (ADR-0025). 401 device_revoked.
 	reasonDeviceRevoked = "device_revoked"
+	// reasonFormSessionRejected — the Form session cookie names no live
+	// session of an active user: malformed, unknown, expired, signed out, or
+	// a Form session while Form sign-in is off.
+	reasonFormSessionRejected = "form_session_rejected"
 )
 
 // DeviceRevokedBody is the ADR-0025 `device_revoked` answer (coordinator
@@ -533,6 +515,8 @@ func credentialRefusalAnswer(source, reason string) (code, message string) {
 		return reasonServerSessionExpired, "the session expired"
 	case reasonServerSessionIdle:
 		return reasonServerSessionIdle, "the session was idle for too long"
+	case reasonFormSessionRejected:
+		return reasonFormSessionRejected, "the sign-in session is not valid"
 	case reasonLegacySessionRejected:
 		return reasonLegacySessionRejected, "the legacy session cookie is no longer accepted"
 	case reasonAuthorizationHeaderMalformed:
@@ -780,24 +764,19 @@ func validateToken(ctx context.Context, cfg AuthConfig, token string) (auth.User
 //
 // It is the constructor-side form of the question the composition root already
 // asks (productionAuthenticationComposed in cmd/elitea-main). Route
-// constructors used to demand a non-nil ForwardedIdentityVerifier instead, and
-// that field is composed only by the Form authentication document: on an
+// constructors used to demand a field only the Form authentication document
+// composes (the forwarded-identity verifier, removed in #1359), so on an
 // OIDC-only deployment — the E2E stack and every single-sign-on-only install —
-// apiGroupAuthConfig leaves it nil and carries the session cookie and the
-// personal-access-token validator instead. Every such constructor therefore
-// refused a perfectly authenticated deployment, and the binary stopped with
-// "invalid ... route dependencies" at boot.
+// every such constructor refused a perfectly authenticated deployment, and the
+// binary stopped with "invalid ... route dependencies" at boot.
 //
-// A nil ForwardedIdentityVerifier is safe at request time: tryTraefikHeaders
-// refuses every X-Auth-* header when the verifier is nil, so the forwarded
-// identity plane is closed rather than open. What must never be nil is the
-// PrincipalValidator, because validatePrincipal returns the claimed user
-// unchanged when it is absent (#301/#314/#370).
+// What must never be nil is the PrincipalValidator, because validatePrincipal
+// returns the claimed user unchanged when it is absent (#301/#314/#370).
 func (cfg AuthConfig) CredentialPlaneComposed() bool {
 	if cfg.PrincipalValidator == nil {
 		return false
 	}
-	return cfg.ForwardedIdentityVerifier != nil ||
+	return cfg.FormSessions != nil ||
 		cfg.Validator != nil ||
 		cfg.SessionSecret != ""
 }

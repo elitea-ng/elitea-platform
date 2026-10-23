@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
 )
 
 var completeVectorEnv = map[string]string{
@@ -133,5 +133,30 @@ func TestTheVectorCleanupAbandonSwitch(t *testing.T) {
 	// Off beside a client is fine.
 	if on, err := vectorCleanupAbandonSwitch(logger, lookupFrom(map[string]string{}), true); err != nil || on {
 		t.Errorf("unset beside a client: on=%v err=%v", on, err)
+	}
+}
+
+// Inventory without an elitea-vector client records no vector step: there are
+// no vectors the replica could delete, and a recorded step would keep every
+// project delete pending for ever. Rust indexing records it with or without a
+// client (toolkit indexes are in the store regardless), and Inventory beside a
+// client records it so the graph vectors go with the project.
+func TestProjectVectorStepRecordedNeedsAClientForInventory(t *testing.T) {
+	for _, tc := range []struct {
+		name                            string
+		rustIndexing, inventory, client bool
+		want                            bool
+	}{
+		{"nothing", false, false, false, false},
+		{"inventory without a client", false, true, false, false},
+		{"inventory with a client", false, true, true, true},
+		{"client alone drains only", false, false, true, false},
+		{"rust indexing without a client", true, false, false, true},
+		{"rust indexing and inventory without a client", true, true, false, true},
+		{"rust indexing with a client", true, true, true, true},
+	} {
+		if got := projectVectorStepRecorded(tc.rustIndexing, tc.inventory, tc.client); got != tc.want {
+			t.Errorf("%s: projectVectorStepRecorded = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

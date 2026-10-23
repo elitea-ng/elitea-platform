@@ -5,8 +5,8 @@
 {{/*
 Release-INDEPENDENT on purpose. These names are certificate material: the
 runtime mTLS server certificates carry DNS SANs for them, the worker dials
-control/output/content on `elitea-main`, and platform_origin is pinned to a
-certificate whose only SAN is `elitea-platform-edge`. Helm's usual
+control/output/content/platform on `elitea-main` (platform_origin is
+`https://elitea-main:9446`). Helm's usual
 "<release>-<chart>" would rename them per release and fail every handshake with
 an error that reads like a trust problem, nowhere near the rename.
 
@@ -27,6 +27,127 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "elitea-main.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "elitea-main.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+elitea-main.webUpstream — ELITEA_WEB_UPSTREAM, the origin elitea-main relays
+`/app…` and `/docs…` to (internal/api/webedge, #1359 P3). Empty when the chart
+renders no elitea-web, which turns the relay and the `/` → `/app/` redirect
+off and leaves elitea-main serving its own routes only.
+
+elitea-main is the ONLY browser edge: the Ingress or HTTPRoute
+(templates/main/ingress.yaml) is one `/` rule to it, and the path decisions a
+split route used to make — the SPA, the docs, the MCP server inside `/app`, the
+root redirect — are made in Go. The hop is browser traffic relayed, not a
+service-to-service call, so it is plain HTTP to the web Service, the same
+Service a browser-facing route once named directly.
+*/}}
+{{/*
+elitea-main.healthcheckExec — the exec probe that reads one probe path over
+loopback inside the container: `<main.probes.execCommand> -healthcheck <path>`.
+The one place the binary path and the flag are spelled. Takes (list $ path).
+*/}}
+{{- define "elitea-main.healthcheckExec" -}}
+{{- $root := index . 0 -}}
+exec:
+  command: [{{ $root.Values.main.probes.execCommand | default "/elitea-main" | quote }}, "-healthcheck", {{ index . 1 | quote }}]
+{{- end }}
+
+{{- define "elitea-main.webUpstream" -}}
+{{- if .Values.web.enabled -}}
+{{- printf "http://%s:%v" (include "elitea-web.fullname" .) .Values.web.service.port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.gkeIngress — "true" when the standard Ingress is a GKE one
+(main.ingress.gke): gke.enabled, or className / the kubernetes.io/ingress.class
+annotation naming gce or gce-internal. Empty otherwise, and always empty on
+the HTTPRoute path (BackendConfig and FrontendConfig apply to a GKE Ingress
+only; templates/guards.yaml refuses gke.enabled with gatewayApi).
+*/}}
+{{- define "elitea-main.gkeIngress" -}}
+{{- $i := .Values.main.ingress -}}
+{{- if and .Values.main.enabled $i.enabled (not $i.gatewayApi) -}}
+{{- $class := index ($i.annotations | default dict) "kubernetes.io/ingress.class" | default "" -}}
+{{- if or $i.gke.enabled (has $i.className (list "gce" "gce-internal")) (has $class (list "gce" "gce-internal")) -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/* The BackendConfig the Service names: the chart's own, or the operator's. */}}
+{{- define "elitea-main.gkeBackendConfigName" -}}
+{{- $b := .Values.main.ingress.gke.backendConfig -}}
+{{- if $b.create -}}{{- default (include "elitea-main.fullname" .) $b.name -}}{{- else -}}{{- $b.name -}}{{- end -}}
+{{- end }}
+
+{{/* The FrontendConfig the Ingress names: the chart's own, or the operator's. */}}
+{{- define "elitea-main.gkeFrontendConfigName" -}}
+{{- $f := .Values.main.ingress.gke.frontendConfig -}}
+{{- if $f.create -}}{{- default (include "elitea-main.fullname" .) $f.name -}}{{- else -}}{{- $f.name -}}{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.serviceAnnotations — the Service's annotations as a YAML map: the
+GKE wiring (container-native load balancing and the BackendConfig binding on
+the `http` port only — the runtime listeners on the same Service are gRPC
+over mTLS and never sit behind the load balancer), then main.service.annotations,
+which wins on a clash.
+*/}}
+{{- define "elitea-main.serviceAnnotations" -}}
+{{- $out := dict -}}
+{{- if include "elitea-main.gkeIngress" . -}}
+{{- $_ := set $out "cloud.google.com/neg" (dict "ingress" true | toJson) -}}
+{{- with include "elitea-main.gkeBackendConfigName" . -}}
+{{- $_ := set $out "cloud.google.com/backend-config" (dict "ports" (dict "http" .) | toJson) -}}
+{{- end -}}
+{{- end -}}
+{{- $out = merge (deepCopy (.Values.main.service.annotations | default dict)) $out -}}
+{{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
+{{/*
+elitea-main.ingressAnnotations — the Ingress's annotations as a YAML map:
+the GKE class, the FrontendConfig binding and the cert-manager issuer, then
+main.ingress.annotations, which wins on a clash.
+
+GKE's ingress controller is selected by the kubernetes.io/ingress.class
+ANNOTATION. GKE ships no IngressClass object named gce or gce-internal, so an
+Ingress with spec.ingressClassName: gce is ignored: no load balancer, and the
+BackendConfig and FrontendConfig never apply. A className of gce or
+gce-internal is therefore rendered as the annotation (elitea-main.ingressClassName
+drops it from spec); gke.enabled with no class at all means gce.
+*/}}
+{{- define "elitea-main.ingressAnnotations" -}}
+{{- $i := .Values.main.ingress -}}
+{{- $out := dict -}}
+{{- if include "elitea-main.gkeIngress" . -}}
+{{- if not (hasKey ($i.annotations | default dict) "kubernetes.io/ingress.class") -}}
+{{- $_ := set $out "kubernetes.io/ingress.class" (has $i.className (list "gce" "gce-internal") | ternary $i.className "gce") -}}
+{{- end -}}
+{{- with include "elitea-main.gkeFrontendConfigName" . -}}
+{{- $_ := set $out "networking.gke.io/v1beta1.FrontendConfig" . -}}
+{{- end -}}
+{{- end -}}
+{{- with $i.certManager -}}
+{{- if .issuer }}{{ $_ := set $out "cert-manager.io/issuer" .issuer }}{{ end -}}
+{{- if .clusterIssuer }}{{ $_ := set $out "cert-manager.io/cluster-issuer" .clusterIssuer }}{{ end -}}
+{{- if .issuerKind }}{{ $_ := set $out "cert-manager.io/issuer-kind" .issuerKind }}{{ end -}}
+{{- if .issuerGroup }}{{ $_ := set $out "cert-manager.io/issuer-group" .issuerGroup }}{{ end -}}
+{{- end -}}
+{{- $out = merge (deepCopy ($i.annotations | default dict)) $out -}}
+{{- if $out }}{{ toYaml $out }}{{ end -}}
+{{- end }}
+
+{{/*
+elitea-main.ingressClassName — spec.ingressClassName, or empty: a GKE class
+(gce, gce-internal) is an annotation, never an IngressClass name
+(elitea-main.ingressAnnotations).
+*/}}
+{{- define "elitea-main.ingressClassName" -}}
+{{- $c := .Values.main.ingress.className | default "" -}}
+{{- if not (has $c (list "gce" "gce-internal")) }}{{ $c }}{{ end -}}
 {{- end }}
 
 {{- define "elitea-main.serviceAccountName" -}}
@@ -138,7 +259,7 @@ false
 elitea-main.validateEventsNats — refuse a render where elitea-main cannot know
 the NATS the gateway uses. When the gateway reads GATEWAY_NATS_URL from a Secret
 (llmGateway.secrets), the chart cannot see the value, so deriving main's URL
-from the `nats` block could point it at a different broker: soft alerts would
+from the `natsClient` block could point it at a different broker: soft alerts would
 never reach the project stream, or main would crash on a host that does not
 exist. The operator names main's URL as well — main.secrets (preferred when it
 carries credentials) or main.env.
@@ -148,7 +269,7 @@ carries credentials) or main.env.
 {{- $mainSecrets := .Values.main.secrets | default dict -}}
 {{- $gwSecrets := .Values.llmGateway.secrets | default dict -}}
 {{- if and .Values.llmGateway.enabled (hasKey $gwSecrets "GATEWAY_NATS_URL") (not (get $mainEnv "ELITEA_EVENTS_NATS_URL")) (not (hasKey $mainSecrets "ELITEA_EVENTS_NATS_URL")) -}}
-{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `nats` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
+{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `natsClient` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
 {{- end -}}
 {{- end }}
 
@@ -266,6 +387,11 @@ because it passes a manifest the binary then rejects.
 {{- end -}}
 
 {{/*
+  Before the ELITEA_RUNTIME_* ownership check below, so a retired name is
+  refused with its migration message rather than the generic one.
+*/}}
+{{- include "elitea-main.validateRetiredCallbacks" . -}}
+{{/*
   The runtime block is rendered by elitea-main.runtimeEnv, and the env map is
   rendered beside it into the same ConfigMap. A name in both produces a
   duplicate key, which Kubernetes rejects on apply — long after `helm template`
@@ -283,6 +409,8 @@ because it passes a manifest the binary then rejects.
 {{- include "elitea-main.validateVectorClient" . -}}
 {{- include "elitea-main.validateSelfLLMOrigins" . -}}
 {{- include "elitea-main.validateRuntime" . -}}
+{{- include "elitea-main.validateModelService" . -}}
+{{- include "elitea-main.validatePlatformServices" . -}}
 {{- include "elitea-main.validateConnectionBudget" . -}}
 {{- include "elitea-main.validateAuthMaterial" . -}}
 {{- end }}
@@ -510,12 +638,16 @@ elitea-main.validateLLMGateway — issue #463.
 The /llm proxy is all-or-nothing, and the failure it produces when half
 configured is a CrashLoopBackOff rather than a disabled feature.
 
-internal/llmproxy/proxy.go builds an mTLS transport whenever Config.Transport is
-nil, and the only seam for a plaintext transport is a struct field with no
-environment binding, so it is test-only. With LLM_GATEWAY_URL set and any of the
-three material paths empty, tls.LoadX509KeyPair or os.ReadFile fails,
-llmproxy.New returns an error, and cmd/elitea-main returns
-"compose llm gateway proxy" as a fatal boot error.
+internal/llmproxy/gateway_client.go (#1359: gRPC over mutual TLS to the
+gateway's GatewayService) always loads the client certificate; the only
+seam for other material is a struct field with no environment binding, so it
+is test-only. With LLM_GATEWAY_URL set and any of the three material paths
+empty, NewGatewayClient fails, and cmd/elitea-main returns
+"compose llm gateway client" as a fatal boot error.
+
+LLM_GATEWAY_URL names the gateway gRPC listener: https://<host>:<port>, no
+path. The gateway HTTP port (llmGateway.service.port) serves health and
+metrics only, so a URL on that port is refused here too.
 
 So this refuses the half-configured values file at `helm template` time.
 
@@ -533,18 +665,23 @@ the /llm path. That state is no longer silent: with no URL the router answers
   "LLM_GATEWAY_CLIENT_KEY" (get $env "LLM_GATEWAY_CLIENT_KEY" | toString)
   "LLM_GATEWAY_CA_FILE" (get $env "LLM_GATEWAY_CA_FILE" | toString) -}}
 {{- if $url -}}
-{{- if not (or (hasPrefix "https://" $url) (hasPrefix "http://" $url)) -}}
-{{- fail (printf "env.LLM_GATEWAY_URL must be an absolute URL with a scheme and a host. internal/llmproxy/proxy.go refuses anything else: \"target url %q missing scheme or host\"." $url) -}}
+{{- $parsed := urlParse $url -}}
+{{- if or (ne $parsed.scheme "https") (not $parsed.host) (and $parsed.path (ne $parsed.path "/")) -}}
+{{- fail (printf "env.LLM_GATEWAY_URL must be https://<host>:<port> of the gateway gRPC listener, with no path. internal/llmproxy/gateway_client.go refuses anything else: got %q (missing scheme or host, or not https)." $url) -}}
+{{- end -}}
+{{- $infraPort := printf ":%v" (.Values.llmGateway.service.port | default 8083) -}}
+{{- if hasSuffix $infraPort $parsed.host -}}
+{{- fail (printf "env.LLM_GATEWAY_URL is %q, the gateway HTTP port (llmGateway.service.port). That listener serves health and metrics only; /llm is the gRPC listener (llmGateway.service.grpcPort, default 8443) behind llmGateway.service.grpcName." $url) -}}
 {{- end -}}
 {{- range $name, $value := $material -}}
 {{- if not $value -}}
-{{- fail (printf "env.LLM_GATEWAY_URL is set, so env.%s must be set too. internal/llmproxy/proxy.go always builds an mTLS transport and reads this value as a FILE PATH; an empty path makes cmd/elitea-main exit at boot with \"compose llm gateway proxy\". Set all three of LLM_GATEWAY_CLIENT_CERT, LLM_GATEWAY_CLIENT_KEY and LLM_GATEWAY_CA_FILE, and mount the material at those paths." $name) -}}
+{{- fail (printf "env.LLM_GATEWAY_URL is set, so env.%s must be set too. internal/llmproxy/gateway_client.go always loads mutual TLS material and reads this value as a FILE PATH; an empty path makes cmd/elitea-main exit at boot with \"compose llm gateway client\". Set all three of LLM_GATEWAY_CLIENT_CERT, LLM_GATEWAY_CLIENT_KEY and LLM_GATEWAY_CA_FILE, and mount the material at those paths." $name) -}}
 {{- end -}}
 {{- if not (hasPrefix "/" $value) -}}
-{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q. internal/llmproxy/proxy.go passes it to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
+{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q. internal/llmproxy/gateway_client.go passes it to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
 {{- end -}}
 {{- if and $clientMaterial.enabled (not (hasPrefix $mountPath $value)) -}}
-{{- fail (printf "env.%s is %q, which fileConfig.llmGatewayClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container, and the pod exits at boot with \"compose llm gateway proxy\"." $name $value $mountPath) -}}
+{{- fail (printf "env.%s is %q, which fileConfig.llmGatewayClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container, and the pod exits at boot with \"compose llm gateway client\"." $name $value $mountPath) -}}
 {{- end -}}
 {{- end -}}
 {{- if not $clientMaterial.enabled -}}
@@ -556,7 +693,7 @@ the /llm path. That state is no longer silent: with no URL the router answers
 {{- else -}}
 {{- range $name, $value := $material -}}
 {{- if $value -}}
-{{- fail (printf "env.%s is set but env.LLM_GATEWAY_URL is empty, so no proxy is composed and the material is never read. Set env.LLM_GATEWAY_URL, or clear env.%s." $name $name) -}}
+{{- fail (printf "env.%s is set but env.LLM_GATEWAY_URL is empty, so no gateway client is composed and the material is never read. Set env.LLM_GATEWAY_URL, or clear env.%s." $name $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -567,8 +704,8 @@ elitea-main.validateDeepWiki — the same all-or-nothing shape as the /llm hop
 above, for the same reason (ADR-0022 P2/P3).
 
 internal/api/v2/deepwiki/config.go's Validate() refuses an enabled facade that
-is missing the base URL, any of the three certificate paths, or the callback
-origin, and cmd/elitea-main turns that into a fatal boot error. So a
+is missing the base URL or any of the three certificate paths, and
+cmd/elitea-main turns that into a fatal boot error. So a
 half-configured values file is a CrashLoopBackOff, not a disabled feature, and
 this refuses it while the operator is still looking at their terminal.
 
@@ -586,16 +723,15 @@ reads, which looks configured and does nothing.
   "ELITEA_DEEPWIKI_CLIENT_CERT_FILE" (get $env "ELITEA_DEEPWIKI_CLIENT_CERT_FILE" | toString)
   "ELITEA_DEEPWIKI_CLIENT_KEY_FILE" (get $env "ELITEA_DEEPWIKI_CLIENT_KEY_FILE" | toString)
   "ELITEA_DEEPWIKI_CA_FILE" (get $env "ELITEA_DEEPWIKI_CA_FILE" | toString) -}}
+{{- if get $env "ELITEA_DEEPWIKI_BASE_URL" -}}
+{{- fail "env.ELITEA_DEEPWIKI_BASE_URL was retired with the provider's HTTPS SPI (#1359): elitea-main reaches it over gRPC at env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET (host:port, derived by the chart when deepwiki.enabled). Remove BASE_URL; cmd/elitea-main refuses it at boot too (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
 {{- fail (printf "env.ELITEA_DEEPWIKI_ENABLED is %q, which is neither true nor false. internal/api/v2/deepwiki/config.go refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
 {{- end -}}
 {{- if $on -}}
-{{- $url := get $env "ELITEA_DEEPWIKI_BASE_URL" | toString -}}
-{{- if not (hasPrefix "https://" $url) -}}
-{{- fail (printf "env.ELITEA_DEEPWIKI_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; NewProxy catches it at startup." $url) -}}
-{{- end -}}
-{{- if not (include "elitea-deepwiki.callbackBaseUrl" .) -}}
-{{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL must name the origin the PROVIDER calls back to for artifacts and models. Without it a generation runs to completion and then cannot hand back what it produced — the failure arrives at the end of the most expensive operation the facade offers. Set it to this deployment's own in-cluster origin, e.g. http://elitea-main:8080." -}}
+{{- if not (or (get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET") (include "elitea-deepwiki.platformGrpcTarget" .)) -}}
+{{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, but there is no provider to dial: deepwiki.enabled is false here, so the chart derives no env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET. Turn deepwiki.enabled on, or set the target to the host:port of a provider deployed elsewhere (#1359)." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_DEEPWIKI_GIT_ALLOWLIST") -}}
 {{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_GIT_ALLOWLIST must name the git hosts this deployment may clone from. It is fail-closed: empty refuses every repository, at the point a user asks for a wiki. It must hold the SAME value as deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST — this side checks it before opening the vault, that side before building a clone URL, and two that disagree mean an invocation that starts and then fails." -}}
@@ -713,11 +849,11 @@ half-configured values file is a CrashLoopBackOff, not a disabled feature.
 TWO THINGS ARE DELIBERATELY NOT REQUIRED HERE, and both are differences from
 DeepWiki rather than omissions:
 
-  * ELITEA_INVENTORY_CALLBACK_BASE_URL. An empty one DISABLES source expansion
-    and mounts the facade anyway — the eight tools that only read a graph still
-    work, and the three that name a source get the provider's own refusal.
-    cmd/elitea-main logs which of the two it built. Requiring it here would
-    refuse an install the code supports.
+  * a source-expansion origin. There is none any more (#1359 U5): the
+    provider reads and writes artifacts over ArtifactObjectService on
+    elitea-main's platform listener, so expansion depends only on the
+    Configurations plane. ELITEA_INVENTORY_CALLBACK_BASE_URL is retired and
+    refused (elitea-main.validateRetiredCallbacks).
   * ELITEA_INVENTORY_GIT_ALLOWLIST. It is fail-closed on the facade side alone;
     the provider has no allowlist to keep in step with, because Inventory has
     no request-supplied clone URL. An unset one refuses every source, at the
@@ -738,13 +874,15 @@ reads, which looks configured and does nothing.
   "ELITEA_INVENTORY_CLIENT_CERT_FILE" (get $env "ELITEA_INVENTORY_CLIENT_CERT_FILE" | toString)
   "ELITEA_INVENTORY_CLIENT_KEY_FILE" (get $env "ELITEA_INVENTORY_CLIENT_KEY_FILE" | toString)
   "ELITEA_INVENTORY_CA_FILE" (get $env "ELITEA_INVENTORY_CA_FILE" | toString) -}}
+{{- if get $env "ELITEA_INVENTORY_BASE_URL" -}}
+{{- fail "env.ELITEA_INVENTORY_BASE_URL was retired with the provider's HTTPS SPI (#1359): elitea-main reaches it over gRPC at env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET (host:port, derived by the chart when inventory.enabled). Remove BASE_URL; cmd/elitea-main refuses it at boot too (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
 {{- fail (printf "env.ELITEA_INVENTORY_ENABLED is %q, which is neither true nor false. facade.ConfigFromEnv refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
 {{- end -}}
 {{- if $on -}}
-{{- $url := get $env "ELITEA_INVENTORY_BASE_URL" | toString -}}
-{{- if not (hasPrefix "https://" $url) -}}
-{{- fail (printf "env.ELITEA_INVENTORY_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; proxy.New catches it at startup." $url) -}}
+{{- if not (or (get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET") (include "elitea-inventory.platformGrpcTarget" .)) -}}
+{{- fail "env.ELITEA_INVENTORY_ENABLED is on, but there is no provider to dial: inventory.enabled is false here, so the chart derives no env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET. Turn inventory.enabled on, or set the target to the host:port of a provider deployed elsewhere (#1359)." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
 {{- if not (hasKey (.Values.main.secrets | default dict) "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
@@ -827,84 +965,76 @@ cannot boot.
 This helper refuses that values file at render time instead.
 */}}
 {{/*
-elitea-main.validateConnectionBudget — the ceiling nothing enforced.
+elitea-main.validateConnectionBudget — the ceiling nothing enforced, for EVERY
+component that opens PostgreSQL connections (S11; it counted elitea-main
+alone before).
 
-elitea-main opens the six runtime-plane pools per replica when the runtime
-plane is on (36 connections, and validateDependencies forbids them sharing
-capacity) PLUS its primary pool. Multiplied by the HPA's ceiling that is ~400
-against a stock max_connections of 100, and the chart set no pool size at all.
+THE RULE: Σ (replica ceiling × connections per replica) over every component
+≤ postgresql.maxConnections − postgresql.reservedConnections.
 
-TWO CHECKS, and the first matters more than the arithmetic.
+The replica ceiling is the autoscaler's maxReplicas while one owns the
+Deployment, else replicaCount: the question is what this release may consume
+WITHOUT anybody doing anything, and `replicaCount` would check a state the
+autoscaler is free to leave. Per component:
 
-`ELITEA_DATABASE_MAX_CONNS` unset does not mean "small". cmd/elitea-main's
-databasePoolConfig returns EARLY when it is unset, so pgx applies its own
-default of max(4, numCPU) — a number that depends on the node the pod lands on
-and which this chart cannot know. A budget computed around an unknowable term
-is a budget that reports a number it cannot stand behind, so the guard refuses
-to compute one instead.
+  elitea-main      ELITEA_DATABASE_MAX_CONNS, plus the six runtime-plane pools
+                   when the runtime plane is on (36; validateDependencies
+                   forbids them sharing capacity), plus elitea-vector's token
+                   introspection pool (2) when vector.enabled, plus the
+                   AgentState receipt pool (4) per DISTINCT DSN file the
+                   compiled snapshots and Code debug artifacts read (8 when the
+                   two files differ). Behind pgbouncer the server side is
+                   poolSize + reservePoolSize ONCE, plus the AgentState pools,
+                   which never go through the pooler.
+  llm-gateway      GATEWAY_DATABASE_MAX_CONNS.
+  scheduler        its ELITEA_DATABASE_MAX_CONNS.
+  deepwiki host    ELITEA_DEEPWIKI_DATABASE_MAX_CONNS + 1 (the owner claim's
+                   own connection), when the host has its invocation store.
+  deepwiki engine  2 + 2 + ELITEA_DEEPWIKI_QUERY_POOL_SIZE
+                   + 4 × ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS, when the engine
+                   sidecar runs with a database.
+  inventory host   ELITEA_INVENTORY_DATABASE_MAX_CONNS + 1 (the owner claim),
+                   when it has its database (inventory_graph.invocations).
+  inventory engine ELITEA_INVENTORY_POOL_SIZE, when the engine sidecar runs
+                   with a database.
+  worker           limits.agentstate_max_connections AgentState connections
+                   (unset: min(8, delivery_max_concurrency), as the worker
+                   applies), when postgresql.agentStateSharesServer (the
+                   agent-state database lives on this server; dbInit creates
+                   it there). Before the pool had its own size it was
+                   delivery_max_concurrency, and 10 autoscaled replicas held
+                   320 connections.
 
-The count is deliberately for elitea-main alone. The scheduler, gateway and
-worker hold one pool each and do not autoscale; they are covered by
-`reservedConnections`, along with the Jobs and anything else sharing the
-server. Modelling every component here would drift the moment one changes,
-and the term that actually moves is the one this counts.
+A pool size that is unset is not "small": every one of these services falls
+back to pgx's max(4, numCPU), which depends on the node the pod lands on. A
+budget computed around an unknowable term reports a number it cannot stand
+behind, so the guard refuses to compute one and names the setting instead.
 
- The replica count is the HPA's maxReplicas when autoscaling is on, because the
- question is what this release may consume WITHOUT anybody doing anything —
- `replicaCount` would check a state the autoscaler is free to leave.
+Exhaustion does not surface on the component that caused it: the NEXT one to
+connect — usually a migration Job or the scheduler — fails with 'sorry, too
+many clients already'. So the refusal lists every component's share.
 
- When pgbouncer.enabled, the check splits: the server-side term becomes the
- pooler's poolSize + reservePoolSize ONCE for the whole cluster (main's
- replicas share its server pool, and max_db_connections caps it at exactly
- that sum), and a second client-side term keeps every replica's pools under
- pgbouncer.maxClientConn. See the pooler's section in values.yaml.
- */}}
+`reservedConnections` covers what this chart does not model: the hook Jobs,
+interactive psql, backups, and anything else sharing the server.
+*/}}
 {{- define "elitea-main.validateConnectionBudget" -}}
 {{- $main := .Values.main -}}
 {{- $pg := .Values.postgresql | default dict -}}
+{{- $maxConn := int (default 100 $pg.maxConnections) -}}
+{{- $reserved := int (default 25 $pg.reservedConnections) -}}
+{{- $available := sub $maxConn $reserved -}}
 {{- $env := $main.env | default dict -}}
 {{- $runtimeOn := and $main.runtime $main.runtime.enabled -}}
-
-{{- $primary := get $env "ELITEA_DATABASE_MAX_CONNS" | toString -}}
-{{- if and $runtimeOn (not $primary) -}}
-{{- fail "main.runtime.enabled is true but main.env.ELITEA_DATABASE_MAX_CONNS is unset, so this release's connection use cannot be computed. cmd/elitea-main/database_pool.go returns early when it is unset and pgx then applies max(4, numCPU) — a value that depends on the node the pod lands on. With the runtime plane on, each replica ALSO opens 36 isolated runtime-plane connections that may not share capacity, so at autoscaling.maxReplicas the total is the number that exhausts the server. Set it explicitly (1..64)." -}}
-{{- end -}}
-
-{{- $replicas := int (default 1 $main.replicaCount) -}}
-{{- if and $main.autoscaling $main.autoscaling.enabled -}}
-{{- $replicas = int $main.autoscaling.maxReplicas -}}
-{{- end -}}
-
 {{- $pb := .Values.pgbouncer | default dict -}}
-{{- if $pb.enabled -}}
-{{/*
-  With the pooler in the path, the arithmetic splits in two, and each half
-  guards a different exhaustion.
+{{- $parts := list -}}
+{{- $total := 0 -}}
 
-  Server side: every main replica's pools share the pooler's single server
-  pool, so main's server-side cost is poolSize + reservePoolSize ONCE, for the
-  whole cluster — the number the replica count used to multiply. The pooler
-  cannot open more than that (its max_db_connections is rendered as the sum),
-  so this term is exact, not a ceiling. It does not depend on
-  ELITEA_DATABASE_MAX_CONNS, so it runs even when that is unset.
-*/}}
-{{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
-{{- $poolAvailable := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
-{{- $compiledDirect := 0 -}}
-{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
-{{/* The private receipt DSN is independent of the product PgBouncer route. */}}
-{{- $compiledDirect = mul 4 $replicas -}}
+{{- /* ── elitea-main ─────────────────────────────────────────────────────── */ -}}
+{{- $primary := get $env "ELITEA_DATABASE_MAX_CONNS" | toString -}}
+{{- if not $primary -}}
+{{- fail (printf "main.env.ELITEA_DATABASE_MAX_CONNS is unset, so this release's connection use cannot be computed. cmd/elitea-main/database_pool.go returns early when it is unset and pgx then applies max(4, numCPU) — a value that depends on the node the pod lands on.%s Set it explicitly (1..64)." (ternary " With the runtime plane on, each replica ALSO opens 36 isolated runtime-plane connections that may not share capacity, so at autoscaling.maxReplicas the total is the number that exhausts the server." "" (not (not $runtimeOn)))) -}}
 {{- end -}}
-{{- $serverTotal := add $poolServer $compiledDirect -}}
-{{- if gt $serverTotal $poolAvailable -}}
-{{- if $compiledDirect -}}
-{{- fail (printf "this release can open %d PostgreSQL server connections (%d PgBouncer plus %d independent Code receipt connections across %d Main replicas), but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Lower the pool or replica ceiling, or increase the measured server budget." $serverTotal $poolServer $compiledDirect $replicas $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
-{{- end -}}
-{{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
-{{- end -}}
-{{- end -}}
-
-{{- if $primary -}}
+{{- $mainReplicas := int (include "elitea.scaling.maxReplicas" $main) -}}
 {{- $perReplica := int $primary -}}
 {{- if $runtimeOn -}}
 {{/* The compiled phase-one limits, overridable per pool. Kept in the same
@@ -919,37 +1049,318 @@ and the term that actually moves is the one this counts.
 {{- if .Values.vector.enabled -}}
 {{/* The seventh pool, opened only when ELITEA_VECTOR_INTROSPECTION_CLIENTS is
      rendered (vector.enabled): elitea-vector's token introspection reads the
-     claim-token table on its own bounded pool, so a burst of introspection
-     calls cannot starve the lease/control pool. */}}
-{{- $perReplica = add $perReplica (int (default 8 (get $env "ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS"))) -}}
+     claim-token table on its own bounded pool. */}}
+{{- $perReplica = add $perReplica (int (default 2 (get $env "ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS"))) -}}
 {{- end -}}
 {{- end -}}
-
-{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
-{{/* Debug and compiled receipts share the same four-connection AgentState pool. */}}
-{{- $perReplica = add $perReplica 4 -}}
+{{- /*
+  The AgentState receipt pool: four connections per DISTINCT DSN file. The
+  compiled snapshots and the Code debug artifacts share one pool when they read
+  the same file, and open one each when the files differ.
+*/ -}}
+{{- $dsnFiles := list -}}
+{{- $materialDir := ($main.runtime.material | default dict).mountPath | default "" | toString | trimSuffix "/" -}}
+{{- if ($main.runtime.rustCompiledSnapshots | default dict).enabled -}}
+{{- $dsnFiles = append $dsnFiles (printf "%s/agent-checkpoint-connection" $materialDir) -}}
 {{- end -}}
+{{- if ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
+{{- $dsnFiles = append $dsnFiles (printf "%s/agent-checkpoint-connection" $materialDir) -}}
+{{- end -}}
+{{- $agentStateDirect := mul 4 (len (uniq $dsnFiles)) -}}
+{{- $perReplica = add $perReplica $agentStateDirect -}}
 
 {{- if $pb.enabled -}}
 {{/*
-  Client side: the pooler does not limit how many client connections elitea-
-  main opens; it only bounds what they cost on the server. The sum of every
-  replica's pools still has to fit under pgbouncer.maxClientConn, or the
-  pooler starts refusing main's own connections and the read plane fails with
-  'no more connections allowed'.
+  With the pooler in the path, main's server-side cost is poolSize +
+  reservePoolSize ONCE for the whole cluster (max_db_connections caps the
+  pooler at exactly that sum), plus the AgentState pools, which are direct.
+  The client side keeps every replica's pools under pgbouncer.maxClientConn,
+  or the pooler refuses main's own connections.
 */}}
-{{- $client := mul $perReplica $replicas -}}
-{{- $clientCap := int $pb.maxClientConn -}}
-{{- if gt $client $clientCap -}}
-{{- fail (printf "this release's elitea-main pools can open %d client connections (%d per replica x %d replicas), but pgbouncer.maxClientConn allows %d. The pooler refuses the excess and main loses its own database: lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise pgbouncer.maxClientConn." $client $perReplica $replicas $clientCap) -}}
+{{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
+{{- if gt $poolServer $available -}}
+{{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $available $maxConn $reserved) -}}
 {{- end -}}
+{{- $client := mul (sub $perReplica $agentStateDirect) $mainReplicas -}}
+{{- if gt $client (int $pb.maxClientConn) -}}
+{{- fail (printf "this release's elitea-main pools can open %d client connections (%d per replica x %d replicas), but pgbouncer.maxClientConn allows %d. The pooler refuses the excess and main loses its own database: lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, or raise pgbouncer.maxClientConn." $client (sub $perReplica $agentStateDirect) $mainReplicas (int $pb.maxClientConn)) -}}
+{{- end -}}
+{{- $mainServer := add $poolServer (mul $agentStateDirect $mainReplicas) -}}
+{{- $total = add $total $mainServer -}}
+{{- $parts = append $parts (printf "elitea-main %d PostgreSQL server connections (%d PgBouncer%s)" $mainServer $poolServer (ternary (printf " plus %d independent Code receipt connections across %d Main replicas" (mul $agentStateDirect $mainReplicas) $mainReplicas) "" (gt $agentStateDirect 0))) -}}
 {{- else -}}
-
-{{- $total := mul $perReplica $replicas -}}
-{{- $available := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
-{{- if gt $total $available -}}
-{{- fail (printf "this release can open %d PostgreSQL connections (%d per elitea-main replica x %d replicas) but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Exhaustion does not surface on the replica that caused it: the next component to connect — usually a migration Job or the scheduler — fails with 'sorry, too many clients already'. Lower main.env.ELITEA_DATABASE_MAX_CONNS or the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, lower autoscaling.maxReplicas, raise postgresql.maxConnections to match the server you actually run, or put elitea-main behind the pgbouncer component so its replicas share one server pool." $total $perReplica $replicas $available (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
+{{- $mainTotal := mul $perReplica $mainReplicas -}}
+{{- $total = add $total $mainTotal -}}
+{{- $parts = append $parts (printf "elitea-main %d PostgreSQL connections (%d per elitea-main replica x %d replicas)" $mainTotal $perReplica $mainReplicas) -}}
 {{- end -}}
+
+{{- /* ── the other components, each: replica ceiling × per replica ─────── */ -}}
+{{- $rows := list -}}
+{{- if .Values.llmGateway.enabled -}}
+{{- $rows = append $rows (dict "name" "llm-gateway" "field" "llmGateway.env.GATEWAY_DATABASE_MAX_CONNS" "pool" (get (.Values.llmGateway.env | default dict) "GATEWAY_DATABASE_MAX_CONNS") "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.llmGateway)) -}}
+{{- end -}}
+{{- if .Values.scheduler.enabled -}}
+{{- $rows = append $rows (dict "name" "scheduler" "field" "scheduler.env.ELITEA_DATABASE_MAX_CONNS" "pool" (get (.Values.scheduler.env | default dict) "ELITEA_DATABASE_MAX_CONNS") "extra" 0 "replicas" (.Values.scheduler.replicaCount | default 1)) -}}
+{{- end -}}
+{{- if .Values.deepwiki.enabled -}}
+{{- $dwEnv := .Values.deepwiki.env | default dict -}}
+{{- $dwDb := get (fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL"))) "ELITEA_DEEPWIKI_DATABASE_URL" -}}
+{{- if $dwDb -}}
+{{- $dwReplicas := include "elitea.scaling.maxReplicas" .Values.deepwiki -}}
+{{- $rows = append $rows (dict "name" "deepwiki host" "field" "deepwiki.env.ELITEA_DEEPWIKI_DATABASE_MAX_CONNS" "pool" (get $dwEnv "ELITEA_DEEPWIKI_DATABASE_MAX_CONNS") "extra" 1 "replicas" $dwReplicas) -}}
+{{- if eq (include "elitea-deepwiki.sidecar" .) "native" -}}
+{{- $workers := include "elitea.integer" (dict "field" "deepwiki.env.ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS" "value" (get $dwEnv "ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS" | default "1" | toString) "min" 1) | int -}}
+{{- $rows = append $rows (dict "name" "deepwiki engine" "field" "deepwiki.env.ELITEA_DEEPWIKI_QUERY_POOL_SIZE" "pool" (get $dwEnv "ELITEA_DEEPWIKI_QUERY_POOL_SIZE") "extra" (add 4 (mul 4 $workers)) "replicas" $dwReplicas) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.inventory.enabled (fromJson (include "elitea-inventory.databaseSecrets" .)) -}}
+{{- $invReplicas := include "elitea.scaling.maxReplicas" .Values.inventory -}}
+{{- $rows = append $rows (dict "name" "inventory host" "field" "inventory.env.ELITEA_INVENTORY_DATABASE_MAX_CONNS" "pool" (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_DATABASE_MAX_CONNS") "extra" 1 "replicas" $invReplicas) -}}
+{{- if include "elitea-inventory.sidecar" . -}}
+{{- $rows = append $rows (dict "name" "inventory engine" "field" "inventory.env.ELITEA_INVENTORY_POOL_SIZE" "pool" (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_POOL_SIZE") "extra" 0 "replicas" $invReplicas) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.worker.enabled (dig "agentStateSharesServer" true $pg) -}}
+{{- /*
+  The worker's AgentState pool is limits.agentstate_max_connections; unset,
+  the worker uses min(8, delivery_max_concurrency) (src/config.rs), and so
+  does this count.
+*/ -}}
+{{- $wl := .Values.worker.runtime.limits -}}
+{{- $agentPool := $wl.agentstate_max_connections -}}
+{{- if or (kindIs "invalid" $agentPool) (eq (toString $agentPool) "") -}}
+{{- $agentPool = min 8 (int $wl.delivery_max_concurrency) -}}
+{{- else if gt (int $agentPool) (int $wl.delivery_max_concurrency) -}}
+{{- fail (printf "worker.runtime.limits.agentstate_max_connections (%d) is above delivery_max_concurrency (%d): the worker refuses it at start. A pool larger than the turns that can use it only holds idle connections." (int $agentPool) (int $wl.delivery_max_concurrency)) -}}
+{{- end -}}
+{{- $rows = append $rows (dict "name" "worker AgentState" "field" "worker.runtime.limits.agentstate_max_connections" "pool" $agentPool "extra" 0 "replicas" (include "elitea.scaling.maxReplicas" .Values.worker)) -}}
+{{- end -}}
+{{- range $rows -}}
+{{- $raw := .pool | toString | trim -}}
+{{- if or (eq $raw "") (eq $raw "<nil>") -}}
+{{- fail (printf "%s is unset, so the %s's connection use cannot be computed: the service then applies pgx's max(4, numCPU), which depends on the node the pod lands on. Set it explicitly; postgresql.maxConnections is checked against it." .field .name) -}}
+{{- end -}}
+{{- $per := add (include "elitea.integer" (dict "field" .field "value" $raw "min" 1) | int) (int .extra) -}}
+{{- $n := int .replicas -}}
+{{- $sum := mul $per $n -}}
+{{- $total = add $total $sum -}}
+{{- $parts = append $parts (printf "%s %d (%d x %d)" .name $sum $per $n) -}}
+{{- end -}}
+
+{{- if gt $total $available -}}
+{{- fail (printf "this release can open %d PostgreSQL connections at its replica ceilings, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). By component: %s. Exhaustion does not surface on the component that caused it: the next one to connect — usually a migration Job or the scheduler — fails with 'sorry, too many clients already'. Lower a pool (main.env.ELITEA_DATABASE_MAX_CONNS, the ELITEA_RUNTIME_DB_*_MAX_CONNS pools, the per-component *_MAX_CONNS / *_POOL_SIZE) or a replica ceiling (autoscaling.maxReplicas), put elitea-main behind the pgbouncer component, or raise postgresql.maxConnections to match the server you actually run. The Scaling page of the deployment docs has the formula." $total $available $maxConn $reserved (join ", " $parts)) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.subappCallbackIdentity — the workload identity the DeepWiki and
+Inventory engines present on elitea-main's platform listener: the one DNS SAN
+of the sub-application callback client certificate
+(deploy/scripts/gen-runtime-certs.sh mints it as subapp-callback-client.crt,
+the Secret deepwiki.callbackClient / inventory.callbackClient names). The
+chart cannot read that certificate, so the name is the minting script's; a
+certificate minted with another SAN is admitted through
+main.runtime.modelService.extraClients instead.
+*/}}
+{{- define "elitea-main.subappCallbackIdentity" -}}dns:elitea-subapp-callback{{- end -}}
+
+{{/*
+elitea-main.modelServiceOrigin — the origin a DeepWiki/Inventory engine dials
+for elitea.llm.v1.ModelService: elitea-main's platform listener, the same
+origin the worker is handed (worker.runtime.platformOrigin), so the two
+cannot name different listeners.
+*/}}
+{{- define "elitea-main.modelServiceOrigin" -}}{{- .Values.worker.runtime.platformOrigin | toString -}}{{- end -}}
+
+{{/*
+elitea-main.modelServiceClients — ELITEA_MODEL_SERVICE_CLIENTS, the workload
+identities admitted to elitea.llm.v1.ModelService (#1359 U2), comma-separated:
+
+  * the agent worker's SPIFFE ID, worker.runtimeSession.expectedIdentity, when
+    this release runs the worker. The chart cannot read the certificate, and
+    that value is the one the runtime-session Job asserts against the
+    certificate itself, so the allowlist and the certificate cannot disagree
+    without that Job failing;
+  * the sub-application callback identity, when a DeepWiki or Inventory
+    engine sidecar makes model calls (elitea-deepwiki.modelCalls,
+    elitea-inventory.modelCalls);
+  * main.runtime.modelService.extraClients, for callers deployed elsewhere.
+*/}}
+{{- define "elitea-main.modelServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if or (include "elitea-deepwiki.modelCalls" .) (include "elitea-inventory.modelCalls" .) -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range ((.Values.main.runtime.modelService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.validateModelService — the ModelService allowlist (#1359 U2).
+
+cmd/elitea-main refuses to start while the platform listener is open
+(runtime.enabled, which requires listeners.platformAddress) and
+ELITEA_MODEL_SERVICE_CLIENTS names nobody, and refuses an entry that is not a
+"dns:" or "spiffe://" identity. Both are a CrashLoopBackOff, so both are
+refused here. The quieter failure is a worker the list does not name: elitea-
+main boots (DeepWiki's identity keeps the list non-empty) and every model call
+the worker makes is PermissionDenied, so every chat turn fails. That is why
+the worker's identity is required, not optional, whenever the worker runs.
+*/}}
+{{- define "elitea-main.validateModelService" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $modelService := (.Values.main.runtime | default dict).modelService | default dict -}}
+{{- if hasKey $env "ELITEA_MODEL_SERVICE_CLIENTS" -}}
+{{- fail "main.env.ELITEA_MODEL_SERVICE_CLIENTS must not be set: the chart renders it from the worker's identity (worker.runtimeSession.expectedIdentity), the sub-application callback identity (when DeepWiki or Inventory runs) and main.runtime.modelService.extraClients. A name in both maps makes a duplicate ConfigMap key. Move extra identities to main.runtime.modelService.extraClients." -}}
+{{- end -}}
+{{- $extra := $modelService.extraClients | default list -}}
+{{- if not (kindIs "slice" $extra) -}}
+{{- fail (printf "main.runtime.modelService.extraClients must be a list of identities, got %v." $extra) -}}
+{{- end -}}
+{{- range $extra -}}
+{{- $id := toString . -}}
+{{- if not (or (regexMatch "^dns:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $id) (hasPrefix "spiffe://" $id)) -}}
+{{- fail (printf "main.runtime.modelService.extraClients entry %q is not a workload identity: write dns:<lower-case DNS SAN> or a spiffe:// URI (internal/transport/grpcauth). cmd/elitea-main refuses anything else at boot." $id) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.main.runtime.enabled -}}
+{{- if .Values.worker.enabled -}}
+{{- $worker := (.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString -}}
+{{- if not $worker -}}
+{{- fail "worker.enabled=true needs worker.runtimeSession.expectedIdentity: the SPIFFE ID in the worker certificate's one URI SAN (deploy/scripts/gen-runtime-certs.sh: RUNTIME_WORKER_SPIFFE_ID, default spiffe://elitea.standalone/ns/default/sa/agent-worker). The worker makes its model calls over elitea.llm.v1.ModelService (#1359 U2), which admits only the identities in ELITEA_MODEL_SERVICE_CLIENTS, and the chart cannot read the certificate to find it. Without it every model call the worker makes is refused and every chat turn fails. The runtime-session Job checks the value against the certificate, so a wrong one fails the install instead of the first turn." -}}
+{{- end -}}
+{{- if not (hasPrefix "spiffe://" $worker) -}}
+{{- fail (printf "worker.runtimeSession.expectedIdentity is %q, but the worker certificate carries exactly one spiffe:// URI SAN (internal/auth/workloadidentity), so nothing else can name it." $worker) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (include "elitea-main.modelServiceClients" .) -}}
+{{- fail "main.runtime.enabled=true opens elitea-main's platform listener, and ELITEA_MODEL_SERVICE_CLIENTS would be empty: no worker (worker.enabled), no DeepWiki or Inventory engine, and no main.runtime.modelService.extraClients. cmd/elitea-main refuses to start with a ModelService nobody may call. Run the worker in this release, or list the identities of the callers deployed elsewhere (dns:<name> or spiffe:// URIs) in main.runtime.modelService.extraClients." -}}
+{{- end -}}
+{{- else if $extra -}}
+{{- fail "main.runtime.modelService.extraClients is set but main.runtime.enabled is false, so elitea-main opens no platform listener and serves no ModelService. Turn the runtime on, or clear the list." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.artifactServiceClients — ELITEA_ARTIFACT_SERVICE_CLIENTS, the
+workload identities admitted to elitea.runtime.v1.ArtifactObjectService on the
+platform listener (#1359 U5), comma-separated:
+
+  * the agent worker's SPIFFE ID (worker.runtimeSession.expectedIdentity) when
+    this release runs the worker: the Office toolkits' object host and the
+    indexing artifact source;
+  * the sub-application callback identity whenever DeepWiki or Inventory runs
+    at all: the HOST container uploads what a run produced and the engine
+    reads artifact folders, both presenting the callback client certificate;
+  * main.runtime.artifactService.extraClients.
+
+Empty is legal: elitea-main then does not register the service, and every
+caller is refused.
+*/}}
+{{- define "elitea-main.artifactServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if or .Values.deepwiki.enabled .Values.inventory.enabled -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range (((.Values.main.runtime | default dict).artifactService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.internalToolServiceClients — ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS,
+the workload identities admitted to elitea.runtime.v1.InternalToolService
+(#1359 U5): the worker's SPIFFE ID when the worker runs (its internal MCP
+toolkits), the sub-application callback identity when Inventory runs (the
+engine's investigate source-tool calls, which replaced its HTTP test_tool
+hop), plus main.runtime.internalToolService.extraClients. Empty is legal: the
+service is not registered.
+*/}}
+{{- define "elitea-main.internalToolServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.inventory.enabled -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range (((.Values.main.runtime | default dict).internalToolService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.validatePlatformServices — the ArtifactObjectService and
+InternalToolService allowlists (#1359 U5), checked like ModelService's:
+main.env may not set them (the chart renders them), every extraClients entry
+must be a workload identity cmd/elitea-main accepts, and extraClients without
+the runtime is a list nothing reads.
+*/}}
+{{- define "elitea-main.validatePlatformServices" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $runtime := .Values.main.runtime | default dict -}}
+{{- range $pair := list (list "ELITEA_ARTIFACT_SERVICE_CLIENTS" "artifactService" "ArtifactObjectService") (list "ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS" "internalToolService" "InternalToolService") -}}
+{{- $name := index $pair 0 -}}
+{{- $key := index $pair 1 -}}
+{{- $service := index $pair 2 -}}
+{{- if hasKey $env $name -}}
+{{- fail (printf "main.env.%s must not be set: the chart renders it from the worker's identity (worker.runtimeSession.expectedIdentity)%s and main.runtime.%s.extraClients. A name in both maps makes a duplicate ConfigMap key. Move extra identities to main.runtime.%s.extraClients." $name (ternary ", the sub-application callback identity (when DeepWiki or Inventory runs)" ", the sub-application callback identity (when Inventory runs)" (eq $key "artifactService")) $key $key) -}}
+{{- end -}}
+{{- $extra := (get $runtime $key | default dict).extraClients | default list -}}
+{{- if not (kindIs "slice" $extra) -}}
+{{- fail (printf "main.runtime.%s.extraClients must be a list of identities, got %v." $key $extra) -}}
+{{- end -}}
+{{- range $extra -}}
+{{- $id := toString . -}}
+{{- if not (or (regexMatch "^dns:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $id) (hasPrefix "spiffe://" $id)) -}}
+{{- fail (printf "main.runtime.%s.extraClients entry %q is not a workload identity: write dns:<lower-case DNS SAN> or a spiffe:// URI (internal/transport/grpcauth). cmd/elitea-main refuses anything else at boot." $key $id) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $extra (not $runtime.enabled) -}}
+{{- fail (printf "main.runtime.%s.extraClients is set but main.runtime.enabled is false, so elitea-main opens no platform listener and serves no %s. Turn the runtime on, or clear the list." $key $service) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-main.validateRetiredCallbacks — the HTTP callback origins #1359 U5
+retired. elitea-main refuses each at boot (a set value would mean an operator
+still expects an HTTP hop that no longer exists), so the render refuses them
+too, whatever the value:
+
+  * ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL, the internal MCP origin handed to the
+    worker: its internal MCP calls are InternalToolService on the platform
+    listener now;
+  * ELITEA_DEEPWIKI_CALLBACK_BASE_URL / ELITEA_INVENTORY_CALLBACK_BASE_URL, the
+    artifact origin handed to the engines as llm_settings.api_base: artifacts
+    are ArtifactObjectService on the platform listener, models ModelService,
+    and api_base is a fixed route name elitea-main writes itself.
+*/}}
+{{- define "elitea-main.validateRetiredCallbacks" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if hasKey $env "ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL" -}}
+{{- fail "main.env.ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL was retired (#1359 U5): the worker's internal MCP calls go over elitea.runtime.v1.InternalToolService on elitea-main's platform gRPC listener. Remove it; cmd/elitea-main refuses it at boot (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- range $name := list "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" "ELITEA_INVENTORY_CALLBACK_BASE_URL" -}}
+{{- if hasKey $env $name -}}
+{{- fail (printf "main.env.%s was retired (#1359 U5): the provider reads and writes artifacts over elitea.runtime.v1.ArtifactObjectService and makes its model calls over elitea.llm.v1.ModelService, both on elitea-main's platform gRPC listener (worker.runtime.platformOrigin), so there is no HTTP callback origin to configure. Remove it; cmd/elitea-main refuses it at boot (docs/UPGRADING.md)." $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -970,23 +1381,17 @@ and the term that actually moves is the one this counts.
 {{- if not $runtime.enabled -}}
 {{/*
   Runtime OFF. config.go returns an empty configuration and ignores every other
-  ELITEA_RUNTIME_* name, so a half-filled block here is silently dead rather
-  than active. That is the failure this chart is meant to end, so say it now.
+  ELITEA_RUNTIME_* name, and so does this chart: elitea-main.runtimeEnv emits
+  nothing and no listener, port or material volume renders.
+
+  The sub-settings are NOT refused here any more (S10). They ship populated —
+  the streams, the dispatch planes, signingKeyId, material.secretName — because
+  the runtime is on by default, so `main.runtime.enabled=false` has to be the
+  ONE switch that turns it off; making the operator also clear six defaults
+  would make it six switches. What depends on the runtime (the worker,
+  elitea-vector, DeepWiki, Inventory) is still refused beside it, by
+  elitea.featureDependencies and each component's own guard.
 */}}
-{{- range $field := list "commandStream" -}}
-{{- if get $runtime $field -}}
-{{- fail (printf "runtime.%s is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.%s." $field $field) -}}
-{{- end -}}
-{{- end -}}
-{{- if get $runtimeNats "url" -}}
-{{- fail "runtime.nats.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.nats.url." -}}
-{{- end -}}
-{{- if get $material "secretName" -}}
-{{- fail "runtime.material.secretName is set but runtime.enabled is false. Set runtime.enabled=true, or clear runtime.material.secretName." -}}
-{{- end -}}
-{{- if or $agent.enabled $ingest.enabled $scheduling.enabled $discovery.enabled -}}
-{{- fail "a runtime dispatch plane is enabled but runtime.enabled is false. internal/runtimecomposition/config.go ignores every dispatch flag while ELITEA_RUNTIME_ENABLED is off, so the routes stay dark. Set runtime.enabled=true." -}}
-{{- end -}}
 {{- else -}}
 
 {{/*
@@ -1009,7 +1414,7 @@ and the term that actually moves is the one this counts.
 {{- fail (printf "runtime.commandStream is %q. The command bus has three streams, %v, created by the nats-bootstrap chart and named in the NATS permission table; config.go refuses any other name." ($runtime.commandStream | toString) $streams) -}}
 {{- end -}}
 {{- if not $runtime.maxOutstanding -}}
-{{- fail "runtime.enabled=true needs runtime.maxOutstanding (ELITEA_RUNTIME_MAX_OUTSTANDING), a positive integer no greater than 1024." -}}
+{{- fail "runtime.enabled=true needs runtime.maxOutstanding (ELITEA_RUNTIME_MAX_OUTSTANDING), a positive integer no greater than 4096 (#966)." -}}
 {{- end -}}
 {{- range $legacy := list "streamMaxEntries" "redis" -}}
 {{- if hasKey $runtime $legacy -}}
@@ -1035,11 +1440,11 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 
 {{/* The runtime plane's NATS connection (ELITEA_RUNTIME_NATS_URL), as the
-     elitea-main-runtime identity. Empty means the top-level `nats` block;
+     elitea-main-runtime identity. Empty means the `natsClient` block;
      templates/natsClient.yaml issues the certificate and refuses a URL that
-     disagrees with nats.tls. */}}
-{{- if not (or (get $runtimeNats "url") .Values.nats.service) -}}
-{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or the top-level nats.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
+     disagrees with natsClient.tls. */}}
+{{- if not (or (get $runtimeNats "url") .Values.natsClient.service) -}}
+{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or natsClient.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
 {{- end -}}
 {{- if and (get $runtimeNats "url") (contains "@" (get $runtimeNats "url" | toString)) -}}
 {{- fail "runtime.nats.url carries user information. With mTLS the client certificate is the identity, and this URL is rendered into a ConfigMap." -}}
@@ -1051,15 +1456,20 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.enabled=true needs runtime.signingKeyId (ELITEA_RUNTIME_SIGNING_KEY_ID). It must equal the key id inside command-signing-keyring.json, or startup fails on the mismatch." -}}
 {{- end -}}
 
-{{/* Three listeners, three distinct addresses. */}}
-{{- $addresses := list ($listeners.controlAddress | toString) ($listeners.outputAddress | toString) ($listeners.contentAddress | toString) -}}
+{{/* Four listeners, four distinct addresses: control, output, content and
+     the platform listener (#1359), which serves the product API over mTLS to
+     the worker and the sub-applications. */}}
+{{- $addresses := list ($listeners.controlAddress | toString) ($listeners.outputAddress | toString) ($listeners.contentAddress | toString) ($listeners.platformAddress | toString) -}}
 {{- range $address := $addresses -}}
 {{- if not $address -}}
-{{- fail "runtime.enabled=true needs runtime.listeners.controlAddress, runtime.listeners.outputAddress and runtime.listeners.contentAddress, each with a numeric TCP port." -}}
+{{- fail "runtime.enabled=true needs runtime.listeners.controlAddress, runtime.listeners.outputAddress, runtime.listeners.contentAddress and runtime.listeners.platformAddress, each with a numeric TCP port." -}}
 {{- end -}}
 {{- end -}}
-{{- if ne (len ($addresses | uniq)) 3 -}}
-{{- fail (printf "runtime.listeners needs three distinct addresses. internal/runtimecomposition/config.go refuses a repeat: \"runtime listeners require distinct addresses\". Got %v." $addresses) -}}
+{{- if ne (len ($addresses | uniq)) 4 -}}
+{{- fail (printf "runtime.listeners needs four distinct addresses. internal/runtimecomposition/config.go refuses a repeat: \"runtime listeners require distinct addresses\". Got %v." $addresses) -}}
+{{- end -}}
+{{- if eq (include "elitea-main.runtimePort" $listeners.platformAddress) "8080" -}}
+{{- fail "runtime.listeners.platformAddress uses port 8080, the public HTTP listener's port. config.go refuses it: the platform listener serves TLS." -}}
 {{- end -}}
 
 {{/* The material volume. Every remaining runtime name is a FILE PATH, and the
@@ -1124,6 +1534,18 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 {{- end -}}
 
+{{/*
+  currentMainBaseUrl retired with #1359 U5. It named the internal MCP origin
+  elitea-main handed the worker; the worker's internal MCP calls are now
+  elitea.runtime.v1.InternalToolService on the platform gRPC listener, which
+  the worker already dials (worker.runtime.platformOrigin), so there is no
+  origin left to configure. cmd/elitea-main refuses
+  ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL at boot, so the key is refused here
+  whatever its value.
+*/}}
+{{- if hasKey $agent "currentMainBaseUrl" -}}
+{{- fail "main.runtime.agentExecutionDispatch.currentMainBaseUrl was retired (#1359 U5): the worker's internal MCP calls go over elitea.runtime.v1.InternalToolService on elitea-main's platform gRPC listener, which the worker already reaches at worker.runtime.platformOrigin. Remove the key; cmd/elitea-main refuses ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL at boot (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{/* Agent-execution dispatch: the four agent turn routes. */}}
 {{- if $agent.enabled -}}
 {{- if not $agent.commandStream -}}
@@ -1132,25 +1554,14 @@ and the term that actually moves is the one this counts.
 {{- if not (has ($agent.commandStream | toString) $streams) -}}
 {{- fail (printf "runtime.agentExecutionDispatch.commandStream is %q, not one of the command bus's streams %v." ($agent.commandStream | toString) $streams) -}}
 {{- end -}}
-{{/*
-  currentMainBaseUrl is OPTIONAL. Empty means "call my own listener": elitea-main
-  derives http://127.0.0.1:<port> from ELITEA_HTTP_ADDRESS, because the
-  next-input-suggestion policy call is a self call and this process serves
-  cleartext. Set it only where another server answers that path, and then it must
-  be an origin that TERMINATES TLS. An https origin aimed at elitea-main's own
-  cleartext port is what internal/runtimecomposition/config.go now refuses at
-  boot, after it made every chat turn log a failed policy call.
-*/}}
-{{- if and $agent.currentMainBaseUrl (not (hasPrefix "https://" ($agent.currentMainBaseUrl | toString))) -}}
-{{- fail (printf "runtime.agentExecutionDispatch.currentMainBaseUrl must be an https origin with no path, query or fragment, or empty to call elitea-main's own listener. internal/runtimecomposition/config.go validates it. Got %q." ($agent.currentMainBaseUrl | toString)) -}}
-{{- end -}}
 {{- if eq ($agent.commandStream | toString) ($runtime.commandStream | toString) -}}
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
 {{- end -}}
 {{- else -}}
-{{- if or $agent.commandStream $agent.currentMainBaseUrl -}}
-{{- fail "runtime.agentExecutionDispatch settings are present but runtime.agentExecutionDispatch.enabled is false. config.go refuses that combination: \"runtime agent execution dispatch settings require explicit enablement\"." -}}
-{{- end -}}
+{{- /* Off: the stream name is NOT refused (S10). It ships populated, so
+       enabled=false must be the one switch; runtimeEnv writes the stream only
+       beside ENABLED=true, so config.go never sees the combination it
+       refuses. */ -}}
 {{- end -}}
 
 {{/* Index-ingest dispatch: index start, index cancel, index metadata. */}}
@@ -1178,9 +1589,8 @@ and the term that actually moves is the one this counts.
   one stream has one durable consumer, so they share it by construction.
 */}}
 {{- else -}}
-{{- if $ingest.commandStream -}}
-{{- fail "runtime.indexIngestDispatch settings are present but runtime.indexIngestDispatch.enabled is false. config.go: \"runtime index ingest dispatch settings require explicit enablement\"." -}}
-{{- end -}}
+{{- /* Off: the stream name is not refused, as for agentExecutionDispatch
+       above (S10: enabled=false is the one switch). */ -}}
 {{- end -}}
 
 {{/* Index scheduling: the index schedule write and delete routes. */}}
@@ -1245,9 +1655,6 @@ ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT: {{ $sse.maxStreamsPerProject | defau
 {{- if $agent.enabled }}
 ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
-{{- if $agent.currentMainBaseUrl }}
-ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
-{{- end }}
 {{- end }}
 {{- if $ingest.enabled }}
 ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
@@ -1260,7 +1667,7 @@ ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID: {{ $scheduling.instanceId | quote }}
 {{/* The runtime command bus (docs/runtime-command-bus.md), as the
      elitea-main-runtime NATS identity (templates/natsClient.yaml). */}}
 ELITEA_RUNTIME_NATS_URL: {{ include "elitea-main.runtimeNatsUrl" . | quote }}
-{{- if .Values.nats.tls.enabled }}
+{{- if .Values.natsClient.tls.enabled }}
 ELITEA_RUNTIME_NATS_TLS_CA_FILE: {{ printf "%s/ca.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_CERT_FILE: {{ printf "%s/tls.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_KEY_FILE: {{ printf "%s/tls.key" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
@@ -1281,6 +1688,23 @@ ELITEA_RUNTIME_CONTENT_ADDRESS: {{ $listeners.contentAddress | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* The platform listener (#1359): elitea-main's internal gRPC port (gRPC
+     only, no HTTP), the worker's platform_origin. It reuses the content listener's keypair (its SAN is
+     this Service's name) and, like every runtime listener, requires a client
+     certificate the runtime CA signed. */}}
+ELITEA_RUNTIME_PLATFORM_ADDRESS: {{ $listeners.platformAddress | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* #1359 U2: who may call elitea.llm.v1.ModelService on that listener.
+     cmd/elitea-main refuses to start without one while the listener is open;
+     elitea-main.validateModelService refuses the empty list at render. */}}
+ELITEA_MODEL_SERVICE_CLIENTS: {{ include "elitea-main.modelServiceClients" . | quote }}
+{{/* #1359 U5: who may call elitea.runtime.v1.ArtifactObjectService and
+     elitea.runtime.v1.InternalToolService on that listener. An empty list
+     leaves the service unregistered (elitea-main.validatePlatformServices). */}}
+ELITEA_ARTIFACT_SERVICE_CLIENTS: {{ include "elitea-main.artifactServiceClients" . | quote }}
+ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS: {{ include "elitea-main.internalToolServiceClients" . | quote }}
 {{- if .Values.vector.enabled }}
 {{/* ADR-0031: the client identities admitted to TokenIntrospectionService on
      the control listener above — elitea-vector's client certificate, whose
@@ -1324,7 +1748,7 @@ reads the Secret; the service reads the copies.
 
 {{/*
 elitea-main.runtimeNatsUrl — the runtime plane's NATS URL: runtime.nats.url,
-else the top-level `nats` block (the same broker as every other client; the
+else the `natsClient` block (the same broker as every other client; the
 runtime is a separate identity, not a separate server).
 */}}
 {{- define "elitea-main.runtimeNatsUrl" -}}
@@ -1335,7 +1759,7 @@ runtime is a separate identity, not a separate server).
 {{/*
 elitea-main.runtimeNatsMountPath — where elitea-main-runtime's client
 certificate Secret is mounted. A directory of its own: the live-update plane's
-identity sits at nats.tls.mountPath in the same pod.
+identity sits at natsClient.tls.mountPath in the same pod.
 */}}
 {{- define "elitea-main.runtimeNatsMountPath" -}}
 {{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
@@ -1386,3 +1810,4 @@ elitea-llm-gateway.masterKeyRef).
 {{- fail "elitea-main has no SECRETS_MASTER_KEY source and refuses to start without one: it will not store project vault keys unwrapped. Set main.secrets.SECRETS_MASTER_KEY.secretName / .key (a Secret holding a base64url 32-byte Fernet key; the gateway must carry the same value), or, for a throwaway local install only, set main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\"." -}}
 {{- end -}}
 {{- end }}
+

@@ -7,11 +7,12 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"net/http"
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"google.golang.org/grpc"
 )
 
 func TestServerTLSConfigRequiresTLS13VerifiedClientCertificates(t *testing.T) {
@@ -40,7 +41,7 @@ func TestPrivateServerSetRejectsWeakOrSharedListenerComposition(t *testing.T) {
 	services := PrivateServices{
 		Control: runtimev1.UnimplementedRuntimeControlServiceServer{},
 		Output:  runtimev1.UnimplementedExecutionOutputServiceServer{},
-		Content: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		Content: testContentServices(),
 	}
 	valid := PrivateServerConfig{
 		ControlAddress: ":9443", OutputAddress: ":9444", ContentAddress: ":9445",
@@ -48,9 +49,7 @@ func TestPrivateServerSetRejectsWeakOrSharedListenerComposition(t *testing.T) {
 		ControlMaxRequestBytes: 64 * 1024, ControlMaxResponseBytes: 80 * 1024,
 		OutputMaxRequestBytes: 64 * 1024, OutputMaxResponseBytes: 80 * 1024,
 		ControlGRPC: testGRPCServerPolicy(), OutputGRPC: testGRPCServerPolicy(),
-		ContentMaxConnections: 16, ContentMaxStreams: 8,
-		ContentReadTimeout: 5 * time.Second, ContentWriteTimeout: 30 * time.Second,
-		ContentIdleTimeout: 30 * time.Second, ContentMaxHeaderBytes: 8 * 1024,
+		ContentGRPC:     testGRPCServerPolicy(),
 		ShutdownTimeout: 10 * time.Second,
 	}
 	if _, err := NewPrivateServerSet(valid, services); err != nil {
@@ -99,9 +98,25 @@ func TestPrivateServerSetRejectsWeakOrSharedListenerComposition(t *testing.T) {
 	}
 
 	unboundedContentStreams := valid
-	unboundedContentStreams.ContentMaxStreams = 0
+	unboundedContentStreams.ContentGRPC.MaxConcurrentStreams = 0
 	if _, err := NewPrivateServerSet(unboundedContentStreams, services); err == nil {
-		t.Fatal("unbounded content HTTP/2 streams were accepted")
+		t.Fatal("unbounded content streams were accepted")
+	}
+
+	noContent := services
+	noContent.Content = nil
+	if _, err := NewPrivateServerSet(valid, noContent); err == nil {
+		t.Fatal("a content listener without services was accepted")
+	}
+
+	unlisted := services
+	unlisted.Content = []PlatformService{{
+		Name:     runtimev1.RuntimeContentService_ServiceDesc.ServiceName,
+		Clients:  grpcauth.Allowlist{},
+		Register: services.Content[0].Register,
+	}}
+	if _, err := NewPrivateServerSet(valid, unlisted); err == nil {
+		t.Fatal("a content service without an allowlist was accepted")
 	}
 
 	unsafeKeepalive := valid
@@ -110,6 +125,18 @@ func TestPrivateServerSetRejectsWeakOrSharedListenerComposition(t *testing.T) {
 	if _, err := NewPrivateServerSet(unsafeKeepalive, services); err == nil {
 		t.Fatal("invalid output keepalive ordering was accepted")
 	}
+}
+
+// testContentServices is a content listener carrying an unimplemented
+// RuntimeContentService open to any verified peer.
+func testContentServices() []PlatformService {
+	return []PlatformService{{
+		Name:    runtimev1.RuntimeContentService_ServiceDesc.ServiceName,
+		Clients: grpcauth.AnyVerifiedPeer(),
+		Register: func(registrar grpc.ServiceRegistrar) {
+			runtimev1.RegisterRuntimeContentServiceServer(registrar, runtimev1.UnimplementedRuntimeContentServiceServer{})
+		},
+	}}
 }
 
 func testGRPCServerPolicy() GRPCServerPolicy {

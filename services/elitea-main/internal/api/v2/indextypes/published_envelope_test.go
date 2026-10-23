@@ -10,12 +10,12 @@ import (
 	"slices"
 	"testing"
 
-	generated "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/generated"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	generated "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/generated"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
-// TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesidePylonKeys is the
+// TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesideLegacyKeys is the
 // regression test for issue #394.
 //
 // The route answered {document_types, image_types, code_types} only. The
@@ -26,7 +26,7 @@ import (
 // The body now carries BOTH halves, the way #395 did it for application
 // skills. The two halves project the SAME snapshot rows, so they cannot
 // disagree.
-func TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesidePylonKeys(
+func TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesideLegacyKeys(
 	t *testing.T,
 ) {
 	fixture := currentIndexTypesUIFixture(t)
@@ -85,14 +85,14 @@ func TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesidePylonKeys(
 		)
 	}
 
-	// 2. The Pylon half, unchanged: apps/elitea-ui reads exactly these three
+	// 2. The legacy half, unchanged: apps/elitea-ui reads exactly these three
 	// maps (src/slices/fileTypes.js:26-28).
-	var pylon handler.CurrentIndexTypes
-	if err := json.Unmarshal(response.Body.Bytes(), &pylon); err != nil {
-		t.Fatalf("pylon half does not decode: %v", err)
+	var legacyMaps handler.CurrentIndexTypes
+	if err := json.Unmarshal(response.Body.Bytes(), &legacyMaps); err != nil {
+		t.Fatalf("legacy half does not decode: %v", err)
 	}
-	if !reflect.DeepEqual(pylon, fixture) {
-		t.Fatalf("pylon half drifted from testdata fixture: %+v", pylon)
+	if !reflect.DeepEqual(legacyMaps, fixture) {
+		t.Fatalf("legacy half drifted from testdata fixture: %+v", legacyMaps)
 	}
 
 	// 3. The two halves project the same rows, so they cannot disagree.

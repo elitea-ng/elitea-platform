@@ -10,7 +10,7 @@ package projects
 // success and changed nothing — the #128/#130 shape — and create and delete
 // had no route at all.
 //
-// The contract is pylon's, not invented:
+// The contract is the legacy one, not invented:
 //
 //	legacy/plugins/projects/api/v2/group.py   POST <project_id>            → 201, the project
 //	                                          DELETE <project_id>/<group_id> → 204
@@ -23,12 +23,12 @@ package projects
 // Two deliberate divergences, both the "200 that did less than it said" shape
 // this package is fixing:
 //
-//   - pylon's DELETE swallows `ValueError` when the group is not associated
+//   - The legacy DELETE swallows `ValueError` when the group is not associated
 //     with the project and still answers 204. Here a group that is not attached
 //     is a 404, so "detach" cannot silently mean "nothing happened".
-//   - pylon's POST/PUT run several statements on an autocommitting session and
-//     can leave a group row created but not associated. Each write here is one
-//     transaction.
+//   - The legacy POST/PUT run several statements on an autocommitting session
+//     and can leave a group row created but not associated. Each write here is
+//     one transaction.
 
 import (
 	"encoding/json"
@@ -41,7 +41,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// reservedGroupName is pylon's `GroupCreateModel.check_no_group_name`
+// reservedGroupName is the legacy `GroupCreateModel.check_no_group_name`
 // validator: `no_group` is the sentinel the listing uses for projects with no
 // group at all, so a real group by that name would make the two
 // indistinguishable.
@@ -92,9 +92,10 @@ func (h *Handler) GroupCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse the group when the name already exists — pylon looks the name up
-	// before constructing one, and `centry.project_group.name` is UNIQUE, so
-	// creating unconditionally would fail the second project to ask for it.
+	// Reuse the group when the name already exists — the legacy runtime looks
+	// the name up before constructing one, and `centry.project_group.name` is
+	// UNIQUE, so creating unconditionally would fail the second project to ask
+	// for it.
 	//
 	// INSERT-then-SELECT rather than SELECT-then-INSERT: the latter leaves a
 	// window in which two concurrent creates of the same NEW name both see no
@@ -141,7 +142,7 @@ WHERE NOT EXISTS (
 // GroupDelete serves
 // `DELETE /api/v2/projects/group/prompt_lib/{projectID}/{groupID}` — detach one
 // group from one project. The group row itself survives: it may be attached to
-// other projects, and pylon removes only the association.
+// other projects, and the legacy runtime removes only the association.
 func (h *Handler) GroupDelete(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := h.groupWriteContext(w, r)
 	if !ok {
@@ -174,8 +175,9 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1),
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal server error"})
 		return
 	}
-	// pylon answers 204 here as well, having caught the `ValueError` its
-	// `list.remove` raises. A detach that detached nothing is reported as such.
+	// The legacy runtime answers 204 here as well, having caught the
+	// `ValueError` its `list.remove` raises. A detach that detached nothing is
+	// reported as such.
 	if tag.RowsAffected() == 0 {
 		writeJSON(w, http.StatusNotFound,
 			map[string]any{"error": "the group is not attached to this project"})
@@ -186,10 +188,10 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1),
 
 // PutProjectGroups serves `PUT /api/v2/projects/groups/prompt_lib/{projectID}`
 // — REPLACE this project's group set with the named groups, creating any that
-// do not exist yet (pylon's groups.py `put`).
+// do not exist yet (the legacy groups.py `put`).
 //
 // It used to decode the body and echo it back, so the project's groups never
-// moved. The response is the project, as pylon serializes it.
+// moved. The response is the project, as the legacy runtime serializes it.
 func (h *Handler) PutProjectGroups(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := h.groupWriteContext(w, r)
 	if !ok {
@@ -311,8 +313,9 @@ func (h *Handler) groupWriteContext(w http.ResponseWriter, r *http.Request) (int
 	return int32(projectID), true
 }
 
-// writeProject answers with the project and its groups — the body pylon's three
-// group writes all return, and the reason a client does not have to re-fetch.
+// writeProject answers with the project and its groups — the body the legacy
+// three group writes all return, and the reason a client does not have to
+// re-fetch.
 func (h *Handler) writeProject(w http.ResponseWriter, r *http.Request, projectID int32, status int) {
 	ctx := r.Context()
 	project := Project{ID: projectID, Groups: []Group{}, Plugins: []string{}}

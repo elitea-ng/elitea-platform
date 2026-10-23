@@ -22,22 +22,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (
@@ -216,8 +217,8 @@ func TestEnsureIsIdempotent(t *testing.T) {
 // A project row left behind with `create_success = false` is worse than no row
 // at all: the resolver's first branch matches on the NAME, so its owner would
 // be handed a project id no tenant schema backs, and no later attempt would
-// ever replace it. pylon repairs the same state by deleting and recreating
-// (fix_create_personal_projects).
+// ever replace it. The legacy runtime repairs the same state by deleting and
+// recreating (fix_create_personal_projects).
 func TestEnsureRepairsAnUnfinishedPersonalProject(t *testing.T) {
 	ctx := context.Background()
 	pool := newPersonalProjectPool(t)
@@ -267,32 +268,25 @@ func seedUnfinishedProject(ctx context.Context, t *testing.T, pool *pgxpool.Pool
 	return id
 }
 
-// gatedDropStore is a vector store whose drop waits for the gate: the login
-// path must not wait for it. The drop signals entered when it starts.
-type gatedDropStore struct {
-	projectprovisioning.ProjectVectorStore
+// gatedBuckets is an object store whose purge waits for the gate: the login
+// path must not wait for it. The purge signals entered when it starts.
+type gatedBuckets struct {
 	gate    chan struct{}
 	entered chan struct{}
 }
 
-func (s gatedDropStore) ProvisionProjectVectorStore(context.Context, int64) error { return nil }
+func (gatedBuckets) BootstrapProjectBuckets(context.Context, string) error { return nil }
 
-func (s gatedDropStore) RemoveProjectVectorStore(context.Context, int64) error { return nil }
-
-func (s gatedDropStore) ProjectHasVectorStore(context.Context, projectprovisioning.Querier, int64) (bool, error) {
-	return true, nil
-}
-
-func (s gatedDropStore) DropProjectVectorStore(ctx context.Context, projectID int64, _ bool) (string, error) {
+func (s gatedBuckets) TeardownProjectBuckets(ctx context.Context, _ string) error {
 	select {
 	case s.entered <- struct{}{}:
 	default:
 	}
 	select {
 	case <-s.gate:
-		return fmt.Sprintf("project_%d", projectID), nil
+		return nil
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return ctx.Err()
 	}
 }
 
@@ -303,13 +297,13 @@ func (s gatedDropStore) DropProjectVectorStore(ctx context.Context, projectID in
 func TestEnsureRepairHandsTheCleanupToTheJournal(t *testing.T) {
 	ctx := context.Background()
 	pool := newPersonalProjectPool(t)
-	store := gatedDropStore{gate: make(chan struct{}), entered: make(chan struct{}, 1)}
+	store := gatedBuckets{gate: make(chan struct{}), entered: make(chan struct{}, 1)}
 	provisioner := projectprovisioning.New(
 		pool,
 		migrate.New(pool, platformmigrations.Files),
 		nil,
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
-		projectprovisioning.WithVectorStore(store),
+		projectprovisioning.WithArtifactBuckets(store),
 	)
 	var logs bytes.Buffer
 	ensurer, err := personalproject.NewEnsurer(pool, provisioner,
@@ -320,7 +314,7 @@ func TestEnsureRepairHandsTheCleanupToTheJournal(t *testing.T) {
 	userID := seedUser(t, pool, "handoff@autotest.local", "Handoff")
 	strandedID := seedUnfinishedProject(ctx, t, pool, userID)
 
-	// Ensure returns while the drop is still blocked.
+	// Ensure returns while the purge is still blocked.
 	repaired, err := ensurer.Ensure(ctx, userID)
 	if err != nil {
 		t.Fatalf("Ensure over an unfinished project: %v", err)
@@ -331,21 +325,20 @@ func TestEnsureRepairHandsTheCleanupToTheJournal(t *testing.T) {
 	select {
 	case <-store.entered:
 	case <-time.After(30 * time.Second):
-		t.Fatal("the background cleanup never reached the drop")
+		t.Fatal("the background cleanup never reached the purge")
 	}
-	read := func() (completed, leased, recorded bool) {
+	read := func() (completed, leased bool) {
 		if err := pool.QueryRow(ctx, `
-SELECT completed_at IS NOT NULL, claimed_until IS NOT NULL AND claimed_until > clock_timestamp(),
-       (cleanup->>'had_vector_store')::boolean
+SELECT completed_at IS NOT NULL, claimed_until IS NOT NULL AND claimed_until > clock_timestamp()
 FROM centry.project_deletions WHERE project_id = $1`, strandedID,
-		).Scan(&completed, &leased, &recorded); err != nil {
+		).Scan(&completed, &leased); err != nil {
 			t.Fatalf("read the journal row of the removed project: %v", err)
 		}
 		return
 	}
-	if completed, leased, recorded := read(); completed || !leased || !recorded {
-		t.Fatalf("journal: completed=%v leased=%v had_vector_store=%v; want an open row leased to the background run",
-			completed, leased, recorded)
+	if completed, leased := read(); completed || !leased {
+		t.Fatalf("journal: completed=%v leased=%v; want an open row leased to the background run",
+			completed, leased)
 	}
 
 	// Released, the run finishes by itself.
@@ -353,7 +346,7 @@ FROM centry.project_deletions WHERE project_id = $1`, strandedID,
 	if err := provisioner.WaitForCleanups(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if completed, leased, _ := read(); !completed || leased {
+	if completed, leased := read(); !completed || leased {
 		t.Fatalf("journal after the run: completed=%v leased=%v, want complete", completed, leased)
 	}
 }
@@ -438,7 +431,7 @@ func TestEnsureSkipsIdentitiesThatMustNotOwnAPersonalProject(t *testing.T) {
 // reported success while /social/author went on answering "" for good.
 //
 // Reachable two ways, one cause: `POST /projects` takes the name as free text
-// and reserves nothing, and pylon-era data carries `project_user_<uid>` rows
+// and reserves nothing, and legacy-era data carries `project_user_<uid>` rows
 // whose role assignments are gone.
 func TestEnsureIgnoresAProjectOfTheSameNameTheCallerIsNotAMemberOf(t *testing.T) {
 	ctx := context.Background()

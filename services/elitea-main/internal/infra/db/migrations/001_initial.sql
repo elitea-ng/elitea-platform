@@ -1,5 +1,5 @@
 -- 001_initial.sql
--- Drop-in compatible schema for the pylon platform.
+-- Drop-in compatible schema for the legacy runtime's databases.
 -- Shared schema: "centry" (projects, users, groups)
 -- Tenant schema: "p_{project_id}" (per-project data)
 
@@ -263,8 +263,8 @@ CREATE INDEX IF NOT EXISTS ix_moderation_state_entity_id ON centry.moderation_st
 -- migrations/shared/0122_webhooks_and_deliveries.sql for the full account of
 -- why `project_id` is `text` (the repository's five queries take it straight
 -- from chi.URLParam with no int64 parse in between) and why there is no
--- foreign key to a projects table (project membership lives in pylon-owned
--- tables this corpus does not always have; the #496 permission gate is what
+-- foreign key to a projects table (project membership lives in auth tables
+-- this corpus does not always have; the #496 permission gate is what
 -- stops a caller naming a project it cannot see).
 --
 -- `status` folds in migrations/shared/0123_webhook_delivery_blocked_status.sql
@@ -340,16 +340,17 @@ CREATE TABLE IF NOT EXISTS public.pipeline_runs (
 -- Global, admin-authored platform settings: one row per (section, key) of the
 -- schema `internal/api/v2/admin/config_schemas.go` publishes.
 --
--- This table has no counterpart in the legacy deployment, and that is the point.
--- pylon has no configuration table either: the admin Configuration page reads an
--- IN-PROCESS dict of pylon heartbeats (`admin.remote_runtimes`, 15s announce /
--- 60s freshness cut-off), and its save re-serialises a plugin's whole YAML and
--- fires `bootstrap_runtime_update` onto the Arbiter bus fire-and-forget, where a
--- bootstrap handler on the target pylon upserts it into that pylon's own
--- `plugin_config` table (legacy/plugins/admin/api/v2/plugin_config_values.py:275-305,
--- legacy/pylon/pylon/core/providers/internal/db_config.py:65-88).
+-- This table has no counterpart in the legacy deployment, and that is the
+-- point. The legacy runtime had no configuration table either: its admin
+-- Configuration page read an IN-PROCESS dict of runtime heartbeats
+-- (`admin.remote_runtimes`, 15s announce / 60s freshness cut-off), and its save
+-- re-serialises a plugin's whole YAML and fires `bootstrap_runtime_update` onto
+-- the Arbiter bus fire-and-forget, where a bootstrap handler on the target
+-- runtime upserts it into that runtime's own `plugin_config` table
+-- (legacy/plugins/admin/api/v2/plugin_config_values.py:275-305, the legacy
+-- runtime's core/providers/internal/db_config.py:65-88).
 --
--- That mechanism is Pylon plugin loading plus Arbiter transport, which AGENTS.md
+-- That mechanism is runtime plugin loading plus Arbiter transport, which AGENTS.md
 -- names as things the target architecture does NOT preserve — and "Go owns
 -- product data and migrations". So the settings this platform actually consumes
 -- are owned here, in a table, rather than announced over a bus.
@@ -469,7 +470,7 @@ BEGIN
     -- A published skill has exactly one twin in the public project, keyed by
     -- (source project, source skill). The partial unique index is what makes a
     -- concurrent first-publish race lose loudly instead of creating a second
-    -- catalog entry for the same source skill (mirrors pylon's
+    -- catalog entry for the same source skill (mirrors the legacy runtime's
     -- uq_skills_shared_owner, legacy/plugins/elitea_core/models/skill.py:39-42).
     EXECUTE format('
         CREATE UNIQUE INDEX IF NOT EXISTS uq_skills_shared_owner
@@ -669,10 +670,11 @@ BEGIN
     --
     -- The shapes come from those migrations, which take them in turn from the
     -- pg_catalog dump of the live legacy database (schema p_1) rather than from
-    -- pylon's SQLAlchemy models. Two details that read as oversights are
-    -- deliberate and are copied rather than improved: chat_messages_attachment's
-    -- `content` is `json` and NOT `jsonb`, because a deployment running both
-    -- pylon and this service must read back the bytes that were written, and
+    -- the legacy runtime's SQLAlchemy models. Two details that read as
+    -- oversights are deliberate and are copied rather than improved:
+    -- chat_messages_attachment's `content` is `json` and NOT `jsonb`, because
+    -- rows the legacy runtime wrote must read back as the bytes that were
+    -- written, and
     -- `jsonb` normalises whitespace, reorders keys and drops duplicates; and
     -- chat_messages_context lists `id` LAST, which is the deployed column order.
 
@@ -751,8 +753,8 @@ BEGIN
     -- chat_messages_canvas lists `id` LAST for the same reason
     -- chat_messages_context does: it is the deployed column order.
     -- `canvas_type` carries no length limit because the deployed column carries
-    -- none, and a shorter column here would reject a value pylon accepts in a
-    -- database they share. chat_canvas_version_authors has no Go reader or
+    -- none, and a shorter column here would reject a value the legacy runtime
+    -- wrote. chat_canvas_version_authors has no Go reader or
     -- writer yet — it is the source of the `editors` list CreateCanvas already
     -- returns empty — and is created anyway, because 0123's header records what
     -- happened the last time this graph was owned only as far as the error
@@ -799,8 +801,8 @@ BEGIN
         CREATE INDEX IF NOT EXISTS chat_message_group_conversation_id_idx
             ON %I.chat_message_group (conversation_id, id)', schema_name);
     -- Keeps the deployed name, `ix_tenant_...`, rather than one of our own: an
-    -- index we named differently would be a SECOND index on the same column in
-    -- every deployment where pylon already built the first.
+    -- index we named differently would be a SECOND index on the same column
+    -- wherever the legacy runtime had already built the first.
     EXECUTE format('
         CREATE INDEX IF NOT EXISTS ix_tenant_chat_canvas_versions_created_at
             ON %I.chat_canvas_versions (created_at)', schema_name);
@@ -950,8 +952,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =============================================================================
--- AUTH TABLES (pylon_auth owns these; we create them for standalone dev mode)
--- In production, pylon_auth creates and manages these tables.
+-- AUTH TABLES (the legacy auth runtime created these; this file creates them
+-- for standalone dev mode)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS auth_core__user (
     id SERIAL PRIMARY KEY,
@@ -1060,7 +1062,8 @@ ON CONFLICT (id) DO NOTHING;
 -- turned "the admin panel works" into "403 for everyone" on a fresh database.
 -- The reads are gated now (internal/api/router.go), so the roles have to exist.
 --
--- pylon's equivalent is auth_core/db/migrations/202202021633_core.py plus
+-- The legacy runtime's equivalent is
+-- auth_core/db/migrations/202202021633_core.py plus
 -- 202604161400_add_super_admin_role.py. `system` is omitted: it is not in the
 -- Go product's role vocabulary (users.go `adminRolePriority` is
 -- super_admin/admin/editor/viewer) and nothing assigns it.
@@ -1072,7 +1075,7 @@ INSERT INTO auth_core__role (id, name, mode) VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- Administration-mode grants, transcribed from the `recommended_roles` each
--- pylon handler declares in legacy/plugins/admin/api/v2/.
+-- legacy admin handler declares in legacy/plugins/admin/api/v2/.
 --
 -- Two things about that transcription are easy to get wrong. First, a BARE list
 -- (`check_api(["runtime.plugins"])`) is not "no recommended roles" — it parses
@@ -1085,12 +1088,12 @@ ON CONFLICT (id) DO NOTHING;
 --
 -- `editor` and `viewer` get nothing: every declaration sets them False.
 --
--- Only the `administration` mode is seeded. pylon also registers these in
--- `developer` and `default`, but no Go route resolves an admin-panel permission
--- in either, and granting `admin.auth.users` to the DEFAULT-mode `admin` role
--- would leak it into project-scoped resolution — projectPermissions() falls
--- back to central default-mode grants by role name when a project has no
--- per-project rows.
+-- Only the `administration` mode is seeded. The legacy runtime also registered
+-- these in `developer` and `default`, but no Go route resolves an admin-panel
+-- permission in either, and granting `admin.auth.users` to the DEFAULT-mode
+-- `admin` role would leak it into project-scoped resolution —
+-- projectPermissions() falls back to central default-mode grants by role name
+-- when a project has no per-project rows.
 INSERT INTO auth_core__role_permission (role_id, permission)
 SELECT role.id, grant_row.permission
 FROM auth_core__role AS role

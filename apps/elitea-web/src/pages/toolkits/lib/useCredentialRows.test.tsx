@@ -8,8 +8,8 @@
  * The four branches, and what each one costs when it is wrong:
  *
  *  - the PERSONAL query is skipped for public-only pickers, for a viewer with
- *    no personal project, when the personal project IS the selected one, and
- *    for the `vectorstorage` section. Skipping one it should run loses the
+ *    no personal project, and when the personal project IS the selected one.
+ *    Skipping one it should run loses the
  *    user's own credentials; running one it should skip lists a duplicate of
  *    every row under the selected project.
  *  - `configuration_types` filters. An empty list accepts every type — a
@@ -152,13 +152,6 @@ describe('useCredentialRows', () => {
   it('skips the personal query for a public-only picker', async () => {
     servePages({ '1': EMPTY, '42': EMPTY });
     const state = renderCredentialRows(params({ onlyPublic: true }), '42');
-    await waitFor(() => expect(state.current?.hasFetchedData).toBe(true));
-    expect(requestedProjects).toEqual(['1']);
-  });
-
-  it('skips the personal query for the vectorstorage section', async () => {
-    servePages({ '1': EMPTY, '42': EMPTY });
-    const state = renderCredentialRows(params({ section: 'vectorstorage' }), '42');
     await waitFor(() => expect(state.current?.hasFetchedData).toBe(true));
     expect(requestedProjects).toEqual(['1']);
   });

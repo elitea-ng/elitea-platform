@@ -22,8 +22,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
+	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 const natsTestURLEnv = "ELITEA_TEST_NATS_URL"

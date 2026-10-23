@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
+	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 )
 
 // trustedProxyCIDRsEnv names the deployment's trusted proxy CIDRs for the

@@ -23,7 +23,10 @@
 //! * Bounds: a tool response is cut at [`MAX_TOOL_RESPONSE_BYTES`] (the cap
 //!   the server keeps); a session holds at most [`MAX_SESSION_BYTES`], past
 //!   which the oldest WHOLE invocations go (never half of a call/response
-//!   pair) and the session is marked for re-seeding.
+//!   pair) and the session is marked for re-seeding. The session state the
+//!   dropped events built stays: one event with no content, at the head,
+//!   carries it. A re-seed keeps the keys its caller names (the thread's
+//!   model choice, `d0/session.rs`).
 //! * The session remembers the `path_deny` fingerprint its tool responses
 //!   were read under. A different one drops those response bodies (messages
 //!   stay) and marks the session for re-seeding without bodies: content read
@@ -582,7 +585,9 @@ impl SessionStore {
     }
 
     /// Replace the session's events with `events` (the server's transcript,
-    /// folded) and mark it seeded as of `cursor`.
+    /// folded) and mark it seeded as of `cursor`. The session state under
+    /// the keys in `carry` (the thread's own settings, which the server's
+    /// transcript does not hold) stays as the replaced events left it.
     ///
     /// # Errors
     ///
@@ -592,11 +597,24 @@ impl SessionStore {
         key: &str,
         events: Vec<NewEvent>,
         cursor: Option<String>,
+        carry: &'static [&'static str],
     ) -> Result<(), HostError> {
         let key = key.to_owned();
         self.call("could not seed the session", move |conn| {
             let tx = conn.transaction()?;
+            let mut carried = Carried::default();
+            if !carry.is_empty() {
+                let rows: Vec<String> = tx
+                    .prepare("SELECT event FROM events WHERE session_key = ?1 ORDER BY seq")?
+                    .query_map(params![key], |row| row.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                carried.fold(&rows);
+                carried
+                    .state
+                    .retain(|name, _| carry.contains(&name.as_str()));
+            }
             tx.execute("DELETE FROM events WHERE session_key = ?1", params![key])?;
+            carry_state(&tx, &key, 0, carried)?;
             for (index, new) in events.into_iter().enumerate() {
                 insert_event(&tx, &key, i64::try_from(index + 1).unwrap_or(i64::MAX), new)?;
             }
@@ -932,31 +950,117 @@ fn refresh_bytes(tx: &Transaction<'_>, key: &str) -> rusqlite::Result<()> {
 /// Keep the session within [`MAX_SESSION_BYTES`]: the oldest whole
 /// invocations go first (an invocation is a turn's events, so a call and its
 /// response never part), and the newest always stays. Whether anything went.
+/// The session state the dropped events built survives them
+/// ([`carry_state`]).
 fn trim(tx: &Transaction<'_>, key: &str) -> rusqlite::Result<bool> {
     trim_to(tx, key, MAX_SESSION_BYTES)
+}
+
+/// The `turn_execution_id` (and answer id) of the event that carries the
+/// session state of events that went (`carry_state`).
+pub const CARRIED_STATE_TURN: &str = "carried-state";
+
+/// The session state some dropped events built, as it stood after the last
+/// of them, and the author of the last one that set any of it.
+#[derive(Default)]
+struct Carried {
+    state: HashMap<String, Value>,
+    author: String,
+}
+
+impl Carried {
+    /// `rows` (event JSON, in order) folded in.
+    fn fold(&mut self, rows: &[String]) {
+        for text in rows {
+            let Ok(event) = serde_json::from_str::<Event>(text) else {
+                continue;
+            };
+            let (_, _, session) = state_utils::extract_state_deltas(&event.actions.state_delta);
+            if !session.is_empty() {
+                self.state.extend(session);
+                self.author = event.author;
+            }
+        }
+    }
+}
+
+/// Insert, at `seq`, one event with no content whose delta is the state
+/// `carried` holds (a key set to `null` is a cleared one: left out), so the
+/// session's state stays what it was when the events that built it go.
+/// Like the model choice's own event (`d0/session.rs` `keep_model_choice`)
+/// no model request ever folds it; it is an invocation of its own, so a
+/// later trim folds it again with whatever goes then.
+fn carry_state(
+    tx: &Transaction<'_>,
+    key: &str,
+    seq: i64,
+    carried: Carried,
+) -> rusqlite::Result<()> {
+    let state: HashMap<String, Value> = carried
+        .state
+        .into_iter()
+        .filter(|(_, value)| !value.is_null())
+        .collect();
+    if state.is_empty() {
+        return Ok(());
+    }
+    let mut event = Event::new(format!("{CARRIED_STATE_TURN}-{}", uuid::Uuid::new_v4()));
+    event.author = carried.author;
+    event.actions.state_delta = state;
+    insert_event(
+        tx,
+        key,
+        seq,
+        NewEvent {
+            turn_execution_id: CARRIED_STATE_TURN.to_owned(),
+            executed_by: EXECUTED_BY_DESKTOP,
+            response_message_id: Some(CARRIED_STATE_TURN.to_owned()),
+            event,
+        },
+    )
+}
+
+/// The event JSON of one trim group (`inv`, as [`trim_to`] names it), in
+/// order.
+fn group_rows(tx: &Transaction<'_>, key: &str, inv: &str) -> rusqlite::Result<Vec<String>> {
+    tx.prepare(
+        "SELECT event FROM events WHERE session_key = ?1
+         AND COALESCE(NULLIF(invocation_id, ''), 'seq:' || seq) = ?2 ORDER BY seq",
+    )?
+    .query_map(params![key, inv], |row| row.get(0))?
+    .collect()
 }
 
 /// [`trim`] against `limit` (tests use a small one).
 pub(crate) fn trim_to(tx: &Transaction<'_>, key: &str, limit: i64) -> rusqlite::Result<bool> {
     let mut statement = tx.prepare(
         "SELECT COALESCE(NULLIF(invocation_id, ''), 'seq:' || seq) AS inv,
-                SUM(bytes)
+                SUM(bytes), MIN(seq)
          FROM events WHERE session_key = ?1
          GROUP BY inv ORDER BY MIN(seq)",
     )?;
     let groups = statement
         .query_map(params![key], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
-    let mut total: i64 = groups.iter().map(|(_, bytes)| bytes).sum();
+    let mut total: i64 = groups.iter().map(|(_, bytes, _)| bytes).sum();
+    // The first group holds the session's lowest seq: the carried state
+    // takes it, ahead of every event that stays.
+    let head = groups.first().map(|(_, _, seq)| *seq);
+    let mut carried = Carried::default();
     let mut trimmed = false;
     let newest = groups.len().saturating_sub(1);
-    for (index, (inv, bytes)) in groups.into_iter().enumerate() {
+    for (index, (inv, bytes, _)) in groups.into_iter().enumerate() {
         if total <= limit || index >= newest {
             break;
         }
+        carried.fold(&group_rows(tx, key, &inv)?);
         if let Some(seq) = inv.strip_prefix("seq:") {
             tx.execute(
                 "DELETE FROM events WHERE session_key = ?1 AND seq = ?2
@@ -971,6 +1075,9 @@ pub(crate) fn trim_to(tx: &Transaction<'_>, key: &str, limit: i64) -> rusqlite::
         }
         total -= bytes;
         trimmed = true;
+    }
+    if let (true, Some(seq)) = (trimmed, head) {
+        carry_state(tx, key, seq, carried)?;
     }
     Ok(trimmed)
 }

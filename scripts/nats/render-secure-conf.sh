@@ -1,37 +1,43 @@
 #!/usr/bin/env bash
-# render-secure-conf.sh — write the nats.conf the NATS chart renders, for the
-# secured permission tests (#1076).
+# render-secure-conf.sh — write the nats.conf the elitea chart's bundled NATS
+# server renders, for the secured permission tests (#1076).
 #
 #   scripts/nats/render-secure-conf.sh OUT_FILE [VALUES_FILE]
 #
-# Renders deploy/helm/nats with its scale-1 profile (or VALUES_FILE, e.g.
-# values-ha.yaml for the route identity test) through
-# `helm template` and extracts data."nats.conf" from the server ConfigMap. The
+# Renders deploy/helm/elitea (nats.enabled, the scale-1 default; or with
+# VALUES_FILE layered on, e.g. values-nats-ha.yaml for the route identity
+# test) through `helm template` and extracts data."nats.conf" from the server
+# ConfigMap. The
 # tests in libs/go/natsconn/natstest, elitea-main, elitea-scheduler and
 # elitea-llm-gateway read OUT_FILE through ELITEA_TEST_NATS_SECURE_CONF and run
 # nats-server on it, so the permission table under test is the chart's own and
 # not a copy.
 #
-# Needs helm and network access the first time (the upstream nats subchart is
-# vendored by `helm dependency build`), and python3 + PyYAML.
+# Needs helm and python3 + PyYAML, and network for the upstream nats subchart:
+# it runs deploy/helm/elitea/build-deps.sh (`helm dependency build`) first.
 set -euo pipefail
 
 out="${1:?usage: render-secure-conf.sh OUT_FILE [VALUES_FILE]}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-chart="${root}/deploy/helm/nats"
-values="${2:-${chart}/values-scale1.yaml}"
+chart="${root}/deploy/helm/elitea"
 HELM="${HELM:-helm}"
+extra=()
+if [ -n "${2:-}" ]; then extra=(-f "$2"); fi
 
-if ! ls "${chart}"/charts/nats-*.tgz >/dev/null 2>&1; then
-  # `helm dependency build` refuses an http(s) repository it has no definition
-  # for ("no repository definition for ..."); register the subchart's first.
-  "$HELM" repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
-  "$HELM" dependency build "$chart" >/dev/null
-fi
-
+bash "${chart}/build-deps.sh" >/dev/null
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
-"$HELM" template elitea-nats "$chart" --namespace elitea -f "$values" > "$rendered"
+# The platform's own refusals run on every render, so state the two fields the
+# chart has no default for, and turn off the features whose operator values
+# (auth document, allowlists, worker identity) only they need; none of it
+# reaches nats.conf, whose permission table is the same either way.
+"$HELM" template elitea "$chart" --namespace elitea ${extra[@]+"${extra[@]}"} \
+  --set main.runtime.enabled=false --set worker.enabled=false --set vector.enabled=false \
+  --set qdrant.enabled=false --set deepwiki.enabled=false --set inventory.enabled=false \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set networkPolicies.main.noExternalIngress=true \
+  --show-only charts/nats/templates/config-map.yaml > "$rendered"
 
 python3 - "$rendered" "$out" <<'PY'
 import sys, yaml

@@ -6,9 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // The start route stamps how the run began (shared 0140): a browser session
@@ -17,9 +18,7 @@ import (
 // /analytics_execution tell them apart.
 func TestCurrentStartRouteStampsTheTriggerOrigin(t *testing.T) {
 	asToken := func(request *http.Request) *http.Request {
-		request.Header.Set("X-Auth-Type", "token")
-		request.Header.Set("X-Auth-ID", "11")
-		request.Header.Set("X-Auth-User-ID", "11")
+		authtest.BearerToken(request, "11", "11")
 		return request
 	}
 	cases := []struct {
@@ -70,9 +69,7 @@ func TestStartTriggerOriginReadsTheCredentialKind(t *testing.T) {
 // turn).
 func TestRegenerateAndContinueStampTheCallersTriggerOrigin(t *testing.T) {
 	asToken := func(request *http.Request) *http.Request {
-		request.Header.Set("X-Auth-Type", "token")
-		request.Header.Set("X-Auth-ID", "11")
-		request.Header.Set("X-Auth-User-ID", "11")
+		authtest.BearerToken(request, "11", "11")
 		return request
 	}
 	for _, tc := range []struct {

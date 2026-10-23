@@ -333,7 +333,7 @@ flag; the single-agent path is unchanged. Decision: children stream, coalesced (
 |---|---|---|
 | Child permits per worker | 64 (2 × delivery cap) | Acquired at child admission in ordinal order. **Released while a child is paused**, otherwise per-interrupt HITL starves siblings. Paused children per activation are bounded by N (16/64). |
 | Streams per (worker, model) | 16 | New per-model semaphore. |
-| Agentstate pool | separate `agentstate_max_connections`, default delivery cap + 16 | Today the pool is `delivery_max_concurrency` (32) and is shared with sessions and the sandbox ledger (`bootstrap.rs:182-186`, `agents/session.rs:967-968`). Fan-out multiplies demand. |
+| Agentstate pool | `limits.agentstate_max_connections` (optional, default 8 capped at the delivery cap, 1..=delivery cap) and `limits.agentstate_acquire_timeout_millis` (default 30000) | Done: the pool no longer follows `delivery_max_concurrency`. It is shared with sessions and the sandbox ledger, and each user holds a connection only for one short transaction. Fan-out multiplies demand: raise the value, or the acquire timeout, if `pool_wait_ms` on `agent.checkpoint.persist` grows. |
 | Code slots (Wave 3) | semaphore sized to Supervisor capacity, acquired before submit | Admission rejects when `ceil(N / capacity) × item timeout` exceeds the remaining deadline. |
 
 ### 9.4 Rate limits

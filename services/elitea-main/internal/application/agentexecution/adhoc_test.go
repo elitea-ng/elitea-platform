@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 func TestCurrentAdhocStartBuildsCurrentMainChatInputAndTurn(t *testing.T) {
@@ -32,7 +32,7 @@ func TestCurrentAdhocStartBuildsCurrentMainChatInputAndTurn(t *testing.T) {
 		AdmittedAt: admittedAt, Deadline: admittedAt.Add(time.Minute),
 	}}
 	freezer := &currentApplicationVersionFreezerStub{}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestCurrentAdhocStartRejectsMalformedConversationOptionsBeforeAdmission(t *
 	}}
 	admissions := &currentApplicationAdmissionStub{}
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
 		&currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestCurrentAdhocStartRejectsAStepLimitAboveTheRuntimeCeiling(t *testing.T) 
 	}}
 	admissions := &currentApplicationAdmissionStub{}
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
 		&currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestCurrentAdhocStartAcceptsCurrentDefaultMaxTokensSentinel(t *testing.T) {
   "llm_settings":{"model_name":"requested","model_project_id":9,"max_tokens":-1,"openai_compatible":true},
   "tools":[]
 }`)}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

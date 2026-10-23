@@ -22,8 +22,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
 )
 
 // governanceStatusBody is the response shape.
@@ -56,10 +56,17 @@ type governanceStatusBody struct {
 	// A project ID is not secret: it is a small integer that appears in every
 	// tenant URL, and this route is on the internal listener behind mutual TLS
 	// in any case.
-	SharedProjectID string             `json:"shared_project_id"`
-	Store           policy.Status      `json:"store"`
-	Definitions     policy.Diagnostics `json:"definitions"`
-	RateLimiter     *rateLimiterCounts `json:"rate_limiter,omitempty"`
+	SharedProjectID string `json:"shared_project_id"`
+	// WorkloadIdentityEnabled is GATEWAY_WORKLOAD_IDENTITY_ENABLED as this
+	// gateway read it. A platform provider saved with auth_mode
+	// workload_identity is refused with WORKLOAD_IDENTITY_NOT_ALLOWED while it
+	// is false, and the admin providers screen can say that only if the
+	// gateway reports it: the flag is chart configuration that the authoring
+	// side never sees.
+	WorkloadIdentityEnabled bool               `json:"workload_identity_enabled"`
+	Store                   policy.Status      `json:"store"`
+	Definitions             policy.Diagnostics `json:"definitions"`
+	RateLimiter             *rateLimiterCounts `json:"rate_limiter,omitempty"`
 	// Egress is the MERGED allowlist the gateway is enforcing, tagged by
 	// source: the GATEWAY_EGRESS_ALLOWLIST floor, the authored
 	// `egress_allowlist` rows, and the union of the two (gap G6).
@@ -91,7 +98,8 @@ type rateLimiterCounts struct {
 // rather than erroring: a gateway without a database is a supported posture,
 // not a fault.
 func makeGovernanceStatusHandler(
-	store *policy.Store, limiter *policy.Limiter, sharedProjectID string, acct *account.EliteaAccount,
+	store *policy.Store, limiter *policy.Limiter, sharedProjectID string, workloadIdentityEnabled bool,
+	acct *account.EliteaAccount,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := governanceStatusBody{
@@ -99,6 +107,9 @@ func makeGovernanceStatusHandler(
 			RateLimitsEnforceable: limiter.Status() == policy.RateStatusEnforced,
 			RateLimiterStatus:     string(limiter.Status()),
 			SharedProjectID:       sharedProjectID,
+			// The CONFIG value, not the account's: with no database pool there
+			// is no account, and the flag the operator set is still the answer.
+			WorkloadIdentityEnabled: workloadIdentityEnabled,
 		}
 		if acct != nil {
 			// Read it per request, not once at wiring: the authored half of the

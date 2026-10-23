@@ -4,9 +4,13 @@ This protocol is separate from whole-Code recovery read/seal. It never creates,
 restarts, dispatches, or submits a job. Main reads the original Supervisor through
 its existing configured mandatory mTLS client, audience and requester identity.
 
-POST `/elitea.runtime.code-platform.v1/jobs/{original_job_key}/{operation}`.
-Closed operations: `read-retained-runtime`, `read-pending-platform-call`,
-`publish-committed-platform-reply`. No query, redirects, alternate host or runtime
+Since #1359 the operations are RPCs on `elitea.runtime.v1.SandboxSupervisorService`
+(`{job_key, request_json}` in, `{response_json}` out; the JSON documents below are
+unchanged): `CodePlatformOwnerReadRetainedRuntime`, `CodePlatformOwnerReadPendingCall`,
+`CodePlatformOwnerPublishReply`. They replaced POST
+`/elitea.runtime.code-platform.v1/jobs/{original_job_key}/{operation}` (operations
+`read-retained-runtime`, `read-pending-platform-call`, `publish-committed-platform-reply`).
+Main treats any non-OK status as a refusal. No query, redirects, alternate host or runtime
 selector. Content type is exactly application/json. Request has schema
 `elitea.sandbox.code-platform-owner-request.v1`, grant, and required-nullable
 committed_reply_base64url. Only publish carries a reply (binary <=2166800 bytes).

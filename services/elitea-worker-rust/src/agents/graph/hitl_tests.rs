@@ -232,11 +232,11 @@ async fn elitea_graph_adapter_restores_root_event_identity_before_projection() {
         .expect("interrupt event");
     assert_eq!(event.author, "pipeline-root");
     assert_ne!(event.invocation_id, "graph_interrupted");
-    assert!(!event.invocation_id.is_empty());
+    assert_ne!(event.invocation_id, "");
     let payload = adk_rust::graph::interrupt::GraphInterruptPayload::from_event(&event)
         .expect("graph interrupt metadata");
     assert_eq!(payload.thread_id, "thread-1");
-    assert!(!payload.checkpoint_id.is_empty());
+    assert_ne!(payload.checkpoint_id, "");
     assert!(
         running
             .next_event()

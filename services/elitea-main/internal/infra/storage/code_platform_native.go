@@ -10,12 +10,12 @@ import (
 	"io"
 	"strconv"
 
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/codeplatform"
-	toolkit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/codeplatform"
+	toolkit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type CodeApplicationCatalog interface {

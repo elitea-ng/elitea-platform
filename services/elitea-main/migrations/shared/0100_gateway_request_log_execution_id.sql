@@ -12,7 +12,7 @@
 --
 -- It also claims nothing another component owns. gateway.llm_request_logs is
 -- created by 0099 in this same history, so this is not the case that has broken
--- seeds before (a migration taking ownership of a pylon-owned table, which
+-- seeds before (a migration taking ownership of a legacy-owned table, which
 -- fails with 42P07 against a dump-loaded database).
 --
 -- ## What the column is

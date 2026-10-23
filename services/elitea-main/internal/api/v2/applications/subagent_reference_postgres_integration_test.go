@@ -7,21 +7,21 @@ package applications_test
 // `settings` carry the child pair, plus one `entity_tool_mapping` row binding
 // it to the parent version. That is what
 // internal/api/v2/eliteacore/application_relation.go writes, what the chat
-// resolver joins, and what the freeze parses. The pylon-era `application_tools`
-// table holds the same reference in a pylon-MIGRATED tenant and nowhere else:
-// no migration in this repository creates it.
+// resolver joins, and what the freeze parses. The legacy-era
+// `application_tools` table holds the same reference in a legacy-MIGRATED
+// tenant and nowhere else: no migration in this repository creates it.
 //
-// Both defects below are the same shape. A statement named the pylon table
+// Both defects below are the same shape. A statement named the legacy table
 // only, so on every schema this service creates it either failed with 42P01
 // into a discarded error or matched no row — and the feature it implemented
 // looked present in the source and was absent in every deployment.
 //
-//  1. The expanded version read stamped `project_id` on the pylon branch alone,
-//     so the SDK received sub-agent tools with no project. The child lives in a
-//     tenant schema and the application id alone does not say which one, so a
-//     runtime that had to resolve the child could not.
-//  2. Deleting an agent cleaned up references to it in the pylon table alone, so
-//     every parent went on offering a tool whose agent had been deleted.
+//  1. The expanded version read stamped `project_id` on the legacy branch
+//     alone, so the SDK received sub-agent tools with no project. The child
+//     lives in a tenant schema and the application id alone does not say which
+//     one, so a runtime that had to resolve the child could not.
+//  2. Deleting an agent cleaned up references to it in the legacy table alone,
+//     so every parent went on offering a tool whose agent had been deleted.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -90,9 +90,9 @@ func seedChildAgent(t *testing.T, pool *pgxpool.Pool, name string) (int64, int64
 
 // ── 1. the expanded read names the project of every tool ─────────────────────
 
-// The SDK reads `project_id` off each tool. Pylon types it on the tool model
-// itself, so every entry carries it; this handler served it on the pylon branch
-// alone, which no schema it builds has.
+// The SDK reads `project_id` off each tool. The legacy runtime types it on the
+// tool model itself, so every entry carries it; this handler served it on the
+// legacy branch alone, which no schema it builds has.
 func TestVersionPatchStampsTheProjectOnEverySubAgentTool(t *testing.T) {
 	fixture := newExpandedFixture(t, "openai")
 	childApplicationID, childVersionID := seedChildAgent(t, fixture.pool, "the-child")

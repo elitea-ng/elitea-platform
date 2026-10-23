@@ -4,6 +4,18 @@
 # private, metadata and cluster range, and leaves the deny-all policy and
 # the Code Pods' boundary unchanged.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 cd "$(dirname "$0")/../../.."
 chart=deploy/helm/elitea
 work=$(mktemp -d)
@@ -12,14 +24,14 @@ base=(-f "$chart/values-standalone.yaml" --namespace platform
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
   --set sandboxKubernetes.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
-on=(--set sandboxKubernetes.workspaceRuns.enabled=true
+on=(-f deploy/helm/tests/fixtures/cloud-executor-values.yaml --set sandboxKubernetes.workspaceRuns.enabled=true
   --set sandboxKubernetes.workspaceRuns.egress.enabled=true
   --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.244.0.0/16'
   --set 'sandboxKubernetes.workspaceRuns.egress.serviceCidrs[0]=10.96.0.0/12')
 
 # Network off (the default, and egress disabled with runs enabled): no policy.
 helm template sandbox "$chart" "${base[@]}" > "$work/off.yaml"
-helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.workspaceRuns.enabled=true > "$work/off-runs.yaml"
+helm template sandbox "$chart" "${base[@]}" -f deploy/helm/tests/fixtures/cloud-executor-values.yaml > "$work/off-runs.yaml"
 # Network on.
 helm template sandbox "$chart" "${base[@]}" "${on[@]}" > "$work/on.yaml"
 python3 - "$work/off.yaml" "$work/off-runs.yaml" "$work/on.yaml" <<'PY'
@@ -57,7 +69,7 @@ for cidr in ['fc00::/7', 'fe80::/10', '::1/128']:
 assert 'ports' not in internet, 'any port on the public internet'
 PY
 # Missing cluster ranges are refused, not rendered open.
-if helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.workspaceRuns.enabled=true \
+if helm template sandbox "$chart" "${base[@]}" -f deploy/helm/tests/fixtures/cloud-executor-values.yaml \
     --set sandboxKubernetes.workspaceRuns.egress.enabled=true > "$work/invalid" 2>&1; then
   echo "workspace egress without the cluster ranges was accepted" >&2; exit 1
 fi
@@ -84,7 +96,7 @@ YAML
 worker=(-f "$chart/values-standalone.yaml" -f "$work/runs.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-  --set vector.enabled=true --set main.autoscaling.maxReplicas=3 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key)
+  --set vector.enabled=true --set qdrant.enabled=true)
 helm template test "$chart" "${worker[@]}" --show-only templates/worker/configmap-runtime.yaml > "$work/runs-config.yaml"
 python3 - "$work/runs-config.yaml" <<'PY'
 import json, sys, yaml
@@ -99,7 +111,7 @@ PY
 helm template test "$chart" -f "$chart/values-standalone.yaml" \
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1 \
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
-  --set worker.enabled=true --set worker.implementation=rust --set vector.enabled=true --set main.autoscaling.maxReplicas=3 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
+  --set worker.enabled=true --set worker.implementation=rust --set vector.enabled=true --set qdrant.enabled=true \
   --show-only templates/worker/configmap-runtime.yaml > "$work/default-config.yaml"
 ! grep -q workspace_runs "$work/default-config.yaml"
 # An audience Main does not sign for is refused.

@@ -11,9 +11,10 @@
  *  2. the user's PERSONAL project, whose rows carry `private: true`.
  *
  * The personal query is skipped when the caller asks for public rows only, when
- * no personal project is known, when the personal project IS the selected one,
- * and for the `vectorstorage` section — each of those is a baseline branch, not
- * a simplification.
+ * no personal project is known, and when the personal project IS the selected
+ * one — each of those is a baseline branch, not a simplification. (The
+ * baseline's fourth skip, the `vectorstorage` section, went with the pgvector
+ * configuration type: no toolkit property references that section any more.)
  *
  * It lives in `pages/` because `features/toolkits` may not import
  * `features/credentials` (`no-sideways-features`) — see
@@ -28,9 +29,6 @@ import { usePersonalProjectId } from './usePersonalProjectId';
 
 /** The baseline's own page size for this query (`useCredentialsData.hooks.js`: `pageSize: 500`, `sharedLimit: 500`) — a picker lists every row, it does not paginate. */
 const PICKER_PAGE_SIZE = 500;
-
-/** The one section that has no personal half in the baseline. */
-const VECTOR_STORAGE_SECTION = 'vectorstorage';
 
 /**
  * One selectable row. Structurally assignable to `features/credentials`'
@@ -130,7 +128,7 @@ export function useCredentialRows(params: UseCredentialRowsParams): UseCredentia
   const personalProjectId = usePersonalProjectId();
 
   const wantsPersonalRows =
-    !onlyPublic && personalProjectId !== undefined && personalProjectId !== projectId && section !== VECTOR_STORAGE_SECTION;
+    !onlyPublic && personalProjectId !== undefined && personalProjectId !== projectId;
 
   const projectQuery = useConfigurationsList(
     { projectId: projectId ?? '', section, pageSize: PICKER_PAGE_SIZE, sharedLimit: PICKER_PAGE_SIZE, includeShared: true },

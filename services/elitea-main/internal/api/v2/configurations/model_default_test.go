@@ -10,10 +10,11 @@ import (
 	"sync"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentModelDefaultWrite struct {
@@ -64,11 +65,10 @@ func TestCurrentModelDefaultRouteBindsCurrentPathAndUpdatePermission(t *testing.
 
 	writer := &currentModelDefaultWriterStub{}
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
-	authConfig := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	authConfig := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}
 
 	for name, test := range map[string]struct {
 		writer      handler.CurrentModelDefaultWriter
@@ -76,7 +76,7 @@ func TestCurrentModelDefaultRouteBindsCurrentPathAndUpdatePermission(t *testing.
 		permissions auth.PermissionResolver
 	}{
 		"missing writer":       {authConfig: authConfig, permissions: permissions},
-		"missing principal":    {writer: writer, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":    {writer: writer, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"no credential reader": {writer: writer, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions":  {writer: writer, authConfig: authConfig},
 	} {
@@ -223,15 +223,9 @@ func newCurrentModelDefaultRoute(
 ) *handler.CurrentModelDefaultRoute {
 	t.Helper()
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	route, err := handler.NewCurrentModelDefaultRoute(
 		writer,
-		apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
 	)
 	if err != nil {
@@ -253,8 +247,7 @@ func currentModelDefaultRequest(body string) *http.Request {
 		bytes.NewBufferString(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

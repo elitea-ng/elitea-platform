@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -38,7 +38,7 @@ func NewCurrentIndexStartRoute(
 // branch (#340).
 //
 // The permission is unchanged and correct for both branches:
-// `models.applications.tool.patch` is exactly what pylon's own
+// `models.applications.tool.patch` is exactly what the legacy runtime's own
 // `test_toolkit_tool` endpoint checks. Nothing here widens who may run a tool.
 func NewCurrentIndexStartRouteWithToolRuns(
 	useCase StartUseCase,
@@ -58,8 +58,7 @@ func newCurrentIndexStartRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexStartRoute, error) {
-	if useCase == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if useCase == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexStartRoute
 	}
 	var start *StartHandler

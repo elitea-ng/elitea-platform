@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"strconv"
 )
 
 const (
@@ -21,6 +22,9 @@ type S3Config struct {
 	ForcePathStyle bool
 	Bucket         string
 	KeyPrefix      string
+	// NoPresign (S3_PRESIGN=false) hands clients Main's streaming facade
+	// instead of presigned URLs, for a store clients cannot reach.
+	NoPresign bool
 }
 
 // AzureConfig holds Azure Blob backend configuration, sourced from
@@ -92,6 +96,14 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		secretKey, _ := lookup("S3_SECRET_KEY")
 		endpoint, _ := lookup("S3_ENDPOINT_URL")
 		forcePathStyle, _ := lookup("S3_FORCE_PATH_STYLE")
+		presign := true
+		if value, _ := lookup("S3_PRESIGN"); value != "" {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("storage: S3_PRESIGN must be true or false (got %q)", value)
+			}
+			presign = parsed
+		}
 		cfg.S3 = S3Config{
 			Endpoint:       endpoint,
 			AccessKey:      accessKey,
@@ -100,6 +112,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 			ForcePathStyle: forcePathStyle == "true",
 			Bucket:         container,
 			KeyPrefix:      keyPrefix,
+			NoPresign:      !presign,
 		}
 
 	case backendAzure:

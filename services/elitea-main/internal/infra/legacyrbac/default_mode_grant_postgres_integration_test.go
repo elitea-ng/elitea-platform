@@ -40,7 +40,7 @@ package legacyrbac_test
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -48,9 +48,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 const defaultModeGrant = `
@@ -120,7 +120,7 @@ func TestDefaultModeGrantGivesANonMemberNothing(t *testing.T) {
 }
 
 // A project that carries its OWN per-project grants — the shape every
-// pylon-backed database and every legacy dump has — suppresses the central
+// legacy-backed database and every legacy dump has — suppresses the central
 // fallback entirely, so the grant is inert there. This is why the migration
 // cannot change what an existing deployment's members can do.
 func TestDefaultModeGrantIsInertForAProjectWithItsOwnGrants(t *testing.T) {

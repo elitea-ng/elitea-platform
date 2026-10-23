@@ -1,3 +1,12 @@
+-- REWRITTEN (#1359, pgvector removal). The released text of this file has
+-- the checksum fe71faa1fc925a050ad73b5d3b7313e1cc8ca926d1218fe476ae950bd3a7cac7;
+-- the engine's migration runner accepts it for a database that applied it
+-- (`storage::migrate::REWRITTEN`). The released text recreated
+-- `wiki_node_embeddings` (type `vector`) with the project in its key; the
+-- vectors are in elitea-vector now, so this text only drops the 0001 table
+-- (absent on a fresh install) and creates none (0008 drops the released
+-- one where it exists).
+--
 -- The index is scoped by project.
 --
 -- WHY. 0001 keyed every index table by `wiki_id` alone, in this one
@@ -27,7 +36,7 @@
 -- WHY DROP AND CREATE, NOT ALTER. The tables are emptied anyway, and
 -- 0001's constraints carry server-generated names. Recreating the tables
 -- states the whole new key in one place and depends on no generated name.
--- The text-search configuration and the `vector` extension of 0001 stay.
+-- The text-search configuration of 0001 stays.
 --
 -- 0001-0004 are applied and checksummed in the ledger; they are not edited.
 
@@ -129,16 +138,6 @@ CREATE TABLE wiki_edges (
 
 CREATE INDEX idx_wiki_edges_source ON wiki_edges (project_id, wiki_id, source_id);
 CREATE INDEX idx_wiki_edges_target ON wiki_edges (project_id, wiki_id, target_id);
-
-CREATE TABLE wiki_node_embeddings (
-    project_id INTEGER NOT NULL,
-    wiki_id    TEXT    NOT NULL,
-    node_id    TEXT    NOT NULL,
-    embedding  VECTOR  NOT NULL,
-    PRIMARY KEY (project_id, wiki_id, node_id),
-    FOREIGN KEY (project_id, wiki_id, node_id)
-        REFERENCES wiki_nodes (project_id, wiki_id, node_id) ON DELETE CASCADE
-);
 
 -- The BM25 statistics. As in 0001 they have no foreign key: the publish
 -- writes millions of postings for a large repository, and a per-row key

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
 )
 
 var _ conversations.MessageChangesLister = (*ConversationsRepo)(nil)

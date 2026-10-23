@@ -27,14 +27,14 @@ func TestCloudExecutorDefaultsAreOffWithTheADRValues(t *testing.T) {
 func TestCloudExecutorOverlayKeepsBounds(t *testing.T) {
 	var values Values
 	if err := json.Unmarshal([]byte(`{
-		"enabled": true, "shell": false, "network": false, "history_full_allowed": true,
+		"enabled": true, "project_default_enabled": true, "shell": false, "network": false, "history_full_allowed": true,
 		"network_allowlist": ["GitHub.com", "*.npmjs.org", "not a host", "localhost", "github.com"],
 		"max_segment_mb": 100, "max_file_mb": 999999, "max_files": "many", "max_unpacked_mb": 0,
 		"max_project_workspace_gb": 5, "idle_retention_days": 3, "return_grace_days": 0}`), &values); err != nil {
 		t.Fatal(err)
 	}
 	got := CloudExecutorSettingsFromValues(values)
-	if !got.Enabled || got.Shell || got.Network || !got.HistoryFullAllowed ||
+	if !got.Enabled || !got.ProjectDefaultEnabled || got.Shell || got.Network || !got.HistoryFullAllowed ||
 		!reflect.DeepEqual(got.NetworkAllowlist, []string{"github.com", "*.npmjs.org"}) ||
 		got.MaxSegmentMB != 100 || got.MaxFileMB != 25 || got.MaxFiles != 20000 || got.MaxUnpackedMB != 2048 ||
 		got.MaxProjectWorkspaceGB != 5 || got.IdleRetentionDays != 3 || got.ReturnGraceDays != 0 {
@@ -56,5 +56,27 @@ func TestCloudExecutorAmendmentKeys(t *testing.T) {
 	// An unset env_allow stays unset (every name allowed but the denied ones).
 	if CloudExecutorSettingsFromValues(Values{}).EnvAllow != nil {
 		t.Fatalf("env_allow is set by default")
+	}
+}
+
+// The upgrade rule: a project default that was never saved is the saved
+// `enabled`, so a deployment that had the executor on keeps it on for
+// projects without their own value; a saved project default always wins.
+func TestCloudExecutorProjectDefaultFollowsEnabledUntilSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values Values
+		want   bool
+	}{
+		{"new install", Values{}, false},
+		{"upgrade with the executor on", Values{KeyCloudExecutorEnabled: true}, true},
+		{"upgrade with the executor off", Values{KeyCloudExecutorEnabled: false}, false},
+		{"saved off with the executor on", Values{KeyCloudExecutorEnabled: true, KeyCloudExecutorProjectDefaultEnabled: false}, false},
+		{"saved on", Values{KeyCloudExecutorEnabled: true, KeyCloudExecutorProjectDefaultEnabled: true}, true},
+		{"wrong type is absent", Values{KeyCloudExecutorEnabled: true, KeyCloudExecutorProjectDefaultEnabled: "no"}, true},
+	} {
+		if got := CloudExecutorSettingsFromValues(tc.values).ProjectDefaultEnabled; got != tc.want {
+			t.Errorf("%s: project default = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -130,7 +130,7 @@ fn unpolled_future_creates_no_false_stage_or_interruption() {
             pending::<Result<(), SupervisorError>>(),
         ));
     });
-    assert!(output.is_empty());
+    assert_eq!(output, "");
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn absent_context_emits_nothing_and_keeps_execution_behavior() {
         result,
         Poll::Ready(Err(SupervisorError::Ledger(LedgerError::Fenced)))
     ));
-    assert!(output.is_empty());
+    assert_eq!(output, "");
 }
 
 #[test]
@@ -336,7 +336,9 @@ fn nested_runtime_staging_and_receipt_causes_remain_safe() {
         SupervisorError::Content(DependencyContentError::Staging(std::io::Error::other(
             CANARY,
         ))),
-        SupervisorError::Content(DependencyContentError::Unavailable { status: 599 }),
+        SupervisorError::Content(DependencyContentError::Unavailable {
+            code: tonic::Code::DataLoss,
+        }),
         SupervisorError::Receipt,
     ];
     let ((), output) = capture_events(|| {
@@ -347,7 +349,7 @@ fn nested_runtime_staging_and_receipt_causes_remain_safe() {
     assert_stage_event_count(&output, 10);
     assert_eq!(output.matches(r#"disposition="failed""#).count(), 5);
     assert!(!output.contains(CANARY));
-    assert!(!output.contains("599"));
+    assert!(!output.contains("DataLoss"));
     assert!(!output.contains("999"));
     for class in [
         "runtime_observation",

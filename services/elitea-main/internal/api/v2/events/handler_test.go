@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,8 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // fakeSource is an in-memory EventSource: one send channel per logical
@@ -223,7 +224,7 @@ func waitForBody(t *testing.T, rec *lockedRecorder, want string) {
 }
 
 func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
-	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff"} {
+	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff", "conversation_activity"} {
 		if !Forwarded(eventType) {
 			t.Errorf("Forwarded(%q) = false, want true", eventType)
 		}
@@ -239,12 +240,20 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 	}
 	// The third family (ADR-0034 workspace handoff) is audience-scoped: it
 	// reaches only each frame's readers (TestStream_WorkspaceHandoff...).
-	if len(streamFamilies) != 3 {
-		t.Errorf("streamFamilies has %d entries, want 3; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
+	// The fourth (client contract 1.12 conversation activity) is too, may
+	// name the whole project for a public conversation, and needs the
+	// conversation list permission (TestStream_ConversationActivity...).
+	if len(streamFamilies) != 4 {
+		t.Errorf("streamFamilies has %d entries, want 4; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
 	}
 	for _, f := range streamFamilies {
-		if f.audience != (f.eventType == WorkspaceHandoffEventType) {
+		scoped := f.eventType == WorkspaceHandoffEventType || f.eventType == ConversationActivityEventType
+		if f.audience != scoped {
 			t.Errorf("family %q audience scoping = %v", f.eventType, f.audience)
+		}
+		activity := f.eventType == ConversationActivityEventType
+		if f.projectAudience != activity || (f.permission == ConversationListPermission) != activity {
+			t.Errorf("family %q project audience = %v, permission = %q", f.eventType, f.projectAudience, f.permission)
 		}
 	}
 	// And each from its own family only.
@@ -613,5 +622,77 @@ func TestStream_WorkspaceHandoffReachesOnlyItsAudience(t *testing.T) {
 		if body := stream(user); strings.Contains(body, "workspace.handoff") {
 			t.Fatalf("%s got a workspace frame: %q", name, body)
 		}
+	}
+}
+
+// Client contract 1.12: a conversation activity frame reaches only its
+// audience, and only a caller who may list conversations. A public
+// conversation's frame (`audience_project`) reaches every such caller; a
+// private one's and a read frame reach the users they name. A caller without
+// the list permission is not even subscribed. The audience never leaves the
+// server.
+func TestStream_ConversationActivityReachesOnlyItsAudience(t *testing.T) {
+	stream := func(user *auth.User, permissions []string) (string, []string) {
+		t.Helper()
+		src := newFakeSource()
+		resolver := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+			return auth.PermissionResolution{UserID: 1, Permissions: permissions}, nil
+		})
+		h := NewHandlerFromSource(src, WithPermissionResolver(resolver))
+		ctx, cancel := context.WithCancel(context.Background())
+		if user != nil {
+			ctx = auth.ContextWithUser(ctx, *user)
+		}
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			h.Stream(rec, newRequestWithProjectID(ctx, "7"))
+			close(done)
+		}()
+		time.Sleep(20 * time.Millisecond)
+		src.mu.Lock()
+		subscribed := append([]string(nil), src.channels...)
+		src.mu.Unlock()
+		if slices.Contains(subscribed, "project:7:conversations") {
+			for _, frame := range []string{
+				`{"conversation_id":1,"state":"running","audience_project":true}`,
+				`{"conversation_id":2,"state":"needs_you","audience":[12]}`,
+				`{"conversation_id":3,"unread_hint":false,"audience":[11]}`,
+				`{"conversation_id":4,"state":"idle"}`,
+				`{"conversation_id":5,"state":"idle","audience_project":false}`,
+				`not json`,
+			} {
+				src.stream("project:7:conversations") <- natsbus.Event{Type: "conversation_activity", Payload: json.RawMessage(frame)}
+			}
+			// A frame of another type on this family is dropped.
+			src.stream("project:7:conversations") <- natsbus.Event{Type: "workspace.handoff", Payload: json.RawMessage(`{"conversation_id":6,"audience_project":true}`)}
+		}
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		<-done
+		return rec.Body.String(), subscribed
+	}
+	list := []string{ConversationListPermission}
+	body, _ := stream(&auth.User{ID: "11", UserID: "11"}, list)
+	for _, want := range []string{"event: conversation_activity", `"conversation_id":1`, `"conversation_id":3`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("user 11 lacks %q: %q", want, body)
+		}
+	}
+	for _, leaked := range []string{`"conversation_id":2`, `"conversation_id":4`, `"conversation_id":5`, `"conversation_id":6`, "not json", "audience"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("user 11's stream carries %q: %q", leaked, body)
+		}
+	}
+	body, _ = stream(&auth.User{ID: "12", UserID: "12"}, list)
+	if !strings.Contains(body, `"conversation_id":1`) || !strings.Contains(body, `"conversation_id":2`) || strings.Contains(body, `"conversation_id":3`) {
+		t.Fatalf("user 12 got the wrong frames: %q", body)
+	}
+	body, subscribed := stream(&auth.User{ID: "11", UserID: "11"}, []string{StreamPermission})
+	if slices.Contains(subscribed, "project:7:conversations") || strings.Contains(body, "conversation_activity") {
+		t.Fatalf("a caller without %s was subscribed (%v): %q", ConversationListPermission, subscribed, body)
+	}
+	if body, _ := stream(nil, list); strings.Contains(body, "conversation_activity") {
+		t.Fatalf("a caller without a user got a frame: %q", body)
 	}
 }

@@ -14,11 +14,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
 )
 
 // The server injects a test identity, then uses the public handlers and project gate.
@@ -186,6 +187,9 @@ CREATE TABLE p_2.chat_conversations(id integer PRIMARY KEY,is_private boolean,me
 CREATE TABLE p_2.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
 CREATE TABLE p_2.chat_participant_mapping(conversation_id integer,participant_id integer);
 INSERT INTO p_2.chat_participants VALUES (9,'user','{"id":9}');`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(t.Context(), chatactivitytest.Schema("p_2")); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := pool.Exec(t.Context(), `INSERT INTO p_2.chat_conversations VALUES ($1,TRUE,'{}')`, conversation); err != nil {

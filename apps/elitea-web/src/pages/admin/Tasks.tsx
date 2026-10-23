@@ -8,13 +8,11 @@
  *
  * ## Why this page exists next to Schedules & Tasks, rather than inside it
  *
- * That page's "Tasks" tab renders an unavailable notice, and it stays that way:
- * it is about pylon's Arbiter task node, which this platform does not have and
- * is not going to (`SchedulesTasks.tsx`'s header, and
- * `arbiterTaskNodeUnavailable` in the Go handler). This page answers the
- * QUESTION that tab asked, from this platform's own tables — a different
- * subject with a different route, so it gets its own nav entry rather than
- * quietly replacing a notice that is still true.
+ * The reference page's "Tasks" tab read a plugin runtime's in-process task
+ * registry, which this platform does not have and is not going to, so that tab
+ * is not ported (`SchedulesTasks.tsx`'s header). This page answers the QUESTION
+ * that tab asked, from this platform's own tables — a different subject with a
+ * different route, so it gets its own nav entry.
  *
  * ## Three differences from the reference
  *

@@ -13,7 +13,7 @@
 #                   is built on. elitea-main refuses to boot with a native
 #                   client registered and no public origin (coordinator
 #                   decision 9), and /authorize answers 503 without one. It is
-#                   the browser-facing origin, traefik on STANDALONE_PORT.
+#                   the browser-facing origin, elitea-main on STANDALONE_PORT.
 #
 # What it deliberately does NOT do: register a native client. The suite
 # registers its own client through the admin API (the DB layer of the

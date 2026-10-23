@@ -15,7 +15,7 @@
 
 use crate::graph::Graph;
 use elitea_inventory_core::store::{GraphRead, GraphStamp};
-use elitea_pg_migrate::{Ledger, MigrateError, Migration};
+use elitea_pg_migrate::{Ledger, MigrateError, Migration, Rewritten};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::types::Json;
@@ -72,7 +72,32 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0007_deleted_toolkits.sql",
         include_str!("../../migrations/0007_deleted_toolkits.sql"),
     ),
+    (
+        "0008_entity_vectors_in_qdrant.sql",
+        include_str!("../../migrations/0008_entity_vectors_in_qdrant.sql"),
+    ),
+    (
+        "0009_host_invocations.sql",
+        include_str!("../../migrations/0009_host_invocations.sql"),
+    ),
+    (
+        "0010_host_stop_fences.sql",
+        include_str!("../../migrations/0010_host_stop_fences.sql"),
+    ),
 ];
+
+/// The released migrations that were rewritten, with the checksum of every
+/// text of theirs that was ever released (#1359, pgvector removal): a
+/// database whose ledger records one of them stays valid. Any other checksum
+/// is still refused.
+///
+/// * 0004: the only released text (commit 25cd2a50a, #1142) created the
+///   `vector` extension and `entities.embedding_vector`; the rewrite does
+///   nothing, and 0008 drops what that text created.
+pub const REWRITTEN: &[Rewritten] = &[Rewritten {
+    version: "0004",
+    released_checksums: &["a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f"],
+}];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
 /// bind parameters a statement may carry.
@@ -100,11 +125,22 @@ pub enum StoreError {
     /// future, or not a time).
     #[error("{0}")]
     Listing(String),
+    /// elitea-vector, which holds the entity vectors (`vectors`), failed or
+    /// cannot be reached for this call. A write that reports it wrote
+    /// nothing.
+    #[error("{0}")]
+    Vectors(String),
     /// The toolkit was deleted (its tombstone is in
     /// `inventory_graph.deleted_toolkits`, migration 0007): nothing may
     /// write its graph again. Nothing was changed.
     #[error("{0}")]
     Deleted(String),
+    /// Concurrent writes kept the call from finishing (a graph rewritten
+    /// during every attempt to rank it). Nothing is wrong with it: the same
+    /// call made again succeeds. The host reads it as `busy`, the retryable
+    /// refusal.
+    #[error("{0}")]
+    Contended(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -183,7 +219,7 @@ pub fn embedded_file_names() -> Vec<&'static str> {
 /// [`StoreError::Migration`] for an edited applied migration,
 /// [`StoreError::Database`] for a failed statement.
 pub async fn migrate(pool: &PgPool) -> Result<Vec<String>> {
-    Ok(elitea_pg_migrate::apply(pool, &LEDGER, &embedded()?).await?)
+    Ok(elitea_pg_migrate::apply_with_rewrites(pool, &LEDGER, &embedded()?, REWRITTEN).await?)
 }
 
 /// Why the store's schema cannot serve a read-only command, or `None`
@@ -305,14 +341,106 @@ fn rows(graph: &Graph) -> Result<(Vec<EntityRow>, Vec<RelationRow>)> {
 /// which `jsonb` refuses), [`StoreError::Database`] otherwise. Nothing is
 /// written on an error.
 pub async fn save(pool: &PgPool, key: GraphKey, graph: &Graph) -> Result<i64> {
-    let mut transaction = pool.begin().await?;
-    let revision = write_graph(&mut transaction, key, graph).await?;
-    transaction.commit().await?;
-    Ok(revision)
+    save_with(pool, key, graph, None).await
 }
 
-/// [`save`] inside a caller's transaction (which commits it): takes the
-/// graph's write lock, replaces its rows, returns the new revision.
+/// [`save`], publishing the graph's entity vectors through `vectors`
+/// (`vectors::stage`, before the transaction; without it the first ranking
+/// backfills them).
+///
+/// # Errors
+///
+/// See [`save`]; [`StoreError::Vectors`] when the upsert fails (nothing is
+/// written).
+pub async fn save_with(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<i64> {
+    let prepared = prepare(pool, key, graph, vectors).await?;
+    let written = async {
+        let mut transaction = pool.begin().await?;
+        let revision = write_graph(&mut transaction, key, graph, &prepared).await?;
+        transaction.commit().await?;
+        Ok(revision)
+    }
+    .await;
+    prepared.settle(pool, key, vectors, written.is_ok()).await;
+    written
+}
+
+/// A graph write prepared BEFORE its transaction opens: its rows, and its
+/// entity vectors already upserted under a new generation
+/// (`vectors::stage`), so no transaction is open and no lock held across
+/// the call to elitea-vector. Write it with [`write_graph`] inside the
+/// transaction, then [`Prepared::settle`] it whatever the outcome.
+#[must_use = "write it with write_graph, then settle it"]
+pub struct Prepared {
+    entities: Vec<EntityRow>,
+    relations: Vec<RelationRow>,
+    staged: vectors::Staged,
+}
+
+/// Prepare the write of `graph` (see [`Prepared`]).
+///
+/// # Errors
+///
+/// See [`save`]; [`StoreError::Vectors`] when the upsert fails (the write
+/// must not go on).
+pub async fn prepare(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<Prepared> {
+    let (entities, relations) = rows(graph)?;
+    let space = vectors::VectorSpace::of(
+        graph
+            .metadata
+            .get(elitea_inventory_core::embed::MODEL_KEY)
+            .and_then(Value::as_str),
+        entities
+            .iter()
+            .map(|entity| entity.4.as_ref().map_or(0, Vec::len)),
+    );
+    let embedded: Vec<vectors::EntityVector<'_>> = entities
+        .iter()
+        .filter_map(|entity| {
+            entity.4.as_deref().map(|vector| vectors::EntityVector {
+                id: &entity.0,
+                vector,
+            })
+        })
+        .collect();
+    let staged = vectors::stage(pool, key, space, &embedded, vectors).await?;
+    drop(embedded);
+    Ok(Prepared {
+        entities,
+        relations,
+        staged,
+    })
+}
+
+impl Prepared {
+    /// After the write's transaction ended (`committed`: as the caller saw
+    /// it): delete the staged vectors the graph row does not hold, and sweep
+    /// the generations the commit superseded (`vectors::settle`).
+    pub async fn settle(
+        self,
+        pool: &PgPool,
+        key: GraphKey,
+        vectors: Option<&vectors::EntityVectors>,
+        committed: bool,
+    ) {
+        vectors::settle(pool, key, &self.staged, vectors, committed).await;
+    }
+}
+
+/// [`save`] inside a caller's transaction (which commits it, then settles
+/// `prepared`): takes the graph's write lock, replaces its rows, records the
+/// staged vector generation in the graph row (`vectors::record`), and
+/// returns the graph's new revision.
 ///
 /// # Errors
 ///
@@ -321,8 +449,9 @@ pub async fn write_graph(
     transaction: &mut sqlx::PgTransaction<'_>,
     key: GraphKey,
     graph: &Graph,
+    prepared: &Prepared,
 ) -> Result<i64> {
-    let (entities, relations) = rows(graph)?;
+    let (entities, relations) = (&prepared.entities, &prepared.relations);
     let mut metadata = graph.metadata.clone();
     for stamped in STAMPED_METADATA {
         metadata.shift_remove(stamped);
@@ -356,8 +485,9 @@ pub async fn write_graph(
     .bind(key.application_id)
     .execute(&mut **transaction)
     .await?;
-    insert_entities(transaction, key, &entities).await?;
-    insert_relations(transaction, key, &relations).await?;
+    insert_entities(transaction, key, entities).await?;
+    insert_relations(transaction, key, relations).await?;
+    vectors::record(transaction, key, &prepared.staged).await?;
     Ok(revision)
 }
 
@@ -609,12 +739,40 @@ pub async fn stamp(pool: &PgPool, key: GraphKey) -> Result<Option<GraphStamp>> {
 /// [`delete::delete_graph`], which holds the ingestion lease and fences
 /// later writes.
 ///
+/// Without vector access it refuses a graph that holds entity vectors in
+/// elitea-vector (see [`delete_with`]).
+///
 /// # Errors
 ///
-/// [`StoreError::Database`].
+/// [`StoreError::Database`]; [`StoreError::Vectors`] for a graph that holds
+/// entity vectors.
 pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
-    match delete::remove(pool, key, None, delete::Tombstone::No).await? {
+    delete_with(pool, key, None).await
+}
+
+/// [`delete()`], with the graph's entity vectors: through `vectors` the
+/// namespace is deleted inside the deletion's transaction, before its
+/// commit, so a failed delete leaves the graph and its generation records
+/// as they were (nothing is deleted, the call can be repeated). Without
+/// `vectors` a graph that holds any vectors (a recorded, stale or staged
+/// generation) is refused: deleting its rows would drop the only record of
+/// points this call cannot delete.
+///
+/// # Errors
+///
+/// [`StoreError::Database`]; [`StoreError::Vectors`] for a failed
+/// elitea-vector delete, or a graph holding vectors without `vectors`.
+pub async fn delete_with(
+    pool: &PgPool,
+    key: GraphKey,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<bool> {
+    let policy = vectors.map_or(delete::Vectors::Refuse, delete::Vectors::Remove);
+    match delete::remove(pool, key, None, policy, delete::Tombstone::No).await? {
         delete::Removal::Done { removed } => Ok(!removed.is_empty()),
+        delete::Removal::VectorsHeld(reason) => Err(StoreError::Vectors(format!(
+            "the graph was not deleted: {reason}"
+        ))),
         // Without a list time nothing can be newer than it.
         delete::Removal::Newer(_) => Ok(false),
     }
@@ -638,6 +796,41 @@ pub async fn import(
     key: GraphKey,
     graph: &Graph,
     replace_state: bool,
+) -> Result<Imported> {
+    import_with(pool, key, graph, replace_state, None).await
+}
+
+/// [`import`], publishing the graph's entity vectors through `vectors`.
+///
+/// # Errors
+///
+/// See [`import`] and [`save_with`].
+pub async fn import_with(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    replace_state: bool,
+    vectors: Option<&vectors::EntityVectors>,
+) -> Result<Imported> {
+    let prepared = prepare(pool, key, graph, vectors).await?;
+    let imported = import_prepared(pool, key, graph, replace_state, &prepared).await;
+    prepared
+        .settle(
+            pool,
+            key,
+            vectors,
+            matches!(imported, Ok(Imported::Saved { .. })),
+        )
+        .await;
+    imported
+}
+
+async fn import_prepared(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    replace_state: bool,
+    prepared: &Prepared,
 ) -> Result<Imported> {
     let mut transaction = pool.begin().await?;
     lock(&mut transaction, key).await?;
@@ -669,7 +862,7 @@ pub async fn import(
             documents: counts[1],
         });
     }
-    let revision = write_graph(&mut transaction, key, graph).await?;
+    let revision = write_graph(&mut transaction, key, graph, prepared).await?;
     transaction.commit().await?;
     Ok(Imported::Saved { revision })
 }

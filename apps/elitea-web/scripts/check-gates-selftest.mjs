@@ -74,6 +74,10 @@ function record(id, mechanism, redOk, greenOk, note = '') {
 function recordDelegated(id, mechanism, owner) {
   rows.push({ id, mechanism, red: '—', green: '—', note: `DELEGATED to ${owner}` });
 }
+/** A rule that no tool enforces. Listed so the gap stays visible, not counted as delegated. */
+function recordUngated(id, mechanism, reason) {
+  rows.push({ id, mechanism, red: 'n/a', green: 'n/a', note: `NOT GATED — ${reason}` });
+}
 
 // ── section 1: oxlint rule pairs ──
 const OXLINT_CASES = [
@@ -303,7 +307,11 @@ recordDelegated('R-A5', 'scripts/check-endpoint-manifest.mjs (endpoint manifest 
 recordDelegated('R-S1', 'S-unit acceptance tests asserting store shape (no query-derivable state)', 'S-units, review');
 recordDelegated('R-C2', 'theme-level variantMapping config + emitted-tag unit test; Storybook a11y at error', 'units T1/S1');
 recordDelegated('BUDGET/prop-drill-3', '§3.5 prop-drill depth ≤3 — needs cross-module data flow; R-L3 structure narrows it', 'review');
-recordDelegated('BUDGET/route-closure-250', '§3.5 transitive import closure ≤250 per route entry — needs the route tree', 'units R1 + uictl');
+// Was "DELEGATED to units R1 + uictl". Neither ever measured it: uictl only
+// diffed route patterns, and it was deleted with the apps/elitea-ui submodule.
+// The nearest real guard is the per-route chunk byte budget in
+// scripts/check-bundle-budget.mjs (build job), which bounds size, not count.
+recordUngated('BUDGET/route-closure-250', '§3.5 transitive import closure ≤250 per route entry', 'no tool counts it; check-bundle-budget.mjs bounds route-chunk bytes instead');
 
 // ── report ──
 const width = { id: 22, mech: 78, red: 6, green: 7 };
@@ -318,7 +326,10 @@ for (const row of rows) {
 }
 const proved = rows.filter((r) => r.red === 'RED✔' && r.green === 'GREEN✔').length;
 const delegated = rows.filter((r) => r.red === '—').length;
-console.log(`\n${proved} rule(s) proved RED+GREEN, ${delegated} delegated to later units, ${defects} defect(s).`);
+const ungated = rows.filter((r) => r.red === 'n/a').length;
+console.log(
+  `\n${proved} rule(s) proved RED+GREEN, ${delegated} delegated to later units, ${ungated} not gated, ${defects} defect(s).`,
+);
 if (defects > 0) {
   console.error('check-gates-selftest: FAIL — a rule whose failing fixture passes is a defect (D2).');
   process.exit(1);

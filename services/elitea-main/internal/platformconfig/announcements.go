@@ -11,7 +11,7 @@ package platformconfig
 // (`VITE_MAINTENANCE_BANNER`, parsed in EliteaUI's
 // `features/maintenance/lib/helpers/bannerConfig.js`), so the admin form wrote a
 // row no deployment ever read; maintenance mode was a gevent router hook on a
-// Pylon bootstrap plugin (`legacy/plugins/bootstrap/tools/splash.py`), so the
+// legacy bootstrap plugin (`legacy/plugins/bootstrap/tools/splash.py`), so the
 // form had nothing to install a hook on.
 //
 // Both now resolve from `centry.platform_config`, which is what makes them a
@@ -82,7 +82,7 @@ type Maintenance struct {
 	Enabled bool   `json:"enabled"`
 	Title   string `json:"title"`
 	Message string `json:"message"`
-	// HTML is the operator's own splash body, the port of pylon's
+	// HTML is the operator's own splash body, the port of the legacy
 	// `splash_template` tunable.
 	//
 	// It is SEPARATE from Message and does not default. Message is markdown

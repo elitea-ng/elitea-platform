@@ -16,12 +16,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
 )
 
 func TestRoutesPreserveExactFormSurfaceAndMethods(t *testing.T) {
@@ -471,34 +471,17 @@ func TestFormLifecycleAcrossRealHTTPAndApplicationBoundaries(t *testing.T) {
 		t.Fatalf("authorization = %+v", authorization)
 	}
 
-	publicPolicy, err := forwardapp.NewPublicPolicy(nil)
+	// The same cookie is what apimw.Auth and the admin UI read in-process
+	// (#1359): no edge ForwardAuth stands between the browser and them.
+	formSessions, err := NewFormSessions(cookies, flow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	kernel, err := forwardapp.NewKernel(panicCoreCredential(t), flow, publicPolicy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxyResolver, err := NewTrustedProxyResolver(TrustedProxyConfig{
-		TrustedProxyCIDRs:        []string{"10.0.0.0/8"},
-		PublicOrigin:             "https://elitea.example.test",
-		IdentityProjectionSecret: []byte("0123456789abcdef0123456789abcdef"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	core, err := NewCoreHandler(kernel, proxyResolver, cookies, CoreConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	forwardRequest := coreRequest("/auth/check?target=rpc")
-	forwardRequest.AddCookie(authenticatedCookies[0])
-	forwardRecorder := httptest.NewRecorder()
-	core.ServeHTTP(forwardRecorder, forwardRequest)
-	if forwardRecorder.Code != http.StatusOK || forwardRecorder.Header().Get("X-Auth-Type") != "user" ||
-		forwardRecorder.Header().Get("X-Auth-ID") != "71" ||
-		forwardRecorder.Header().Get("X-Auth-Reference") != "-" {
-		t.Fatalf("edge-auth status=%d headers=%v", forwardRecorder.Code, forwardRecorder.Header())
+	readRequest := httptest.NewRequest(http.MethodGet, "/api/v2/elitea_core/projects", nil)
+	readRequest.AddCookie(authenticatedCookies[0])
+	principal, err := formSessions.AuthenticateFormSession(readRequest)
+	if err != nil || principal.UserID != "71" || principal.ID != "71" || principal.AuthType != "session" {
+		t.Fatalf("Form session principal = %+v, %v", principal, err)
 	}
 
 	restartRequest := httptest.NewRequest(http.MethodGet, BasePath+LoginPath+"?target_to=%2Fagain", nil)
@@ -523,6 +506,11 @@ func TestFormLifecycleAcrossRealHTTPAndApplicationBoundaries(t *testing.T) {
 	if logoutRecorder.Code != http.StatusFound || logoutRecorder.Header().Get("Location") != "/done" ||
 		len(sessions.records) != 0 {
 		t.Fatalf("logout status = %d location = %q sessions = %d", logoutRecorder.Code, logoutRecorder.Header().Get("Location"), len(sessions.records))
+	}
+	signedOut := httptest.NewRequest(http.MethodGet, "/api/v2/elitea_core/projects", nil)
+	signedOut.AddCookie(restartedCookies[0])
+	if _, err := formSessions.AuthenticateFormSession(signedOut); !errors.Is(err, apimw.ErrFormSessionRejected) {
+		t.Fatalf("signed-out Form session = %v, want ErrFormSessionRejected", err)
 	}
 }
 

@@ -1,306 +1,149 @@
-// This file gates the edge-auth target of the edge configuration (#378).
+// This file gates the removal of edge authentication (#1359). It replaces the
+// #378 gate, which held every edge forwardAuth to an address elitea-main
+// registered.
 //
-// An edgeAuth middleware calls one HTTP address before it admits a request.
-// Traefik returns the answer of that address to the caller when the answer is
-// not 2xx. An address that nothing registers therefore breaks every router that
-// names the middleware, and it breaks them at the edge.
+// elitea-main registered exactly one such address, /internal/auth/main. Its
+// only product was the X-Auth-* identity projection, and that plane is gone:
+// elitea-main no longer registers the path, no longer reads the headers, and
+// reads the Form session cookie itself. So the rule this gate applies is now
+// one rule:
 //
-// The retired deploy/centry-hybrid edge pointed `go-main-auth` at
-// http://elitea-main:8080/internal/auth/main. elitea-main registers
-// that path in internal/api/production_router.go, inside the branch that
-// composes production authentication. cmd/elitea-main/main.go enters that
-// branch only when ELITEA_AUTH_CONFIG_FILE is set. So the rule this gate
-// applies is one rule:
+//	no edge configuration this repository ships may call an authenticator.
 //
-//	a router may name an edgeAuth middleware only when the Compose service
-//	behind its address sets ELITEA_AUTH_CONFIG_FILE.
+// A forwardAuth middleware calls one HTTP address before it admits a request
+// and returns that address's non-2xx answer to the caller. Pointed at
+// /internal/auth/main it would answer 404 for every request, so a router that
+// names one fails at the edge. Pointed anywhere else it would be a second
+// authentication plane this repository does not review.
 //
-// The foundation stack broke that rule. It mounted a whole directory, so it
-// loaded index-routes.yml as a side effect, and eight routers there name
-// go-main-auth. Three of them carry no Host(`elitea-gateway`) guard and
-// sit at priority 90, so a browser reached them and the notification API failed
-// at the edge.
+// Unlike the #378 gate, a DEFINITION that no router names is a defect here
+// too: there is no address left for it to call, and leaving one in place
+// invites the next router to name it.
 //
-// A DEFINITION that no router names is not a defect here. Traefik never calls
-// it. This gate follows the router, because that is what Traefik acts on.
+// The in-process half lives in elitea-main: internal/api's
+// TestRouterStripsClientIdentityHeaders proves the root strip is mounted, and
+// TestInProcessStripCoversTheEdgeFloor below holds its list to the edges'.
 //
-// This gate needs no container and no network. It stays with the other edge
-// gates in the No Binaries workflow, which carries no path filter.
+// The compose Traefik is gone too (#1359 P2): elitea-main is the compose edge,
+// so the compose half of this gate asks elitea-main directly.
 //
 // RUN IT WITH -count=1, for the reason stated in edge_middlewares_test.go: the
 // YAML this file reads lives in deploy/, outside this module.
 package deployedge_test
 
 import (
-	"net/url"
+	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
-// authConfigVariable selects production authentication. main.go reads it, and
-// production_router.go registers the edge-auth path only in that branch.
-const authConfigVariable = "ELITEA_AUTH_CONFIG_FILE"
+// removedAuthPath is the edge-auth address elitea-main used to register.
+const removedAuthPath = "/internal/auth/main"
 
-// edgeAuthMiddleware is one middleware definition, with the address this
-// gate follows and the chain members that reach further definitions.
-type edgeAuthMiddleware struct {
-	EdgeAuth struct {
-		Address string `yaml:"address"`
-	} `yaml:"forwardAuth"`
-	Chain struct {
-		Middlewares []string `yaml:"middlewares"`
-	} `yaml:"chain"`
-}
-
-// edgeWithEdgeAuth re-reads the edge YAML with the fields this gate needs.
-type edgeWithEdgeAuth struct {
-	HTTP struct {
-		Routers map[string]struct {
-			Middlewares []string `yaml:"middlewares"`
-		} `yaml:"routers"`
-		Middlewares map[string]edgeAuthMiddleware `yaml:"middlewares"`
-	} `yaml:"http"`
-}
-
-// composeModel is the subset of a Compose file this gate reads.
-type composeModel struct {
-	Services map[string]struct {
-		Environment yaml.Node `yaml:"environment"`
-	} `yaml:"services"`
-}
-
-func parseEdgeWithEdgeAuth(t *testing.T, path string) edgeWithEdgeAuth {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var parsed edgeWithEdgeAuth
-	if err := yaml.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("parse %s as Traefik dynamic configuration: %v", path, err)
-	}
-	return parsed
-}
-
-func parseCompose(t *testing.T, root, relative string) composeModel {
-	t.Helper()
-	absolute := filepath.Join(root, relative)
-	raw, err := os.ReadFile(absolute)
-	if err != nil {
-		t.Fatalf(
-			"read %s: %v.\nThe Compose file moved and this gate stopped "+
-				"gating. Update configSets() in edge_middlewares_test.go.",
-			relative, err,
-		)
-	}
-	var parsed composeModel
-	if err := yaml.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("parse %s as a Compose model: %v", relative, err)
-	}
-	if len(parsed.Services) == 0 {
-		t.Fatalf(
-			"%s declares no services, so this gate stopped gating. The file "+
-				"changed shape. Update configSets() in edge_middlewares_test.go.",
-			relative,
-		)
-	}
-	return parsed
-}
-
-// environmentValue reads one variable out of a Compose `environment` block.
-// Compose accepts a mapping and a `NAME=value` sequence, and this gate accepts
-// both. The second return value reports that the name is present.
-func environmentValue(node yaml.Node, name string) (string, bool) {
-	switch node.Kind {
-	case yaml.MappingNode:
-		for index := 0; index+1 < len(node.Content); index += 2 {
-			if node.Content[index].Value == name {
-				return node.Content[index+1].Value, true
-			}
+// TestNoEdgeServesTheRemovedAuthenticator replaces the parsed-Traefik half of
+// this gate. The compose edge is elitea-main now, so the question "does a
+// loaded edge call an authenticator" becomes "does elitea-main, AS the edge,
+// still answer the address one would call". It must not: a 2xx there would be
+// an authentication plane nobody reviews, and the address existing at all
+// invites the next edge to name it. TestNoTraefikEdgeShips keeps a forwardAuth
+// edge from coming back in a compose file, and the walk below covers the
+// chart and the Gateway API manifests.
+func TestNoEdgeServesTheRemovedAuthenticator(t *testing.T) {
+	edge := startComposeEdge(t, browserFacingRouterConfig(), browserRemoteAddr)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		answer := edge.do(t, method, removedAuthPath, http.Header{"Cookie": {"elitea_session=forged"}})
+		if answer.reachedWeb {
+			t.Fatalf("%s %s reached the web container; the path routing changed under this gate", method, removedAuthPath)
 		}
-	case yaml.SequenceNode:
-		for _, entry := range node.Content {
-			key, value, found := strings.Cut(entry.Value, "=")
-			if found && key == name {
-				return value, true
-			}
+		if answer.status != http.StatusNotFound && answer.status != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s answered %d through the compose edge. Edge authentication was removed in #1359; "+
+				"elitea-main must not serve that address", method, removedAuthPath, answer.status)
 		}
 	}
-	return "", false
 }
 
-// expandMiddlewares returns every middleware a router reaches, including the
-// members of a chain middleware. A chain fails the same way a router does.
-func expandMiddlewares(named []string, definitions map[string]edgeAuthMiddleware) []string {
-	seen := map[string]bool{}
-	var reached []string
-	var walk func(references []string)
-	walk = func(references []string) {
-		for _, reference := range references {
-			name := providerLocalName(reference)
-			if seen[name] {
-				continue
-			}
-			seen[name] = true
-			reached = append(reached, name)
-			definition, present := definitions[name]
-			if !present {
-				continue
-			}
-			walk(definition.Chain.Middlewares)
-		}
-	}
-	walk(named)
-	return reached
-}
-
-// TestEveryLoadedEdgeAuthTargetIsRegistered is the gate.
-func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
+// TestNoDeployConfigurationCallsTheRemovedAuthPath covers what the parsed gate
+// cannot: Helm templates (not YAML until rendered), the Gateway API manifests,
+// and any file no configuration set declares yet.
+func TestNoDeployConfigurationCallsTheRemovedAuthPath(t *testing.T) {
 	root := repoRoot(t)
+	deploy := filepath.Join(root, "deploy")
 
-	checked := 0
-	for _, set := range configSets() {
-		paths := set.resolve(t, root)
-
-		// Merge the set, because a router in one file names a middleware that
-		// another file in the same set defines.
-		definitions := map[string]edgeAuthMiddleware{}
-		routerFile := map[string]string{}
-		routerMiddlewares := map[string][]string{}
-		for _, path := range paths {
-			parsed := parseEdgeWithEdgeAuth(t, path)
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				relative = path
+	scanned := 0
+	sawSentinel := false
+	err := filepath.WalkDir(deploy, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".yml", ".yaml", ".tpl":
+		default:
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		relative, _ := filepath.Rel(root, path)
+		if relative == sentinelDeployFile {
+			sawSentinel = true
+		}
+		for number, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
 			}
-			for name, definition := range parsed.HTTP.Middlewares {
-				definitions[name] = definition
-			}
-			for router, definition := range parsed.HTTP.Routers {
-				routerFile[router] = relative
-				routerMiddlewares[router] = definition.Middlewares
+			if strings.Contains(trimmed, removedAuthPath) || strings.HasPrefix(trimmed, "forwardAuth:") {
+				t.Errorf("%s:%d: %q — edge authentication was removed in #1359", relative, number+1, trimmed)
 			}
 		}
-
-		routers := make([]string, 0, len(routerMiddlewares))
-		for router := range routerMiddlewares {
-			routers = append(routers, router)
-		}
-		sort.Strings(routers)
-
-		for _, router := range routers {
-			for _, name := range expandMiddlewares(routerMiddlewares[router], definitions) {
-				address := definitions[name].EdgeAuth.Address
-				if strings.TrimSpace(address) == "" {
-					continue
-				}
-				checked++
-				assertEdgeAuthTarget(t, root, set, router, routerFile[router], name, address)
-			}
-		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", deploy, err)
 	}
-
-	if checked == 0 {
-		t.Fatal(
-			"no router names an edgeAuth middleware in any configuration " +
-				"set, so this gate proved nothing. The edge changed shape, or " +
-				"a set stopped being declared.",
+	if scanned == 0 || !sawSentinel {
+		t.Fatalf(
+			"scanned %d files under deploy/ and %s seen=%v, so this "+
+				"gate proved nothing. deploy/ moved; update the walk.",
+			scanned, sentinelDeployFile, sawSentinel,
 		)
 	}
 }
 
-// assertEdgeAuthTarget applies the one rule to one reference.
-func assertEdgeAuthTarget(
-	t *testing.T,
-	root string,
-	set configSet,
-	router, routerFile, middleware, address string,
-) {
-	t.Helper()
-
-	parsed, err := url.Parse(address)
-	if err != nil || parsed.Host == "" {
-		t.Errorf(
-			"set %q: middleware %q holds the edgeAuth address %q, which is "+
-				"not a URL with a host: %v",
-			set.name, middleware, address, err,
-		)
-		return
-	}
-	if parsed.Path != browserauth.MainEdgeAuthPath {
-		t.Errorf(
-			"set %q: middleware %q calls %q, and router %q in %s names it.\n"+
-				"elitea-main registers exactly one internal edge-auth "+
-				"path, %q (internal/api/browserauth). Every other path "+
-				"answers 404, and Traefik returns that 404 to the caller.\n"+
-				"Correct the address. Teach this gate the second path only "+
-				"when elitea-main registers one.",
-			set.name, middleware, address, router, routerFile,
-			browserauth.MainEdgeAuthPath,
-		)
-		return
-	}
-
-	target := parsed.Hostname()
-	if len(set.composeFiles) == 0 {
-		t.Errorf(
-			"set %q: router %q in %s names %q, which calls %q, but the set "+
-				"declares no Compose file.\n"+
-				"Nothing can then answer whether %s registers that path. "+
-				"Declare composeFiles for this set in "+
-				"edge_middlewares_test.go.\n"+
-				"Set boundary: %s",
-			set.name, router, routerFile, middleware, address, target,
-			set.mountedBy,
-		)
-		return
-	}
-
-	defining := 0
-	for _, relative := range set.composeFiles {
-		compose := parseCompose(t, root, relative)
-		service, present := compose.Services[target]
-		if !present {
+// TestInProcessStripCoversTheEdgeFloor holds elitea-main's own strip list
+// (apimw.ClientIdentityHeaders) to the floor the browser edges were held to.
+// In compose that list IS the edge strip; in a cluster the HTTPRoute strips as
+// well. A name on the floor that elitea-main keeps is one a deployment without
+// a stripping edge would trust.
+//
+// X-Elitea-Execution-Id is the one exemption, for the reason
+// apimw.StripClientIdentityHeaders records: it is legitimate client input on
+// /llm, verified there, and stripping it would drop desktop cost attribution.
+func TestInProcessStripCoversTheEdgeFloor(t *testing.T) {
+	const executionHeader = "X-Elitea-Execution-Id"
+	for _, name := range requiredStrippedHeaders {
+		if strings.EqualFold(name, executionHeader) {
+			if containsFold(apimw.ClientIdentityHeaders, name) {
+				t.Errorf("apimw.ClientIdentityHeaders deletes %s, which the desktop and the worker send on /llm", name)
+			}
 			continue
 		}
-		defining++
-		value, configured := environmentValue(service.Environment, authConfigVariable)
-		if configured && strings.TrimSpace(value) != "" {
-			continue
+		if !containsFold(apimw.ClientIdentityHeaders, name) {
+			t.Errorf("apimw.ClientIdentityHeaders does not delete %s, which every browser edge deletes", name)
 		}
-		t.Errorf(
-			"set %q: router %q in %s names %q, which calls %q.\n"+
-				"Service %q in %s does not set %s, so elitea-main composes no "+
-				"production authentication and registers no edge-auth "+
-				"path. cmd/elitea-main/main.go reads that variable, and "+
-				"internal/api/production_router.go registers %q only inside "+
-				"that branch.\n"+
-				"Traefik returns the non-2xx answer of the authenticator to "+
-				"the caller, so every route this router serves fails at the "+
-				"edge.\n"+
-				"Set %s for that service, or stop loading the router.\n"+
-				"Set boundary: %s",
-			set.name, router, routerFile, middleware, address,
-			target, relative, authConfigVariable,
-			browserauth.MainEdgeAuthPath, authConfigVariable, set.mountedBy,
-		)
-	}
-	if defining == 0 {
-		t.Errorf(
-			"set %q: router %q in %s names %q, which calls %q, but no "+
-				"declared Compose file defines a service named %q.\n"+
-				"Declared: %s\n"+
-				"The address names a container this stack does not start, so "+
-				"the edge-auth call cannot be answered.",
-			set.name, router, routerFile, middleware, address, target,
-			strings.Join(set.composeFiles, ", "),
-		)
 	}
 }
+
+// sentinelDeployFile is a template the walk must reach, so a walk that
+// silently stops matching files cannot pass.
+const sentinelDeployFile = "deploy/helm/elitea/templates/main/deployment.yaml"

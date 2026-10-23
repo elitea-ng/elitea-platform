@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // ObjectEraser erases a thread's objects (*workspacestore.Service).
@@ -145,7 +145,7 @@ func (s *Service) Begin(ctx context.Context, request BeginRequest) (BeginOutcome
 		return BeginOutcome{}, err
 	}
 	if !policy.Enabled {
-		return BeginOutcome{}, ErrDisabled
+		return BeginOutcome{}, disabled(policy)
 	}
 	if mode == HistoryFull && !policy.HistoryFullAllowed {
 		return BeginOutcome{}, ErrHistoryModeNotAllowed
@@ -290,10 +290,11 @@ func (s *Service) Reclaim(ctx context.Context, request ReclaimRequest) (Handoff,
 		len(request.DeviceID) > 128 {
 		return Handoff{}, ErrInvalid
 	}
-	handoff, err := s.repo.Reclaim(ctx, request.Thread, request.ActorUserID, request.Epoch, request.DeviceID)
+	reclaimed, err := s.repo.Reclaim(ctx, request.Thread, request.ActorUserID, request.Epoch, request.DeviceID)
 	if err != nil {
 		return Handoff{}, err
 	}
+	handoff := reclaimed.Handoff
 	s.record(ctx, request.Thread, request.ActorUserID, "POST", request.AuditRoute, started,
 		fmt.Sprintf("handoff.reclaim: state %s, epoch %d, pending %t", handoff.State, handoff.Epoch, handoff.ReclaimPending), false)
 	return handoff, nil
@@ -347,13 +348,14 @@ func (s *Service) Release(ctx context.Context, request ReleaseRequest) (Handoff,
 	if err != nil {
 		return Handoff{}, err
 	}
-	handoff, err := s.repo.Release(ctx, ReleaseRecord{
+	released, err := s.repo.Release(ctx, ReleaseRecord{
 		Thread: request.Thread, ActorUserID: request.ActorUserID, Epoch: request.Epoch,
 		Grace: policy.ReturnGrace, Message: EventMessage{Event: "handoff.release"},
 	})
 	if err != nil {
 		return Handoff{}, err
 	}
+	handoff := released.Handoff
 	applied := "none"
 	if request.AppliedSHA != nil {
 		applied = *request.AppliedSHA
@@ -478,13 +480,13 @@ func (s *Service) StartCloudTurn(
 		return Handoff{}, Policy{}, err
 	}
 	if !policy.Enabled {
-		return Handoff{}, Policy{}, ErrDisabled
+		return Handoff{}, Policy{}, disabled(policy)
 	}
-	handoff, err := s.repo.StartCloudTurn(ctx, thread, epoch, executionID, responseMessageID)
+	started, err := s.repo.StartCloudTurn(ctx, thread, epoch, executionID, responseMessageID)
 	if err != nil {
 		return Handoff{}, Policy{}, err
 	}
-	return handoff, policy, nil
+	return started.Handoff, policy, nil
 }
 
 // FinishCloudTurn ends a cloud turn (end, cancellation or a pause for input):

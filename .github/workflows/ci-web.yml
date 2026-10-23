@@ -1,10 +1,11 @@
 name: CI — Web
 
-# apps/elitea-web's FAST quality gates (spec §7.6, unit F2). Replaces ci-ui.yml
-# at cutover step 8 — until then both run side by side. Every job here is
-# node-only (plus go for `parity`), runs in a couple of minutes, and blocks
-# PRs: quality (typecheck + lint), storybook, the sharded unit-test + coverage
-# jobs, the gate-* family, build, parity.
+# apps/elitea-web's FAST quality gates (spec §7.6, unit F2). It replaced
+# ci-ui.yml, which went with the apps/elitea-ui submodule. Every job here is
+# node-only, runs in a couple of minutes, and blocks PRs: quality (typecheck +
+# lint), storybook, the sharded unit-test + coverage jobs, the gate-* family,
+# build. The `parity` job (uictl routes + manifest against the pinned
+# apps/elitea-ui baseline) was retired with that submodule.
 #
 # JOB COUNT IS A BUDGET. The organisation is on the GitHub free plan: 20
 # concurrent jobs for the WHOLE org. This workflow used to start 37 runner jobs
@@ -39,29 +40,23 @@ on:
   pull_request:
     paths:
       - "apps/elitea-web/**"
-      - "tools/uictl/**"
       - "services/elitea-main/**"
       - "deploy/**"
+      # The shared client package the app compiles from source. The client
+      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
+      # so a table-only edit does not start this pipeline.
+      - "libs/ts/client-core/**"
       - ".github/workflows/ci-web.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/elitea-web/**"
-      - "tools/uictl/**"
-      - "services/elitea-main/**"
-      - "deploy/**"
-      - ".github/workflows/ci-web.yml"
-    # NO `tags: v*` — issue #309, Gate 2. publish.yml cuts release tags with
-    # `secrets.GITHUB_TOKEN`, and GitHub does not start workflow runs for refs
-    # created by GITHUB_TOKEN. Measured: `gh api .../actions/runs` returns zero
-    # runs on any `v1.*` ref, for any workflow. A tag trigger here was never a
-    # release gate, only the appearance of one.
-    # scripts/check-ci-dormancy.mjs fails the build if one is added back.
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "15 0 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
@@ -90,7 +85,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Typecheck
         run: npm run typecheck
       - name: Lint (oxlint + tsgolint + elitea/* + i18next bridge)
@@ -149,7 +153,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Storybook tests
         # Issue #483, the fourth gate of the same shape. This step read
         # `if [ -d .storybook ] … else echo "storybook project pending"`. The
@@ -211,7 +224,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Unit tests (coverage shard)
         env:
           VITEST_SKIP_COVERAGE_THRESHOLDS: true
@@ -273,7 +295,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Download coverage shards
         uses: actions/download-artifact@v8
         with:
@@ -340,18 +371,14 @@ jobs:
     # still points at the gate by name. Nothing carries `continue-on-error`:
     # a failing gate fails this job.
     #
-    # `submodules: recursive` — gen-brand-tokens.mjs reads the pinned
-    # apps/elitea-ui palettes; it was the one gate in this group that needed
-    # them. Four of these gates need no dependency at all (generated
-    # artifacts, playwright image tag, wave-2 partition, visual coverage) and
-    # used to skip `npm ci` for that reason; they now ride the shared install,
-    # which costs the job nothing extra because the other thirteen need it.
+    # Four of these gates need no dependency at all (generated artifacts,
+    # playwright image tag, wave-2 partition, visual coverage) and used to
+    # skip `npm ci` for that reason; they now ride the shared install, which
+    # costs the job nothing extra because the other thirteen need it.
     name: Static gates (node scripts)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive # gen-brand-tokens reads the pinned apps/elitea-ui palettes
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -367,7 +394,16 @@ jobs:
         # 'success'`. One pull request then reports every red gate at once,
         # as the old one-job-per-gate layout did, instead of one per push.
         id: install
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
 
       # ── Rule-layer self-test ────────────────────────────────────────────
       - name: Rule-layer self-test
@@ -476,16 +512,14 @@ jobs:
         run: node scripts/build-route-wiring-map.mjs --check
 
       # ── Generated artifacts match their generators ──────────────────────
-      # Issue #490. Three generators in apps/elitea-web/scripts/ write files that
-      # the repository COMMITS, and nothing compared the committed copy with a
+      # Issue #490. Generators in apps/elitea-web/scripts/ write files that the
+      # repository COMMITS, and nothing compared the committed copy with a
       # fresh run. A hand edit, or an input that moved on after the last
       # regeneration, survived every pull request.
       #
-      # gen-brand-tokens.mjs states the rule in its own header — "both committed;
-      # regenerate and diff, never hand-edit". These steps are what perform the
-      # diff. They are the same shape as the two drift checks above (generated
-      # client, route-wiring map): regenerate in memory, compare bytes, name the
-      # file that differs.
+      # These steps are what perform the diff. They are the same shape as the
+      # two drift checks above (generated client, route-wiring map): regenerate
+      # in memory, compare bytes, name the file that differs.
       #
       # Each `--check` mode fails when the committed file is ABSENT and when the
       # generator renders nothing, not only when the two differ (#426: a check
@@ -502,17 +536,49 @@ jobs:
       # src/shared/api/socket/{events,messages}.ts, are hand-maintained source
       # now; their own unit tests are the drift guard in its place. A drift
       # check here would have nothing left to compare.
-      - name: Generated artifacts — route export drift (parity/new-app-routes.json)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: node scripts/export-routes.mjs --check
-      - name: Generated artifacts — brand token drift (default.pack.json + palette.augment.d.ts)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        # Runs even when the step above failed, so one pull request reports
-        # every stale artifact instead of one per push.
-        run: node scripts/gen-brand-tokens.mjs --check --baseline ../elitea-ui
+      #
+      # gen-brand-tokens.mjs went the same way with the apps/elitea-ui
+      # submodule whose palettes it read: default.pack.json,
+      # palette.augment.d.ts and client-core's defaultPack.gen.ts are
+      # hand-maintained source now, held by the brand pack's own tests.
+      # export-routes.mjs and parity/new-app-routes.json fed only uictl's
+      # --new-routes diff, so they went too.
       - name: Generated artifacts — hue preview drift (parity/brand-hue-preview.html)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/gen-hue-preview.mjs --check
+
+      # ── Shared client package (libs/ts/client-core) ─────────────────────
+      # Pure TypeScript that the web, desktop and mobile clients compile from
+      # source. It has no dependencies: its typecheck borrows this job's
+      # installed TypeScript and @types/node, and its tests are node:test.
+      # The mobile app compiles and bundles it in ci-mobile.yml.
+      - name: Shared client package — typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: libs/ts/client-core
+        run: npm run typecheck
+      - name: Shared client package — tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: libs/ts/client-core
+        run: npm test
+      - name: Generated artifacts — brand artwork drift (logo-mark/favicon/logo-full + mark.gen.ts)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: libs/ts/client-core
+        run: npm run check:generated
+
+      # ── Parity manifest ─────────────────────────────────────────────────
+      # What survives of `uictl parity-manifest --validate` (deleted with the
+      # apps/elitea-ui submodule): shard bookkeeping, the §8.3 item schema and
+      # the append-only rules (no id deleted, acceptance text changed only
+      # under a waiver) against the pull request's BASE branch, which the
+      # script fetches at depth 1. On a push there is no base branch and it
+      # compares against HEAD; the pull request run is the guard. The
+      # endpoint-manifest, contract-coverage and visual-coverage gates read
+      # this manifest, so its shape still matters.
+      - name: Parity manifest (schema + append-only ids and acceptance)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          PARITY_BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-parity-manifest.mjs
 
       # ── Endpoint manifest ───────────────────────────────────────────────
       # Issue #426. Both the checker and the manifest it reads are in the tree,
@@ -680,7 +746,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Build (app + admin + maintenance + brand-preview + docs)
         # `npm run build`'s chain now includes `build:docs` (embedded-docs
         # programme decision 7): the search-index generator then
@@ -711,60 +786,3 @@ jobs:
           name: elitea-web-dist
           path: apps/elitea-web/dist/
           retention-days: 7
-
-  parity:
-    # Keeps its own job: it needs go, `submodules: recursive` and
-    # `fetch-depth: 0`, and none of the node gates want that checkout cost.
-    name: Parity (uictl routes + manifest)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive # apps/elitea-ui is the pinned parity baseline
-          # The DeepWiki census anchors resolve through parity/deepwiki-ui.pin —
-          # a commit `git show` must be able to reach. A shallow checkout has
-          # only the head, and the audit reported every anchor missing.
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          # The cache is .github/actions/go-cache below: setup-go's own
-          # saves from every ref, and pull-request copies evicted main's.
-          cache: false
-          go-version-file: go.work
-      - name: Restore the Go cache (pull requests read, main writes)
-        uses: ./.github/actions/go-cache
-        with:
-          # uictl has no external deps (no go.sum); key on the workspace sum.
-          cache-dependency-path: go.work.sum
-      # Decision record, "CI parity-gate phasing": on PR this job blocks on
-      # parity-routes + parity-manifest --validate; --require-must runs in the
-      # SAME job but blocks only release tags and cutover/* branches.
-      - name: Route + manifest parity (PR-blocking)
-        working-directory: .
-        run: |
-          go run ./tools/uictl parity-routes --baseline apps/elitea-ui
-          go run ./tools/uictl parity-manifest --validate
-      - name: Require-must parity (cutover gate)
-        # This release-readiness audit deliberately remains outside normal PR
-        # validation until the migration register's priority:must items are
-        # complete. Route + manifest parity above remains PR-blocking.
-        #
-        # The `refs/tags/v` half of this condition is GONE (issue #309, Gate 2)
-        # and its removal changes no behaviour, which is the point: publish.yml
-        # cuts tags with GITHUB_TOKEN, GitHub starts no run for such a ref, and
-        # measurement confirms zero runs on any `v1.*` ref. Written as a
-        # release gate, it was never one.
-        #
-        # It is NOT simply switched on for releases instead, and that is a
-        # decision rather than an omission: `uictl parity-manifest
-        # --require-must` currently exits 1 with "694 priority:must item(s) not
-        # verified" (measured on this branch). Wiring it into the release path
-        # today would make every release run red on a known, tracked backlog —
-        # a second kind of signal nobody can act on. `cutover/*` is a branch
-        # that really does fire, and is where the audit is meant to bite.
-        if: startsWith(github.ref, 'refs/heads/cutover/')
-        working-directory: .
-        # Scoped to the domain the branch names (cutover/<domain>): the audit
-        # is meant to bite on the domain being cut over; the rest of the
-        # backlog is tracked, not blocked on, here.
-        run: go run ./tools/uictl parity-manifest --require-must --domain "${GITHUB_REF_NAME#cutover/}"

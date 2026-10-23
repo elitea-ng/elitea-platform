@@ -8,10 +8,11 @@
  *
  *  1. Rows actually render from the measured `{rows,total,counts}` body — the
  *     one shape `/admin/auth_users/administration` returns.
- *  2. Every enabled control REACHES THE SERVER with the body pylon defined, and
- *     every control with no server behind it is disabled with a stated reason.
- *     A control that renders but sends nothing is exactly the class #130/#180
- *     shipped; asserting only that a button exists would not catch it.
+ *  2. Every enabled control REACHES THE SERVER with the body the legacy API
+ *     defined, and every control with no server behind it is disabled with a
+ *     stated reason. A control that renders but sends nothing is exactly the
+ *     class #130/#180 shipped; asserting only that a button exists would not
+ *     catch it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -164,7 +165,8 @@ describe('Admin › Users', () => {
     await waitFor(() => expect(writes()).toHaveLength(1));
     const request = writes()[0]!;
     expect(request.method).toBe('PUT');
-    // The id is in the PATH, mirroring pylon's `user_suspend/<mode>/<user_id>`.
+    // The id is in the PATH, mirroring the legacy
+    // `user_suspend/<mode>/<user_id>`.
     expect(request.url).toContain('/admin/user_suspend/administration/11');
     expect(request.body).toEqual({ suspended: true });
   });
@@ -184,7 +186,7 @@ describe('Admin › Users', () => {
     expect(writes()[0]!.url).toContain('/admin/user_suspend/administration/12');
   });
 
-  it('sends the pylon set_admin_role body when the role select changes', async () => {
+  it('sends the legacy set_admin_role body when the role select changes', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');
@@ -362,8 +364,9 @@ describe('Admin › Users', () => {
       const listings = recorded.filter((entry) => entry.method === 'GET');
       expect(listings.some((entry) => entry.url.includes('user_type=system'))).toBe(true);
     });
-    // System users are the platform's own service accounts; pylon offers no
-    // role/suspend/delete control for them and neither does this port.
+    // System users are the platform's own service accounts; the legacy runtime
+    // offered no role/suspend/delete control for them and neither does this
+    // port.
     expect(screen.queryByRole('button', { name: 'Delete user' })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Admin Role' })).not.toBeInTheDocument();
 

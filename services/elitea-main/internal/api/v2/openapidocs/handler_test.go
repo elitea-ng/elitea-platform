@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
 )
 
 func TestSpecServesTheEmbeddedYAMLByteForByte(t *testing.T) {

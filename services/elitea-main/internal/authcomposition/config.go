@@ -19,10 +19,10 @@ import (
 	"golang.org/x/net/http/httpguts"
 	"gopkg.in/yaml.v3"
 
-	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	forwardapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/edgeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 const (

@@ -3,16 +3,16 @@ package agentexecution
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 type recoveryUseCase struct {
@@ -42,12 +42,7 @@ func TestCurrentNodeRecoveryRouteStrictPublicAdmission(t *testing.T) {
 	}{{"accepted", string(raw), true, nil, 202, 1}, {"child selector", strings.TrimSuffix(string(raw), "}") + `,"child_thread_id":"foreign"}`, true, nil, 400, 0}, {"duplicate revision", strings.Replace(string(raw), `"expected_revision":3`, `"expected_revision":3,"expected_revision":3`, 1), true, nil, 400, 0}, {"no permission", string(raw), false, nil, 403, 0}, {"stale", string(raw), true, app.ErrNotAllowed, 409, 1}} {
 		t.Run(spec.name, func(t *testing.T) {
 			useCase := &recoveryUseCase{err: spec.err}
-			config := apimw.AuthConfig{PrincipalValidator: currentStartPrincipalValidatorFunc(func(_ context.Context, u auth.User) (auth.User, error) { return u, nil }), ForwardedIdentityVerifier: currentStartPeerVerifierFunc(func(r *http.Request) error {
-				if r.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("peer denied")
-				}
-				return nil
-			})}
+			config := apimw.AuthConfig{PrincipalValidator: currentStartPrincipalValidatorFunc(func(_ context.Context, u auth.User) (auth.User, error) { return u, nil }), FormSessions: authtest.FormSessions{}}
 			permissions := currentStartPermissionResolverFunc(func(_ context.Context, u auth.User, mode, project string) (auth.PermissionResolution, error) {
 				if mode != auth.PermissionModeDefault || project != "7" {
 					t.Fatal(mode, project)
@@ -63,8 +58,7 @@ func TestCurrentNodeRecoveryRouteStrictPublicAdmission(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := httptest.NewRequest(http.MethodPost, "/api/v2/elitea_core/task/prompt_lib/7/10000000-0000-4000-8000-000000000043/node_recovery/actions", strings.NewReader(spec.body))
-			req.Header.Set("X-Auth-Type", "user")
-			req.Header.Set("X-Auth-ID", "11")
+			authtest.SignIn(req, "11")
 			req.RemoteAddr = "10.0.0.8:43120"
 			w := httptest.NewRecorder()
 			route.ServeHTTP(w, req)

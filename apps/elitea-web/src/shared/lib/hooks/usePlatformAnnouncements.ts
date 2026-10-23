@@ -24,8 +24,8 @@
  * is telling users about something happening at that moment, and a control that
  * needs a redeploy is not available when it is needed.
  *
- * Maintenance mode used to be a Pylon router hook. It is now enforced by
- * elitea-main's Maintenance middleware, which answers 503 to every non-admin
+ * Maintenance mode used to be a legacy-runtime router hook. It is now enforced
+ * by elitea-main's Maintenance middleware, which answers 503 to every non-admin
  * request. What this hook reads is that same state, so the splash and the
  * refusals cannot disagree about whether the platform is open.
  *
@@ -75,7 +75,7 @@ export interface PlatformMaintenance {
   readonly title: string;
   readonly message: string;
   /**
-   * The operator's own splash body — the port of pylon's `splash_template`.
+   * The operator's own splash body — the port of the legacy `splash_template`.
    * HTML, sanitised before it is rendered, and EMPTY unless one was authored.
    * When it is empty the splash falls back to `message`, which always resolves
    * to something because the server fills a default for it.

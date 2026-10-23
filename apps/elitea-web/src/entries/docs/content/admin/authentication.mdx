@@ -20,6 +20,10 @@ Authentication lives under **Configuration › Authentication** in the admin con
       </Tab>
       <Tab title="SAML 2.0">
         Identity-provider entity ID, SSO URL, single-logout URL, and certificate(s); this service's own entity ID and ACS URL; name-ID format; the e-mail and name attribute mappings; whether to sign AuthnRequests; the service provider certificate; and clock-skew tolerance.
+
+        **NameID format** is a select. The values are *Not requested* (the default), *Unspecified*, *Email address*, *Persistent* and *Transient*. With *Not requested*, the identity provider sends its own default format. With *Transient*, the NameID changes at each sign-in, so also set the e-mail attribute.
+
+        The service provider metadata is at `https://<host>/auth/saml/metadata`. Import it at the identity provider after you enable the provider. It is available with or without **Sign authentication requests**. It always contains the entity ID, the ACS URL (HTTP-POST) and the selected NameID format, and it asks for signed assertions. It contains the service provider certificate only when requests are signed.
       </Tab>
     </Tabs>
   </Step>

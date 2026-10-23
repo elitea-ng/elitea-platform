@@ -10,10 +10,11 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
-	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn/natstest"
+	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions runs elitea-main's real
@@ -22,7 +23,7 @@ import (
 // and the natsbus relay — as the elitea-main identity against a nats-server
 // started from the NATS chart's own rendered config, after the real
 // bootstrap.sh created the assets (#1076). A grant missing from
-// deploy/helm/nats/values.yaml fails here, not in a cluster.
+// deploy/helm/elitea/values.yaml fails here, not in a cluster.
 func TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions(t *testing.T) {
 	s := natstest.Start(t)
 	s.Bootstrap(t, nil)
@@ -331,4 +332,64 @@ func waitRoster(t *testing.T, store *v2canvaspresence.NATSStore, key string, wan
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// TestSecuredPlatformMCPReplayRunsOnTheChartsPermissions runs the platform
+// MCP replay store's boot path and every KV operation it makes — claim
+// (kv.Create, and its read-back when the key exists), the in-progress read,
+// the answer (kv.Update), the replay read, the release (kv.Delete) and a
+// claim after a delete marker — as the elitea-main identity on two
+// connections ("replicas") against the chart's rendered config, after the
+// real bootstrap.sh created the bucket (issue 1231). A grant missing from
+// deploy/helm/elitea/values.yaml fails here, not in a cluster.
+func TestSecuredPlatformMCPReplayRunsOnTheChartsPermissions(t *testing.T) {
+	s := natstest.Start(t)
+	s.Bootstrap(t, nil)
+	ctx := context.Background()
+	env := s.Lookup(eventsNATSPrefix, natsconn.IdentityMain, map[string]string{eventsNATSURLEnv: s.URL()})
+	replicas := make([]*desktopopsapi.NATSPlatformReplays, 2)
+	for i := range replicas {
+		conn, err := newEventsNATSConn(env, nil)
+		if err != nil || conn == nil {
+			t.Fatalf("newEventsNATSConn as elitea-main = (%v, %v)\nserver log:\n%s", conn, err, s.Log())
+		}
+		t.Cleanup(conn.Close)
+		store, err := newPlatformMCPReplayStore(ctx, conn)
+		if err != nil {
+			t.Fatalf("newPlatformMCPReplayStore: %v\nserver log:\n%s", err, s.Log())
+		}
+		replicas[i] = store
+	}
+
+	claim, err := replicas[0].Claim(ctx, "call.secured", "digest")
+	if err != nil || claim.Verdict != desktopopsapi.ReplayClaimed {
+		t.Fatalf("claim = (%+v, %v)\nserver log:\n%s", claim, err, s.Log())
+	}
+	if busy, err := replicas[1].Claim(ctx, "call.secured", "digest"); err != nil || busy.Verdict != desktopopsapi.ReplayInProgress {
+		t.Fatalf("the other replica's claim = (%+v, %v)", busy, err)
+	}
+	if err := replicas[0].Complete(ctx, "call.secured", claim, desktopopsapi.PlatformReplayResult{
+		Status: 200, OK: true, Body: json.RawMessage(`{"ok":true}`),
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	done, err := replicas[1].Claim(ctx, "call.secured", "digest")
+	if err != nil || done.Verdict != desktopopsapi.ReplayDone || string(done.Result.Body) != `{"ok":true}` {
+		t.Fatalf("replay on the other replica = (%+v, %v)", done, err)
+	}
+	if other, err := replicas[1].Claim(ctx, "call.secured", "another"); err != nil || other.Verdict != desktopopsapi.ReplayConflict {
+		t.Fatalf("another input = (%+v, %v)", other, err)
+	}
+
+	released, err := replicas[0].Claim(ctx, "call.released", "digest")
+	if err != nil || released.Verdict != desktopopsapi.ReplayClaimed {
+		t.Fatalf("claim = (%+v, %v)", released, err)
+	}
+	if err := replicas[0].Release(ctx, "call.released", released); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if again, err := replicas[1].Claim(ctx, "call.released", "digest"); err != nil || again.Verdict != desktopopsapi.ReplayClaimed {
+		t.Fatalf("a claim over the delete marker = (%+v, %v)", again, err)
+	}
+	s.RequireNoViolations(t, natsconn.IdentityMain)
 }

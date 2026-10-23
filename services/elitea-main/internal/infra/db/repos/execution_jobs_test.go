@@ -3,14 +3,15 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	configurationdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/configurations"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -131,13 +132,36 @@ func TestExecutionJobsRepositoryFailsClosedOnPersistedPolicyMismatch(t *testing.
 	if !errors.Is(err, ErrAdmissionPolicyMismatch) {
 		t.Fatalf("expected fail-closed policy mismatch, got %v", err)
 	}
+	// #966: the operator who meets this error is told both values and the
+	// one-step fix, not only that the two differ.
+	for _, want := range []string{
+		fmt.Sprintf("configured=%d", policy.MaxOutstanding),
+		fmt.Sprintf("persisted=%d", policy.MaxOutstanding+1),
+		"ELITEA_RUNTIME_MAX_OUTSTANDING",
+		"every elitea-main replica",
+		"elitea-admission-ctl set -max",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("policy mismatch message lacks %q: %v", want, err)
+		}
+	}
 	if len(store.execCalls) != 1 || len(store.rowCalls) != 2 || !strings.Contains(store.rowCalls[1].sql, "FOR UPDATE") {
 		t.Fatalf("policy mismatch crossed admission boundary: rows=%d execs=%d", len(store.rowCalls), len(store.execCalls))
 	}
 }
 
+func TestValidationDispatchPolicyAcceptsCapsAboveTheFormer1024Ceiling(t *testing.T) {
+	for _, maxOutstanding := range []int64{1025, 2048, MaxSupportedOutstandingJobs} {
+		policy := testDispatchPolicy()
+		policy.MaxOutstanding = maxOutstanding
+		if _, err := newExecutionJobsRepository(&scriptedStore{scriptedExecutor: &scriptedExecutor{}}, policy); err != nil {
+			t.Fatalf("rejected supported MaxOutstanding=%d: %v", maxOutstanding, err)
+		}
+	}
+}
+
 func TestValidationDispatchPolicyRequiresBoundedPositiveAdmissionCapacity(t *testing.T) {
-	for _, maxOutstanding := range []int64{0, -1, maxSupportedOutstandingJobs + 1} {
+	for _, maxOutstanding := range []int64{0, -1, MaxSupportedOutstandingJobs + 1} {
 		policy := testDispatchPolicy()
 		policy.MaxOutstanding = maxOutstanding
 		if _, err := newExecutionJobsRepository(&scriptedStore{scriptedExecutor: &scriptedExecutor{}}, policy); err == nil {

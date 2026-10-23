@@ -11,15 +11,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // These tests run against the real PostgreSQL service the Test job in
-// .github/workflows/ci-go.yml provisions (pgvector/pgvector:0.8.5-pg16-trixie, exported as
+// .github/workflows/ci-go.yml provisions (postgres:18, exported as
 // ELITEA_TEST_DATABASE_URL), on the baseline tenant schema p_1 the 001_initial
 // migration creates. Every statement in internal/infra/db/repos/applications.go
 // was previously unexecuted in any environment; these exercise all twelve
@@ -465,7 +465,7 @@ func TestApplicationsRepoPostgres_ListReportsIsForkedFromVersionMetaAndSurfacesO
 	})
 	// A version whose meta names ONLY one of the two keys is not a fork —
 	// `IsForkedFromMeta`/`isForkedFromMeta` both require both, matching what
-	// pylon's own model tested (key presence, not truthiness).
+	// the legacy model tested (key presence, not truthiness).
 	createTestApplication(t, repo, "half-tagged", 5, &applications.Version{
 		Name: "base",
 		Meta: map[string]any{"parent_entity_id": "42"},
@@ -614,7 +614,7 @@ func TestApplicationsRepoPostgres_DeleteClearsApplicationToolsWhenThatTableExist
 	ctx := testContext(t)
 	seedUser(t, pool, 1, "one@elitea.ai")
 
-	// application_tools exists only in pylon-migrated databases, and has no
+	// application_tools exists only in legacy-migrated databases, and has no
 	// cascade there. Recreate that shape to prove Delete still clears it.
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE p_1.application_tools (

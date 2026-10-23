@@ -40,7 +40,7 @@ pub(crate) fn digest(value: &str) -> io::Result<[u8; 32]> {
         return Err(refused());
     }
     let mut output = [0; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let digit = |v| match v {
             b'0'..=b'9' => Ok(v - b'0'),
             b'a'..=b'f' => Ok(v - b'a' + 10),

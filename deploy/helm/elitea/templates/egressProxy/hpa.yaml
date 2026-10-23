@@ -1,0 +1,8 @@
+{{- if .Values.egressProxy.enabled }}
+{{- /*
+  Stateless (each tunnel lives on one connection); CPU follows the bytes it
+  copies. The floor stays at two (validateGuards), so a rollout is never an
+  egress outage.
+*/}}
+{{- include "elitea.scaling.cpuHpa" (dict "v" .Values.egressProxy "field" "egressProxy" "name" (include "elitea-egress-proxy.fullname" .) "labels" (include "elitea-egress-proxy.labels" .)) }}
+{{- end }}

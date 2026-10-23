@@ -3,9 +3,8 @@ package promptcontextreads_test
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,12 +12,13 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -55,15 +55,8 @@ func TestCurrentPromptContextReadsPostgresHTTPRBACAndTenantIsolation(t *testing.
 		projectContext,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: promptContextPeerVerifierFunc(
-				func(request *http.Request) error {
-					host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
-					if splitErr == nil && (host == "127.0.0.1" || host == "::1") {
-						return nil
-					}
-					return fmt.Errorf("untrusted peer")
-				},
-			),
+			FormSessions:       authtest.FormSessions{},
+			Validator:          authtest.Tokens{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -202,12 +195,9 @@ func TestCurrentPromptContextReadsPostgresHTTPRBACAndTenantIsolation(t *testing.
 				t.Fatal(err)
 			}
 			if test.tokenID == "" {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", test.userID)
+				authtest.SignIn(request, test.userID)
 			} else {
-				request.Header.Set("X-Auth-Type", "token")
-				request.Header.Set("X-Auth-ID", test.tokenID)
-				request.Header.Set("X-Auth-User-ID", test.userID)
+				authtest.BearerToken(request, test.tokenID, test.userID)
 			}
 			response, err := server.Client().Do(request)
 			if err != nil {
@@ -292,8 +282,7 @@ func getPromptContextFixture(t *testing.T, client *http.Client, url string) (int
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -598,12 +587,4 @@ func newPromptContextPostgresPool(t *testing.T) *pgxpool.Pool {
 		admin.Close()
 	})
 	return pool
-}
-
-type promptContextPeerVerifierFunc func(*http.Request) error
-
-func (function promptContextPeerVerifierFunc) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	return function(request)
 }

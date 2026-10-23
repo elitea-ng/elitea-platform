@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // NewRouter builds the chi router for the /llm surface, wiring each route to
@@ -48,6 +48,10 @@ func NewRouterWithLog(h *llmproxy.Handler, recorder *requestlog.Recorder) http.H
 	// and BEFORE every handler so a loop is contained before dispatch. An
 	// unarmed marker (no GATEWAY_HOP_SECRET) makes it a pass-through.
 	r.Use(h.HopGuard)
+	// The degraded-mode reservations of a request live until its handler
+	// returns (human decision, DECISIONS.md 2026-10-22). Mounted on the root so
+	// a route added later is covered without anyone remembering.
+	r.Use(h.DegradedHoldsScope)
 	r.NotFound(h.NotFound)
 	r.MethodNotAllowed(h.MethodNotAllowed)
 
@@ -81,13 +85,8 @@ func NewRouterWithLog(h *llmproxy.Handler, recorder *requestlog.Recorder) http.H
 		r.Post("/responses", h.Responses)
 
 		// OpenAI dialect — the realtime WebSocket surface (llmproxy/realtime.go).
-		// A WebSocket handshake is a GET, so GET is the route that matters; POST
-		// is mounted beside it because the legacy pylon relay and several
-		// hand-built clients post to the same path, and a 405 there is a
-		// mis-diagnosable failure for a route whose real errors are already
-		// hard to read.
+		// A WebSocket handshake is a GET, so GET is the only verb mounted.
 		r.Get("/realtime", h.Realtime)
-		r.Post("/realtime", h.Realtime)
 
 		// Synthetic models surface — resolved from Postgres per project, NOT
 		// routed through core (design §4.2, §3.4). The exact /models route is

@@ -54,7 +54,7 @@ pub enum Status {
 pub struct Check {
     /// Stable: `credentials`, `dir.config`, `dir.data`, `dir.logs`,
     /// `history`, `workspaces`, `index.<workspace id>` (one per workspace
-    /// with a local index), `deployment`, `session`, `local_work`,
+    /// with a local index), `models`, `deployment`, `session`, `local_work`,
     /// `pending_revokes`.
     pub id: String,
     pub title: &'static str,
@@ -96,7 +96,21 @@ pub trait DoctorHooks: Send + Sync {
     ///
     /// The index could not be turned on (the policy turns it off, …).
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String>;
+    /// Whether the workspace's folder is watched now (its index refreshes
+    /// on outside changes).
+    fn index_watching(&self, workspace_id: &str) -> bool;
+    /// Refresh the workspace's index incrementally (`index_refresh`); why
+    /// not, for a person.
+    ///
+    /// # Errors
+    ///
+    /// The index could not refresh (turned off, the policy turns it off, …).
+    fn refresh_index(&self, workspace_id: &str) -> Result<(), String>;
 }
+
+/// An index turned on whose last build is older than this, while its
+/// folder is not watched, is reported stale (`index.refresh`).
+const INDEX_STALE_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// The repairs that delete what the app keeps: refused without `confirm`.
 /// A workspace's index repair is matched without its `:<workspace id>`.
@@ -372,7 +386,51 @@ impl LocalDoctor {
         checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
         checks.extend(self.index_checks());
+        checks.push(self.models_check());
         checks
+    }
+
+    /// The embedding model cache (`<data>/models`): owner-only like the
+    /// rest, and which catalogue models are on this computer (sizes only:
+    /// every load verifies the files against their pinned digests).
+    fn models_check(&self) -> Check {
+        use elitea_local_embed::catalog::MODELS;
+        use elitea_local_embed::manager::{ModelState, ModelStore};
+        let root = self.data_dir.join("models");
+        let mut check = dir_check("models", "Embedding models", &root, "dir.tighten.models");
+        if check.status != Status::Ok || fs::symlink_metadata(&root).is_err() {
+            if fs::symlink_metadata(&root).is_err() {
+                check.message =
+                    "No embedding model downloaded (embeddings are off unless you choose one)."
+                        .into();
+            }
+            return check;
+        }
+        let store = ModelStore::new(&root);
+        let states: Vec<String> = MODELS
+            .into_iter()
+            .filter_map(|spec| match store.state(spec) {
+                ModelState::Missing => None,
+                ModelState::Ready => Some(format!("{} (ready)", spec.display_name)),
+                ModelState::Partial { have, total } => Some(format!(
+                    "{} (partly downloaded, {} of {} MB)",
+                    spec.display_name,
+                    have / 1_000_000,
+                    total / 1_000_000
+                )),
+            })
+            .collect();
+        check.message = if states.is_empty() {
+            format!("{} holds no model.", root.display())
+        } else {
+            format!(
+                "{} — {}; {} MB in all.",
+                root.display(),
+                states.join(", "),
+                store.disk_bytes() / 1_000_000
+            )
+        };
+        check
     }
 
     fn credentials_check(&self) -> Check {
@@ -657,6 +715,9 @@ impl LocalDoctor {
                 tighten_dir(&self.config_dir).map(|()| "Restricted to you.".into())
             }
             "dir.tighten.data" => tighten_dir(&self.data_dir).map(|()| "Restricted to you.".into()),
+            "dir.tighten.models" => {
+                tighten_dir(&self.data_dir.join("models")).map(|()| "Restricted to you.".into())
+            }
             "dir.tighten.logs" => match &self.log_dir {
                 Some(logs) => tighten_dir(logs).map(|()| "Restricted to you.".into()),
                 None => Err(HostError::Storage("there is no logs folder".into())),
@@ -787,19 +848,48 @@ fn index_files(dir: &Path) -> [PathBuf; 3] {
     ]
 }
 
-/// `PRAGMA quick_check`, then the schema version, read-only and without
-/// following a symlinked file; why it is damaged when it is.
-fn index_integrity(path: &Path) -> Result<i64, String> {
+/// The index database, read-only and without following a symlinked file.
+fn open_index(path: &Path) -> Result<rusqlite::Connection, String> {
     // The folder canonical, so no-follow refuses a symlinked FILE only.
     let path = match (path.parent(), path.file_name()) {
         (Some(dir), Some(name)) => fs::canonicalize(dir).map_err(|e| e.to_string())?.join(name),
         _ => path.to_owned(),
     };
-    let conn = rusqlite::Connection::open_with_flags(
+    rusqlite::Connection::open_with_flags(
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())
+}
+
+/// When the last build of a turned-on index completed (UTC); `None` when
+/// it is turned off, was never built, or cannot be read.
+fn index_last_build(path: &Path) -> Option<chrono::NaiveDateTime> {
+    let conn = open_index(path).ok()?;
+    let enabled: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'setting:enabled'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if enabled.as_deref() == Some("false") {
+        return None;
+    }
+    let finished: Option<String> = conn
+        .query_row(
+            "SELECT max(finished_at) FROM runs WHERE status = 'completed'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    chrono::NaiveDateTime::parse_from_str(&finished?, "%Y-%m-%dT%H:%M:%S%.f").ok()
+}
+
+/// `PRAGMA quick_check`, then the schema version, read-only and without
+/// following a symlinked file; why it is damaged when it is.
+fn index_integrity(path: &Path) -> Result<i64, String> {
+    let conn = open_index(path)?;
     let verdict: String = conn
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
@@ -894,12 +984,29 @@ impl LocalDoctor {
                     "{name}: written by a newer version of Elitea (schema {version}); update the app."
                 ),
             ),
-            Ok(_) => Check::new(
-                id,
-                TITLE,
-                Status::Ok,
-                format!("{name}: owner-only, opens and passes its integrity check."),
-            ),
+            Ok(_) => match index_last_build(&file) {
+                Some(built)
+                    if chrono::Utc::now().naive_utc() - built > INDEX_STALE_AFTER
+                        && !self.hooks.index_watching(&workspace.id) =>
+                {
+                    Check::new(
+                        id,
+                        TITLE,
+                        Status::Warn,
+                        format!(
+                            "{name}: last built more than a day ago and its folder is not \
+                             watched, so agents may search code that changed since. Refresh it."
+                        ),
+                    )
+                    .fix(fix("refresh"), "Refresh")
+                }
+                _ => Check::new(
+                    id,
+                    TITLE,
+                    Status::Ok,
+                    format!("{name}: owner-only, opens and passes its integrity check."),
+                ),
+            },
             Err(error) => Check::new(
                 id,
                 TITLE,
@@ -925,6 +1032,15 @@ impl LocalDoctor {
         };
         let dir = self.index_dir(&workspace.id);
         match repair {
+            "index.refresh" => {
+                self.hooks
+                    .refresh_index(&workspace.id)
+                    .map_err(HostError::Unsupported)?;
+                Ok(format!(
+                    "The code index of {} is refreshing.",
+                    workspace.name
+                ))
+            }
             "index.tighten" => {
                 tighten_dir(&dir)?;
                 for file in index_files(&dir) {
@@ -1260,6 +1376,9 @@ mod tests {
         /// deleted) before the index was released again.
         gone_while_closed: Mutex<Vec<bool>>,
         rebuilt_indexes: Mutex<Vec<String>>,
+        /// Workspaces whose folder is watched, and indexes refreshed.
+        watched: Mutex<Vec<String>>,
+        refreshed_indexes: Mutex<Vec<String>>,
     }
 
     impl DoctorHooks for FakeHooks {
@@ -1304,6 +1423,22 @@ mod tests {
                 .push(workspace_id.to_owned());
             Ok(())
         }
+
+        fn index_watching(&self, workspace_id: &str) -> bool {
+            self.watched
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == workspace_id)
+        }
+
+        fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
+            self.refreshed_indexes
+                .lock()
+                .unwrap()
+                .push(workspace_id.to_owned());
+            Ok(())
+        }
     }
 
     struct Fixture {
@@ -1329,6 +1464,8 @@ mod tests {
             closed_indexes: Mutex::default(),
             gone_while_closed: Mutex::default(),
             rebuilt_indexes: Mutex::default(),
+            watched: Mutex::default(),
+            refreshed_indexes: Mutex::default(),
         });
         let doctor = LocalDoctor {
             hooks: hooks.clone(),
@@ -1345,6 +1482,45 @@ mod tests {
             doctor,
             hooks,
         }
+    }
+
+    /// The model cache: absent is fine, a loose one is tightened, and a
+    /// partial download is named with its size.
+    #[test]
+    fn the_model_cache_is_checked_and_tightened() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let models = |f: &Fixture| {
+            f.doctor
+                .checks()
+                .into_iter()
+                .find(|check| check.id == "models")
+                .unwrap()
+        };
+        let absent = models(&f);
+        assert_eq!(absent.status, Status::Ok);
+        assert!(
+            absent.message.contains("No embedding model"),
+            "{}",
+            absent.message
+        );
+        let root = f.doctor.data_dir.join("models");
+        let spec = elitea_local_embed::catalog::MODELS[0];
+        let dir = root.join(spec.cache_key());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("model.safetensors.part"), vec![0_u8; 2_000_000]).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let loose = models(&f);
+        assert_eq!(loose.status, Status::Warn);
+        assert_eq!(loose.fix_id.as_deref(), Some("dir.tighten.models"));
+        f.doctor.fix("dir.tighten.models", false).unwrap();
+        let tight = models(&f);
+        assert_eq!(tight.status, Status::Ok);
+        assert!(
+            tight.message.contains("partly downloaded, 2 of"),
+            "{}",
+            tight.message
+        );
     }
 
     struct NoBrowser;
@@ -1882,6 +2058,70 @@ mod tests {
         // Turned on but nothing built yet: not a problem.
         fs::remove_file(dir.join(INDEX_FILE)).unwrap();
         assert_eq!(index_check_of(&f, &workspace).unwrap().status, Status::Ok);
+    }
+
+    /// Records a completed build `hours_ago` in the index file.
+    fn built_hours_ago(dir: &Path, hours_ago: i64) {
+        let finished = (chrono::Utc::now() - chrono::TimeDelta::hours(hours_ago))
+            .naive_utc()
+            .format("%Y-%m-%dT%H:%M:%S%.3f")
+            .to_string();
+        let conn = rusqlite::Connection::open(dir.join(INDEX_FILE)).unwrap();
+        conn.execute(
+            "INSERT INTO runs (project_id, application_id, toolkit_id, started_at, finished_at, status)
+             VALUES (1, 1, 'local', ?1, ?1, 'completed')",
+            [&finished],
+        )
+        .unwrap();
+    }
+
+    /// Stale for more than a day while the folder is not watched: a
+    /// warning whose repair refreshes it. Watched, recent or turned off:
+    /// nothing to say (#1219).
+    #[test]
+    fn an_index_stale_for_a_day_without_its_watch_is_refreshed() {
+        let f = fixture();
+        let (workspace, dir, _folder) = indexed_workspace(&f);
+        built_hours_ago(&dir, 2);
+        assert_eq!(index_check_of(&f, &workspace).unwrap().status, Status::Ok);
+
+        built_hours_ago(&dir, 25);
+        // The latest build counts: still recent.
+        assert_eq!(index_check_of(&f, &workspace).unwrap().status, Status::Ok);
+        let conn = rusqlite::Connection::open(dir.join(INDEX_FILE)).unwrap();
+        // Only the old build left.
+        conn.execute("DELETE FROM runs WHERE id = (SELECT min(id) FROM runs)", [])
+            .unwrap();
+        drop(conn);
+        let c = index_check_of(&f, &workspace).unwrap();
+        let fix = format!("index.refresh:{}", workspace.id);
+        assert_eq!(
+            (c.status, c.fix_id.as_deref(), c.fix_confirm.as_deref()),
+            (Status::Warn, Some(fix.as_str()), None),
+            "{c:?}"
+        );
+        assert!(f.doctor.fix(&fix, false).unwrap().contains(&workspace.name));
+        assert_eq!(
+            *f.hooks.refreshed_indexes.lock().unwrap(),
+            std::slice::from_ref(&workspace.id)
+        );
+
+        f.hooks.watched.lock().unwrap().push(workspace.id.clone());
+        assert_eq!(
+            index_check_of(&f, &workspace).unwrap().status,
+            Status::Ok,
+            "watched"
+        );
+        f.hooks.watched.lock().unwrap().clear();
+
+        let store = elitea_local_index::sqlite_store::SqliteGraphStore::open(&dir).unwrap();
+        store.set_setting("enabled", "false").unwrap();
+        store.close();
+        assert_eq!(
+            index_check_of(&f, &workspace).unwrap().status,
+            Status::Ok,
+            "turned off"
+        );
     }
 
     #[cfg(unix)]

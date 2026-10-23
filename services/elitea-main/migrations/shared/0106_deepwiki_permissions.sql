@@ -10,10 +10,10 @@
 -- corpus restores a string that legacy already declared, and says where it
 -- came from. This one cannot: the legacy `deepwiki_plugin` has no `api/`
 -- package and no `check_api` call anywhere in it. Its five routes
--- (descriptor, health, slots, invoke, invocations) were reached by the pylon
--- provider hub over mTLS and authorised by the HOP, never by a project role.
--- testdata/legacy/legacy-rbac-static-catalog.json therefore carries nothing
--- for it, and neither does testdata/postgres/legacy-rbac-matrix.json.
+-- (descriptor, health, slots, invoke, invocations) were reached by the legacy
+-- runtime provider hub over mTLS and authorised by the HOP, never by a project
+-- role. testdata/legacy/legacy-rbac-static-catalog.json therefore carries
+-- nothing for it, and neither does testdata/postgres/legacy-rbac-matrix.json.
 --
 -- So these are new strings, chosen rather than recovered — 0104 was the first
 -- file here to do that, for Agent Evaluation, and this is the second. The

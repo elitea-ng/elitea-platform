@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 // A model (ad-hoc) chat's `@` mentions reach the same notifier the agent
@@ -27,8 +27,7 @@ func adhocMentionService(t *testing.T, created bool, writer *recordingMentionWri
 		ExecutionID: "execution-adhoc", CommandID: "command-adhoc", Created: created,
 		AdmittedAt: admittedAt, Deadline: admittedAt.Add(time.Minute),
 	}}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

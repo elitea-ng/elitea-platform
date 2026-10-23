@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
 )
 
 // Store is the persistence the Service needs. The Postgres implementation is
@@ -41,12 +41,12 @@ type Store interface {
 // of seconds, for the sweeper) never reaches a user.
 const RouteVectorDeleteBudget = 3 * time.Second
 
-// Service is the rust-mode counterpart of indexmeta.Service,
-// indexmeta.ExactService, indexmeta.DeleteService and
-// indexmeta.ConfigurationService: the same request and response types, backed
-// by the registry instead of a pgvector database. The saved toolkit is still
-// resolved first, so a caller can only reach the indexes of a toolkit it can
-// see; what it no longer needs is the toolkit's pgvector_configuration.
+// Service serves the index metadata routes (list, exact read, delete,
+// configuration save) in the indexmeta request and response types, from the
+// registry. It replaced the per-project pgvector services, which #1359
+// removed. The saved toolkit is still resolved first, so a caller can only
+// reach the indexes of a toolkit it can see; the toolkit's retired
+// pgvector_configuration is not needed.
 type Service struct {
 	toolkits  indexingapp.CurrentToolkitReader
 	store     Store
@@ -79,9 +79,10 @@ func validRequest(request indexmetaapp.Request) (projectID, actorID, toolkitID i
 	return int32(request.ProjectID), int32(request.ActorUserID), int32(request.ToolkitID), true
 }
 
-// requireToolkit is the visibility check ResolveCurrentTarget makes before it
-// looks for a pgvector reference. The registry needs no reference, but a
-// toolkit the actor cannot see must still answer exactly as it does today.
+// requireToolkit is the visibility check the retired pgvector path's
+// ResolveCurrentTarget made before it looked for a pgvector reference. The
+// registry needs no reference, but a toolkit the actor cannot see must still
+// answer exactly as it did.
 func (s *Service) requireToolkit(ctx context.Context, projectID, actorID, toolkitID int32) error {
 	toolkit, found, err := s.toolkits.GetCurrentToolkit(ctx, projectID, actorID, toolkitID)
 	if err != nil {

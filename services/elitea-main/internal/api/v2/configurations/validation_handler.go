@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strconv"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -22,7 +22,7 @@ var ErrValidationForbidden = errors.New("configuration validation is forbidden")
 
 // ValidationAuthorizer derives the tenant, actor and resource/projection
 // projects from trusted request identity and persisted authorization state. It
-// must not trust public X-Auth-* headers.
+// must not trust any identity a request header claims.
 type ValidationAuthorizer interface {
 	AuthorizeValidation(ctx context.Context, projectID, configurationRevisionID string) (executionapp.AdmissionIdentity, error)
 }

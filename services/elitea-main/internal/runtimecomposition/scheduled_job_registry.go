@@ -3,7 +3,7 @@ package runtimecomposition
 import (
 	"time"
 
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
 )
 
 // scheduledJobs builds the schedulingapp.Job values New() registers — the

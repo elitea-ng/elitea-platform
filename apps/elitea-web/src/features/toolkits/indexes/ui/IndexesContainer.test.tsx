@@ -344,7 +344,7 @@ describe('IndexesContainer', () => {
         HttpResponse.json([{ id: '1', metadata: { collection: 'my-index', state: 'completed', indexed: 1 } }]),
       ),
       http.delete(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1/1`, () =>
-        HttpResponse.json({ error: 'PGVector configuration is missing for toolkit 1' }, { status: 400 }),
+        HttpResponse.json({ error: 'Toolkit id is missing for toolkit 1' }, { status: 400 }),
       ),
     );
     const onError = vi.fn();
@@ -358,7 +358,7 @@ describe('IndexesContainer', () => {
 
     // The server's own sentence, not a generic line — the same rule the rail
     // follows for a failed read (`lib/helpers/indexesListError.ts`).
-    await waitFor(() => expect(onError).toHaveBeenCalledWith('PGVector configuration is missing for toolkit 1'));
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('Toolkit id is missing for toolkit 1'));
     // Still open, still showing the index: nothing was deleted, and the
     // screen no longer pretends otherwise.
     expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -389,12 +389,12 @@ describe('IndexesContainer', () => {
     // the container passes the query's rejection down at all.
     server.use(
       http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
-        HttpResponse.json({ error: 'PGVector configuration is missing for toolkit 1' }, { status: 400 }),
+        HttpResponse.json({ error: 'Toolkit id is missing for toolkit 1' }, { status: 400 }),
       ),
     );
     renderContainer();
     expect(await screen.findByTestId('indexes-list-error')).toBeInTheDocument();
-    expect(screen.getByText('PGVector configuration is missing for toolkit 1')).toBeInTheDocument();
+    expect(screen.getByText('Toolkit id is missing for toolkit 1')).toBeInTheDocument();
     expect(screen.queryByText('Still no indexes created')).not.toBeInTheDocument();
   });
 

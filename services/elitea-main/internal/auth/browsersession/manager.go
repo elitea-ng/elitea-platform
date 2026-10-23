@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // Store is the persistence this package needs, declared at the consumer.

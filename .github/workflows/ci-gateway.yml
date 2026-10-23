@@ -34,35 +34,35 @@ on:
       # real NATS client against the nats.conf the NATS chart renders, after
       # the real bootstrap.sh. A change to any of them must run it.
       - "libs/go/natsconn/**"
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # The guarded write-back UPSERT both writers must equal
       # (budget-writeback-guarded-upsert-v1.sql); the gateway half of the
       # parity gate must run on a contract-only change.
       - "libs/proto/contracts/**"
+      # The GatewayService contract and its generated Go code (#1359): the
+      # gateway imports libs/proto/gen/go through a replace.
+      - "libs/proto/elitea/gateway/**"
+      - "libs/proto/gen/go/**"
       # The shipped DDL the gateway's Postgres integration tests apply.
       - "services/elitea-main/migrations/shared/**"
-  push:
-    branches:
-      - main
-    paths:
-      - "services/elitea-llm-gateway/**"
-      # This workflow's own file. The pull_request arm above names it and this
-      # arm did not, so a push that edited only the gate could not start the
-      # gate it edited (#518).
-      - ".github/workflows/ci-gateway.yml"
-      - "scripts/ci/check-gateway-toolchain.sh"
-      - "libs/go/natsconn/**"
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
-      - "scripts/nats/**"
-      - "libs/proto/contracts/**"
-      - "services/elitea-main/migrations/shared/**"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "11 0 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -111,9 +111,17 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.9.0
-          # Reads the lint cache everywhere, saves it only on a push to main
+          # No `golangci-lint config verify`: it validates against a JSON
+          # schema it downloads from golangci-lint.run at run time, so an
+          # outage of that site redded this gate on code nobody had touched
+          # (#1359). The lint run below loads the same .golangci.yml and
+          # refuses a configuration it cannot load (malformed YAML, an
+          # unknown linter or formatter); ci-go.yml's workspace lint applies
+          # the same file without the schema step.
+          verify: false
+          # Reads the lint cache everywhere, saves it only on a run on main
           # (the rule in .github/actions/main-write-cache).
-          skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}
+          skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
           working-directory: services/elitea-llm-gateway
 
   test:
@@ -127,11 +135,12 @@ jobs:
     # cmd/elitea-llm-gateway's budget-probe test) skip without a database.
     # They ran nowhere in CI until this service; ELITEA_REQUIRE_GATEWAY_POSTGRES_TEST
     # below turns their skip into a failure, so losing the service cannot
-    # read as green (ci-go.yml's #423 pattern). pgvector, as in ci-go.yml, so
-    # one image serves every Postgres test in the repository.
+    # read as green (ci-go.yml's #423 pattern). Plain PostgreSQL 18 (Debian
+    # 13), the server every deployment runs: the gateway's DDL needs no
+    # extension.
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -172,7 +181,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: Provision the secured NATS permission test
         working-directory: .

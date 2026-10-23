@@ -31,8 +31,7 @@ func TestSessionTokensStayInExecutionInputForStartAndRegeneration(t *testing.T) 
 				},
 			}
 			admissions := &currentApplicationAdmissionStub{}
-			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-				&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 			if err != nil {
 				t.Fatal(err)
 			}

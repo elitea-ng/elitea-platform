@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(chosen[0].field, "a");
         let fallback = choose(Some(&json!({})), Some(&old)).unwrap();
         assert_eq!(fallback[0].field, "b");
-        assert!(choose(None, Some(&json!({}))).unwrap().is_empty());
+        assert_eq!(choose(None, Some(&json!({}))).unwrap(), []);
     }
 
     #[test]

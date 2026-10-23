@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 )
 
 type indexCatalogStub struct {

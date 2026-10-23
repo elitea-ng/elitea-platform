@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 const postgresIntegrationDatabaseURL = "ELITEA_TEST_DATABASE_URL"
@@ -108,7 +108,7 @@ func TestCreateToolkitInsertSQLBindsOwnerID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Quote(1) failed: %v", err)
 	}
-	statement := createToolkitInsertSQL(schema, true)
+	statement := createToolkitInsertSQL(schema)
 
 	columns := regexp.MustCompile(`INSERT INTO "p_1"\.elitea_tools \(([^)]*)\)`).FindStringSubmatch(statement)
 	if columns == nil {
@@ -142,61 +142,6 @@ func TestCreateToolkitInsertSQLBindsOwnerID(t *testing.T) {
 		if want := fmt.Sprintf("$%d", position+1); bound[position] != want {
 			t.Errorf("value %d is %q, want %q", position+1, bound[position], want)
 		}
-	}
-}
-
-func TestCreateToolkitInsertSQLOmitsOwnerIDForTheCurrentPylonTable(t *testing.T) {
-	t.Parallel()
-
-	// The same already-quoted identifier the repository passes; see the sibling
-	// case above for why the test builds it rather than restating the quoting.
-	schema, err := tenantschema.Quote("1")
-	if err != nil {
-		t.Fatalf("Quote(1) failed: %v", err)
-	}
-	statement := createToolkitInsertSQL(schema, false)
-	columns := regexp.MustCompile(`INSERT INTO "p_1"\.elitea_tools \(([^)]*)\)`).FindStringSubmatch(statement)
-	if columns == nil {
-		t.Fatalf("createToolkitInsertSQL produced an unrecognisable INSERT:\n%s", statement)
-	}
-	named := strings.Split(strings.ReplaceAll(columns[1], " ", ""), ",")
-	if contains(named, "owner_id") {
-		t.Errorf("owner_id is present in the current Pylon table statement: %v", named)
-	}
-	if !contains(named, "author_id") {
-		t.Errorf("author_id is not among the inserted columns %v", named)
-	}
-}
-
-func TestCreateToolkitSupportsTheCurrentPylonTableWithoutOwnerID(t *testing.T) {
-	pool := newToolkitsIntegrationPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := db.RunMigrations(ctx, pool); err != nil {
-		t.Fatalf("run baseline migrations: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `ALTER TABLE p_1.elitea_tools DROP COLUMN owner_id`); err != nil {
-		t.Fatalf("apply the current Pylon table shape: %v", err)
-	}
-
-	created, err := (&pgRepo{pool: pool}).CreateToolkit(ctx, "1", map[string]any{
-		"name":       "pylon-shape-fixture",
-		"type":       "openapi",
-		"_author_id": "7",
-	})
-	if err != nil {
-		t.Fatalf("CreateToolkit: %v", err)
-	}
-	if created["id"] == "" {
-		t.Fatalf("CreateToolkit returned no id: %#v", created)
-	}
-
-	var authorID int
-	if err := pool.QueryRow(ctx, `SELECT author_id FROM p_1.elitea_tools WHERE name = 'pylon-shape-fixture'`).Scan(&authorID); err != nil {
-		t.Fatalf("read back the created row: %v", err)
-	}
-	if authorID != 7 {
-		t.Errorf("author_id = %d, want 7", authorID)
 	}
 }
 

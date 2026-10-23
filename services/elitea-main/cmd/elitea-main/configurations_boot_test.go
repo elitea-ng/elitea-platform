@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // TestOIDCOnlyDeploymentComposesTheConfigurationsPlane holds the boot of every
@@ -14,8 +14,8 @@ import (
 // The capability gate in main.go and the route constructor behind it used to
 // ask DIFFERENT questions. productionAuthenticationComposed accepts a
 // deployment whose credential is the browser session plus a personal access
-// token; NewCurrentAvailableRoute demanded a ForwardedIdentityVerifier, which
-// only the Form authentication document composes. So the gate let an OIDC-only
+// token; NewCurrentAvailableRoute demanded a forwarded-identity verifier
+// (removed in #1359), which only the Form authentication document composed. So the gate let an OIDC-only
 // deployment through and the constructor then refused, and the binary stopped
 // half a second after start with:
 //
@@ -29,7 +29,7 @@ import (
 // ACTUALLY refused it.
 func TestOIDCOnlyDeploymentComposesTheConfigurationsPlane(t *testing.T) {
 	// Exactly main.go's OIDC-only inputs: no Form graph, so no production
-	// principal validator and no forwarded-identity verifier; a pool-backed
+	// principal validator and no Form session reader; a pool-backed
 	// session principal validator, the token validator for
 	// APPLICATION_SECRET_KEY-signed tokens, and that secret.
 	oidcOnly := apiGroupAuthConfig(
@@ -37,9 +37,9 @@ func TestOIDCOnlyDeploymentComposesTheConfigurationsPlane(t *testing.T) {
 		activePrincipals{}, &countingTokens{}, apiGroupTestSecret, true, nil,
 	)
 
-	if oidcOnly.ForwardedIdentityVerifier != nil {
-		t.Fatal("an OIDC-only deployment must not carry a forwarded-identity " +
-			"verifier: there is no header-stripping ingress in front of it")
+	if oidcOnly.FormSessions != nil {
+		t.Fatal("an OIDC-only deployment must not carry a Form session " +
+			"reader: it composes no Form sign-in")
 	}
 	if !productionAuthenticationComposed(oidcOnly) {
 		t.Fatal("the capability gate refuses an OIDC-only deployment")

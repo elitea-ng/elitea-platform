@@ -14,11 +14,11 @@ import (
 	"time"
 	"unicode"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -373,7 +373,7 @@ func NewCurrentRoutes(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentRoutes, error) {
-	// PrincipalValidator and ForwardedIdentityVerifier are optional — when nil
+	// PrincipalValidator and FormSessions are optional — when nil
 	// the auth middleware falls back to session-cookie verification, which is
 	// the only credential OIDC-only deployments have (no
 	// ELITEA_AUTH_CONFIG_FILE, hence no FormGraph). Requiring them made these

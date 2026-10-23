@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"net/http"
-	"strconv"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	"github.com/go-chi/chi/v5"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type NodeRecoveryResultStore interface {
@@ -22,38 +23,35 @@ func (s *ContentServer) WithNodeRecoveryResults(store NodeRecoveryResultStore) *
 	return s
 }
 
-func (s *ContentServer) PostNodeRecoveryResult(w http.ResponseWriter, r *http.Request) {
-	contentID, version := chi.URLParam(r, "contentID"), chi.URLParam(r, "version")
-	if s.nodeRecoveryResults == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" || !domain.ValidID(contentID) || !domain.ValidID(version) {
-		http.Error(w, "Invalid node recovery result request", http.StatusBadRequest)
-		return
+// ReadNodeRecoveryResult serves one recovered result whose version is its
+// SHA-256.
+func (s *ContentServer) ReadNodeRecoveryResult(ctx context.Context, request *runtimev1.ReadNodeRecoveryResultRequestV1) (*runtimev1.ReadNodeRecoveryResultResponseV1, error) {
+	if s.nodeRecoveryResults == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
+	contentID, version := request.GetContentId(), request.GetVersion()
+	if !domain.ValidID(contentID) || !domain.ValidID(version) {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "Invalid node recovery result request")
+	}
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		http.Error(w, "Node recovery claim denied", http.StatusForbidden)
-		return
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Node recovery claim denied")
 	}
-	if !s.takeNodeRecoverySlot(w) {
-		return
-	}
-	defer func() { <-s.requests }()
-	data, err := s.nodeRecoveryResults.ReadNodeRecoveryResult(r.Context(), claim, contentID, version)
+	release, err := takeNodeRecoverySlot(s.requests)
 	if err != nil {
-		writeNodeRecoveryControlError(w, err)
-		return
+		return nil, err
+	}
+	defer release()
+	data, err := s.nodeRecoveryResults.ReadNodeRecoveryResult(ctx, claim, contentID, version)
+	if err != nil {
+		return nil, nodeRecoveryControlStatus(err)
 	}
 	if len(data) == 0 || len(data) > 1024*1024 {
-		writeNodeRecoveryControlError(w, ErrContentRejected)
-		return
+		return nil, nodeRecoveryControlStatus(ErrContentRejected)
 	}
 	digest := sha256.Sum256(data)
 	if hex.EncodeToString(digest[:]) != version {
-		writeNodeRecoveryControlError(w, ErrContentRejected)
-		return
+		return nil, nodeRecoveryControlStatus(ErrContentRejected)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Header().Set("X-Elitea-Content-SHA256", version)
-	_, _ = w.Write(data)
+	return &runtimev1.ReadNodeRecoveryResultResponseV1{ResultJson: data}, nil
 }

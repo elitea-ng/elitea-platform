@@ -220,8 +220,9 @@ func (c *comparer) shape(where string, dir side, was, now *Shape) {
 		c.shape(where+"[]", dir, was.Items, now.Items)
 	}
 
-	// Alternatives are matched by position after sorting. A oneOf is rare in
-	// the client subset; when its arms change at all, the gate asks a human.
+	// A locked alternative survives when an arm is identical to it or when
+	// some arm compares clean against it under the same rules as any other
+	// shape (an optional response property added to an error body, say).
 	if len(was.OneOf) > 0 {
 		if len(now.OneOf) < len(was.OneOf) {
 			c.fail(where, "oneOf lost an alternative (%d -> %d)", len(was.OneOf), len(now.OneOf))
@@ -232,11 +233,24 @@ func (c *comparer) shape(where string, dir side, was, now *Shape) {
 			nowArms[canonical(arm)] = true
 		}
 		for i, arm := range was.OneOf {
-			if !nowArms[canonical(arm)] {
+			if !nowArms[canonical(arm)] && !c.armSurvives(where, dir, arm, now.OneOf) {
 				c.fail(fmt.Sprintf("%s.oneOf[%d]", where, i), "alternative changed or removed")
 			}
 		}
 	}
+}
+
+// armSurvives reports whether one of now's alternatives is a compatible
+// evolution of the locked alternative was.
+func (c *comparer) armSurvives(where string, dir side, was *Shape, now []*Shape) bool {
+	for _, arm := range now {
+		trial := &comparer{op: c.op}
+		trial.shape(where, dir, was, arm)
+		if len(trial.problems) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // requestConstraints fails every way now admits fewer values than was: a

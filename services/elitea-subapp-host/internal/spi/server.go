@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"time"
 )
@@ -15,7 +13,7 @@ import (
 // App is a sub-application as the host sees it: a name, a descriptor, an
 // admission table and a runner. Everything else on the wire is the host's.
 type App struct {
-	// Name is the provider's name, reported as `plugin` by /health.
+	// Name is the provider's name, reported as `plugin` by Health.
 	Name string
 	// Version is reported as providerVersion.
 	Version string
@@ -46,7 +44,7 @@ type Server struct {
 	logger    *slog.Logger
 	startedAt time.Time
 	ready     func(context.Context) map[string]bool
-	handler   http.Handler
+	cancels   CancelBus
 }
 
 // Option adjusts a Server.
@@ -59,7 +57,14 @@ func WithStore(store Store) Option {
 	}
 }
 
-// WithReadiness adds checks /ready reports; every check must pass for READY.
+// WithCancelBus fans a cancel out to the replica running the invocation
+// (cancelbus.go). Without one a cancel reaches only this process's runs; the
+// store still records the request.
+func WithCancelBus(bus CancelBus) Option {
+	return func(s *Server) { s.cancels = bus }
+}
+
+// WithReadiness adds checks Health reports; every check must pass for ready.
 func WithReadiness(check func(context.Context) map[string]bool) Option {
 	return func(s *Server) { s.ready = check }
 }
@@ -82,27 +87,61 @@ func NewServer(settings Settings, app App, logger *slog.Logger, options ...Optio
 	if aware, ok := app.Runner.(ManagerAware); ok {
 		aware.AttachManager(s.manager)
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /descriptor", s.descriptor)
-	mux.HandleFunc("GET /health", s.health)
-	mux.HandleFunc("GET /ready", s.readiness)
-	mux.HandleFunc("GET /slots", s.slots)
-	mux.HandleFunc("POST /tools/{toolkit}/{tool}/invoke", s.invoke)
-	mux.HandleFunc("GET /tools/{toolkit}/{tool}/invocations/{invocation}", s.poll)
-	mux.HandleFunc("DELETE /tools/{toolkit}/{tool}/invocations/{invocation}", s.cancel)
-	s.handler = s.identityGate(s.mtlsGate(mux))
+	s.manager.cancels = s.cancels
+	// Only a runner with slot holders (SlotHolder) has a slot limit; for any
+	// other runner every invocation runs at once, as before.
+	if holder, ok := app.Runner.(SlotHolder); ok {
+		s.manager.SetSlots(settings.MaxParallelWorkers)
+		// A store that counts the slot load of an image from before the
+		// fleet (rows without a slot flag) learns from the runner which
+		// tools hold a slot.
+		if setter, ok := s.manager.store.(interface{ SetSlotTools([]ToolRef) }); ok {
+			setter.SetSlotTools(SlotTools(app.Toolkits, holder))
+		}
+	}
 	return s, nil
+}
+
+// SlotTools lists every (toolkit alias, tool) pair of the admission table
+// whose invocation the runner names a slot holder, from the call names
+// alone (no request, no identity).
+func SlotTools(toolkits Toolkits, holder SlotHolder) []ToolRef {
+	var tools []ToolRef
+	for _, family := range toolkits.Families {
+		for _, alias := range family.Aliases {
+			for _, tool := range family.Tools {
+				if holder.HoldsSlot(Invoke{Family: family, Toolkit: alias, Tool: tool}) {
+					tools = append(tools, ToolRef{Toolkit: alias, Tool: tool})
+				}
+			}
+		}
+	}
+	return tools
 }
 
 // Manager exposes the registry (for tests and for an embedding main).
 func (s *Server) Manager() *Manager { return s.manager }
 
-// Start begins housekeeping; Stop ends every in-flight invocation.
-func (s *Server) Start(ctx context.Context) {
+// Start begins housekeeping and listens for the cancels other replicas fan
+// out; Stop ends every in-flight invocation.
+func (s *Server) Start(ctx context.Context) error {
+	// A stop a sibling recorded on a row reaches the run here too, at the
+	// store's next claim check, when the bus is absent or lost the message.
+	// The bus and the poll take the same path (StopLocal), which only raises
+	// the run's stop flag: a run stopped twice ends once.
+	if watcher, ok := s.manager.Store().(StopWatcher); ok {
+		watcher.WatchStops(func(id string) { s.manager.StopLocal(id) })
+	}
+	if s.cancels != nil {
+		if err := s.cancels.Subscribe(ctx, func(id string) { s.manager.StopLocal(id) }); err != nil {
+			return fmt.Errorf("listen for cancellations: %w", err)
+		}
+	}
 	s.manager.Start(ctx)
 	if starter, ok := s.app.Runner.(Starter); ok {
 		starter.Start(ctx)
 	}
+	return nil
 }
 func (s *Server) Stop() { s.manager.Stop() }
 
@@ -116,6 +155,18 @@ type ManagerAware interface{ AttachManager(*Manager) }
 // (Manager.SubmitLabelled); nil or empty means no labels.
 type Labeler interface {
 	Labels(call Invoke) map[string]string
+}
+
+// SlotHolder is a runner some of whose invocations take one of the limited
+// slots (<PREFIX>MAX_PARALLEL_WORKERS on each replica) while they run: a
+// DeepWiki wiki generation, say. The server asks before Submit, from the
+// call alone. A slot holder is admitted only while this process admits
+// work and, with a durable store, the fleet has a free slot (with an
+// in-memory store: this process has a free slot); otherwise it is refused
+// at once, never queued (Manager.SubmitWith).
+// A runner that does not implement it has no slot limit.
+type SlotHolder interface {
+	HoldsSlot(call Invoke) bool
 }
 
 // Starter is a runner with background work (refreshing what the engine can
@@ -132,105 +183,31 @@ func (s *Server) PlatformOps() (PlatformOps, bool) {
 	return ops, ok
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
+// The documents the provider service (grpc.go) answers with. They are the
+// bodies the SPI's HTTP surface wrote before #1359, byte for byte, because
+// the facade hands them on to the browser unchanged and the conformance
+// fixtures pin them.
 
-// unauthenticatedPaths are reachable without mTLS or an identity: the probes.
-// Requiring a client certificate on them would empty a rotation the moment
-// mutual TLS went on.
-var unauthenticatedPaths = map[string]bool{"/health": true, "/ready": true}
-
-// mtlsGate refuses a hop that is not mutually authenticated when a client CA
-// is configured. When THIS process terminates TLS with a client CA, the
-// listener already required and verified a client certificate at the
-// handshake, so a request that reached the handler over TLS is the proof;
-// the peer certificates are checked all the same, because Go exposes them
-// and a check that costs nothing is worth having. A cleartext hop is 421; a
-// TLS hop with no verified client certificate is 496 — the legacy shell's
-// two refusals, which the facade already parses.
-func (s *Server) mtlsGate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.settings.MTLSRequired() || unauthenticatedPaths[r.URL.Path] {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if r.TLS == nil {
-			s.logger.Warn("refusing a cleartext hop", "method", r.Method, "path", r.URL.Path)
-			writeJSON(w, http.StatusMisdirectedRequest, TransportError(http.StatusMisdirectedRequest, "Misdirected Request"))
-			return
-		}
-		if len(r.TLS.VerifiedChains) == 0 && !s.settings.TerminatesMTLS() {
-			s.logger.Warn("refusing a hop with no verified client certificate", "method", r.Method, "path", r.URL.Path)
-			writeJSON(w, 496, TransportError(496, "No Client Certificate"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// identityGate strips every identity header a caller presented, then puts
-// back only what a valid signature vouches for. With a secret configured
-// and mTLS required, a request off the probes with no valid signature is
-// refused; without mTLS the headers are merely dropped, so a dev stack
-// still serves. A dropped identity is EMPTY, never the body's: a runner
-// whose tools address tenant data must refuse a call with no verified
-// project (inventory's run.Runner.RequireVerifiedProject) rather than read
-// the project from the body the caller writes.
-func (s *Server) identityGate(next http.Handler) http.Handler {
-	secret := []byte(s.settings.IdentitySecret)
-	required := s.settings.MTLSRequired()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity := Identity{}
-		if len(secret) > 0 {
-			switch {
-			case VerifySignature(r.Header, secret):
-				identity = IdentityFromHeaders(r.Header)
-			case required && !unauthenticatedPaths[r.URL.Path]:
-				s.logger.Warn("refusing a hop with a missing or invalid identity signature", "method", r.Method, "path", r.URL.Path)
-				writeJSON(w, http.StatusUnauthorized, TransportError(http.StatusUnauthorized, "Unauthorized"))
-				return
-			default:
-				s.logger.Warn("dropping unverified identity headers", "method", r.Method, "path", r.URL.Path)
-			}
-		}
-		StripIdentityHeaders(r.Header)
-		next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), identity)))
-	})
-}
-
-type identityKey struct{}
-
-func withIdentity(ctx context.Context, identity Identity) context.Context {
-	return context.WithValue(ctx, identityKey{}, identity)
-}
-
-// IdentityFromContext is the verified identity of the caller, empty when the
-// hop carried none.
-func IdentityFromContext(ctx context.Context) Identity {
-	identity, _ := ctx.Value(identityKey{}).(Identity)
-	return identity
-}
-
-func (s *Server) descriptor(w http.ResponseWriter, _ *http.Request) {
-	// The descriptor is written WITHOUT Go's HTML escaping, unlike every
-	// other body: it is a document the application supplies verbatim, and
-	// the golden fixtures were recorded from Python's json.dumps, which
-	// leaves <, > and & alone. Escaping them is JSON-equivalent but not
-	// byte-equal, and the descriptor is pinned byte for byte — Inventory's
-	// recorded text says "Jira ticket -> GitHub PR". Only this route is
-	// affected; nothing else the host serves changes shape.
+// DescriptorJSON is the provider's self-description for the configured
+// service location.
+//
+// It is encoded WITHOUT Go's HTML escaping, unlike every other body: it is a
+// document the application supplies verbatim, and the golden fixtures were
+// recorded from Python's json.dumps, which leaves <, > and & alone. Escaping
+// them is JSON-equivalent but not byte-equal, and the descriptor is pinned
+// byte for byte — Inventory's recorded text says "Jira ticket -> GitHub PR".
+func (s *Server) DescriptorJSON() ([]byte, error) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(s.app.Descriptor(s.settings.ServiceLocationURL)); err != nil {
-		writeJSON(w, http.StatusOK, s.app.Descriptor(s.settings.ServiceLocationURL))
-		return
+		return nil, err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(bytes.TrimRight(buffer.Bytes(), "\n"))
+	return bytes.TrimRight(buffer.Bytes(), "\n"), nil
 }
 
-func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+// HealthDocument is what the host reports about itself.
+func (s *Server) HealthDocument() map[string]any {
 	hostname := os.Getenv("HOSTNAME")
 	if hostname == "" {
 		hostname = os.Getenv("POD_NAME")
@@ -242,7 +219,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	if podIP == "" {
 		podIP = "unknown"
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"status":          "UP",
 		"providerVersion": s.app.Version,
 		"uptime":          int(time.Since(s.startedAt).Seconds()),
@@ -256,56 +233,71 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 			"hostname":            hostname,
 			"pod_ip":              podIP,
 			"durable_invocations": s.manager.Store().Durable(),
+			"cancel_fanout":       s.cancels != nil,
 			"runner":              s.app.Runner.Name(),
-			"mtls_required":       s.settings.MTLSRequired(),
+			"mtls_required":       true,
 			"identity_verified":   s.settings.IdentitySecret != "",
 			"git_egress":          ParseEgressPolicy(s.settings.GitAllowlist).Describe(),
 		},
-	})
+	}
 }
 
-func (s *Server) readiness(w http.ResponseWriter, r *http.Request) {
+// Readiness runs the readiness checks; ready when every one passed.
+func (s *Server) Readiness(ctx context.Context) (bool, map[string]bool) {
 	checks := map[string]bool{"invocations": true}
 	if s.ready != nil {
-		for name, ok := range s.ready(r.Context()) {
+		for name, ok := range s.ready(ctx) {
 			checks[name] = ok
 		}
 	}
-	status, code := "READY", http.StatusOK
+	ready := true
 	for _, ok := range checks {
 		if !ok {
-			status, code = "NOT_READY", http.StatusServiceUnavailable
+			ready = false
 		}
 	}
-	writeJSON(w, code, map[string]any{"status": status, "checks": checks})
+	return ready, checks
 }
 
-func (s *Server) slots(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, Slots(s.settings, s.manager.InFlight()))
+// SlotsDocument is the provider's capacity report.
+//
+// For a runner with slot holders (SlotHolder) over a store that keeps the
+// fleet (FleetSlotter) it reports the FLEET: the slots of the live replicas
+// that admit work and the slot holders that run on any of them. That is the
+// same rule admission applies, so a can_start the UI reads is a start the
+// fleet admits. With an in-memory store it reports this process's slot
+// holders. For any other runner it reports this process's invocations, as
+// before (the conformance fixtures pin that body).
+func (s *Server) SlotsDocument(ctx context.Context) map[string]any {
+	if _, ok := s.app.Runner.(SlotHolder); !ok {
+		return Slots(s.settings, s.manager.InFlight())
+	}
+	capacity, fleet, err := s.manager.FleetSlots(ctx)
+	if !fleet || s.settings.JobsEnabled {
+		return Slots(s.settings, s.manager.LocalHolders())
+	}
+	if err != nil {
+		s.logger.Warn("could not read the fleet's slots; this replica reports its own", "error", err)
+		return Slots(s.settings, s.manager.LocalHolders())
+	}
+	return FleetSlots(capacity)
 }
 
-// maxInvokeBytes bounds a request body: large enough for an expanded
-// toolkit configuration, small enough that a client cannot hold a goroutine
-// on a stream that never ends.
-const maxInvokeBytes = 4 << 20
+// MaxInvokeBytes bounds a request body: large enough for an expanded
+// toolkit configuration, small enough that a caller cannot hold a goroutine
+// on a body that never ends.
+const MaxInvokeBytes = 4 << 20
 
-func (s *Server) invoke(w http.ResponseWriter, r *http.Request) {
-	toolkit, tool := r.PathValue("toolkit"), r.PathValue("tool")
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvokeBytes+1))
-	if err != nil || len(raw) > maxInvokeBytes {
-		writeJSON(w, http.StatusBadRequest, TransportError(http.StatusBadRequest, "Bad Request"))
-		return
-	}
-	var request map[string]any
-	if err := json.Unmarshal(raw, &request); err != nil || request == nil {
-		writeJSON(w, http.StatusBadRequest, TransportError(http.StatusBadRequest, "Bad Request"))
-		return
-	}
-	// Admission runs INSIDE the invocation: an unknown toolkit or tool is
-	// accepted with an id and terminates as resource_not_found on the first
-	// poll, which is what the recording shows and what the facade's poll loop
-	// expects. Refusing at the door would be tidier and would break both.
-	identity := IdentityFromContext(r.Context())
+// Accept registers one tool call and starts it, returning the accepted
+// invocation. identity is the caller the transport verified (empty when the
+// hop carried none).
+//
+// Admission runs INSIDE the invocation: an unknown toolkit or tool is
+// accepted with an id and terminates as resource_not_found on the first
+// read, which is what the recording shows and what the facade's and the
+// browser's poll loops expect. Refusing at the door would be tidier and would
+// break both.
+func (s *Server) Accept(ctx context.Context, identity Identity, toolkit, tool string, request map[string]any) (*Invocation, error) {
 	call := func(ctx context.Context, tc *Context) (map[string]any, error) {
 		family, err := s.app.Toolkits.Resolve(toolkit)
 		if err != nil {
@@ -321,56 +313,28 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request) {
 	// SetLabel yet would be invisible to a StopMatching in between
 	// (Manager.SubmitLabelled). An unknown toolkit has no family and so no
 	// labels; the run refuses it.
-	var labels map[string]string
-	if labeler, ok := s.app.Runner.(Labeler); ok {
-		if family, err := s.app.Toolkits.Resolve(toolkit); err == nil {
-			labels = labeler.Labels(Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity})
+	var submission Submission
+	if family, err := s.app.Toolkits.Resolve(toolkit); err == nil {
+		invoke := Invoke{Family: family, Toolkit: toolkit, Tool: tool, Request: request, Identity: identity}
+		if labeler, ok := s.app.Runner.(Labeler); ok {
+			submission.Labels = labeler.Labels(invoke)
+		}
+		// Only a call the runner names a slot holder takes a slot. An
+		// unknown toolkit takes none: the run refuses it at once.
+		if holder, ok := s.app.Runner.(SlotHolder); ok {
+			submission.HoldsSlot = holder.HoldsSlot(invoke)
 		}
 	}
-	invocation, err := s.manager.SubmitLabelled(r.Context(), toolkit, tool, labels, call)
-	if err != nil {
-		s.logger.Error("failed to accept an invocation", "toolkit", toolkit, "tool", tool, "error", err)
-		writeJSON(w, http.StatusInternalServerError, TransportError(http.StatusInternalServerError, "Internal Server Error"))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"invocation_id": invocation.ID, "status": wireStarted})
+	return s.manager.SubmitWith(ctx, toolkit, tool, submission, call)
 }
 
-func (s *Server) poll(w http.ResponseWriter, r *http.Request) {
-	body, err := s.manager.Poll(r.Context(), r.PathValue("toolkit"), r.PathValue("tool"), r.PathValue("invocation"))
-	if err != nil {
-		s.logger.Error("poll failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, TransportError(http.StatusInternalServerError, "Internal Server Error"))
-		return
-	}
-	if body == nil {
-		writeJSON(w, http.StatusNotFound, TransportError(http.StatusNotFound, "Resource Not Found"))
-		return
-	}
-	writeJSON(w, http.StatusOK, body)
+// AcceptedBody is the body of an accepted invocation.
+func AcceptedBody(invocation *Invocation) map[string]any {
+	return map[string]any{"invocation_id": invocation.ID, "status": wireStarted}
 }
 
-func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
-	known, err := s.manager.Cancel(r.Context(), r.PathValue("toolkit"), r.PathValue("tool"), r.PathValue("invocation"))
-	if err != nil {
-		s.logger.Error("cancel failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, TransportError(http.StatusInternalServerError, "Internal Server Error"))
-		return
-	}
-	if !known {
-		writeJSON(w, http.StatusNotFound, TransportError(http.StatusNotFound, "Resource Not Found"))
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		encoded = []byte(`{"errorCode":"500","message":"Internal Server Error","details":[]}`)
-		status = http.StatusInternalServerError
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(encoded)
+// TerminalBody reports whether a poll body ends its invocation.
+func TerminalBody(body map[string]any) bool {
+	status, _ := body["status"].(string)
+	return status != wireStarted && status != wireInProgress
 }

@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/governance"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/governance"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/server"
 )
 
 type fakeCounter struct {
@@ -269,7 +269,7 @@ func TestGovernanceStatus_RateLimitsEnforceableFollowsStatus(t *testing.T) {
 	c := &fakeCounter{}
 	get := func() (bool, string) {
 		rec := httptest.NewRecorder()
-		makeGovernanceStatusHandler(nil, l, "", nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
+		makeGovernanceStatusHandler(nil, l, "", false, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 		var b struct {
 			E bool   `json:"rate_limits_enforceable"`
 			S string `json:"rate_limiter_status"`

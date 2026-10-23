@@ -1,5 +1,5 @@
 //! The page gate without Python: `tests/fixtures/wiki/golden` is a small
-//! repository (Python, C++, a Pylon API, Markdown, YAML, a file only on
+//! repository (Python, C++, a plugin class API, Markdown, YAML, a file only on
 //! disk) and the Python engine's run of the page phase over it
 //! (`parity/python_pages_dump.py --mermaid-pages`, the structure planner's
 //! output plus three hand-written pages: one over the split cap, one
@@ -13,7 +13,7 @@
 
 use elitea_deepwiki_engine::errors::EngineError;
 use elitea_deepwiki_engine::runner::StopSignal;
-use elitea_deepwiki_engine::wiki::context::PylonPlugin;
+use elitea_deepwiki_engine::wiki::context::PluginMount;
 use elitea_deepwiki_engine::wiki::expansion::ExpansionFlags;
 use elitea_deepwiki_engine::wiki::pages::{PageGenerator, PageSettings, generate_pages};
 use elitea_deepwiki_engine::wiki::parity::{self, StubModel};
@@ -146,7 +146,7 @@ async fn the_rust_page_phase_equals_the_python_reference() {
         .map(|p| serde_json::json!({"page_id": p.page_id, "title": p.title, "content": p.content, "status": p.status.as_str()}))
         .collect();
     assert_eq!(pages["pages"], Value::Array(got_pages));
-    assert!(outcome.pages.errors.is_empty());
+    assert_eq!(outcome.pages.errors, [] as [String; 0]);
 
     // Artifacts.
     let python_result = json("result.json");
@@ -228,7 +228,7 @@ async fn probe_generator(
             repo_root: dump.repo_root.clone(),
             flags: ExpansionFlags::from_env().unwrap(),
             budget: CONTEXT_TOKEN_BUDGET,
-            pylon: PylonPlugin::new(dump.repo_root.clone()),
+            plugin_mount: PluginMount::new(dump.repo_root.clone()),
         },
         chat: parity::stub_chat(&model.base_url).unwrap(),
         settings: PageSettings::new(dump.identity.repository.clone()),
@@ -248,7 +248,7 @@ async fn page_retrieval_runs_off_the_runtime_thread() {
     let pages = generate_pages(Arc::clone(&generator), &dump.structure, &dump.repo_context)
         .await
         .unwrap();
-    assert!(!pages.pages.is_empty());
+    assert_ne!(pages.pages, []);
     let threads = generator.retrieval.search.threads.lock().unwrap().clone();
     assert!(!threads.is_empty(), "the golden pages search");
     assert!(threads.iter().all(|t| *t != runtime_thread));
@@ -265,5 +265,5 @@ async fn a_stop_starts_no_page() {
         result.map_err(|e| e.message),
         Err("Invocation cancelled".to_owned())
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(model.requests(), [] as [serde_json::Value; 0]);
 }

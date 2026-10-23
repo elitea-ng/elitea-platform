@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 func TestInternalSkillGetSelectsVersionWithoutChangingDefault(t *testing.T) {

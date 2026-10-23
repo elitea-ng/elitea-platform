@@ -6,9 +6,9 @@
 // to disagree about what a tool error looks like, so there is one copy and both
 // import it.
 //
-// # THE RESPONSE, AND WHERE IT DIFFERS FROM PYLON
+// # THE RESPONSE, AND WHERE IT DIFFERS FROM THE LEGACY RUNTIME
 //
-// pylon's `test_toolkit_tool` answers `serialize(result)` at 200 for every
+// The legacy `test_toolkit_tool` answers `serialize(result)` at 200 for every
 // settled run, `{"error": "Timeout"}` at 400 on expiry, and `{"error": ...}` at
 // 500 for anything else. It cannot tell the four conditions apart, because the
 // SDK hands it one dict.
@@ -26,7 +26,7 @@
 //	runtime failure     500  ok:false with the runtime's safe message
 //	bounded wait passed 504  ok:false with the task id, so the caller can poll
 //
-// 504 rather than pylon's 400: the run is STILL GOING and durable. 400 would
+// 504 rather than the legacy 400: the run is STILL GOING and durable. 400 would
 // tell the caller their request was wrong, and it was not.
 package toolkitrun
 
@@ -38,8 +38,8 @@ import (
 	"strconv"
 	"strings"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // UseCase is the seam both handlers hold. A nil one means this deployment
@@ -53,18 +53,18 @@ type UseCase interface {
 // the bundle factory — too late for the caller to see why.
 const MaxRequestBodyBytes = int64(1 << 20)
 
-// Body is the request shape both handlers decode. It is pylon's
+// Body is the request shape both handlers decode. It is the legacy
 // `TestToolkitToolInputModel` minus the fields this platform refuses to take
 // from a caller.
 //
-// pylon accepts `toolkit_config.settings` from the request and runs the tool
-// against them, which is how its UI tests unsaved form values. THIS SERVICE
-// TAKES ONLY THE ID. The settings come from the saved row, resolved by the
-// project-scoped resolver, because a caller that can supply settings can supply
-// credentials — and the same choice was already made for index_data by
-// StartUseCase ("The HTTP boundary never forwards client-supplied toolkit
-// settings or credentials", indexing/start_handler.go). A tool run is not the
-// place to reverse it.
+// The legacy runtime accepts `toolkit_config.settings` from the request and
+// runs the tool against them, which is how its UI tests unsaved form values.
+// THIS SERVICE TAKES ONLY THE ID. The settings come from the saved row,
+// resolved by the project-scoped resolver, because a caller that can supply
+// settings can supply credentials — and the same choice was already made for
+// index_data by StartUseCase ("The HTTP boundary never forwards client-supplied
+// toolkit settings or credentials", indexing/start_handler.go). A tool run is
+// not the place to reverse it.
 //
 // The cost, stated: testing UNSAVED settings is not possible through this
 // route. A caller must save the toolkit first.

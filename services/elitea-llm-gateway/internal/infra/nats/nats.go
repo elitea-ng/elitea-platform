@@ -32,7 +32,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sony/gobreaker/v2"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 )
 
 const (
@@ -308,7 +308,7 @@ func (c *Client) OnBreakerStateChange(fn func(from, to gobreaker.State)) {
 func (c *Client) BreakerState() gobreaker.State { return c.breaker.State() }
 
 // errAssetMissing is wrapped by every "asset does not exist" bind error.
-var errAssetMissing = errors.New("created by the nats-bootstrap Job (deploy/helm/nats-bootstrap; compose: the nats-bootstrap service) — run it, then restart the gateway")
+var errAssetMissing = errors.New("created by the nats-bootstrap Job (deploy/helm/elitea natsBootstrap; compose: the nats-bootstrap service) — run it, then restart the gateway")
 
 // bindAssets looks up every asset the gateway uses and verifies the settings
 // its code depends on. It never creates or updates one (#1076): before, the

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 func env(pairs map[string]string) func(string) (string, bool) {
@@ -25,18 +25,14 @@ func env(pairs map[string]string) func(string) (string, bool) {
 }
 
 // Nothing set is a deployment that expands no source: the allowlist refuses
-// every host, the callback origin is empty (which the composition root reads
-// as "mount without expansion"), and the defaults stand.
+// every host and the defaults stand.
 func TestAnUnsetEnvironmentIsFailClosedRatherThanPermissive(t *testing.T) {
 	cfg, err := inventory.SourcesFromEnv(env(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CallbackBaseURL != "" {
-		t.Errorf("callback origin %q", cfg.CallbackBaseURL)
-	}
-	if cfg.CallbackTokenTTL != 2*time.Hour {
-		t.Errorf("token lifetime %v, want the two-hour default", cfg.CallbackTokenTTL)
+	if cfg.CallbackTokenTTL != inventory.DefaultCallbackTokenTTL {
+		t.Errorf("token lifetime %v, want the eight-hour default", cfg.CallbackTokenTTL)
 	}
 	if len(cfg.SourceTypes) != len(inventory.DefaultSourceTypes) {
 		t.Errorf("source types %v, want the default %v", cfg.SourceTypes, inventory.DefaultSourceTypes)
@@ -57,7 +53,7 @@ func TestANilLookupReadsTheProcessEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CallbackTokenTTL != 2*time.Hour {
+	if cfg.CallbackTokenTTL != inventory.DefaultCallbackTokenTTL {
 		t.Fatalf("token lifetime %v", cfg.CallbackTokenTTL)
 	}
 }
@@ -67,15 +63,11 @@ func TestANilLookupReadsTheProcessEnvironment(t *testing.T) {
 func TestEachSettingIsReadAsWritten(t *testing.T) {
 	cfg, err := inventory.SourcesFromEnv(env(map[string]string{
 		inventory.GitAllowlistEnv:     "github.com, *.github.com",
-		inventory.CallbackBaseURLEnv:  "  http://elitea-main:8080  ",
 		inventory.CallbackTokenTTLEnv: "30",
 		inventory.SourceTypesEnv:      "github, ado_repos",
 	}))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if cfg.CallbackBaseURL != "http://elitea-main:8080" {
-		t.Errorf("callback origin %q — the surrounding space was not trimmed", cfg.CallbackBaseURL)
 	}
 	if cfg.CallbackTokenTTL != 30*time.Minute {
 		t.Errorf("token lifetime %v, want 30 minutes", cfg.CallbackTokenTTL)
@@ -166,11 +158,6 @@ func TestAHalfWiredExpanderIsRefused(t *testing.T) {
 		"no grant recorder": func() (*inventory.Sources, error) {
 			return inventory.NewSources(toolkits, settings, minter, nil, whole)
 		},
-		"no callback origin": func() (*inventory.Sources, error) {
-			without := whole
-			without.CallbackBaseURL = "   "
-			return inventory.NewSources(toolkits, settings, minter, grants, without)
-		},
 	}
 	for name, compose := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -181,23 +168,28 @@ func TestAHalfWiredExpanderIsRefused(t *testing.T) {
 			if !errors.Is(err, material.ErrSourceUnavailable) {
 				t.Fatalf("%v", err)
 			}
-			if !strings.Contains(err.Error(), inventory.CallbackBaseURLEnv) {
-				t.Fatalf("the refusal does not name the variable an operator must set: %v", err)
-			}
 		})
 	}
 
-	// The whole thing composes, and the callback origin loses its trailing
-	// slash — the provider joins a path onto it, and two slashes is a URL the
-	// artifact routes do not answer.
-	trailing := whole
-	trailing.CallbackBaseURL = "http://elitea-main:8080/"
-	built, err := inventory.NewSources(toolkits, settings, minter, grants, trailing)
+	// The whole thing composes, and the engine is handed the fixed platform
+	// route name rather than a configured origin (#1359 U5).
+	built, err := inventory.NewSources(toolkits, settings, minter, grants, whole)
 	if err != nil || built == nil {
 		t.Fatalf("%v %v", built, err)
 	}
-	if built.CallbackBase != "http://elitea-main:8080" {
+	if built.CallbackBase != material.PlatformRouteBase {
 		t.Fatalf("callback base %q", built.CallbackBase)
+	}
+}
+
+// ELITEA_INVENTORY_CALLBACK_BASE_URL is retired (#1359 U5) and refused,
+// naming the variable.
+func TestTheRetiredCallbackOriginIsRefused(t *testing.T) {
+	_, err := inventory.SourcesFromEnv(env(map[string]string{
+		inventory.RetiredCallbackBaseURLEnv: "http://elitea-main:8080",
+	}))
+	if err == nil || !strings.Contains(err.Error(), inventory.RetiredCallbackBaseURLEnv) {
+		t.Fatalf("the retired variable was not refused: %v", err)
 	}
 }
 

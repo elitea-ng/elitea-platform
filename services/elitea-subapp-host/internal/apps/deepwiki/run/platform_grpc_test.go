@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	subappv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -122,7 +122,9 @@ func platformHost(t *testing.T, sidecar *fakeSidecar, pki *testPKI, clients stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(t.Context())
+	if err := server.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{pki.serverTC}, ClientCAs: pki.caPool,
 		ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}

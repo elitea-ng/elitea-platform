@@ -260,6 +260,10 @@ func (w *currentToolkitSettingsWalker) resolveToolkitSettings(
 		return nil, ErrCurrentToolkitSchemaNotFound
 	}
 
+	// The retired `pgvector_configuration` (retired.go) is neither expanded nor
+	// frozen: a toolkit saved before the retirement may still store one, and
+	// it reaches no runtime. The settings map is this walker's own clone.
+	delete(settings, RetiredPgvectorToolkitSetting)
 	plans, err := w.buildFieldPlans(ctx, schema.Properties)
 	if err != nil {
 		return nil, err
@@ -318,6 +322,10 @@ func (w *currentToolkitSettingsWalker) buildFieldPlans(
 
 	names := make([]string, 0, len(properties))
 	for name := range properties {
+		// A schema that still names the retired field plans nothing for it.
+		if name == RetiredPgvectorToolkitSetting {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)

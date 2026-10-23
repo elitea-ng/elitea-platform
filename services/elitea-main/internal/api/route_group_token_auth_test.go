@@ -32,7 +32,7 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 type routeGroupProjectResolver struct{}
@@ -52,7 +52,6 @@ func TestEveryRouteGroupAcceptsABearerToken(t *testing.T) {
 	runtimeRoutes, err := NewProductionRuntimeRoutes(
 		reached, reached,
 		group.PrincipalValidator,
-		productionRuntimePeerVerifierFunc(func(*http.Request) error { return http.ErrNoCookie }),
 		group,
 	)
 	if err != nil {

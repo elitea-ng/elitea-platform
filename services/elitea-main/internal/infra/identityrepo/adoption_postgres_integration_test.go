@@ -1,6 +1,6 @@
 package identityrepo
 
-// The Form/pylon-parity plane's first login applies the SAME adoption rule as
+// The Form/legacy-parity plane's first login applies the SAME adoption rule as
 // the SSO plane's joinAccountByEmail (adoption.go). Before, it linked any row
 // whose address matched.
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 )
 
 func TestFormPlaneFirstLoginAppliesTheSharedAdoptionRule(t *testing.T) {
@@ -55,7 +55,7 @@ func TestFormPlaneFirstLoginAppliesTheSharedAdoptionRule(t *testing.T) {
 	}
 	assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_provider WHERE user_id = $1`, federatedRow)
 
-	// A pylon bare ref does not count as federated: still adoptable.
+	// A legacy bare ref does not count as federated: still adoptable.
 	adopted, err := login(identity.ProvisioningPolicy{}, "legacy-form-login", "legacy@corp.com")
 	if err != nil || adopted.UserID != bareRow {
 		t.Fatalf("bare-ref row: result = %+v, err = %v, want adoption of %d", adopted, err, bareRow)

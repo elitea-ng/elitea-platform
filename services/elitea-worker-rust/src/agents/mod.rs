@@ -13,6 +13,7 @@ pub(crate) use elitea_agent_runtime::context_management;
 use elitea_agent_runtime::context_status;
 pub(crate) use elitea_agent_runtime::context_summary;
 pub(crate) mod direct_hitl;
+pub(crate) mod dispatch_journal;
 pub(crate) mod driven;
 pub(crate) mod events;
 pub mod graph;
@@ -43,7 +44,7 @@ mod application_pipeline_tests;
 #[cfg(test)]
 mod approved_calls_pg_tests;
 #[cfg(test)]
-mod assembly_tests;
+pub(crate) mod assembly_tests;
 #[cfg(test)]
 mod client_frames_tests;
 #[cfg(test)]
@@ -61,7 +62,7 @@ mod ordinary_tests;
 #[cfg(test)]
 mod pause_frames_tests;
 #[cfg(test)]
-mod pipeline_tests;
+pub(crate) mod pipeline_tests;
 #[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]

@@ -8,10 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentModelCatalogReaderStub struct {
@@ -44,11 +45,10 @@ func TestCurrentModelCatalogRouteBindsCurrentPathAndSafeReadPermission(t *testin
 
 	reader := &currentModelCatalogReaderStub{}
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
-	authConfig := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	authConfig := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}
 
 	for name, test := range map[string]struct {
 		reader          handler.CurrentModelCatalogReader
@@ -60,7 +60,7 @@ func TestCurrentModelCatalogRouteBindsCurrentPathAndSafeReadPermission(t *testin
 		"missing public project": {reader: reader, authConfig: authConfig, permissions: permissions},
 		"missing principal": {
 			reader: reader, publicProjectID: 1,
-			authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions,
+			authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions,
 		},
 		"no credential reader": {
 			reader: reader, publicProjectID: 1,
@@ -191,16 +191,10 @@ func newCurrentModelCatalogRoute(
 ) *handler.CurrentModelCatalogRoute {
 	t.Helper()
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := currentReadPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	route, err := handler.NewCurrentModelCatalogRoute(
 		reader,
 		1,
-		apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
 	)
 	if err != nil {

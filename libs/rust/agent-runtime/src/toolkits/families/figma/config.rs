@@ -58,9 +58,10 @@ impl std::error::Error for FigmaConfigError {}
 /// The SDK reads `figma_configuration.token` (sent as `X-Figma-Token`) and
 /// the toolkit-level `global_limit` and `global_regexp` output defaults; it
 /// refuses a toolkit without a token and a `global_regexp` that does not
-/// compile. The indexing and LLM-prompt settings (`pgvector_configuration`,
-/// `embedding_model`, `number_of_threads`) belong to tools this family does
-/// not serve and are ignored. Non-`Clone` and non-`Debug`.
+/// compile. The indexing and LLM-prompt settings (`embedding_model`,
+/// `number_of_threads`) belong to tools this family does not serve and are
+/// ignored; the SDK's `pgvector_configuration` is retired and never sent.
+/// Non-`Clone` and non-`Debug`.
 pub(crate) struct FigmaToolkitConfig {
     token: Zeroizing<String>,
     global_limit: u64,

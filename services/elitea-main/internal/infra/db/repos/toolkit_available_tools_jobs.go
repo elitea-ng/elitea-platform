@@ -7,11 +7,11 @@ import (
 	"math"
 	"strings"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkitdiscoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitdiscoveryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -116,10 +116,7 @@ func (r *ToolkitAvailableToolsJobsRepository) AdmitToolkitAvailableTools(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("lock toolkit discovery admission policy: %w", err)
 	}
 	if persistedMax != r.policy.MaxOutstanding {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf(
-			"%w: capability %q configured=%d persisted=%d",
-			ErrAdmissionPolicyMismatch, capabilityID, r.policy.MaxOutstanding, persistedMax,
-		)
+		return executionapp.AdmissionOutcome{}, admissionPolicyMismatchError(capabilityID, r.policy.MaxOutstanding, persistedMax)
 	}
 
 	existing, digest, err = loadDiscoveryAdmission(

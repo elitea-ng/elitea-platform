@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -245,8 +246,7 @@ func TestCurrentNotificationRouteBindsEveryMethodToCurrentPermission(t *testing.
 			store := &currentNotificationStoreStub{}
 			route := newCurrentNotificationAPITestRoute(t, store, test.permission)
 			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
-			request.Header.Set("X-Auth-Type", "user")
-			request.Header.Set("X-Auth-ID", "42")
+			authtest.SignIn(request, "42")
 			request.RemoteAddr = "10.0.0.8:43120"
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
@@ -261,8 +261,7 @@ func TestCurrentNotificationRouteRejectsCrossProjectPermission(t *testing.T) {
 	store := &currentNotificationStoreStub{}
 	route := newCurrentNotificationAPITestRoute(t, store, "different.permission")
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/notifications/notifications/prompt_lib/7", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "42")
+	authtest.SignIn(request, "42")
 	request.RemoteAddr = "10.0.0.8:43120"
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, request)
@@ -280,12 +279,6 @@ func (function currentNotificationPrincipalValidatorFunc) ValidatePrincipal(
 	return function(ctx, user)
 }
 
-type currentNotificationPeerVerifierFunc func(*http.Request) error
-
-func (function currentNotificationPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return function(request)
-}
-
 func newCurrentNotificationAPITestRoute(
 	t *testing.T,
 	store notificationapp.Store,
@@ -301,12 +294,7 @@ func newCurrentNotificationAPITestRoute(
 				}
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: currentNotificationPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		currentNotificationPermissionResolver{userID: 42, permissions: []string{permission}},
 	)

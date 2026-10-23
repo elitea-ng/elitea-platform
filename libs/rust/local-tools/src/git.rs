@@ -1014,7 +1014,7 @@ impl Repo {
             .split(|byte| *byte == 0)
             .map(|field| String::from_utf8_lossy(field).into_owned())
             .collect();
-        for triple in fields.chunks_exact(3) {
+        for triple in fields.as_chunks::<3>().0 {
             let (path, kind, value) = (&triple[0], &triple[1], &triple[2]);
             if drivers.contains(&(kind.clone(), value.clone())) {
                 return Err(unsafe_repo(format!(

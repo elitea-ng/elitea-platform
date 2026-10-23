@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // The dependency that makes an empty database unmigratable without this file
@@ -24,14 +24,14 @@ func TestInitialSchemaCreatesTheObjectsTheSharedHistoryNeeds(t *testing.T) {
 	t.Parallel()
 
 	if strings.TrimSpace(Initial) == "" {
-		t.Fatal("the embedded pylon-era schema is empty; elitea-migrate cannot build a database from nothing")
+		t.Fatal("the embedded legacy-era schema is empty; elitea-migrate cannot build a database from nothing")
 	}
 	for _, statement := range []string{
 		"CREATE SCHEMA IF NOT EXISTS centry",
 		"CREATE TABLE IF NOT EXISTS centry.project",
 	} {
 		if !strings.Contains(Initial, statement) {
-			t.Fatalf("the embedded pylon-era schema does not %q. "+
+			t.Fatalf("the embedded legacy-era schema does not %q. "+
 				"migrate.Bootstrap probes centry.project and the shared history "+
 				"declares a foreign key to it, so a first install fails (#556)", statement)
 		}

@@ -581,7 +581,7 @@ const file_elitea_subapp_v1_platform_proto_rawDesc = "" +
 	"statistics2\xd8\x01\n" +
 	"\x12PlatformOperations\x12`\n" +
 	"\rDeleteProject\x12&.elitea.subapp.v1.DeleteProjectRequest\x1a'.elitea.subapp.v1.DeleteProjectResponse\x12`\n" +
-	"\rDeleteToolkit\x12&.elitea.subapp.v1.DeleteToolkitRequest\x1a'.elitea.subapp.v1.DeleteToolkitResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1b\x06proto3"
+	"\rDeleteToolkit\x12&.elitea.subapp.v1.DeleteToolkitRequest\x1a'.elitea.subapp.v1.DeleteToolkitResponseBRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1;subappv1b\x06proto3"
 
 var (
 	file_elitea_subapp_v1_platform_proto_rawDescOnce sync.Once

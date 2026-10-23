@@ -25,7 +25,7 @@ var (
 	ErrNotFound     = errors.New("browser session not found")
 )
 
-// State is the language-neutral replacement for the current pylon_auth auth
+// State is the language-neutral replacement for the legacy auth plugin's auth
 // context persisted in the server-side session. ProviderAttributes is a JSON
 // object so provider-specific claims remain at the authentication boundary
 // instead of becoming untyped fields throughout the service. This preserves

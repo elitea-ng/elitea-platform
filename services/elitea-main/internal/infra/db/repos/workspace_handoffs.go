@@ -33,8 +33,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 // WorkspaceHandoffsRepository implements workspacehandoff.Repository.
@@ -508,8 +508,8 @@ SELECT name, sha FROM elitea_runtime.workspace_refs WHERE project_id = $1 AND co
 
 func (r *WorkspaceHandoffsRepository) Reclaim(
 	ctx context.Context, thread workspacehandoff.Thread, actorUserID, epoch int64, deviceID string,
-) (workspacehandoff.Handoff, error) {
-	var out workspacehandoff.Handoff
+) (workspacehandoff.TransitionResult, error) {
+	var out workspacehandoff.TransitionResult
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
 		current, found, err := lockHandoff(ctx, tx, thread)
 		if err != nil {
@@ -525,7 +525,7 @@ func (r *WorkspaceHandoffsRepository) Reclaim(
 			if err != nil {
 				return err
 			}
-			out = row.Handoff
+			out = workspacehandoff.TransitionResult{Handoff: row.Handoff, Changed: true}
 		case current.State == workspacestore.StateCloudRunning && current.Epoch == epoch:
 			row, err := transition(ctx, tx, thread, []workspacestore.State{workspacestore.StateCloudRunning}, epoch,
 				workspacestore.StateCloudRunning, 0, `, reclaim_pending = TRUE,
@@ -534,9 +534,10 @@ func (r *WorkspaceHandoffsRepository) Reclaim(
 			if err != nil {
 				return err
 			}
-			out = row.Handoff
+			// A repeated take back of a running turn finds the flag set.
+			out = workspacehandoff.TransitionResult{Handoff: row.Handoff, Changed: !current.ReclaimPending}
 		case current.State == workspacestore.StateReclaiming && current.Epoch == epoch+1:
-			out = current.Handoff // a retried take back
+			out = workspacehandoff.TransitionResult{Handoff: current.Handoff} // a retried take back
 		default:
 			return workspacehandoff.ErrStaleEpoch
 		}
@@ -545,8 +546,8 @@ func (r *WorkspaceHandoffsRepository) Reclaim(
 	return out, err
 }
 
-func (r *WorkspaceHandoffsRepository) Release(ctx context.Context, record workspacehandoff.ReleaseRecord) (workspacehandoff.Handoff, error) {
-	var out workspacehandoff.Handoff
+func (r *WorkspaceHandoffsRepository) Release(ctx context.Context, record workspacehandoff.ReleaseRecord) (workspacehandoff.TransitionResult, error) {
+	var out workspacehandoff.TransitionResult
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
 		current, found, err := lockHandoff(ctx, tx, record.Thread)
 		if err != nil {
@@ -568,7 +569,7 @@ SELECT released FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 			if !released {
 				return workspacehandoff.ErrErased
 			}
-			out = current.Handoff // a retried release
+			out = workspacehandoff.TransitionResult{Handoff: current.Handoff} // a retried release
 			return nil
 		}
 		if current.State == workspacestore.StateLocal {
@@ -595,7 +596,7 @@ SELECT released FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 			workspacehandoff.ReleaseMessage(current.DeviceName), row.Epoch); err != nil {
 			return err
 		}
-		out = row.Handoff
+		out = workspacehandoff.TransitionResult{Handoff: row.Handoff, Changed: true}
 		return nil
 	})
 	return out, err
@@ -658,8 +659,8 @@ RETURNING `+handoffColumns, record.Thread.ProjectID, record.Thread.ConversationU
 
 func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 	ctx context.Context, thread workspacehandoff.Thread, epoch int64, executionID, responseMessageID string,
-) (workspacehandoff.Handoff, error) {
-	var out workspacehandoff.Handoff
+) (workspacehandoff.TransitionResult, error) {
+	var out workspacehandoff.TransitionResult
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
 		current, found, err := lockHandoff(ctx, tx, thread)
 		if err != nil {
@@ -677,8 +678,8 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 			if err != nil {
 				return err
 			}
-			out = current.Handoff
-			out.RewindTo = rewind
+			out = workspacehandoff.TransitionResult{Handoff: current.Handoff}
+			out.Handoff.RewindTo = rewind
 			return nil
 		}
 		if current.State == workspacestore.StateCloudRunning && current.Epoch == epoch {
@@ -703,8 +704,8 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 		if err != nil {
 			return err
 		}
-		out = row.Handoff
-		out.RewindTo = rewind
+		out = workspacehandoff.TransitionResult{Handoff: row.Handoff, Changed: true}
+		out.Handoff.RewindTo = rewind
 		return nil
 	})
 	return out, err

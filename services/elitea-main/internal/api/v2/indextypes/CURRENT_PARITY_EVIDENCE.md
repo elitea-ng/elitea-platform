@@ -19,7 +19,7 @@ still refuses the capability, in the chart and in the binary.
 
 ## What #394 changed
 
-The route answered the three Pylon maps only. The published contract for the
+The route answered the three legacy maps only. The published contract for the
 same path is `DocumentLoadersResponse` — `{items, total}` — so the generated
 `apps/elitea-web` client read a body with no `items` key, and
 `shared/api/unwrap.ts` reports that as an unrecognised shape. That drift is why
@@ -44,7 +44,7 @@ what it did not ask for, and `api/openapi/v2.yaml` needs no edit.
 | Image compatibility | The current producer reads `image_loaders_map`, not `image_loaders_map_converted`. | Generated snapshot excludes `.bmp` and `.svg`. | Exact current behavior. EliteaUI independently adds `.svg` in `fileTypes.js`; the API must not silently widen during this port. |
 | UI consumer | `EliteaUI/src/api/applications.js:getDocumentLoaders`, `hooks/useFileTypes.js`, and `slices/fileTypes.js` consume the three maps directly. | `testdata/current_index_types_ui_response.json` | The three maps decode out of the response equal to the fixture. Byte-for-byte whole-body equality ended with #394, which added the published `items`/`total` keys the second shipped client needs. |
 | Tenant boundary | The payload is process-global, but access is project-scoped by the current decorator. | Auth and PostgreSQL permission resolution execute before snapshot read. | Cross-project membership, suspended project/user, wrong permission, viewer/editor, and platform-admin cases are integration-tested. |
-| Production ownership | The current Pylon handler remains the owner until an individual route is cut over. | `ELITEA_INDEX_TYPES_ENABLED` is strict and defaults to disabled; disabled composition registers no Go route, while enabled composition registers exactly the reviewed GET path. | Atomic ownership: the Go route either owns the exact path or falls through as absent. OFF is not free — `internal/api/router.go` then answers the path from the toolkits handler's static six-loader list, which no data backs. |
+| Production ownership | The legacy runtime's handler remains the owner until an individual route is cut over. | `ELITEA_INDEX_TYPES_ENABLED` is strict and defaults to disabled; disabled composition registers no Go route, while enabled composition registers exactly the reviewed GET path. | Atomic ownership: the Go route either owns the exact path or falls through as absent. OFF is not free — `internal/api/router.go` then answers the path from the toolkits handler's static six-loader list, which no data backs. |
 
 ## Snapshot identity and bounds
 
@@ -95,8 +95,8 @@ for this snapshot.
 
 ## Deliberate safe differences and remaining cutover gates
 
-The current Pylon module is briefly initialized with `{}` and can fall back to
-three empty maps after an SDK import failure. When mounted, Go composition must
+The legacy runtime's module is briefly initialized with `{}` and can fall back
+to three empty maps after an SDK import failure. When mounted, Go composition must
 instead load the pinned complete snapshot and fail startup if that evidence is
 invalid. This avoids serving a silently partial capability catalog. If an
 already-composed reader fails during a request, the Go handler returns a

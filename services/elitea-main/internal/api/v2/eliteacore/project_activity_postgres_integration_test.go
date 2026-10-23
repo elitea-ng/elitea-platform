@@ -15,8 +15,8 @@ package eliteacore_test
 //     `project_id` predicate produces plausible-looking numbers that are wrong.
 //     TestProjectUserActivityCountsOnlyTheRequestedProject is the guard.
 //   - ROW MULTIPLICATION BY EMAIL. `user_email` is denormalised onto every
-//     audit row, so grouping by `(user_id, user_email)` — as pylon does —
-//     splits one user across two rows, and the client's `Map` keyed on
+//     audit row, so grouping by `(user_id, user_email)` — as the legacy runtime
+//     does — splits one user across two rows, and the client's `Map` keyed on
 //     `user_id` keeps only the last. TestProjectUserActivityMergesAUserWhose
 //     EmailChanged is the guard.
 //
@@ -34,7 +34,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 type projectActivityRow struct {
@@ -144,7 +144,7 @@ func TestProjectUserActivityMergesAUserWhoseEmailChanged(t *testing.T) {
 			appearances++
 		}
 	}
-	// pylon's GROUP BY (user_id, user_email) answers 2 here, each with count 1,
+	// The legacy GROUP BY (user_id, user_email) answers 2 here, each with count 1,
 	// and the client's Map keeps whichever arrives last — a square showing "1
 	// event" for a user who produced two.
 	if appearances != 1 {

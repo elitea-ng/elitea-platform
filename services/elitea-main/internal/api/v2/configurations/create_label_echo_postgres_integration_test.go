@@ -19,7 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,10 +31,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // TestCreateEchoesTheStoredLabel is the acceptance test.
@@ -47,9 +47,9 @@ func TestCreateEchoesTheStoredLabel(t *testing.T) {
 	created := createEchoDo(t, router, map[string]any{
 		"elitea_title": title,
 		"label":        label,
-		"type":         "pgvector",
-		"section":      "vectorstorage",
-		"data":         map[string]any{"host": "127.0.0.1"},
+		"type":         "figma",
+		"section":      "credentials",
+		"data":         map[string]any{},
 	})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
@@ -116,9 +116,9 @@ func TestCreateWithoutALabelIsRefused(t *testing.T) {
 	const title = "autotest_no_label_cfg"
 	created := createEchoDo(t, router, map[string]any{
 		"elitea_title": title,
-		"type":         "pgvector",
-		"section":      "vectorstorage",
-		"data":         map[string]any{"host": "127.0.0.1"},
+		"type":         "figma",
+		"section":      "credentials",
+		"data":         map[string]any{},
 	})
 	if created.Code != http.StatusBadRequest {
 		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())

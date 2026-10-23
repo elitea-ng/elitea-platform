@@ -20,7 +20,7 @@
  *
  *  2. After the stream fails to connect — `runSocketFallback`. A `task_id`
  *     in the response does NOT prove the run is on the Go runtime: the
- *     legacy pylon route honours `await_response=false` and returns a
+ *     legacy runtime's route honours `await_response=false` and returns a
  *     `task_id` of its own, while serving no `/executions/…/events` stream
  *     at all. Nothing in the response distinguishes the two (Go answers
  *     `{task_id}` and nothing else), so the STREAM ITSELF is the

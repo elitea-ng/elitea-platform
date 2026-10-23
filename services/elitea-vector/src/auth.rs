@@ -2081,11 +2081,11 @@ mod tests {
                 .memory_toolkit_ids,
             vec![3, 8]
         );
-        assert!(
+        assert_eq!(
             grant_from_response(&answer(pb::TokenKind::EngineCallback), 1_000)
                 .expect("callback")
-                .memory_toolkit_ids
-                .is_empty()
+                .memory_toolkit_ids,
+            [] as [i64; 0]
         );
     }
 

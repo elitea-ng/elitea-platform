@@ -248,6 +248,11 @@ test('J16: create a pipeline through the real form and land on a live flow edito
 });
 
 test('J16: the pipeline editor screen is accessible (spec §6.4)', async ({ page }) => {
+  // test.slow() (90 s, as the other create-edit-save-reload journeys in this
+  // folder): on a webkit CI leg with four workers this journey measured
+  // 30-35 s with no single slow call (every API read < 0.3 s), so the
+  // default 30 s budget cut it off mid-reload and it read as a hang.
+  test.slow();
   /*
    * Was RED — two critical `button-name` violations (WCAG 4.1.2) from the
    * icon-only collapse buttons in `features/pipelines/ui/GeneralFormPanel.tsx`
@@ -268,6 +273,11 @@ test('J16: the pipeline editor screen is accessible (spec §6.4)', async ({ page
 });
 
 test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
+  // test.slow() (90 s, as the other create-edit-save-reload journeys in this
+  // folder): on a webkit CI leg with four workers this journey measured
+  // 30-35 s with no single slow call (every API read < 0.3 s), so the
+  // default 30 s budget cut it off mid-reload and it read as a hang.
+  test.slow();
   /*
    * JRNY-016 acceptance (1). This was RED: the save submitted only
    * `toVersionDraft(activeVersion, conversationStarters)`, so the PUT carried

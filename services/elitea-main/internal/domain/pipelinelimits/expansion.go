@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // The Worker parses a stored pipeline with a budget on the document AFTER
@@ -57,11 +57,18 @@ type expansionMeter struct {
 
 // checkExpansion is the save-time budget check of a decoded document's root.
 func checkExpansion(root *yaml.Node) error {
-	meter := expansionMeter{jumpLimit: aliasReplayFactor * parserEvents(root)}
-	if !meter.visit(root, 0) {
+	if _, ok := meterExpansion(root); !ok {
 		return ErrExpansionTooLarge
 	}
 	return nil
+}
+
+// meterExpansion runs the meter over root and returns it with its verdict, so
+// a test can read the work the walk did.
+func meterExpansion(root *yaml.Node) (expansionMeter, bool) {
+	meter := expansionMeter{jumpLimit: aliasReplayFactor * parserEvents(root)}
+	ok := meter.visit(root, 0)
+	return meter, ok
 }
 
 // parserEvents counts the events serde_yaml_ng's loader keeps for the document

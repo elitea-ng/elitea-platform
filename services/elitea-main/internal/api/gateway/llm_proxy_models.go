@@ -9,12 +9,12 @@ package gateway
 // multiplying by the quantities the provider reported.
 //
 // A pair with NO ROW is not refused, and — for a token model — is not free
-// either. `internal/cost` falls back to a pylon-parity prefix table and, failing
-// that, to a flat 1.0/3.0 USD per 1M tokens (`cost.go` Price, `default_prices.go`
-// defaultPrice). So the call IS billed, the budget counter IS incremented, and a
-// ceiling CAN stop it — but every one of those numbers is an invention. The
-// failure is silent and it is a WRONG BILL, not a missing one, which is harder
-// to notice and harder to reconstruct after the fact.
+// either. `internal/cost` falls back to a legacy-parity prefix table and,
+// failing that, to a flat 1.0/3.0 USD per 1M tokens (`cost.go` Price,
+// `default_prices.go` defaultPrice). So the call IS billed, the budget counter
+// IS incremented, and a ceiling CAN stop it — but every one of those numbers is
+// an invention. The failure is silent and it is a WRONG BILL, not a missing one,
+// which is harder to notice and harder to reconstruct after the fact.
 //
 // Audio is the exception and it is the stricter one. A per-second or
 // per-character rate is never fabricated, deliberately: an invented figure for a
@@ -76,7 +76,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // actorFrom names who authored an override, for the row's provenance columns.

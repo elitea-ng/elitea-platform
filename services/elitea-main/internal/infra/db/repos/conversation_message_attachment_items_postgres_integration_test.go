@@ -145,7 +145,7 @@ func TestListMessageGroupsReturnsAttachmentItemAlongsideText(t *testing.T) {
 
 	details := attachmentItemDetailsOf(t, items[1])
 
-	// `name` and `bucket` are a DELIBERATE divergence from pylon's own API
+	// `name` and `bucket` are a DELIBERATE divergence from the legacy API
 	// shape, which exposes neither (elitea_core/models/pd/attachment.py:32-43).
 	// The client reads both directly — `name` for the transcript label and the
 	// playback toolbar, `bucket` for imageAttachment.helpers.ts:78's

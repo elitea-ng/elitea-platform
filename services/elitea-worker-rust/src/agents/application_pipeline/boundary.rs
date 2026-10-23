@@ -8,7 +8,7 @@ use crate::agents::events::{
     DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY,
     PIPELINE_TOOL_BOUNDARY_METADATA_KEY,
 };
-use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, receipt_for_node};
+use crate::agents::pipeline::scope_receipts::receipt_for_node;
 use crate::agents::pipeline::scoped_applications::route_from_event;
 use crate::agents::runtime::NativeAgentAssemblyError;
 use adk_rust::Event;
@@ -154,7 +154,7 @@ pub(super) fn application_family_interrupt_ids(
     if receipt.activation().call_id() != call || receipt.activation().step() != checkpoint.step {
         return Err(invalid_boundary());
     }
-    let GraphCallOutcome::Paused { result } = receipt.outcome() else {
+    let Some(result) = receipt.outcome().paused_result() else {
         return Err(invalid_boundary());
     };
     let recorded = crate::agents::application_tools::nested_application_interrupt_ids(result)
@@ -652,7 +652,9 @@ pub(crate) mod tests {
     use crate::agents::pipeline::composition::{
         PipelineCheckpointCatalog, PipelineCheckpointRevision,
     };
-    use crate::agents::pipeline::scope_receipts::{finish_graph_call, prepare_graph_call};
+    use crate::agents::pipeline::scope_receipts::{
+        GraphCallOutcome, finish_graph_call, prepare_graph_call,
+    };
     use crate::agents::pipeline::scoped_applications::PipelineApplicationScope;
     use adk_rust::graph::{
         Checkpoint, Checkpointer, ExecutionConfig, MemoryCheckpointer, NodeContext, State,

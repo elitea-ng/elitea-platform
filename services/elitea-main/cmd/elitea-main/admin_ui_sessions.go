@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
 
 // adminUISessions boxes the browser-session manager for the admin shell, or

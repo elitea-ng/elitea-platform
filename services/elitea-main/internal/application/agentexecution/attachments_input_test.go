@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 func TestCurrentApplicationStartSendsTheTurnsAttachmentChunksConcatenatedInOrder(t *testing.T) {
@@ -31,8 +31,7 @@ func TestCurrentApplicationStartSendsTheTurnsAttachmentChunksConcatenatedInOrder
 	}}
 	admissions := newCurrentAttachmentAdmissionStub()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +61,7 @@ func TestCurrentAdhocStartSendsTheTurnsAttachmentChunksConcatenatedInOrder(t *te
 	}}
 	admissions := newCurrentAttachmentAdmissionStub()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +82,7 @@ func TestCurrentAdhocStartSendsTheTurnsAttachmentChunksConcatenatedInOrder(t *te
 
 // assertCurrentTurnAttachmentsWereSent pins the two properties that make the
 // field usable by the worker: it is the FLATTENED concatenation of every
-// attachment's chunks (pylon's chat_history.py:67-73 extends, it does not
+// attachment's chunks (the legacy chat_history.py:67-73 extends, it does not
 // nest), and its order is the item order the same admission is writing, so
 // chunk N in the prompt belongs to the file the transcript shows Nth.
 func assertCurrentTurnAttachmentsWereSent(
@@ -129,8 +127,7 @@ func TestCurrentApplicationStartSendsAnEmptyListWhenTheTurnAttachedNothing(t *te
 	}}
 	admissions := newCurrentAttachmentAdmissionStub()
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +161,7 @@ func TestCurrentTurnInputAttachmentsFlattensMultiChunkContent(t *testing.T) {
 		t.Fatalf("input_attachments=%s want %s", got, want)
 	}
 	// A payload that is not an array at all contributes nothing rather than
-	// refusing the turn: pylon's own data has objects here (chat_history.py's
+	// refusing the turn: legacy-era data has objects here (chat_history.py's
 	// non-list fallback), and a malformed attachment must not stop a message
 	// whose TEXT is fine from being sent.
 	if got := currentTurnInputAttachments([]CurrentTurnAttachment{
@@ -180,10 +177,10 @@ func TestCurrentTurnInputAttachmentsFlattensMultiChunkContent(t *testing.T) {
 }
 
 // TestAttachmentScaffoldMarksOnlyDocumentsForContentExtraction pins the
-// convention the worker reads. Pylon does not have to persist its equivalent
-// flag (utils/attachments.py:320 `needs_content_extraction`) because producer
-// and consumer are one process; here they are two services, so the marker is
-// part of the stored content and part of this repository's contract.
+// convention the worker reads. The legacy runtime does not have to persist its
+// equivalent flag (utils/attachments.py:320 `needs_content_extraction`) because
+// producer and consumer are one process; here they are two services, so the
+// marker is part of the stored content and part of this repository's contract.
 func TestAttachmentScaffoldMarksOnlyDocumentsForContentExtraction(t *testing.T) {
 	attachments, err := currentTurnAttachments(
 		"ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
@@ -215,13 +212,13 @@ func TestAttachmentScaffoldMarksOnlyDocumentsForContentExtraction(t *testing.T) 
 	if marker["item_id"] != attachments[0].ItemID {
 		t.Fatalf("marker item_id=%v want the attachment's own id %q", marker["item_id"], attachments[0].ItemID)
 	}
-	// An image has no text to extract (pylon's ImageToModelProcessor sets no
+	// An image has no text to extract (the legacy ImageToModelProcessor sets no
 	// flag), so the key is ABSENT rather than present-and-false: the worker's
 	// default reading of a missing key must be "nothing to do".
 	if got := currentAttachmentMarker(t, attachments[1].Content); got != nil {
 		t.Fatalf("image carries an extraction marker: %+v", got)
 	}
-	// .svg is an image by MIME and a document by pylon's rule, so it is
+	// .svg is an image by MIME and a document by the legacy rule, so it is
 	// marked — the marker follows attachment_type, not the media type.
 	if got := currentAttachmentMarker(t, attachments[2].Content); got == nil {
 		t.Fatalf("svg is a document but carries no marker: %s", attachments[2].Content)

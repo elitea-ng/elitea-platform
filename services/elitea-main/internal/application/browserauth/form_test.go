@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
 func TestFormAssertionPreservesCurrentIdentitySemantics(t *testing.T) {

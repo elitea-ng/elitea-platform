@@ -10,15 +10,15 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn/natstest"
 )
 
 // TestSecuredGatewayRunsOnTheChartsPermissions runs the gateway's real NATS
 // client — Connect, the bind, every counter, KV and publish operation — as
 // the elitea-llm-gateway identity against a nats-server started from the NATS
 // chart's own rendered config, with the assets the real bootstrap.sh created
-// (#1076). A grant missing from deploy/helm/nats/values.yaml fails here.
+// (#1076). A grant missing from deploy/helm/elitea/values.yaml fails here.
 func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	s := natstest.Start(t)
 	s.Bootstrap(t, nil)

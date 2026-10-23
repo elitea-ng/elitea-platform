@@ -2,6 +2,7 @@ package agentexecution
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 )
 
@@ -193,4 +194,31 @@ func (service *CurrentApplicationStartService) notifyMentionedUsers(
 		slog.Error("agentexecution: write mention notifications",
 			"project_id", request.ProjectID, "recipients", len(rows), "err", err)
 	}
+}
+
+// currentQuestionMeta is the question message group's `meta` at admission:
+// `interaction_uuid` when the client sent one, and the message's mentions
+// (issue 1062) — `mentioned_user_ids`, the ids the composer tagged as the
+// route parsed them (deduplicated, at most 64), and `mentions_everyone` for
+// `@everyone`. The transcript re-emits the group's meta as `metadata`, so a
+// client renders the exact people tagged instead of guessing them from the
+// text. They are what the sender tagged, not who was told: notification
+// still re-resolves membership (mentionAudience), and an id that is not a
+// member is stored but notifies nobody.
+func currentQuestionMeta(interactionUUID string, mentioned []int64, everyone bool) json.RawMessage {
+	meta := map[string]any{}
+	if interactionUUID != "" {
+		meta["interaction_uuid"] = interactionUUID
+	}
+	if len(mentioned) > 0 {
+		meta["mentioned_user_ids"] = mentioned
+	}
+	if everyone {
+		meta["mentions_everyone"] = true
+	}
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
 }

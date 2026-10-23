@@ -22,7 +22,7 @@ const (
 )
 
 // NodeEventV1 is the language-neutral data-plane form of the current
-// pylon_indexer NodeEvent consumed by EliteaUI. Field names deliberately match
+// legacy indexer NodeEvent consumed by EliteaUI. Field names deliberately match
 // the current UI-facing JSON contract. Event type remains a bounded string so
 // adding a current-baseline event does not require synchronized enum releases.
 //
@@ -249,7 +249,7 @@ const file_elitea_runtime_v1_node_event_proto_rawDesc = "" +
 	"\v_created_atB\x14\n" +
 	"\x12_parent_message_idB\r\n" +
 	"\v_agent_nameB\x17\n" +
-	"\x15_execution_generationJ\x04\b\x0e\x10 BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x15_execution_generationJ\x04\b\x0e\x10 BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_node_event_proto_rawDescOnce sync.Once

@@ -6,7 +6,7 @@
 //     tracing.view.
 //   - `otlp` reverse-proxies browser-originated OTLP/HTTP payloads to the
 //     configured collector, avoiding a browser-to-collector CORS hop exactly
-//     as the pylon original did against Jaeger (legacy otlp.py).
+//     as the legacy original did against Jaeger (legacy otlp.py).
 //   - `collect` accepts the UI's own span-batch shape (legacy collect.py) and
 //     re-emits it as real spans through the process-wide TracerProvider —
 //     the same one libs/go/observability wires up for elitea-main's own
@@ -17,9 +17,10 @@
 // Option (a) of the two the issue offers: elitea-main proxies collect/otlp to
 // an OTEL collector rather than pointing clients straight at a collector
 // service. This is a straight port of the legacy shape (both collect.py and
-// otlp.py already proxy through pylon_main), keeps the UI/worker client
-// surface unchanged, and needs no collector-facing CORS or authentication
-// configuration in deploy/* — the collector only ever talks to elitea-main.
+// otlp.py already proxy through the legacy main service), keeps the UI/worker
+// client surface unchanged, and needs no collector-facing CORS or
+// authentication configuration in deploy/* — the collector only ever talks to
+// elitea-main.
 //
 // # Authorization
 //
@@ -51,10 +52,10 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/observability"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/libs/go/observability"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // Config configures the tracing ingest surface.
@@ -62,7 +63,7 @@ type Config struct {
 	// Enabled mirrors the observability SDK's own kill switch
 	// (OTEL_SDK_DISABLED != "true"): with nothing behind it to export to,
 	// ingest answers a discoverable "tracing is disabled" (503, matching
-	// legacy's `if not self.module.enabled` branches) instead of silently
+	// the legacy runtime's `if not self.module.enabled` branches) instead of silently
 	// accepting and dropping every payload.
 	Enabled bool
 	// CollectorHTTPEndpoint is the OTLP/HTTP collector base URL `otlp`
@@ -123,7 +124,7 @@ func NewHandler(pool *pgxpool.Pool, cfg Config, tracer func() trace.Tracer) *Han
 func (h *Handler) Routes(requireAdminStatus func(http.Handler) http.Handler) chi.Router {
 	r := chi.NewRouter()
 
-	// No-project-id variant: legacy's url_params included a bare '' alongside
+	// No-project-id variant: the legacy runtime's url_params included a bare '' alongside
 	// '<int:project_id>' (PromptLibAPI.post(self, project_id: int = None,
 	// **kwargs)) for callers that have not resolved a project yet (e.g. the
 	// UI's earliest boot-time spans). Authenticated only — there is no

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	interruptdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	interruptdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -133,6 +133,11 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 			if projectionErr != nil {
 				return fmt.Errorf("project current agent stop: %w", projectionErr)
 			}
+			// Only a fresh send stopped before output is deleted, always with
+			// its question. A regeneration's question is the original,
+			// already answered one: the projection keeps the pair and settles
+			// the empty answer, so it reaches the Retained check below
+			// (#1093).
 			if projection.Deleted {
 				if !projection.QuestionDeleted || projection.Retained || projection.Salvaged {
 					return errors.New("current agent cancellation deleted an incomplete pair")

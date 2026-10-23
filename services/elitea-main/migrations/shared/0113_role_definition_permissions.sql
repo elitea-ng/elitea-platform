@@ -5,8 +5,8 @@
 --   configuration.roles.roles.edit    ← PUT    /admin/roles/{scope}/{mode}
 --   configuration.roles.roles.delete  ← DELETE /admin/roles/{scope}/{mode}
 --
--- RECOVERED, NOT CHOSEN. All three strings are pylon's own: they are the
--- `permissions` list of the four handlers in
+-- RECOVERED, NOT CHOSEN. All three strings are the legacy runtime's own: they
+-- are the `permissions` list of the four handlers in
 -- legacy/plugins/admin/api/v2/roles.py, and all four are already in the
 -- catalogue this repository transcribed into
 -- testdata/postgres/legacy-rbac-matrix.json (`global_permission_catalog`).
@@ -28,7 +28,7 @@
 --
 -- `system` is included although internal/infra/db/migrations/001_initial.sql
 -- seeds no administration-mode `system` role. The WHERE clause simply matches
--- nothing there. On a pylon-backed database the role does exist, and omitting
+-- nothing there. On a legacy-backed database the role does exist, and omitting
 -- it would NARROW that deployment's existing matrix.
 --
 -- WHY A NEW FILE. 0060 returns early when any administration-mode role exists,

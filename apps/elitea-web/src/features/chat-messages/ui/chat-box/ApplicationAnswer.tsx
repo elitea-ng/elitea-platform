@@ -39,15 +39,14 @@ import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
-import { ApplicationAnswerAuthorization } from './ApplicationAnswerAuthorization';
+import { ApplicationAnswerApprovals, useAnswerApprovalModel } from './ApplicationAnswerApprovals';
 import { AssistantAvatar } from './MessageAvatar';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
 import { RememberMemoryAction } from './RememberMemoryAction';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
-import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
-import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
+import { AskUserAnswerSummary } from '../chat-hitl-actions/AskUserAnswerSummary';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 import { BudgetUsageLink } from '../error-trace/BudgetUsageLink';
 import { FailureReference } from '../error-trace/FailureReference';
@@ -100,10 +99,10 @@ export function ApplicationAnswer({
   isLastMessage = false,
   author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
-  actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
+  actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, hideContinueButton = false } = {},
-  hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
+  hitl: { hitlInterrupt, hitlInterrupts, onHitlResume, staticPause } = {},
   feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
   const recovery = messageNodeRecoveryBinding(answer);
@@ -171,10 +170,8 @@ export function ApplicationAnswer({
     [toolActions],
   );
 
-  const effectiveHitlInterrupts = useMemo<readonly HitlInterrupt[]>(() => {
-    const list = Array.isArray(hitlInterrupts) && hitlInterrupts.length > 0 ? hitlInterrupts : hitlInterrupt ? [hitlInterrupt] : [];
-    return list as unknown as readonly HitlInterrupt[];
-  }, [hitlInterrupt, hitlInterrupts]);
+  const approvals = useAnswerApprovalModel({ hitlInterrupt, hitlInterrupts, toolActions, authRequiredActions, staticPause });
+  const { visibleHitlInterrupts, pendingInstanceKeys } = approvals;
 
   const onContinueWithConfirmation = useCallback(() => {
     onContinueTokenLimitExecution?.(messageId);
@@ -209,7 +206,7 @@ export function ApplicationAnswer({
     !!exception ||
     (authRequiredActions.length > 0 && !!onContinueMcpExecution) ||
     (!!requiresConfirmationSignal && !!onContinueTokenLimitExecution) ||
-    effectiveHitlInterrupts.length > 0 || !!recovery;
+    visibleHitlInterrupts.length > 0 || approvals.staticCards.cards.length > 0 || !!recovery;
 
   const renderedContent = canRenderContent && hasTextContent ? (
     <AnswerContent
@@ -264,15 +261,9 @@ export function ApplicationAnswer({
         />
       )}
 
-      <ApplicationAnswerAuthorization
-        actions={authRequiredActions}
-        messageId={messageId}
-        continuation={{ onContinueMcpExecution, renderAuthModal }}
-      />
-
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
-      {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isActivelyProcessing} />}
+      {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isActivelyProcessing} pendingInstanceKeys={pendingInstanceKeys} />}
 
       {!isProcessing && swarmChildActions.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>
@@ -314,6 +305,7 @@ export function ApplicationAnswer({
           })}
         >
           {recovery && <NodeRecoveryNotice binding={recovery} />}
+          {canRenderContent && toolActions.length > 0 && <AskUserAnswerSummary toolActions={toolActions} />}
           {continuationFailed ? (
             <ContinuationError error={exception} partialOutput={partialOutput}>
               {renderedContent}
@@ -328,29 +320,27 @@ export function ApplicationAnswer({
 
           {!!exception && <FailureReference messageId={messageId} code={answer.failureCode} />}
 
-          {!hideContinueButton && !!requiresConfirmationSignal && (
-            <ChatContinue
-              requiresConfirmation
-              disabled={!onContinueTokenLimitExecution}
-              onContinue={onContinueWithConfirmation}
-            />
-          )}
-
-          {effectiveHitlInterrupts.map((interrupt, index) => (
-            <ChatHitlActions
-              key={interrupt.tool_call_id || `hitl-${index}`}
-              hitlInterrupt={interrupt}
-              toolCallId={interrupt.tool_call_id ?? ''}
-              onHitlResume={onHitlResume}
-              disabled={!onHitlResume || Boolean(interrupt.decided)}
-            />
-          ))}
+          <ApplicationAnswerApprovals
+            model={approvals}
+            messageId={messageId}
+            onHitlResume={onHitlResume}
+            staticPause={staticPause}
+            authorization={{ onContinueMcpExecution, renderAuthModal }}
+            confirmation={!hideContinueButton && !!requiresConfirmationSignal ? (
+              <ChatContinue
+                requiresConfirmation
+                message={requiresConfirmationSignal.message}
+                disabled={!onContinueTokenLimitExecution}
+                onContinue={onContinueWithConfirmation}
+              />
+            ) : null}
+          />
 
           {isLoadingOrRegenerating &&
             !hasTextContent &&
             !exception &&
             nonSwarmChildActions.length === 0 &&
-            effectiveHitlInterrupts.length === 0 && (
+            visibleHitlInterrupts.length === 0 && (
               <ApplicationAnswerLoading isStreaming={isStreaming} />
             )}
 
@@ -387,6 +377,7 @@ export function ApplicationAnswer({
               onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
               onCopy={onCopy}
               onRegenerate={onRegenerate}
+              onFork={onFork}
               onDelete={onDelete}
               onOpenAsDocument={
                 onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined

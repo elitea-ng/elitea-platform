@@ -5,7 +5,7 @@ package admin
 //
 // # Why this is its own surface and not that section made writable
 //
-// The section's fields address keys inside a pylon plugin's YAML
+// The section's fields address keys inside a legacy plugin's YAML
 // (`auth_provider`, `metadata_endpoint`, `client_id`, `client_secret`), and the
 // plugin-configuration write path stores a section's fields as plaintext JSONB
 // rows in `centry.platform_config`. Two things follow, and either alone decides
@@ -18,8 +18,8 @@ package admin
 //   - A flat list of field values cannot express "this document is an OIDC
 //     provider, and these are the invariants it must satisfy". The
 //     configuration provenance specification asks for one TYPED provider
-//     revision per protocol precisely because pylon's values are scattered, and
-//     a settings document reproduces the scattering.
+//     revision per protocol precisely because the legacy values are scattered,
+//     and a settings document reproduces the scattering.
 //
 // So the definition has its own surface, its own table (shared migration 0095)
 // and its own validation (`internal/identityproviders`), and the section says
@@ -28,9 +28,9 @@ package admin
 // # The permission is the one the page it replaces already used
 //
 // `runtime.plugins`, resolved in administration mode, gates every route here.
-// pylon's `plugin_config_values.py` declares the same string, so an operator who
-// could edit the Authentication section can author a provider and no new grant
-// is needed — which also keeps the grant gate in
+// The legacy `plugin_config_values.py` declares the same string, so an operator
+// who could edit the Authentication section can author a provider and no new
+// grant is needed — which also keeps the grant gate in
 // `internal/api/router_permission_grant_gate_test.go` untripped.
 //
 // # What a caller can and cannot see
@@ -57,8 +57,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
 // IdentityProviderSecretStore is the vault seam this surface seals through.

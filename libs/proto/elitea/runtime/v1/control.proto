@@ -10,7 +10,7 @@ import "elitea/runtime/v1/input.proto";
 import "elitea/runtime/v1/output.proto";
 import "elitea/runtime/v1/sandbox.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 enum ClaimDispositionV1 {
   CLAIM_DISPOSITION_V1_UNSPECIFIED = 0;

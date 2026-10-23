@@ -69,7 +69,10 @@ fn terminal_failure_code(
         | NodeFailureClass::InvalidResult
         | NodeFailureClass::ModelOutputIncomplete
         | NodeFailureClass::Cancelled
-        | NodeFailureClass::Unknown => {
+        | NodeFailureClass::Unknown
+        // Lost-runtime re-runs exhausted or out of time: the same typed Code
+        // failure Main and Web already render (wire-compatible).
+        | NodeFailureClass::RuntimeLost => {
             Some(preparation.map_or("pipeline.code_failed", CodePreparationFailure::code))
         }
     }
@@ -966,14 +969,14 @@ mod tests {
         assert_eq!(activations.len(), 2);
         assert_eq!(activations[0], activations[1]);
         assert_eq!(runtime.runtime.visits.lock().unwrap().len(), 1);
-        assert!(
+        assert_eq!(
             checkpoints
                 .load("child-code")
                 .await
                 .unwrap()
                 .unwrap()
-                .pending_nodes
-                .is_empty()
+                .pending_nodes,
+            [] as [String; 0]
         );
         recovered
             .invoke(State::new(), ExecutionConfig::new("child-code"))

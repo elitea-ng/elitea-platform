@@ -1,44 +1,14 @@
 /**
- * The thread's cloud handoff on the session page: the badge, the Send to
- * cloud button and the folder's Handoff settings in the header, the banner
- * above the composer while the thread is not running here, and the dialogs
- * behind them.
+ * The thread's cloud handoff on the session page: the banner above the
+ * composer while the thread is not running here, and the dialogs behind it
+ * and behind the composer footer's run-location menu (`ComposerControls`).
  */
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
-import Tooltip from '@mui/material/Tooltip';
 
-import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
-import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 
 import { ChangedFilesCard, useWorkspaceIpc } from '@/features/workspace';
-import { CloudThreadBanner, EraseCloudCopyDialog, ExecutorBadge, HandoffSettingsDialog, SendToCloudDialog, TakeBackDialog } from '@/features/workspace-handoff';
-import { t } from '@/shared/i18n';
+import { CloudThreadBanner, EraseCloudCopyDialog, HandoffSettingsDialog, SendToCloudDialog, TakeBackDialog } from '@/features/workspace-handoff';
 
 import type { ThreadHandoff } from './useThreadHandoff';
-
-/** Where the thread runs, and the way to send it. */
-export function HandoffHeader({ handoff }: { handoff: ThreadHandoff }): React.JSX.Element | null {
-  if (handoff.status === undefined && !handoff.canSend) return null;
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-      {handoff.status !== undefined && <ExecutorBadge executor={handoff.status.executor} />}
-      {handoff.canSend && (
-        <>
-          <Button size="small" startIcon={<CloudUploadOutlinedIcon fontSize="inherit" />} onClick={() => handoff.open('send')}>
-            {t('workspace.handoff.send', 'Send to cloud')}
-          </Button>
-          <Tooltip title={t('workspace.handoff.settings.title', 'Handoff settings')}>
-            <IconButton size="small" aria-label={t('workspace.handoff.settings.title', 'Handoff settings')} onClick={() => handoff.open('settings')}>
-              <TuneOutlinedIcon fontSize="inherit" />
-            </IconButton>
-          </Tooltip>
-        </>
-      )}
-    </Box>
-  );
-}
 
 /** Above the composer, while the thread is not running here. */
 export function HandoffBanner({ handoff }: { handoff: ThreadHandoff }): React.JSX.Element | null {

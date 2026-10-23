@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "elitea-sandbox-runtime.fullname" . }}-scripts
+  namespace: {{ include "elitea-sandbox-runtime.namespace" . }}
+  labels:
+    {{- include "elitea-sandbox-runtime.labels" . | nindent 4 }}
+data:
+  install.sh: |-
+{{ .Files.Get "files/install.sh" | indent 4 }}
+  check.sh: |-
+{{ .Files.Get "files/check.sh" | indent 4 }}

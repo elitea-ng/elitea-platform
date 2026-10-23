@@ -9,7 +9,7 @@ package repos
 // not the unexported query functions it calls, and it runs on the migrated
 // template so shared migrations 0100 (execution_id) and 0119
 // (tool_call_records) are exercised as DDL. It reuses this package's own
-// agent-analytics fixtures (seedAgentExecution, seedPylonApplicationsTable,
+// agent-analytics fixtures (seedAgentExecution, seedApplicationsTable,
 // seedUnattributedRequests) rather than duplicating them, and this package's
 // own tool-analytics fixture (recordToolCallForTest) for the tool half.
 
@@ -26,7 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 )
 
 func costAttributionRouter(pool *pgxpool.Pool, now time.Time) chi.Router {

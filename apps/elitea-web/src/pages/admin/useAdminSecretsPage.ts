@@ -11,8 +11,8 @@
  * from the NAME (`SecretsPage/constants.js`), and this reproduces that rule
  * exactly, because the classification is about which secrets a human put there:
  *
- *   - `auth_token` — written by pylon's `auth_init` RPC at startup. It is the
- *     only entry in the reference deployment's global vault.
+ *   - `auth_token` — written by the legacy runtime's `auth_init` RPC at
+ *     startup. It is the only entry in the reference deployment's global vault.
  *   - `project_llm_key` — the per-project LLM key the LiteLLM runtime managed.
  *   - a bare 32-character hex name — `SecretString.store_secret()` mints these
  *     as opaque references for configuration credential fields.
@@ -25,9 +25,9 @@
  * ## Search, sort and pagination are client-side
  *
  * As in the reference — and necessarily so: the listing endpoint is
- * `GET /secrets/secrets/administration/0` with no parameters at all, in pylon
- * and in `internal/api/v2/secrets/admin.go` alike. A global vault holds tens of
- * entries, not thousands, so the whole set is one response.
+ * `GET /secrets/secrets/administration/0` with no parameters at all, in the
+ * legacy runtime and in `internal/api/v2/secrets/admin.go` alike. A global
+ * vault holds tens of entries, not thousands, so the whole set is one response.
  */
 import { useCallback, useMemo, useState } from 'react';
 
@@ -59,8 +59,8 @@ function isInternalSecretName(name: string): boolean {
  * only — every one of them is re-resolved server-side per request.
  *
  * Note `list` and `view` are both here and they are NOT the same grant: the
- * admin SPA's sidebar has always gated this page on `.list`, while pylon's admin
- * READ handlers declare `.view` — and on the reference deployment the
+ * admin SPA's sidebar has always gated this page on `.list`, while the legacy
+ * admin READ handlers declare `.view` — and on the reference deployment the
  * administration-mode `editor` role holds the first and not the second. The page
  * therefore renders for an editor and its reads are refused, which is why the
  * server's reason is surfaced rather than a generic failure.

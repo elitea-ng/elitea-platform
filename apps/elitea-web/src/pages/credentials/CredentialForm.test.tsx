@@ -623,12 +623,12 @@ describe('CredentialForm — edit flow', () => {
     expect(capturedBody).toMatchObject({ elitea_title: 'internal-key-v1', label: 'My Prod Key v2' });
   });
 
-  it("disables Delete with a reason on a project's last vectorstorage configuration (regression: A7-pages finding 2)", async () => {
+  it("disables Delete with a reason on a project's last embedding configuration (regression: A7-pages finding 2)", async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
     server.use(
       http.get(`${BASE}/configurations/configuration/7/abc`, () =>
-        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'only-pgvector', section: 'vectorstorage', data: {} }),
+        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'only-embedding', section: 'embedding', data: {} }),
       ),
     );
     server.use(
@@ -644,10 +644,10 @@ describe('CredentialForm — edit flow', () => {
         onDiscarded={vi.fn()}
       />,
     );
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('only-pgvector'));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('only-embedding'));
     fireEvent.click(screen.getByRole('button', { name: 'Credential actions' }));
     await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true'));
-    expect(screen.getByLabelText('Cannot delete the only pgVector configuration. At least one is required for the project.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Cannot delete the only embedding model configuration. At least one is required for the project.')).toBeInTheDocument();
   });
 
   it('keeps Delete enabled when a second configuration exists in the same protected section (regression: A7-pages finding 2)', async () => {
@@ -655,7 +655,7 @@ describe('CredentialForm — edit flow', () => {
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
     server.use(
       http.get(`${BASE}/configurations/configuration/7/abc`, () =>
-        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'one-of-two', section: 'vectorstorage', data: {} }),
+        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'one-of-two', section: 'embedding', data: {} }),
       ),
     );
     server.use(
@@ -958,7 +958,7 @@ describe('CredentialForm — type catalogue scope', () => {
 
     expect(await screen.findByText('LLM Model')).toBeInTheDocument();
     expect(seen).toEqual([
-      ['llm', 'embedding', 'vectorstorage', 'ai_credentials', 'image_generation', 'asr', 'tts'],
+      ['llm', 'embedding', 'ai_credentials', 'image_generation', 'asr', 'tts'],
     ]);
   });
 
@@ -1031,5 +1031,66 @@ describe('CredentialForm — type catalogue scope', () => {
     );
 
     await waitFor(() => expect(seen).toEqual([['credentials']]));
+  });
+});
+
+/**
+ * The catalogue's `ai_dial` entry, as the server ships it: `auth_mode` and
+ * `token_audience` are in the schema because the ADMIN providers surface
+ * accepts them. A project credential cannot use workload identity — every
+ * project route refuses it — so this form must not offer the choice.
+ */
+const AI_DIAL_TYPE = {
+  type: 'ai_dial',
+  section: 'ai_credentials',
+  config_schema: {
+    title: 'AI DIAL',
+    properties: {
+      data: {
+        required: ['api_base'],
+        properties: {
+          api_base: { type: 'string', title: 'Api Base' },
+          api_key: { type: 'string', format: 'password', title: 'Api Key' },
+          api_version: { type: 'string', title: 'Api Version' },
+          auth_mode: { type: 'string', enum: ['key', 'workload_identity'], default: 'key', title: 'Auth Mode' },
+          token_audience: { anyOf: [{ type: 'string' }, { type: 'null' }], default: null, title: 'Token Audience' },
+        },
+      },
+    },
+  },
+};
+
+describe('CredentialForm — platform-only provider fields', () => {
+  it('hides auth_mode and token_audience and submits the key mode the project route accepts', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([AI_DIAL_TYPE])));
+    let capturedBody: { data?: Record<string, unknown> } | undefined;
+    server.use(
+      http.post(`${BASE}/configurations/configurations/7`, async ({ request }) => {
+        capturedBody = (await request.json()) as { data?: Record<string, unknown> };
+        return HttpResponse.json({ uid: 'new-dial', type: 'ai_dial' });
+      }),
+    );
+    const onSaved = vi.fn();
+    renderForm(
+      <CredentialForm
+        context={CONTEXT}
+        mode={{ kind: 'create', credentialType: 'ai_dial' }}
+        onSaved={onSaved}
+        onDiscarded={vi.fn()}
+      />,
+    );
+    await screen.findByText('Api Key');
+    expect(screen.getByText('Api Version')).toBeInTheDocument();
+    expect(screen.queryByText('Auth Mode')).not.toBeInTheDocument();
+    expect(screen.queryByText('Token Audience')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'my-dial' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    // Never the platform-only mode: `key` (the schema default) is what a
+    // project write accepts, and a hidden field must not carry anything else.
+    expect(capturedBody?.data?.['auth_mode']).toBe('key');
+    expect(capturedBody?.data?.['token_audience'] ?? null).toBeNull();
   });
 });

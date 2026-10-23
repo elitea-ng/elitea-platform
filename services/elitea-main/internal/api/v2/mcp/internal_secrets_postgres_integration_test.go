@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	secretsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	secretsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 )
 
 func TestInternalSecretLifecycleUsesEncryptedVaultWithoutReturningPlaintext(t *testing.T) {
@@ -54,7 +54,7 @@ func TestInternalSecretLifecycleUsesEncryptedVaultWithoutReturningPlaintext(t *t
 	}
 	assertSecretToolResultIsSafe(t, updated.body, name, updatedValue)
 	if bytes.Contains(updated.body, []byte("IGNORED_RENAME")) {
-		t.Fatalf("update honored a body rename current pylon ignores: %s", updated.body)
+		t.Fatalf("update honored a body rename the legacy contract ignores: %s", updated.body)
 	}
 
 	plain, err := invokeInternalHandler(

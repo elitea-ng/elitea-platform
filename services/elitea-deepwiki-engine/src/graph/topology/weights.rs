@@ -194,6 +194,6 @@ mod tests {
         flat.add_edge("a", "b", EdgeData::default());
         flat.add_edge("b", "c", EdgeData::default());
         flat.add_edge("c", "a", EdgeData::default());
-        assert!(detect_hubs(&flat, 3.0).is_empty());
+        assert_eq!(detect_hubs(&flat, 3.0), [] as [String; 0]);
     }
 }

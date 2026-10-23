@@ -4,13 +4,22 @@
  *
  * Deny is the focused button and Escape denies: the safe answer is the one
  * the keyboard reaches without thought. The backdrop does not dismiss, since
- * an accidental click must not answer for the user.
+ * an accidental click must not answer for the user. While the reason box is
+ * open Escape never denies (that would drop what the person wrote): it
+ * closes an empty box and leaves a box with text alone.
  *
  * The `continue` kind (the run used its steps: go on?) is not a modal: it is
  * a compact card the page puts in the transcript, under what the agent did.
  * It is asked every time and never remembered, so it offers no "always".
+ * The `mcp_authorization` kind (an MCP server needs the person's sign-in) is
+ * such a card too: McpAuthorizationCard.
+ *
+ * "Decline and tell the agent why" denies with the person's text
+ * (`deny_with_feedback`): the agent reads it with the denial and can try
+ * another way. The text goes only with a denial (IPC.md "Decline with
+ * feedback").
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -19,17 +28,25 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import type { Theme } from '@mui/material/styles';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/workspaceIpc';
+
+import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
+
+import { clipUtf8 } from '../model/feedback';
+
+import { McpAuthorizationCard } from './McpAuthorizationCard';
 
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */
   request: ApprovalRequestPayload | undefined;
   /** How many more are waiting behind this one. */
   queued: number;
-  onRespond: (requestId: string, decision: ApprovalDecision) => void;
+  /** `feedback` comes only with `deny_with_feedback`. */
+  onRespond: (requestId: string, decision: ApprovalDecision, feedback?: string) => void;
 }
 
 const monoSx = (theme: Theme) => ({
@@ -86,16 +103,79 @@ function ContinueCard({ request, respond }: { request: ApprovalRequestPayload; r
   );
 }
 
-export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogProps): React.JSX.Element | null {
-  const denyRef = useRef<HTMLButtonElement>(null);
-  const requestId = request?.request_id;
-  // Deny takes focus each time a new request is shown (focus-trap order would otherwise start at the first button).
-  useEffect(() => {
-    if (requestId !== undefined) denyRef.current?.focus();
-  }, [requestId]);
+/** The command and the paths a request names, each shown only when present. */
+function ApprovalTargets({ command, paths }: { command?: string[] | undefined; paths?: string[] | undefined }): React.JSX.Element {
+  return (
+    <>
+      {command !== undefined && command.length > 0 && (
+        <Box component="pre" data-testid="approval-command" aria-label={t('workspace.approval.command', 'Command')} sx={monoSx}>
+          {command.map(quoteArg).join(' ')}
+        </Box>
+      )}
+      {paths !== undefined && paths.length > 0 && (
+        <Box component="ul" data-testid="approval-paths" aria-label={t('workspace.approval.paths', 'Paths')} sx={(theme: Theme) => ({ ...monoSx(theme), listStyle: 'none' })}>
+          {paths.map((path) => (
+            <li key={path}>{path}</li>
+          ))}
+        </Box>
+      )}
+    </>
+  );
+}
+
+/** The box the person writes the agent a reason in, once they chose "Decline and tell the agent why". */
+function FeedbackBox({ value, onChange }: { value: string; onChange: (value: string) => void }): React.JSX.Element {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The box opens on the person's click: their next keys go into it.
+  useEffect(() => inputRef.current?.focus(), []);
+  return (
+    <TextField
+      size="small"
+      multiline
+      minRows={2}
+      inputRef={inputRef}
+      value={value}
+      // The box stops at what the host keeps (UTF-8 bytes, not characters).
+      onChange={(event) => onChange(clipUtf8(event.target.value))}
+      label={t('workspace.approval.feedback', 'Tell the agent why (and what to do instead)')}
+      slotProps={{ htmlInput: { 'data-testid': 'approval-feedback' } }}
+    />
+  );
+}
+
+export function ApprovalDialog(props: ApprovalDialogProps): React.JSX.Element | null {
+  // A new request starts with no feedback box open.
+  return <ApprovalPrompt key={props.request?.request_id ?? ''} {...props} />;
+}
+
+function ApprovalPrompt({ request, queued, onRespond }: ApprovalDialogProps): React.JSX.Element | null {
   if (request === undefined) return null;
   const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
   if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
+  if (request.kind === 'mcp_authorization') return <McpAuthorizationCard request={request} respond={respond} />;
+  return <ToolApproval request={request} queued={queued} onRespond={onRespond} />;
+}
+
+/** A tool's approval: the modal dialog (mounted once per request). */
+function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { request: ApprovalRequestPayload }): React.JSX.Element {
+  const denyRef = useRef<HTMLButtonElement>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  // Deny takes focus when the request is shown (focus-trap order would otherwise start at the first button).
+  useEffect(() => denyRef.current?.focus(), []);
+  const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
+  const decidedBy = ruleSourceLabel(request.source, request.rule);
+  const explained = feedback?.trim() ?? '';
+  const declineWithFeedback = (): void => {
+    if (explained === '') respond('deny');
+    else onRespond(request.request_id, 'deny_with_feedback', explained);
+  };
+  const escape = (): void => {
+    if (feedback === null) respond('deny');
+    else if (explained === '') {
+      setFeedback(null);
+      denyRef.current?.focus();
+    }
+  };
   return (
     <Dialog
       open
@@ -103,10 +183,10 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
       fullWidth
       aria-labelledby="workspace-approval-title"
       aria-describedby="workspace-approval-detail"
-      // The focus trap claims focus after mount; Deny takes it once the dialog has finished opening.
-      slotProps={{ transition: { onEntered: () => denyRef.current?.focus() } }}
+      // The focus trap claims focus after mount; Deny takes it once the dialog has finished opening (unless the person already opened the reason box).
+      slotProps={{ transition: { onEntered: () => feedback === null && denyRef.current?.focus() } }}
       onClose={(_event, reason) => {
-        if (reason === 'escapeKeyDown') respond('deny');
+        if (reason === 'escapeKeyDown') escape();
       }}
     >
       <DialogTitle id="workspace-approval-title">{request.title}</DialogTitle>
@@ -114,28 +194,32 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
         <Typography id="workspace-approval-detail" variant="bodyMedium">
           {request.detail}
         </Typography>
-        {request.command !== undefined && request.command.length > 0 && (
-          <Box component="pre" data-testid="approval-command" aria-label={t('workspace.approval.command', 'Command')} sx={monoSx}>
-            {request.command.map(quoteArg).join(' ')}
-          </Box>
-        )}
-        {request.paths !== undefined && request.paths.length > 0 && (
-          <Box component="ul" data-testid="approval-paths" aria-label={t('workspace.approval.paths', 'Paths')} sx={(theme: Theme) => ({ ...monoSx(theme), listStyle: 'none' })}>
-            {request.paths.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-          </Box>
-        )}
+        <ApprovalTargets command={request.command} paths={request.paths} />
         <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
-          {t('workspace.approval.reason', 'Why: {{reason}}', { reason: request.reason })}
+          {t('workspace.approval.reason', 'Why: {{reason}}', { reason: request.justification ?? request.reason })}
         </Typography>
+        {decidedBy !== undefined && (
+          <Typography variant="bodySmall" data-testid="approval-rule-source" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+            {t('workspace.approval.source', 'Asked by {{source}}', { source: decidedBy })}
+          </Typography>
+        )}
         {queued > 0 && (
           <Typography variant="bodySmall" component="output">
             {t('workspace.approval.queued', '{{n}} more waiting', { n: queued })}
           </Typography>
         )}
+        {feedback !== null && <FeedbackBox value={feedback} onChange={setFeedback} />}
       </DialogContent>
       <DialogActions>
+        {feedback === null ? (
+          <Button color="error" onClick={() => setFeedback('')}>
+            {t('workspace.approval.declineWhy', 'Decline and tell the agent why')}
+          </Button>
+        ) : (
+          <Button color="error" variant="outlined" onClick={declineWithFeedback}>
+            {t('workspace.approval.sendDecline', 'Decline and send')}
+          </Button>
+        )}
         <Button ref={denyRef} color="error" onClick={() => respond('deny')}>
           {t('workspace.approval.deny', 'Deny')}
         </Button>

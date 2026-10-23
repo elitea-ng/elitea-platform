@@ -3,14 +3,14 @@
 ## Overview
 
 `elitea-platform` is the Go monorepo for the cloud-native replatforming of
-`pylon_main` (Python/Flask) to `elitea-main` (Go). It follows a service + shared
+the legacy runtime's main service (Python/Flask) to `elitea-main` (Go). It follows a service + shared
 library structure managed with Go workspaces.
 
 ## Repository Layout
 
 ```
 elitea-platform/
-├── services/elitea-main/   # Main API service (replaces pylon_main)
+├── services/elitea-main/   # Main API service (replaces the legacy main service)
 ├── libs/go/                # Shared Go libraries
 │   ├── authlib/            # Authentication primitives
 │   ├── eventslib/          # Domain event types & publisher interface
@@ -26,7 +26,7 @@ elitea-platform/
 
 ### elitea-main
 
-Replaces `pylon_main`: the central API gateway and domain logic service.
+Replaces the legacy main service: the central API gateway and domain logic service.
 
 **Responsibilities:**
 - HTTP API (chi router)
@@ -75,6 +75,6 @@ The migration from Python/Flask proceeds domain by domain:
 1. Infrastructure layer (DB pool, NATS, health probes) — **done**
 2. Auth middleware — in progress
 3. Domain services (one per sprint)
-4. Deprecate `pylon_main` once all routes are validated in production
+4. Deprecate the legacy main service once all routes are validated in production
 
 See the cloud-native migration plan for the full 24-week roadmap.

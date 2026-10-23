@@ -1,3 +1,12 @@
+-- REWRITTEN (#1359, pgvector removal). The released text of this file has
+-- the checksum ea5af872e89869cdf824e92f71586ed58143efa30572c74c73a3e7bfa1bb40c3;
+-- the engine's migration runner accepts it for a database that applied it
+-- (`storage::migrate::REWRITTEN`). The dense vectors moved to Qdrant behind
+-- elitea-vector (ADR-0031), so a fresh install must not need the `vector`
+-- extension: this text no longer creates it nor the `wiki_node_embeddings`
+-- table. A database that applied the released text keeps both until 0008
+-- drops them.
+--
 -- DeepWiki index storage: the PostgreSQL replacement for the per-wiki files.
 --
 -- ADR-0022 decision 3. The legacy engine kept every index as files on a PVC:
@@ -17,22 +26,11 @@
 -- migrations are owned, versioned and checksummed here (the elitea-llm-gateway
 -- precedent) and are applied by this service, not by elitea-main.
 --
--- WHY THE DENSE COLUMN HAS NO DIMENSION, AND NO HNSW INDEX YET.
+-- WHERE THE DENSE VECTORS ARE.
 --
--- `vector` without a typmod accepts any dimension, which the engine needs:
--- the legacy code sizes its vector table from the configured embedding model
--- (1536 for platform embeddings, 384 for the local MiniLM fallback). pgvector
--- cannot build an HNSW index on an unconstrained column, so this migration
--- creates none and dense search runs as an exact sequential scan.
---
--- That is deliberate for the parity phase, not an oversight. HNSW is
--- approximate; adding it in the same change as the storage port would mix two
--- sources of ranking difference and make the P0 retrieval fixtures unable to
--- tell them apart. Exact scan first, parity proven against the fixtures, then
--- HNSW with its own recall measurement against the now-trusted exact backend.
--- The follow-up migration adds `vector(n)` per deployment plus the index.
-
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Not here. The released text created the `vector` extension and a
+-- `wiki_node_embeddings` table; the vectors are in elitea-vector now
+-- (#1359), and this database holds no vector.
 
 -- ---------------------------------------------------------------------------
 -- Text search configuration
@@ -196,18 +194,6 @@ CREATE TABLE IF NOT EXISTS wiki_edges (
 
 CREATE INDEX IF NOT EXISTS idx_wiki_edges_source ON wiki_edges (wiki_id, source_id);
 CREATE INDEX IF NOT EXISTS idx_wiki_edges_target ON wiki_edges (wiki_id, target_id);
-
--- ---------------------------------------------------------------------------
--- Dense vectors
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS wiki_node_embeddings (
-    wiki_id   TEXT   NOT NULL,
-    node_id   TEXT   NOT NULL,
-    embedding VECTOR NOT NULL,
-    PRIMARY KEY (wiki_id, node_id),
-    FOREIGN KEY (wiki_id, node_id)
-        REFERENCES wiki_nodes (wiki_id, node_id) ON DELETE CASCADE
-);
 
 -- ---------------------------------------------------------------------------
 -- BM25 term statistics

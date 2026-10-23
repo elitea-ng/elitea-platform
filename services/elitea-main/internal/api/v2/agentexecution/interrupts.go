@@ -11,9 +11,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 )
 
 // Per-interrupt HITL decision API (libs/proto/contracts/fanout-interrupt-decisions-v1.md §6).
@@ -84,7 +84,7 @@ func interruptKeyPrefix(key string) string {
 }
 
 func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (http.Handler, error) {
-	if useCase == nil || authConfig.PrincipalValidator == nil || authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if useCase == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, errors.New("execution interrupt route dependencies are required")
 	}
 	list := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

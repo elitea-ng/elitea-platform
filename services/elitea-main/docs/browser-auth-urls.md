@@ -21,21 +21,24 @@ All browser authentication routes are under `/auth/`.
 | Form login page | `/auth/form/login` |
 | Form credential post | `/auth/form/authorize` |
 | Form logout | `/auth/form/logout` |
-| Form plane core check | `/auth/check` |
-| Token credential check (legacy; projects no identity) | `/auth` |
-| Gateway auth target (internal, not browser-facing) | `/internal/auth/main` |
 
-The four Form rows exist only when `ELITEA_FORM_LOGIN_ENABLED=true` AND no
+The Form rows exist only when `ELITEA_FORM_LOGIN_ENABLED=true` AND no
 single sign-on plane is configured. Form sign-in is off by default; with it
 off they answer 404, and `/auth/login` is the SSO chooser when OIDC or SAML is
 configured.
 
-`GET /auth` (no further segment) is the legacy token credential check: it
-answers 200 or 403 and never sets `X-Auth-*` headers, and it refuses a
-`target` mapper parameter. The identity projection Main trusts comes only from
-`/internal/auth/main`, which signs it. The browser routes are below `/auth`, and
-each is registered by its full path, so they do not collide.
-`/api/v2/auth/*` is the token and permission API, a different prefix.
+There is no forward-auth target any more (#1359). `GET /auth` (the legacy
+token check), the Form plane's `/auth/check` and `/internal/auth/main` (which
+projected a signed `X-Auth-*` identity for an authenticating edge) are gone.
+elitea-main reads every browser credential itself: the single sign-on
+`elitea_session` cookie and the Form plane's `elitea_browser_auth` cookie
+(`internal/api/browserauth/form_session.go`), and it deletes any inbound
+`X-Auth-*` or `X-Elitea-*` identity header before routing
+(`internal/api/middleware/strip_identity.go`).
+
+The browser routes are below `/auth`, and each is registered by its full path,
+so they do not collide. `/api/v2/auth/*` is the token and permission API, a
+different prefix.
 
 ## What an operator registers
 
@@ -54,7 +57,6 @@ Use the public origin of the deployment, for example
 
 ## Edges
 
-Each browser edge forwards `/auth` and `/auth/` to elitea-main:
-`deploy/traefik/dynamic.yml`, `deploy/traefik/dynamic.e2e.yml` and
-`deploy/gateway-api/httproute.yaml`. The Traefik middlewares that call
-elitea-main use `/internal/auth/main`.
+Each browser edge forwards `/auth` and `/auth/` to elitea-main
+(`deploy/gateway-api/httproute.yaml`, and the compose edges while they exist).
+No edge authenticates a request on elitea-main's behalf.

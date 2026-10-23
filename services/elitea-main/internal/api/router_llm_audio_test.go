@@ -16,8 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 // The /llm/v1/audio routes through NewRouter, with the REAL edge proxy
@@ -54,7 +55,7 @@ func (f fixedPersonalProject) PersonalProjectID(context.Context, string) (int, e
 // audioGateway is the fake elitea-llm-gateway. It counts the requests that
 // reached it and records the project the edge signed for the last one.
 type audioGateway struct {
-	server  *httptest.Server
+	client  llmproxy.Gateway
 	calls   atomic.Int64
 	project atomic.Value
 }
@@ -62,19 +63,18 @@ type audioGateway struct {
 func newAudioGateway(t *testing.T) *audioGateway {
 	t.Helper()
 	g := &audioGateway{}
-	g.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g.client = gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.calls.Add(1)
 		g.project.Store(r.Header.Get(llmproxy.HeaderProjectID))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"text":"ok"}`))
-	}))
-	t.Cleanup(g.server.Close)
+	}), "edge-secret")
 	return g
 }
 
 func audioRouter(t *testing.T, gateway *audioGateway, resolver fixedPersonalProject) http.Handler {
 	t.Helper()
-	proxy, err := llmproxy.New(llmproxy.Config{TargetURL: gateway.server.URL, Transport: http.DefaultTransport, IdentitySecret: "edge-secret"})
+	proxy, err := llmproxy.New(llmproxy.Config{Gateway: gateway.client})
 	if err != nil {
 		t.Fatalf("build the edge proxy: %v", err)
 	}

@@ -1,8 +1,9 @@
--- Current Pylon Main restores the execution task_id after the synchronous SDK
--- resets index metadata for an index_data run. Persist that external effect as
--- a bounded, retryable intent beside the immutable index admission. The intent
--- is populated by the authenticated exact-generation NodeEvent transaction;
--- PgVector is reconciled later and never participates in output ingestion.
+-- The current legacy main runtime restores the execution task_id after the
+-- synchronous SDK resets index metadata for an index_data run. Persist that
+-- external effect as a bounded, retryable intent beside the immutable index
+-- admission. The intent is populated by the authenticated exact-generation
+-- NodeEvent transaction; PgVector is reconciled later and never participates in
+-- output ingestion.
 ALTER TABLE elitea_runtime.index_ingest_jobs
     ADD COLUMN index_meta_task_restamp_source_event_id TEXT,
     ADD COLUMN index_meta_task_restamp_occurred_at TIMESTAMPTZ,

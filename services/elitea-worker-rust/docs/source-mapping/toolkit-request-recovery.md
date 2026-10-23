@@ -4,7 +4,7 @@ Status: implemented and verified through deployed headed Chrome on 2026-09-14.
 
 ## Functional reference and ownership
 
-Current Core `pylon_main/plugins/elitea_core/api/v2/test_toolkit_tool.py` executes one selected tool and returns its result or task ID.
+Current Core `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/test_toolkit_tool.py` executes one selected tool and returns its result or task ID.
 The route supports synchronous waiting and asynchronous task references.
 Its timeout path attempts to stop the task.
 It does not provide a browser request reference for recovery before receiving that task ID.

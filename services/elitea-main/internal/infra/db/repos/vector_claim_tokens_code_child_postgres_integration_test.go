@@ -16,10 +16,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	codeplatformdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	codeplatformdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 func TestPostgresCodeToolkitChildInheritsItsParentsConversation(t *testing.T) {

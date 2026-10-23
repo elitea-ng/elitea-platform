@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // The trigger origin reaches the job row the store writes (shared 0140), and
@@ -93,8 +93,7 @@ func TestCurrentAdhocStartCarriesTheTriggerOrigin(t *testing.T) {
 		ExecutionID: "execution-adhoc", CommandID: "command-adhoc", Created: true,
 		AdmittedAt: time.Unix(1, 0), Deadline: time.Unix(61, 0),
 	}}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

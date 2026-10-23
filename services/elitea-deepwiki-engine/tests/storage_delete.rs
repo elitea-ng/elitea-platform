@@ -11,6 +11,7 @@ use elitea_deepwiki_engine::storage::build::{
     Build, BuildSpace, PUBLISH_WIKI_LOCK, PublishSettings, WikiRecord, publish_wiki_lock_object,
 };
 use elitea_deepwiki_engine::storage::delete::{self, ProjectLimits, SweepOptions};
+use elitea_deepwiki_engine::storage::dense::{DenseAccess, DenseIndex};
 use elitea_deepwiki_engine::storage::rows::{IndexEdge, IndexNode};
 use elitea_deepwiki_engine::storage::{PROJECT_ARG, WikiKey};
 use serde_json::{Value, json};
@@ -29,11 +30,10 @@ fn limits() -> ProjectLimits {
 }
 
 /// Every table that holds a wiki's rows, with the filter column set.
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 6] = [
     "wikis",
     "wiki_nodes",
     "wiki_edges",
-    "wiki_node_embeddings",
     "wiki_bm25_meta",
     "wiki_bm25_docs",
     "wiki_bm25_postings",
@@ -51,6 +51,17 @@ fn nodes(tag: &str, count: usize) -> Vec<IndexNode> {
 }
 
 async fn stage(space: &BuildSpace, key: &WikiKey, tag: &str, count: usize) -> Build {
+    stage_with(space, key, tag, count, Some(common::TEST_MODEL)).await
+}
+
+/// [`stage`], with vectors of `model` (none for `None`).
+async fn stage_with(
+    space: &BuildSpace,
+    key: &WikiKey,
+    tag: &str,
+    count: usize,
+    model: Option<&str>,
+) -> Build {
     let nodes = nodes(tag, count);
     let edges: Vec<IndexEdge> = nodes
         .windows(2)
@@ -73,10 +84,15 @@ async fn stage(space: &BuildSpace, key: &WikiKey, tag: &str, count: usize) -> Bu
     let mut build = space.begin(key).await.expect("begin");
     build.stage_nodes(nodes).await.expect("nodes");
     build.stage_edges(&edges).await.expect("edges");
-    build
-        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
-        .await
-        .expect("embeddings");
+    if let Some(model) = model {
+        build
+            .stage_embeddings(
+                model,
+                vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())),
+            )
+            .await
+            .expect("embeddings");
+    }
     build
 }
 
@@ -137,7 +153,8 @@ async fn deleting_a_wiki_removes_every_table_and_only_that_wiki() {
     assert!(deleted.existed);
     assert_eq!(deleted.rows.nodes, 6);
     assert_eq!(deleted.rows.edges, 5);
-    assert_eq!(deleted.rows.embeddings, 6);
+    // The vectors are not rows of this database.
+    assert_eq!(deleted.rows.embeddings, 0);
     assert!(deleted.rows.statistics > 0);
     assert_eq!(
         rows(&pool, 1, "acme--doomed--main").await,
@@ -256,7 +273,7 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
     )
     .await
     .expect("delete the stale build");
-    assert!(stale.wikis.is_empty());
+    assert_eq!(stale.wikis, [] as [String; 0]);
     assert_eq!((stale.builds, stale.live_builds), (1, 0));
     for table in TABLES {
         let left: i64 = sqlx::query_scalar(&format!(
@@ -287,7 +304,7 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
     )
     .await
     .expect("again");
-    assert!(again.wikis.is_empty());
+    assert_eq!(again.wikis, [] as [String; 0]);
 }
 
 fn arguments(project: i32, extra: &Value) -> serde_json::Map<String, Value> {
@@ -297,15 +314,28 @@ fn arguments(project: i32, extra: &Value) -> serde_json::Map<String, Value> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)] // one fixture, every refusal
 async fn the_engine_tools_delete_inside_the_stamped_project() {
     let Some(pool) = common::fresh_database("delete_tools").await else {
         return;
     };
-    let space = BuildSpace::new(pool.clone(), "deleter");
+    let (space, store) = common::dense_space(&pool, "deleter");
     publish(&space, &common::key_in(1, "w-a"), "alpha", 3).await;
     publish(&space, &common::key_in(1, "w-b"), "alpha", 3).await;
     publish(&space, &common::key_in(2, "w-a"), "beta", 3).await;
     let settings = PublishSettings::default();
+    let ready = || DenseAccess::Ready(DenseIndex::memory(store.clone()));
+    let points = |project: i32, wiki: &str| -> usize {
+        store
+            .generations(&common::key_in(project, wiki))
+            .iter()
+            .map(|(_, count)| count)
+            .sum()
+    };
+    assert_eq!(
+        (points(1, "w-a"), points(1, "w-b"), points(2, "w-a")),
+        (3, 3, 3)
+    );
 
     // Another project's stamp cannot reach project 1's wiki.
     let wrong = maintenance::run(
@@ -314,12 +344,55 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        ready(),
         &StopSignal::default(),
     )
     .await
     .expect("run");
     assert_eq!(wrong["deleted"], false);
     assert!(populated(&rows(&pool, 1, "w-a").await));
+    assert_eq!(points(1, "w-a"), 3);
+
+    // A configured elitea-vector without a bearer: refused before anything
+    // is deleted (the vectors would stay).
+    let unauthorised = maintenance::run(
+        "delete_wiki_index",
+        &arguments(1, &json!({"wiki_id": "w-a"})),
+        &pool,
+        &settings,
+        STALE_AFTER,
+        DenseAccess::Missing("no callback token".into()),
+        &StopSignal::default(),
+    )
+    .await;
+    assert!(
+        unauthorised
+            .as_ref()
+            .is_err_and(|e| e.message.contains("no callback token")),
+        "{unauthorised:?}"
+    );
+    assert!(populated(&rows(&pool, 1, "w-a").await));
+
+    // elitea-vector refusing: the rows go, the tool fails, and a repeat
+    // deletes the vectors.
+    store.set_unavailable(true);
+    let failed = maintenance::run(
+        "delete_wiki_index",
+        &arguments(1, &json!({"wiki_id": "w-a"})),
+        &pool,
+        &settings,
+        STALE_AFTER,
+        ready(),
+        &StopSignal::default(),
+    )
+    .await;
+    assert!(
+        failed.as_ref().is_err_and(|e| e.message.contains("retry")),
+        "{failed:?}"
+    );
+    store.set_unavailable(false);
+    assert_eq!(rows(&pool, 1, "w-a").await, vec![0; TABLES.len()]);
+    assert_eq!(points(1, "w-a"), 3);
 
     let one = maintenance::run(
         "delete_wiki_index",
@@ -327,14 +400,33 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        ready(),
         &StopSignal::default(),
     )
     .await
     .expect("run");
     assert_eq!(one["success"], true);
-    assert_eq!(one["deleted"], true);
-    assert_eq!(one["rows"]["nodes"], 3);
+    // The rows were deleted by the failed attempt; the vectors by this one.
+    assert_eq!(one["deleted"], false);
+    assert_eq!(one["vectors"], "deleted");
+    assert_eq!(points(1, "w-a"), 0);
+    assert_eq!((points(1, "w-b"), points(2, "w-a")), (3, 3));
     assert!(populated(&rows(&pool, 1, "w-b").await));
+
+    let two = maintenance::run(
+        "delete_wiki_index",
+        &arguments(2, &json!({"wiki_id": "w-a"})),
+        &pool,
+        &settings,
+        STALE_AFTER,
+        ready(),
+        &StopSignal::default(),
+    )
+    .await
+    .expect("run");
+    assert_eq!(two["deleted"], true);
+    assert_eq!(two["rows"]["nodes"], 3);
+    assert_eq!(points(2, "w-a"), 0);
 
     let all = maintenance::run(
         "delete_project_wikis",
@@ -342,18 +434,22 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        ready(),
         &StopSignal::default(),
     )
     .await
     .expect("run");
     assert_eq!(all["wikis"], json!(["w-b"]));
+    // A project's vectors are elitea-main's to drop (DropProject).
+    assert_eq!(points(1, "w-b"), 3);
     // The per-wiki counts, in the order of `wikis`.
     assert_eq!(all["per_wiki"][0]["wiki_id"], "w-b");
     assert!(
         all["per_wiki"][0]["nodes"].as_u64().unwrap_or(0) > 0,
         "{all}"
     );
-    assert!(populated(&rows(&pool, 2, "w-a").await));
+    // Project 2's wiki was deleted by its own stamp above, nothing else.
+    assert_eq!(rows(&pool, 2, "w-a").await, vec![0; TABLES.len()]);
 
     // No project, no wiki id: refused.
     for (tool, args) in [
@@ -366,6 +462,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
             &pool,
             &settings,
             STALE_AFTER,
+            DenseAccess::Off,
             &StopSignal::default(),
         )
         .await;
@@ -377,6 +474,7 @@ async fn the_engine_tools_delete_inside_the_stamped_project() {
         &pool,
         &settings,
         STALE_AFTER,
+        DenseAccess::Off,
         &StopSignal::default(),
     )
     .await;
@@ -418,26 +516,50 @@ async fn a_publish_records_the_model_and_a_later_one_without_replaces_it() {
         .expect("row")
     };
 
-    // A wiki from before the columns: both NULL.
-    publish(&space, &key, "alpha", 2).await;
+    // A build without vectors: both NULL.
+    stage_with(&space, &key, "alpha", 2, None)
+        .await
+        .publish(&WikiRecord::default())
+        .await
+        .expect("publish");
     assert_eq!(recorded(pool.clone()).await, (None, None));
 
-    stage(&space, &key, "alpha", 2)
+    // A build with vectors records the model and dimension it staged them
+    // with.
+    stage_with(&space, &key, "alpha", 2, Some("text-embedding-3-small"))
         .await
-        .publish(&WikiRecord {
-            embedding_model: Some("text-embedding-3-small".into()),
-            embedding_dim: Some(1536),
-            ..WikiRecord::default()
-        })
+        .publish(&WikiRecord::default())
         .await
         .expect("publish");
     assert_eq!(
         recorded(pool.clone()).await,
-        (Some("text-embedding-3-small".into()), Some(1536))
+        (Some("text-embedding-3-small".into()), Some(3))
     );
+    // A record naming another model or dimension than the vectors is
+    // refused.
+    for record in [
+        WikiRecord {
+            embedding_model: Some("another".into()),
+            ..WikiRecord::default()
+        },
+        WikiRecord {
+            embedding_dim: Some(1536),
+            ..WikiRecord::default()
+        },
+    ] {
+        let refused = stage(&space, &key, "alpha", 2).await.publish(&record).await;
+        assert!(
+            matches!(refused, Err(StorageError::Publish(_))),
+            "{refused:?}"
+        );
+    }
 
     // The next publish replaces the vectors, so it replaces the model too.
-    publish(&space, &key, "alpha", 2).await;
+    stage_with(&space, &key, "alpha", 2, None)
+        .await
+        .publish(&WikiRecord::default())
+        .await
+        .expect("publish");
     assert_eq!(recorded(pool).await, (None, None));
 }
 
@@ -470,6 +592,7 @@ async fn deleting_stray_rows_with_no_wikis_row_is_a_deletion() {
         &pool,
         &settings,
         STALE_AFTER,
+        DenseAccess::Off,
         &StopSignal::default(),
     )
     .await
@@ -490,6 +613,7 @@ async fn deleting_stray_rows_with_no_wikis_row_is_a_deletion() {
         &pool,
         &settings,
         STALE_AFTER,
+        DenseAccess::Off,
         &StopSignal::default(),
     )
     .await
@@ -545,11 +669,11 @@ async fn a_project_deletion_loops_until_empty_or_fails_naming_the_remainder() {
         .await
         .expect("finishes");
     assert_eq!(done.wikis.len(), 3);
-    assert!(
+    assert_eq!(
         delete::project_wikis(&pool, common::project(4))
             .await
-            .expect("left")
-            .is_empty()
+            .expect("left"),
+        [] as [String; 0]
     );
     // The cap landing exactly on the last wiki is a success, not an error.
     publish(&space, &common::key_in(4, "w-x"), "alpha", 1).await;
@@ -573,15 +697,16 @@ async fn the_stored_embedding_model_is_read_from_the_wiki_row() {
     let space = BuildSpace::new(pool.clone(), "asker");
     let with_model = common::key_in(1, "w-model");
     let without = common::key_in(1, "w-none");
-    stage(&space, &with_model, "alpha", 2)
+    stage_with(&space, &with_model, "alpha", 2, Some("emb-1"))
         .await
-        .publish(&WikiRecord {
-            embedding_model: Some("emb-1".into()),
-            ..WikiRecord::default()
-        })
+        .publish(&WikiRecord::default())
         .await
         .expect("publish");
-    publish(&space, &without, "beta", 2).await;
+    stage_with(&space, &without, "beta", 2, None)
+        .await
+        .publish(&WikiRecord::default())
+        .await
+        .expect("publish");
     let project = common::project(1);
     let stored = |wiki: &str| {
         let pool = pool.clone();
@@ -748,15 +873,21 @@ async fn the_orphan_sweep_skips_projects_with_activity_after_the_list() {
     .expect("delete");
     assert_eq!(done.deleted.len(), 1);
     assert_eq!(done.deleted[0].0.project_id, 2);
-    assert!(done.failed.is_empty());
+    assert_eq!(
+        done.failed,
+        [] as [(
+            elitea_deepwiki_engine::storage::delete::IndexedProject,
+            String
+        ); 0]
+    );
     assert_eq!(done.skipped.len(), 2);
     assert_eq!(rows(&pool, 2, "w-old").await, vec![0; TABLES.len()]);
     assert!(populated(&rows(&pool, 3, "w-new").await));
-    assert!(
-        !delete::project_wikis(&pool, common::project(4))
+    assert_ne!(
+        delete::project_wikis(&pool, common::project(4))
             .await
-            .expect("wikis")
-            .is_empty()
+            .expect("wikis"),
+        [] as [String; 0]
     );
 }
 
@@ -951,6 +1082,7 @@ async fn a_deletion_gives_up_waiting_for_a_publish_and_deletes_nothing() {
         &pool,
         &settings,
         STALE_AFTER,
+        DenseAccess::Off,
         &StopSignal::default(),
     )
     .await
@@ -1017,6 +1149,7 @@ async fn a_cancelled_deletion_stops_waiting_in_the_database() {
                 &pool,
                 &PublishSettings::default(),
                 STALE_AFTER,
+                DenseAccess::Off,
                 &stop,
             )
             .await
@@ -1069,13 +1202,13 @@ async fn a_wiki_republished_with_another_model_between_steps_is_refused() {
     let Some(pool) = common::fresh_database("model_between").await else {
         return;
     };
-    let space = BuildSpace::new(pool.clone(), "recorder");
+    let (space, store) = common::dense_space(&pool, "recorder");
     let key = common::key_in(1, "w-a");
     let publish_with = |model: &'static str| {
         let space = space.clone();
         let key = key.clone();
         async move {
-            stage(&space, &key, "alpha", 3)
+            stage_with(&space, &key, "alpha", 3, Some(model))
                 .await
                 .publish(&WikiRecord {
                     embedding_model: Some(model.into()),
@@ -1104,12 +1237,16 @@ async fn a_wiki_republished_with_another_model_between_steps_is_refused() {
         .expect("recorded");
     assert_eq!(chosen, "model-a");
     // Not republished yet: the search is served.
-    let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model(chosen.clone());
-    assert!(!search(db).await.expect("same model").is_empty());
+    let db = UnifiedDb::new(pool.clone(), key.clone())
+        .with_dense(common::dense(&store))
+        .expecting_embedding_model(chosen.clone());
+    assert_ne!(search(db).await.expect("same model"), []);
 
     // The wiki is republished with another model BETWEEN the steps.
     publish_with("model-b").await;
-    let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model(chosen);
+    let db = UnifiedDb::new(pool.clone(), key.clone())
+        .with_dense(common::dense(&store))
+        .expecting_embedding_model(chosen);
     let refused = search(db).await.expect_err("the vectors are model-b's now");
     assert!(
         matches!(&refused, StorageError::EmbeddingModelChanged { stored, expected, .. }
@@ -1120,13 +1257,19 @@ async fn a_wiki_republished_with_another_model_between_steps_is_refused() {
 
     // A caller that chose the current model is served; one that did not
     // record a model (the plain reader) is unaffected.
-    let db = UnifiedDb::new(pool.clone(), key.clone()).expecting_embedding_model("model-b");
-    assert!(!search(db).await.expect("current model").is_empty());
-    let unchecked = UnifiedDb::new(pool.clone(), key.clone());
-    assert!(!search(unchecked).await.expect("unchecked").is_empty());
+    let db = UnifiedDb::new(pool.clone(), key.clone())
+        .with_dense(common::dense(&store))
+        .expecting_embedding_model("model-b");
+    assert_ne!(search(db).await.expect("current model"), []);
+    let unchecked = UnifiedDb::new(pool.clone(), key.clone()).with_dense(common::dense(&store));
+    assert_ne!(search(unchecked).await.expect("unchecked"), []);
 
     // A wiki that records no model has nothing to refuse.
-    publish(&space, &key, "alpha", 3).await;
+    stage_with(&space, &key, "alpha", 3, None)
+        .await
+        .publish(&WikiRecord::default())
+        .await
+        .expect("publish");
     let db = UnifiedDb::new(pool.clone(), key).expecting_embedding_model("anything");
-    assert!(!search(db).await.expect("no model recorded").is_empty());
+    assert_ne!(search(db).await.expect("no model recorded"), []);
 }

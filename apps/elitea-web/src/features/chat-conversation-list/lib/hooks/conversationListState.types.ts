@@ -73,4 +73,6 @@ export interface DateGroupListItem {
   readonly conversations: readonly Conversation[];
   readonly total?: number;
   readonly offset?: number;
+  /** Client contract 1.12: how many conversations of the whole bucket need the person (the listing's count). */
+  readonly needsYou?: number;
 }

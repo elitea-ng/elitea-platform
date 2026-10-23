@@ -20,9 +20,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 )
 
 // recordingStore is a wikichat.Store that remembers what it was asked to
@@ -226,14 +226,14 @@ func TestObserverIsNilWhenNothingIsRecorded(t *testing.T) {
 }
 
 // pollThrough drives one poll through the tee. `inner` stands in for the hop:
-// it fills the Outcome the way providerhost/proxy's ModifyResponse does and
+// it fills the Outcome the way providerhost/proxy's Forward does and
 // writes the same bytes to the caller.
 func pollThrough(history *History, status int, body string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet,
 		"/api/v2/deepwiki/invocations/7/Wikis/ask/inv-1", nil)
 	// The stand-in hop reports through the Outcome exactly as
-	// providerhost/proxy's ModifyResponse does, and writes the same bytes to
+	// providerhost/proxy's Forward does, and writes the same bytes to
 	// the caller — so a tee that quietly consumed the body would be visible
 	// in the recorder rather than only in the store.
 	forward := history.Poll(func(

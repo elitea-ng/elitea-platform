@@ -14,12 +14,12 @@ import (
 // migration in two different processes believe they held the same lock.
 const bootstrapScope Scope = "bootstrap"
 
-// Bootstrap applies the pylon-era schema to a database that does not carry it,
+// Bootstrap applies the legacy-era schema to a database that does not carry it,
 // and reports whether it did.
 //
 // WHY THE BINARY DOES THIS. The numbered histories cannot run against an empty
 // database — shared/0030 has a foreign key to centry.project, and that table is
-// created by the pylon-era schema rather than by any migration. Until this
+// created by the legacy-era schema rather than by any migration. Until this
 // existed, only the compose stack and the E2E seeder could supply it, both by
 // running psql against a file on disk. A Kubernetes install therefore could not
 // reach a migrated database at all without a human, and the Helm chart's
@@ -65,14 +65,14 @@ func Bootstrap(ctx context.Context, pool *pgxpool.Pool, schema string) (bool, er
 		if err := tx.QueryRow(ctx,
 			`SELECT to_regclass('centry.project') IS NOT NULL`,
 		).Scan(&present); err != nil {
-			return fmt.Errorf("migrate: probe for the pylon-era schema: %w", err)
+			return fmt.Errorf("migrate: probe for the legacy-era schema: %w", err)
 		}
 		if present {
 			return nil
 		}
 
 		if _, err := tx.Exec(ctx, schema); err != nil {
-			return fmt.Errorf("migrate: apply the pylon-era schema: %w", err)
+			return fmt.Errorf("migrate: apply the legacy-era schema: %w", err)
 		}
 
 		// Proven rather than assumed. The SQL is applied as one multi-statement
@@ -83,10 +83,10 @@ func Bootstrap(ctx context.Context, pool *pgxpool.Pool, schema string) (bool, er
 		if err := tx.QueryRow(ctx,
 			`SELECT to_regclass('centry.project') IS NOT NULL`,
 		).Scan(&present); err != nil {
-			return fmt.Errorf("migrate: verify the pylon-era schema: %w", err)
+			return fmt.Errorf("migrate: verify the legacy-era schema: %w", err)
 		}
 		if !present {
-			return fmt.Errorf("migrate: the pylon-era schema applied but centry.project is absent")
+			return fmt.Errorf("migrate: the legacy-era schema applied but centry.project is absent")
 		}
 		applied = true
 		return nil

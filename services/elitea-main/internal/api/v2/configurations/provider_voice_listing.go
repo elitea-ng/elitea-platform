@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 // provider_voice_listing.go is the elitea-main half of the TTS voice listing
@@ -101,21 +99,11 @@ func (c *GatewayConnectionChecker) ListProviderVoices(
 		return ProviderVoiceListing{}, fmt.Errorf("list provider voices: encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/llm/v1/list_provider_voices", strings.NewReader(string(raw)))
-	if err != nil {
-		return ProviderVoiceListing{}, fmt.Errorf("list provider voices: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// No execution id: a voice listing is a read on behalf of a signed-in user
-	// looking at a picker, not a runtime execution.
-	llmproxy.SignIdentityHeaders(req.Header, c.identitySecret, connectionCheckProjectIDFrom(ctx), "", "", "")
-
-	resp, err := c.httpClient.Do(req)
+	resp, done, err := c.call(ctx, c.timeout, c.gateway.ListProviderVoices, raw, "")
 	if err != nil {
 		return ProviderVoiceListing{}, fmt.Errorf("list provider voices: call gateway: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer done()
 
 	if resp.StatusCode != http.StatusOK {
 		// The route answers 200 for every provider verdict, so a non-200 is

@@ -21,7 +21,8 @@ package admin
 //
 // ## The contract is not invented
 //
-// It mirrors the pylon handlers the existing admin_ui client already speaks to:
+// It mirrors the legacy handlers the existing admin_ui client already speaks
+// to:
 //
 //	legacy/plugins/admin/api/v2/projects.py        (GET, the enrichment loop)
 //	legacy/plugins/projects/models/project.py      (list_projects_paginated)
@@ -38,9 +39,9 @@ package admin
 //     names are not unique), so PostgreSQL may return tied rows in a different
 //     order per LIMIT/OFFSET page — rows repeat on one page and vanish from
 //     another while paging through an unchanged table.
-//   - `total` counts the FILTERED set. pylon does too; the Go implementation
-//     this replaces did not, so its pagination advertised pages that did not
-//     exist as soon as a filter was applied.
+//   - `total` counts the FILTERED set. The legacy runtime does too; the Go
+//     implementation this replaces did not, so its pagination advertised pages
+//     that did not exist as soon as a filter was applied.
 //   - The owner and admin lookups are LATERAL sub-selects, not JOINs. A plain
 //     LEFT JOIN onto project roles multiplies a project out once per admin,
 //     which is exactly what the pre-A14 admin USER listing did.
@@ -48,7 +49,7 @@ package admin
 // ## Authorisation
 //
 // Both routes are gated in internal/api/router.go on the permission their
-// pylon counterparts declare — `projects.projects.projects.view` for the read,
+// legacy counterparts declare — `projects.projects.projects.view` for the read,
 // `projects.projects.projects.edit` for the write — resolved from
 // auth_core__user_role per request. The admin SPA's
 // `window.admin_ui_config.permissions` is PRESENTATION state and is never
@@ -62,7 +63,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -99,8 +100,8 @@ var sortableProjectColumns = map[string]string{
 // legacy/plugins/admin/api/v2/projects.py's enrichment loop attaches.
 //
 // `project_name` and `admin_name` duplicate `name` and `owner_name`: they are
-// pylon-era aliases the existing admin_ui client and the QA suite read, kept so
-// this endpoint stays drop-in.
+// legacy-era aliases the existing admin_ui client and the QA suite read, kept
+// so this endpoint stays drop-in.
 type projectRow struct {
 	ID           int      `json:"id"`
 	Name         string   `json:"name"`
@@ -210,9 +211,9 @@ FROM centry.project p`).Scan(&all, &personal); err != nil {
 // `list_projects_paginated`'s condition set.
 //
 // The search matches the project name, the project id AS TEXT, and the OWNER's
-// name or email — pylon resolves the third by calling `auth_search_users` and
-// ORing the returned ids into the query; the sub-select below is the same
-// question asked in one round trip.
+// name or email — the legacy runtime resolves the third by calling
+// `auth_search_users` and ORing the returned ids into the query; the sub-select
+// below is the same question asked in one round trip.
 func projectFilters(params projectListingParams) (where string, args []any) {
 	conditions := make([]string, 0, 2)
 	switch params.projectType {
@@ -340,13 +341,13 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, pageArgs...)
 
 // projectStatus mirrors projects.py's status ladder.
 //
-// pylon has a fourth value, `pending`, for `create_success IS NULL`. That
-// branch is UNREACHABLE against this schema: `centry.project.create_success` is
-// NOT NULL both in internal/infra/db/migrations/001_initial.sql and in the
-// running legacy database. It is not reproduced here rather than emitted as a
-// constant nobody can trigger — the defect the admin Users reference page
-// shipped, where a `status` column that does not exist rendered as a permanent
-// "Active" chip.
+// The legacy runtime has a fourth value, `pending`, for `create_success IS
+// NULL`. That branch is UNREACHABLE against this schema:
+// `centry.project.create_success` is NOT NULL both in
+// internal/infra/db/migrations/001_initial.sql and in the running legacy
+// database. It is not reproduced here rather than emitted as a constant nobody
+// can trigger — the defect the admin Users reference page shipped, where a
+// `status` column that does not exist rendered as a permanent "Active" chip.
 func projectStatus(suspended, createSuccess bool) string {
 	switch {
 	case suspended:

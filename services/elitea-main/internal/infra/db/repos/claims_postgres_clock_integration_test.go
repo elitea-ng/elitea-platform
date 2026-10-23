@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 type claimClockCaptureRepository struct {
@@ -124,6 +124,16 @@ WHERE claim_id = $1`, decision.Lease.ClaimID).Scan(&claimedAt, &storedExpiresAt)
 			}
 			if renewed.Fence != decision.Lease.Fence || renewed.ClaimID != decision.Lease.ClaimID {
 				t.Fatalf("renewal changed authority-bearing identity: before=%+v after=%+v", decision.Lease, renewed)
+			}
+			// The lease poll gates the cloud executor's take-back lookup on
+			// the job's capability (#1311): an empty one would silently turn
+			// the signal off for every agent turn.
+			if renewed.CapabilityID != executiondomain.ConfigurationValidationCapability {
+				t.Fatalf("renewal capability = %q, want the job's", renewed.CapabilityID)
+			}
+			if observed, err := service.ObserveDesiredState(ctx, decision.Lease.Fence); err != nil ||
+				observed.CapabilityID != executiondomain.ConfigurationValidationCapability {
+				t.Fatalf("observed execution = %+v err=%v, want the job's capability", observed, err)
 			}
 			if captured.renewObservedAt.IsZero() || renewed.ExpiresAt.Sub(captured.renewObservedAt) != executionapp.MaxClaimLeaseTTLMillis.Duration() {
 				t.Fatalf("renewal was not exactly database clock plus 30000ms: observed=%s expires=%s", captured.renewObservedAt, renewed.ExpiresAt)

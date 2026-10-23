@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"testing"
 
-	publicapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	publicapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 type currentIndexMetaDeleteRBACSpy struct {
@@ -32,8 +33,8 @@ func TestCurrentIndexMetaDeleteRoutePostgresPermissionMatrix(t *testing.T) {
 	prepareIndexRBACFixtures(t, pool)
 	resolver := legacyrbac.NewPostgresResolver(pool)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        authsvc.NewPrincipalValidator(pool),
-		ForwardedIdentityVerifier: indexRBACPeerVerifier{},
+		PrincipalValidator: authsvc.NewPrincipalValidator(pool),
+		FormSessions:       authtest.FormSessions{},
 	}
 
 	for _, test := range []struct {

@@ -28,7 +28,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 )
 
 // ---- the decision -----------------------------------------------------------
@@ -127,14 +127,14 @@ func TestBudgetStartupRefusal_UnsetModeIsAuto(t *testing.T) {
 func TestRequireEnforcementRejectsATypo(t *testing.T) {
 	for _, v := range []string{"0", "false", "no", "OFF", "disabled", ""} {
 		t.Setenv("LLM_BUDGET_REQUIRE_ENFORCEMENT", v)
-		got := config.FromEnv().RequireBudgetEnforcement
+		got := mustConfigFromEnv(t).RequireBudgetEnforcement
 		if got != config.RequireEnforcementAuto {
 			t.Fatalf("LLM_BUDGET_REQUIRE_ENFORCEMENT=%q read as %q, want %q", v, got, config.RequireEnforcementAuto)
 		}
 	}
 	for _, v := range []string{config.RequireEnforcementOn, config.RequireEnforcementOff, config.RequireEnforcementAuto} {
 		t.Setenv("LLM_BUDGET_REQUIRE_ENFORCEMENT", v)
-		if got := config.FromEnv().RequireBudgetEnforcement; got != v {
+		if got := mustConfigFromEnv(t).RequireBudgetEnforcement; got != v {
 			t.Fatalf("LLM_BUDGET_REQUIRE_ENFORCEMENT=%q read as %q", v, got)
 		}
 	}
@@ -343,7 +343,7 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 	command := func(t *testing.T, ctx context.Context, mode string) (*exec.Cmd, *bytes.Buffer) {
 		t.Helper()
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestGatewayRefusesToStartWithoutEnforcement")
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(append(os.Environ(), grpcListenerTestEnv(t)...),
 			gatewaySubprocessEnv+"=1",
 			// Port 1 is reserved and refuses immediately, so the dial fails
 			// fast and leaves the NATS client nil — the exact state of a
@@ -397,6 +397,32 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 			t.Fatalf("the refusal does not name the budget gate; output:\n%s", out.String())
 		}
 	})
+
+	// LLM_BUDGET_EXPECTED_REPLICAS divides the NATS-down degraded cap (human
+	// decision, DECISIONS.md 2026-10-22). A value that is not an integer of 1
+	// or more must stop the real main(), not fall back to 1. The mode is OFF
+	// here, so the only thing that can stop this process is that refusal; the
+	// "off keeps serving" subtest below is the negative control.
+	for _, bad := range []string{"0", "-3", "+3", "007", ""} {
+		t.Run(fmt.Sprintf("expected replicas %q refuses", bad), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd, out := command(t, ctx, config.RequireEnforcementOff)
+			cmd.Env = append(cmd.Env, "LLM_BUDGET_EXPECTED_REPLICAS="+bad)
+			err := cmd.Run()
+			if ctx.Err() != nil {
+				t.Fatalf("the gateway kept running with LLM_BUDGET_EXPECTED_REPLICAS=%q; output:\n%s", bad, out.String())
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
+				t.Fatalf("want a non-zero exit with LLM_BUDGET_EXPECTED_REPLICAS=%q, got %v; output:\n%s", bad, err, out.String())
+			}
+			if !strings.Contains(out.String(), "FATAL: refusing to start") ||
+				!strings.Contains(out.String(), "LLM_BUDGET_EXPECTED_REPLICAS") {
+				t.Fatalf("the refusal does not name LLM_BUDGET_EXPECTED_REPLICAS; output:\n%s", out.String())
+			}
+		})
+	}
 
 	// The negative control. Without it the subtest above proves only that this
 	// environment cannot start a gateway — a bogus DATABASE_URL and an

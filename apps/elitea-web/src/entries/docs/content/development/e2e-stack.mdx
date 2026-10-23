@@ -52,7 +52,7 @@ There is no separate `build` or `status` subcommand: `up` builds what it needs, 
 
 | Port | Service | Override |
 |---|---|---|
-| 8082 | Traefik (E2E entry point) | `E2E_PORT` |
+| 8082 | elitea-main, the browser edge (relays `/app` and `/docs` to elitea-web) | `E2E_PORT` |
 | 9400 | oidc-provider-mock | fixed — see [the standalone stack's note](/development/standalone-stack#common-failures) |
 | 15432 | PostgreSQL | `E2E_PG_PORT` |
 

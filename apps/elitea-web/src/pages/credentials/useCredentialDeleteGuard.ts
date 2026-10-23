@@ -1,6 +1,6 @@
 /**
  * pages/credentials/useCredentialDeleteGuard.ts — the "don't let a project's
- * last vectorstorage/embedding credential be deleted" guard used by
+ * last embedding credential be deleted" guard used by
  * `useCredentialFormController.ts` (unit A7, finding A7-pages/2). Split into
  * its own sibling file purely to keep `useCredentialFormController.ts`
  * under the §3.5 400-line file-length budget — the same reason
@@ -10,7 +10,7 @@
 import { useConfigurationsList } from '@/features/credentials';
 import { t } from '@/shared/i18n';
 
-const PROTECTED_DELETE_GUARD_SECTIONS = new Set(['vectorstorage', 'embedding']);
+const PROTECTED_DELETE_GUARD_SECTIONS = new Set(['embedding']);
 
 export interface DeleteGuard {
   readonly canDelete: boolean;
@@ -19,8 +19,8 @@ export interface DeleteGuard {
 
 /**
  * Ports `[fsd]/features/credentials/ui/credentials-tab-bar/CredentialsControls.jsx`'s
- * `isLastInSection` guard: a project's last `vectorstorage`/`embedding`
- * config may not be deleted, because every agent/chat relying on that
+ * `isLastInSection` guard: a project's last `embedding` config may not be
+ * deleted, because every agent/chat relying on that
  * project-wide config would break. Baseline computes
  * `totalAvailable = (sectionConfigs?.total ?? 0) + (sectionConfigs?.shared?.total ?? 0)`
  * from a `pageSize: 2, include_shared: true, shared_limit: 2` query and
@@ -38,15 +38,12 @@ export interface DeleteGuard {
  * `useCredentialFormController.ts`'s own `performSave`/`canSubmit` are
  * split from that file's hook body.
  */
-function resolveDeleteGuard(canDeleteFromPermission: boolean, section: string | undefined, sectionTotal: number, sectionGuardEnabled: boolean): DeleteGuard {
+function resolveDeleteGuard(canDeleteFromPermission: boolean, sectionTotal: number, sectionGuardEnabled: boolean): DeleteGuard {
   const isLastInSection = sectionGuardEnabled && sectionTotal <= 1;
   if (!canDeleteFromPermission || !isLastInSection) {
     return { canDelete: canDeleteFromPermission && !isLastInSection, deleteDisabledReason: undefined };
   }
-  const configTypeLabel =
-    section === 'vectorstorage'
-      ? t('credentials.form.deleteLastConfigTypeVectorstore', 'pgVector')
-      : t('credentials.form.deleteLastConfigTypeEmbedding', 'embedding model');
+  const configTypeLabel = t('credentials.form.deleteLastConfigTypeEmbedding', 'embedding model');
   return {
     canDelete: false,
     deleteDisabledReason: t(
@@ -86,5 +83,5 @@ export function useCredentialDeleteGuard(isEditMode: boolean, projectId: string,
     { enabled: sectionGuardEnabled },
   );
   const sectionTotal = (sectionConfigs.data?.total ?? 0) + (sectionConfigs.data?.shared?.total ?? 0);
-  return resolveDeleteGuard(canDeleteFromPermission, section, sectionTotal, sectionGuardEnabled);
+  return resolveDeleteGuard(canDeleteFromPermission, sectionTotal, sectionGuardEnabled);
 }

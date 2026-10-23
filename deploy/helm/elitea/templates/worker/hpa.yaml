@@ -1,0 +1,36 @@
+{{- if and .Values.worker.enabled .Values.worker.autoscaling.enabled }}
+{{- if eq (include "elitea.scaling.workerSource" . | trim) "cpu" }}
+{{- $a := .Values.worker.autoscaling }}
+{{- /* An HPA needs minReplicas >= 1 (scale to zero is KEDA's alone): refused by name here, not by the API server. */}}
+{{- include "elitea.scaling.validateRange" (dict "v" .Values.worker "field" "worker") }}
+# CPU, the fallback: no KEDA is available to this release
+# (elitea.scaling.workerSource). An agent execution spends most of its life
+# waiting on a model, so CPU rises later than the backlog does. Install KEDA
+# for the consumer-lag trigger (keda-scaledobject.yaml).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "elitea-worker.fullname" . }}
+  labels:
+    {{- include "elitea-worker.labels" . | nindent 4 }}
+  annotations:
+    elitea.ai/autoscaling-source: cpu
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "elitea-worker.fullname" . }}
+  minReplicas: {{ $a.minReplicas }}
+  maxReplicas: {{ $a.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $a.targetCPUUtilizationPercentage | default 70 }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ $a.cooldownSeconds }}
+{{- end }}
+{{- end }}

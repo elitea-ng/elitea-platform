@@ -65,6 +65,38 @@ fn the_listing_is_what_the_agent_tools_see() {
     );
 }
 
+/// The index lists exactly what the shared walker (no glob) yields as
+/// regular files: hidden files in, ignored files out, in byte order. The
+/// walker's glob semantics (`search_files`' override) do not reach it, and
+/// `find_files`' glob filter is its own.
+#[test]
+fn the_listing_is_the_shared_walkers_files() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path();
+    write(root, ".github/ci.yml", "on: push\n");
+    write(root, ".gitignore", "gen/\n*.log\n");
+    write(root, "gen/out.py", "x = 1\n");
+    write(root, "z.log", "noise\n");
+    write(root, "b/a.py", "a = 1\n");
+    write(root, "a.py", "a = 1\n");
+    let workspace = workspace(root, &[]);
+    let walked: Vec<String> = elitea_local_tools::files::walker(
+        &workspace,
+        &elitea_local_tools::workspace::WsPath::root(),
+        None,
+        None,
+    )
+    .unwrap()
+    .flatten()
+    .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+    .filter_map(|entry| elitea_local_tools::files::relative(&workspace, entry.path()))
+    .map(|path| path.display_string())
+    .collect();
+    assert_eq!(walked, [".github/ci.yml", ".gitignore", "a.py", "b/a.py"]);
+    let source = LocalFolderSource::new(workspace);
+    assert_eq!(keys(&source), walked);
+}
+
 /// The listing reads nothing (a file never seen is listed by its stat);
 /// the fetch reads the file once, confined, and its version is the hash of
 /// those bytes.
@@ -306,6 +338,10 @@ impl Hooked {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl elitea_content_source::ContentSource for Hooked {
     async fn list(
         &self,

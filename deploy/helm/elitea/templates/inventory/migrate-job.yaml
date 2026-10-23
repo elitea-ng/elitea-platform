@@ -9,8 +9,8 @@
 */ -}}
 {{- $dbSecrets := fromJson (include "elitea-inventory.databaseSecrets" .) }}
 {{- if hasKey $dbSecrets "ELITEA_INVENTORY_DATABASE_URL" }}
-# The engine's own migrations (ADR-0027): the inventory_graph schema and the
-# pgvector extension, from the engine image whose `migrate` subcommand runs the
+# The engine's own migrations (ADR-0027): the inventory_graph schema (no
+# extension; the entity vectors are in elitea-vector), from the engine image whose `migrate` subcommand runs the
 # SQL files the binary embeds, so they are exactly the ones the running engine
 # expects. A JOB, not a startup step: two replicas starting together must not
 # race (it also takes an advisory lock), and elitea-migrate owns the product

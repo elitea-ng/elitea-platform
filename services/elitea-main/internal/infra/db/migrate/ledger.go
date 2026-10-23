@@ -90,6 +90,10 @@ func validateRecordedLedger(
 		if _, duplicate := applied[entry.version]; duplicate {
 			return nil, fmt.Errorf("migrate: duplicate database version %04d", entry.version)
 		}
+		if releasedText(migration, entry.checksum) {
+			applied[entry.version] = struct{}{}
+			continue
+		}
 		if entry.name != migration.Name {
 			return nil, fmt.Errorf("migrate: name mismatch for %s", migration.Path)
 		}

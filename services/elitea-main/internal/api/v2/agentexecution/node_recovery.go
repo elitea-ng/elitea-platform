@@ -6,10 +6,10 @@ import (
 	"io"
 	"net/http"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -22,7 +22,7 @@ type CurrentNodeRecoveryUseCase interface {
 }
 
 func NewCurrentNodeRecoveryRoute(useCase CurrentNodeRecoveryUseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (http.Handler, error) {
-	if useCase == nil || authConfig.PrincipalValidator == nil || authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if useCase == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, app.ErrInvalid
 	}
 	router := chi.NewRouter()

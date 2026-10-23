@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

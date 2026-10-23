@@ -123,6 +123,7 @@ import type {
   ShotPersona,
 } from "../src/entries/docs/shots.manifest";
 import { shots as manifestShots } from "../src/entries/docs/shots.manifest";
+import { resolveShotRoute } from "./lib/docs-shot-route.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(SCRIPT_DIR, "..");
@@ -258,28 +259,6 @@ function readSeedMap(path: string): Record<string, unknown> {
     return {};
   }
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-}
-
-/**
- * Resolves every `:name` segment in `route` from `seedMap`, honouring the
- * shot's own `placeholders` override (see shots.manifest.ts's doc on that
- * field) before falling back to `seedMap[name]` directly. Throws, naming the
- * unresolved segment, rather than navigating to a route that still contains
- * a literal `:agentId` — which would "succeed" as a capture of a 404 page.
- */
-function resolveRoute(shot: Shot, seedMap: Record<string, unknown>): string {
-  return shot.route.replace(/:([A-Za-z][A-Za-z0-9_]*)/g, (match, name: string) => {
-    const seedMapKey = shot.placeholders?.[name] ?? name;
-    const value = seedMap[seedMapKey];
-    if (typeof value !== "string" && typeof value !== "number") {
-      throw new Error(
-        `route placeholder "${match}" (seed map key "${seedMapKey}") did not resolve to a ` +
-          `string/number in the seed map — got ${JSON.stringify(value)}. Run docs-seed.ts, or ` +
-          "check the shot's `placeholders` override.",
-      );
-    }
-    return String(value);
-  });
 }
 
 /**
@@ -619,7 +598,15 @@ async function captureShot(
 ): Promise<CaptureResult> {
   const persona = shot.persona ?? cliPersona;
   const theme = shot.theme ?? "light";
-  const route = resolveRoute(shot, seedMap);
+  // A route whose seed key is absent is a per-shot result, never a throw out
+  // of the capture loop: one unseeded shot (the DeepWiki ones without
+  // --wiki-repository and a real model) used to abort the whole run (#1342).
+  // `--fail-on-missing` still fails a run that asked for it by id.
+  const resolved = resolveShotRoute(shot.route, shot.placeholders, seedMap);
+  if (resolved.error !== undefined) {
+    return { id: shot.id, route: shot.route, bytes: undefined, error: resolved.error };
+  }
+  const route = resolved.route;
   let context: BrowserContext | undefined;
   try {
     context = await browser.newContext({

@@ -6,8 +6,9 @@
 //
 // There are two reference implementations of these checks and they DISAGREE:
 //
-//   - pylon's `legacy/plugins/elitea_core/utils/toolkit_security.py` compares
-//     with a plain `.lower()`;
+//   - the legacy runtime's
+//     `legacy/plugins/elitea_core/utils/toolkit_security.py` compares with a
+//     plain `.lower()`;
 //   - the SDK's `elitea-sdk/elitea_sdk/runtime/toolkits/security.py` compares on
 //     a canonical key — lowercased with every non-alphanumeric character
 //     stripped — and additionally reduces routing prefixes off tool names.

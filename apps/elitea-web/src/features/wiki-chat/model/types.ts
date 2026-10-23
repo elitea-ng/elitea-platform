@@ -1,3 +1,5 @@
+import { FRAME_TYPE } from '@elitea/client-core/stream';
+
 /**
  * The chat stream's message types, as the provider emits them.
  *
@@ -5,18 +7,20 @@
  * rather than an import: these are the types THIS reducer branches on, and a
  * shared enum would make the two screens' surfaces look identical when they are
  * not. `todo_update` is here and nowhere else; `start_task` is not here at all.
+ * The values come from `@elitea/client-core`'s `FRAME_TYPE`, except
+ * `todo_update`, which is not a chat stream frame.
  */
 export const ChatFrameType = {
-  Chunk: 'chunk',
-  AIMessageChunk: 'AIMessageChunk',
-  AgentLlmChunk: 'agent_llm_chunk',
-  AgentResponse: 'agent_response',
-  AgentThinkingStep: 'agent_thinking_step',
-  AgentThinkingStepUpdate: 'agent_thinking_step_update',
-  AgentToolError: 'agent_tool_error',
-  AgentException: 'agent_exception',
-  Error: 'error',
-  LlmError: 'llm_error',
+  Chunk: FRAME_TYPE.Chunk,
+  AIMessageChunk: FRAME_TYPE.AIMessageChunk,
+  AgentLlmChunk: FRAME_TYPE.AgentLlmChunk,
+  AgentResponse: FRAME_TYPE.AgentResponse,
+  AgentThinkingStep: FRAME_TYPE.AgentThinkingStep,
+  AgentThinkingStepUpdate: FRAME_TYPE.AgentThinkingStepUpdate,
+  AgentToolError: FRAME_TYPE.AgentToolError,
+  AgentException: FRAME_TYPE.AgentException,
+  Error: FRAME_TYPE.Error,
+  LlmError: FRAME_TYPE.LlmError,
   /** Not an agent frame: deep research emits it as its own socket type. */
   TodoUpdate: 'todo_update',
 } as const;

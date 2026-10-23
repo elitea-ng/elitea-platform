@@ -1536,7 +1536,7 @@ async fn code_control_stop_without_attempt_preserves_cancel_and_lost_lease_disti
         );
         let after = journal.load().await.unwrap();
         assert_eq!(after.ledger.revision(), before.ledger.revision());
-        assert!(after.ledger.history().is_empty());
+        assert_eq!(after.ledger.history(), []);
         assert_eq!(runtime.calls.load(Ordering::SeqCst), 0);
     }
 }
@@ -1638,7 +1638,7 @@ async fn parent_cancellation_keeps_control_stop_without_attempt_or_code_projecti
             ..
         }
     ));
-    assert!(stored.ledger.history().is_empty());
+    assert_eq!(stored.ledger.history(), []);
     assert!(body.body.calls.lock().await.is_empty());
     assert_eq!(body.reports.load(Ordering::SeqCst), 0);
 }

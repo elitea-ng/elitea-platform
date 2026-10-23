@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 )
 
 // adminUIEmails is the only part of the admin-console identity path that talks

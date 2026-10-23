@@ -20,11 +20,11 @@
 --                          reading the table directly.
 --
 -- WHY A SIDE TABLE, NOT TWO COLUMNS ON auth_core__token. `public.auth_core__token`
--- belongs to pylon's `auth_core` plugin, and this corpus has never issued DDL
--- against it — 0071_token_project_binding.sql makes the same argument at
--- length and takes the same shape for the same reason. Two migration systems
--- owning one table definition is the failure 0064 and 0065 each describe from
--- the other side.
+-- belongs to the legacy runtime's `auth_core` plugin, and this corpus has never
+-- issued DDL against it — 0071_token_project_binding.sql makes the same
+-- argument at length and takes the same shape for the same reason. Two
+-- migration systems owning one table definition is the failure 0064 and 0065
+-- each describe from the other side.
 --
 -- WHY NOT DEDUPE ON THE NOTIFICATION ROW. centry.notifications.uuid is UNIQUE
 -- (0065) and the artifact-bucket producer leans on `ON CONFLICT (uuid) DO
@@ -35,11 +35,11 @@
 -- cannot delete, so it lives here.
 --
 -- NO BACKFILL, AND WHAT THAT MEANS. A token that existed before this migration
--- — or one pylon minted — has no row, so `issued_at` is unknown. Unknown is
--- treated as "old enough": its owner still gets the expiry warning. The
--- alternative, defaulting issued_at to the migration's own clock, would make
--- every pre-existing key look newly minted and SUPPRESS the warning for the
--- whole population this feature exists for.
+-- — or one that the legacy runtime minted — has no row, so `issued_at` is
+-- unknown. Unknown is treated as "old enough": its owner still gets the expiry
+-- warning. The alternative, defaulting issued_at to the migration's own clock,
+-- would make every pre-existing key look newly minted and SUPPRESS the warning
+-- for the whole population this feature exists for.
 --
 -- THE FOREIGN KEY IS GUARDED, for the reason 0071 states: elitea-migrate can
 -- run before `001_initial.sql` creates auth_core, and a bare REFERENCES clause

@@ -2,7 +2,7 @@
  * "Take back requested": the web's Take back button (on a thread this
  * computer sent to the cloud) raises a notification of kind
  * `workspace_reclaim_requested`; only this computer can move the thread
- * back, so the shell shows it as a toast with a Take back action. The action
+ * back, so the shell shows it as a banner under the toolbar with a Take back action. The action
  * opens the thread and starts the take back dialog there.
  *
  * It listens like the bell does (the notifications stream signals, the list
@@ -12,11 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import Alert from '@mui/material/Alert';
-import CloseIcon from '@mui/icons-material/Close';
 import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
-import Snackbar from '@mui/material/Snackbar';
 
 import { readThreads, useWorkspaceIpc } from '@/features/workspace';
 import { readThreadUuids, useTakeBackRequests } from '@/features/workspace-handoff';
@@ -27,6 +23,7 @@ import { unwrapBody } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 
 import type { ShellAction } from '../lib/shellActions';
+import { NoticeBanner } from './NoticeBanner';
 
 /** The notification kind the server raises for a web Take back request (ADR-0034, decision 7). */
 const RECLAIM_REQUESTED = 'workspace_reclaim_requested';
@@ -93,25 +90,17 @@ export function ReclaimRequestToast({ run }: { run: (action: ShellAction) => voi
     finish(located.id);
   };
   return (
-    <Snackbar open anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} onClose={(_event, why) => why !== 'clickaway' && finish(located.id)}>
-      <Alert
-        severity="info"
-        variant="filled"
-        data-testid="reclaim-request-toast"
-        // `action` replaces the Alert's own close button, so the dismiss is drawn here.
-        action={
-          <>
-            <Button color="inherit" size="small" onClick={takeBack}>
-              {t('desktop.handoff.takeBack', 'Take back')}
-            </Button>
-            <IconButton color="inherit" size="small" aria-label={t('desktop.handoff.dismiss', 'Dismiss')} onClick={() => finish(located.id)}>
-              <CloseIcon fontSize="inherit" />
-            </IconButton>
-          </>
-        }
-      >
-        {t('desktop.handoff.reclaimRequested', 'You asked to take a thread back from the cloud. Take it back here?')}
-      </Alert>
-    </Snackbar>
+    <NoticeBanner
+      tone="info"
+      testId="reclaim-request-toast"
+      onClose={() => finish(located.id)}
+      actions={
+        <Button size="small" onClick={takeBack}>
+          {t('desktop.handoff.takeBack', 'Take back')}
+        </Button>
+      }
+    >
+      {t('desktop.handoff.reclaimRequested', 'You asked to take a thread back from the cloud. Take it back here?')}
+    </NoticeBanner>
   );
 }

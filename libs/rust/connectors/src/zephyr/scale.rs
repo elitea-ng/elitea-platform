@@ -925,7 +925,7 @@ mod tests {
             transport,
         )
         .unwrap();
-        assert!(source.list().await.unwrap().is_empty());
+        assert_eq!(source.list().await.unwrap(), []);
     }
 
     #[test]

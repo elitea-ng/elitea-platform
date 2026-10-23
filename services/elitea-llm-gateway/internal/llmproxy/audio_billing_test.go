@@ -1,6 +1,6 @@
 // audio_billing_test.go — the audio money path (issue #323).
 //
-// audio_test.go asserts the WIRE shape the pylon-indexer callers read. This
+// audio_test.go asserts the WIRE shape the legacy indexer callers read. This
 // file asserts what the request BILLS, and it asserts it end to end: a real
 // HTTP request through the route, into the budget gate, out onto the fake
 // counter. A test that calls speechUnits and stops proves the selection is
@@ -19,8 +19,8 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // allowingGate returns a budget checker that admits every request and records
@@ -80,7 +80,7 @@ func audioDefaultPricedDelta(t *testing.T) func() int64 {
 //
 // The seconds and characters bases refuse a rate that is not from the catalog,
 // so they bill a real price or nothing, and the nothing is counted. The TOKEN
-// basis does not: it falls back to the pylon default table like every other
+// basis does not: it falls back to the legacy default table like every other
 // route, so an audio request CAN bill a figure the gateway invented. Until this
 // counter existed nothing reported it — MetricAudioUnpriced cannot fire because
 // a price was produced, and MetricAudioNonTokenBasis cannot fire because the

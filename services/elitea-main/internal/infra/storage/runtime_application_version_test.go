@@ -4,20 +4,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
+
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,25 +147,16 @@ func TestNestedApplicationVersionServesTheFrozenClaimScopedDefinition(t *testing
 	})
 	server := newNestedApplicationVersionTestServer(t, source, newNestedVersionFreezer(t))
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, nestedApplicationVersionRequest(t, certificate, fence, "1", "2"))
+	response := serve(server, nestedApplicationVersionRequest(t, certificate, fence, 1, 2))
 
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	require.Equal(t, 1, readCalls)
-	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
-	require.Equal(t, "no-store, no-cache, must-revalidate", response.Header().Get("Cache-Control"))
-	require.Equal(t, "no-cache", response.Header().Get("Pragma"))
-	require.Equal(t, "0", response.Header().Get("Expires"))
-	require.Equal(t, "nosniff", response.Header().Get("X-Content-Type-Options"))
-	require.NotEmpty(t, response.Header().Get("Content-Length"))
-	digest := sha256.Sum256(response.Body.Bytes())
-	require.Equal(t, formatSHA256Digest(digest), response.Header().Get("Content-Digest"))
 
 	// The client decodes with `deny_unknown_fields`
 	// (services/elitea-worker-rust/src/transport/runtime_context.rs:773-781), so
 	// the key SET is part of the contract, not only the values.
 	var envelope map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
+	require.NoError(t, json.Unmarshal(response.Body, &envelope))
 	require.Len(t, envelope, 6)
 	for _, key := range []string{
 		"schema_version", "project_id", "application_id", "version_id", "version_details", "frozen_definition_sha256",
@@ -175,7 +165,7 @@ func TestNestedApplicationVersionServesTheFrozenClaimScopedDefinition(t *testing
 	}
 
 	var value RuntimeApplicationVersionContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &value))
+	require.NoError(t, json.Unmarshal(response.Body, &value))
 	require.Equal(t, RuntimeApplicationVersionSchemaVersion, value.SchemaVersion)
 	require.EqualValues(t, 90106, value.ProjectID)
 	require.EqualValues(t, 1, value.ApplicationID)
@@ -270,13 +260,13 @@ func TestNestedApplicationVersionRefusesAClaimItCannotAuthorize(t *testing.T) {
 		1,
 	)
 	require.NoError(t, err)
-	response := httptest.NewRecorder()
-	anonymous.Routes().ServeHTTP(response, httptest.NewRequest(
-		http.MethodPost,
-		"/executions/execution-1/generations/1/runtime-context/applications/1/versions/2",
-		nil,
-	))
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	response := serve(anonymous, func(server *ContentServer) contentResult {
+		response, err := server.GetApplicationVersion(context.Background(), &runtimev1.GetApplicationVersionRequestV1{
+			Scope: contentScope("execution-1", 1), ApplicationId: 1, VersionId: 2,
+		})
+		return resultOf(response.GetVersionJson(), err)
+	})
+	require.Equal(t, codes.Unauthenticated, response.Code)
 
 	// A well-formed claim that does not belong to this execution/generation:
 	// the authorizer's row simply does not match, and the answer must not say
@@ -293,12 +283,11 @@ func TestNestedApplicationVersionRefusesAClaimItCannotAuthorize(t *testing.T) {
 		source,
 		freezer,
 	)
-	response = httptest.NewRecorder()
-	rejected.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2",
+	response = serve(rejected, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2,
 	))
-	require.Equal(t, http.StatusForbidden, response.Code)
-	require.NotContains(t, response.Body.String(), "execution")
+	require.Equal(t, codes.PermissionDenied, response.Code)
+	require.NotContains(t, string(response.Body), "execution")
 
 	// An authorizer that failed for its own reasons is a dependency failure,
 	// which the worker may retry — not a refusal, which it may not.
@@ -312,11 +301,10 @@ func TestNestedApplicationVersionRefusesAClaimItCannotAuthorize(t *testing.T) {
 		source,
 		freezer,
 	)
-	response = httptest.NewRecorder()
-	unavailable.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2",
+	response = serve(unavailable, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2,
 	))
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	require.Equal(t, codes.Unavailable, response.Code)
 }
 
 func TestNestedApplicationVersionRefusesAnIdentityItCannotServe(t *testing.T) {
@@ -345,11 +333,10 @@ func TestNestedApplicationVersionRefusesAnIdentityItCannotServe(t *testing.T) {
 		}),
 		freezer,
 	)
-	response := httptest.NewRecorder()
-	mismatched.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2",
+	response := serve(mismatched, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2,
 	))
-	require.Equal(t, http.StatusNotFound, response.Code)
+	require.Equal(t, codes.NotFound, response.Code)
 
 	// No such application/version pair in this project's schema.
 	absent := newNestedApplicationVersionTestServer(
@@ -361,13 +348,13 @@ func TestNestedApplicationVersionRefusesAnIdentityItCannotServe(t *testing.T) {
 		}),
 		freezer,
 	)
-	response = httptest.NewRecorder()
-	absent.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2",
+	response = serve(absent, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2,
 	))
-	require.Equal(t, http.StatusNotFound, response.Code)
+	require.Equal(t, codes.NotFound, response.Code)
 
-	// Non-canonical and out-of-range path identities never reach the schema.
+	// A zero identity never reaches the schema. (Non-canonical spellings such
+	// as "01" or "+1" were a path concern; the RPC carries typed integers.)
 	unreachable := newNestedApplicationVersionTestServer(
 		t,
 		currentApplicationVersionSourceFunc(func(
@@ -378,27 +365,22 @@ func TestNestedApplicationVersionRefusesAnIdentityItCannotServe(t *testing.T) {
 		}),
 		freezer,
 	)
-	for _, identity := range [][2]string{
-		{"01", "2"},
-		{"1", "0"},
-		{"+1", "2"},
-		{"1", "two"},
-		{"1", "18446744073709551616"},
+	for _, identity := range [][2]uint64{
+		{0, 2},
+		{1, 0},
 	} {
-		response = httptest.NewRecorder()
-		unreachable.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
+		response = serve(unreachable, nestedApplicationVersionRequest(
 			t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), identity[0], identity[1],
 		))
-		require.Equal(t, http.StatusBadRequest, response.Code, identity)
+		require.Equal(t, codes.InvalidArgument, response.Code, identity)
 	}
 
 	// An identity that is canonical but larger than the tenant schema's own
 	// integer columns is a miss, not a malformed request.
-	response = httptest.NewRecorder()
-	unreachable.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2147483648",
+	response = serve(unreachable, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2147483648,
 	))
-	require.Equal(t, http.StatusNotFound, response.Code)
+	require.Equal(t, codes.NotFound, response.Code)
 }
 
 func TestNestedApplicationVersionRefusesRatherThanTruncateAnOversizeDefinition(t *testing.T) {
@@ -428,13 +410,12 @@ func TestNestedApplicationVersionRefusesRatherThanTruncateAnOversizeDefinition(t
 		}),
 	)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2",
+	response := serve(server, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2,
 	))
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
-	require.NotContains(t, response.Body.String(), "instructions")
-	require.Less(t, response.Body.Len(), maxRuntimeApplicationVersionResponseBytes)
+	require.Equal(t, codes.Unavailable, response.Code)
+	require.NotContains(t, string(response.Body), "instructions")
+	require.Less(t, len(response.Body), maxRuntimeApplicationVersionResponseBytes)
 }
 
 func TestNestedApplicationVersionRouteIsAbsentWithoutItsService(t *testing.T) {
@@ -456,11 +437,10 @@ func TestNestedApplicationVersionRouteIsAbsentWithoutItsService(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, server.runtimeVersions)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, nestedApplicationVersionRequest(
-		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), "1", "2",
+	response := serve(server, nestedApplicationVersionRequest(
+		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 1, 2,
 	))
-	require.Equal(t, http.StatusNotFound, response.Code)
+	require.Equal(t, codes.Unimplemented, response.Code)
 }
 
 func TestNestedApplicationVersionCompositionRequiresEveryDependency(t *testing.T) {
@@ -620,21 +600,19 @@ func nestedApplicationVersionRequest(
 	t *testing.T,
 	certificate *x509.Certificate,
 	fence []byte,
-	applicationID string,
-	versionID string,
-) *http.Request {
+	applicationID uint64,
+	versionID uint64,
+) contentCall {
 	t.Helper()
-	path := strings.Join([]string{
-		"/executions/execution-1/generations/1/runtime-context/applications",
-		applicationID,
-		"versions",
-		versionID,
-	}, "/")
-	request := httptest.NewRequest(http.MethodPost, path, nil)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
-	return request
+	ctx := contentClaimContext(context.Background(), certificate, "claim-1", fence)
+	return func(server *ContentServer) contentResult {
+		response, err := server.GetApplicationVersion(ctx, &runtimev1.GetApplicationVersionRequestV1{
+			Scope:         contentScope("execution-1", 1),
+			ApplicationId: applicationID,
+			VersionId:     versionID,
+		})
+		return resultOf(response.GetVersionJson(), err)
+	}
 }
 
 type nestedVersionProjectContextStub struct{}

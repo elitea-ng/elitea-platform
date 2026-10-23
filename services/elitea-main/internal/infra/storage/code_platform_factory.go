@@ -1,10 +1,10 @@
 package storage
 
 import (
-	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/codeplatform"
-	toolkit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/codeplatform"
+	toolkit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
 )
 
 // CodePlatformNativeFactory binds existing product owners to one current claim.

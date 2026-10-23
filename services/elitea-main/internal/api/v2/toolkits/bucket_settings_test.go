@@ -18,7 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 )
 
 func TestAFileStoreToolkitIsNotSavedWithoutABucket(t *testing.T) {

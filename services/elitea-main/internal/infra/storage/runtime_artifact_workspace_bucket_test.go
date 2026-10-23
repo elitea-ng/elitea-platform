@@ -3,9 +3,9 @@ package storage
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/stretchr/testify/require"
 )
@@ -42,25 +42,22 @@ func TestRuntimeArtifactPlaneRefusesTheWorkspaceBucket(t *testing.T) {
 			for _, hidden := range []string{WorkspaceBucketName, suffixed} {
 				source := &artifactSourceStub{}
 				server := newArtifactTestServer(t, builderAuthorizerForProject(7), workspaceAwareSource{source, hidden})
-				response := httptest.NewRecorder()
-				server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+call.operation, fmt.Sprintf(call.body, hidden)))
-				require.Equal(t, http.StatusNotFound, response.Code, response.Body.String())
+				response := serve(server, builderRequest(t, "artifacts/"+call.operation, fmt.Sprintf(call.body, hidden)))
+				require.Equal(t, codes.NotFound, response.Code, string(response.Body))
 				require.Zero(t, source.projectID, "the hidden bucket must not reach the artifact source")
 				require.Empty(t, source.bucket)
 
 				// An ordinary bucket reaches the source, so the refusal above
 				// is the gate and not the request shape.
-				ordinary := httptest.NewRecorder()
-				server.Routes().ServeHTTP(ordinary, builderRequest(t, "artifacts/"+call.operation, fmt.Sprintf(call.body, "agent-artifacts")))
-				require.Equal(t, "agent-artifacts", source.bucket, ordinary.Body.String())
+				ordinary := serve(server, builderRequest(t, "artifacts/"+call.operation, fmt.Sprintf(call.body, "agent-artifacts")))
+				require.Equal(t, "agent-artifacts", source.bucket, string(ordinary.Body))
 			}
 			// The user bucket of the reserved name keeps working beside a
 			// suffixed hidden bucket.
 			source := &artifactSourceStub{}
 			server := newArtifactTestServer(t, builderAuthorizerForProject(7), workspaceAwareSource{source, suffixed})
-			user := httptest.NewRecorder()
-			server.Routes().ServeHTTP(user, builderRequest(t, "artifacts/"+call.operation, fmt.Sprintf(call.body, WorkspaceBucketName)))
-			require.Equal(t, WorkspaceBucketName, source.bucket, user.Body.String())
+			user := serve(server, builderRequest(t, "artifacts/"+call.operation, fmt.Sprintf(call.body, WorkspaceBucketName)))
+			require.Equal(t, WorkspaceBucketName, source.bucket, string(user.Body))
 		})
 	}
 }

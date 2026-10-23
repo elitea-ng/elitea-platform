@@ -56,10 +56,10 @@ import (
 	"testing"
 	"time"
 
-	v2budgets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/budgets"
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	v2budgets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/budgets"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The permissions are read from the production constants, not copied, so a
@@ -172,7 +172,7 @@ func TestAViewerReadsTheThreeSurfacesAndWritesNone(t *testing.T) {
 // A caller who is a member of a project that carries its OWN per-project grant
 // rows resolves only those rows, and therefore holds none of the six.
 //
-// This is the shape of every pylon-backed database, every legacy dump and the
+// This is the shape of every legacy dump and the
 // end-to-end stack. It is what proves the two tests above are measuring the
 // corpus grants and not something ambient, and it is the refused direction for
 // all six at once.

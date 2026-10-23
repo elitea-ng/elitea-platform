@@ -117,7 +117,7 @@ export function ChatMessageList({
   isStreaming = false,
   userId,
   projectId,
-  messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage } = {},
+  messageActions: { onCopyToClipboard, onDeleteAnswer, onRegenerateAnswer, onSubmitEditedMessage, onForkFromMessage } = {},
   canvas: { onEdit: onEditCanvas, selected: selectedCodeBlockInfo, onCreateFromSelection: onCreateCanvasFromSelection, onOpenFile: onOpenFileInCanvas } = {},
   tts: { autoSpeak = false, onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
@@ -127,6 +127,7 @@ export function ChatMessageList({
     onHitlResume,
     hideContinueButton = false,
     hideHitlActions = false,
+    staticPause,
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
@@ -269,6 +270,9 @@ export function ChatMessageList({
               ? () => { onDeleteAnswer(messageId); }
               : undefined;
           const handleCopy = onCopyToClipboard ? () => { onCopyToClipboard(message); } : undefined;
+          // A fork point must be settled on the server: not streaming, not loading, not waiting for an approval, and stored (not the welcome row).
+          const isSettled = !messageIsStreaming && !message.isLoading && !message.isRegenerating && message.hitlInterrupt === undefined && (message.hitlInterrupts?.length ?? 0) === 0 && message.staticPause === undefined;
+          const handleFork = onForkFromMessage && isSettled && message.id !== WELCOME_MESSAGE_ID ? () => { onForkFromMessage(messageId); } : undefined;
 
           return (
             <Box
@@ -286,6 +290,7 @@ export function ChatMessageList({
                   onOpenFileInCanvas={onOpenFileInCanvas}
                   onCopy={handleCopy}
                   onDelete={handleDelete}
+                  onFork={handleFork}
                   onSubmit={isEligibleForEdit ? onSubmitEditedMessage : undefined}
                 />
               ) : (
@@ -305,6 +310,7 @@ export function ChatMessageList({
                   actions={{
                     onCopy: handleCopy,
                     onDelete: handleDelete,
+                    onFork: handleFork,
                     onRegenerate:
                       isLastMessage && !message.isLoading && !messageIsStreaming && onRegenerateAnswer
                         ? () => { onRegenerateAnswer(messageId); }
@@ -322,6 +328,7 @@ export function ChatMessageList({
                     hitlInterrupt: hideHitlActions ? undefined : message.hitlInterrupt,
                     hitlInterrupts: hideHitlActions ? undefined : message.hitlInterrupts,
                     onHitlResume: !hideHitlActions && isLastMessage ? onHitlResume : undefined,
+                    staticPause: staticPause?.pause.messageId === messageId ? staticPause : undefined,
                   }}
                   tts={{
                     onAutoSpeak,

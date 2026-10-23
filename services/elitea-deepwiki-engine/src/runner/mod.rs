@@ -91,7 +91,7 @@ pub enum Runner {
 }
 
 impl Runner {
-    /// The name `GET /engine/health` reports.
+    /// The name the sidecar's `Health` reports.
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {

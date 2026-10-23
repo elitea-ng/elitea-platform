@@ -9,7 +9,7 @@ package elitea.vector.v1;
 
 import "elitea/vector/v1/vector.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1";
 
 service TokenIntrospectionService {
   // IntrospectToken answers whether a token is usable for vector access, and
@@ -68,7 +68,7 @@ message IntrospectTokenResponse {
   bool active = 1;
   // project_id is the project the token is bound to.
   int64 project_id = 2;
-  // principal is the token owner, as "user:<id>".
+  // principal is the token owner, as `user:<id>`.
   string principal = 3;
   TokenKind kind = 4;
   // expires_at_unix is the token expiry, in seconds since the Unix epoch.

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -47,7 +47,7 @@ func contextDeliveryFixture(t *testing.T, source *contextPolicyStub) (*CurrentAp
 	}
 	admissions := &currentApplicationAdmissionStub{}
 	freezer, _ := summaryFreezer(t)
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

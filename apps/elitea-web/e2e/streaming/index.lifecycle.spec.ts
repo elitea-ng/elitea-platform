@@ -199,8 +199,7 @@ async function createIndexThroughUi(page: Page, panel: Locator, projectId: strin
  * `IndexActionsParts.tsx:43` disables the button on it, with the tooltip
  * `'"Remove index" tool is not selected'` (`IndexActionsParts.tsx:37`). The
  * fixture toolkit `seed-index` writes carries NO `selected_tools` at all —
- * its settings are `bucket` + `embedding_model` + `pgvector_configuration`
- * and nothing else (`deploy/scripts/standalone-stack.sh:1104-1114`) — so on
+ * its settings are `bucket` + `embedding_model` and nothing else (`deploy/scripts/standalone-stack.sh:1104-1114`) — so on
  * a freshly-seeded stack that button is permanently disabled, which is what
  * this journey's first real run measured (job 101650528151: the locator
  * resolved to `<button disabled …>Delete</button>` and never became
@@ -392,7 +391,8 @@ test('the asynchronous index start refuses every tool but index_data, and admits
    *
    * What this route still promises is narrower, and worth a live assertion
    * because two independent clients depend on it — `indexesApi.ts:219-220`
-   * (which is why it only ever sends `index_data`) and pylon's own callers:
+   * (which is why it only ever sends `index_data`) and the legacy runtime's
+   * callers:
    *
    *  a) With `await_response=false` the handler validates `tool_name` before
    *     anything else and refuses everything but `index_data`
@@ -432,7 +432,7 @@ test('the asynchronous index start refuses every tool but index_data, and admits
     `an asynchronous non-index_data run must be REFUSED, not accepted or crashed. Body: ${(await searchAttempt.text()).slice(0, 400)}`,
   ).toBe(400);
   const refusal = (await searchAttempt.json()) as ValidationRefusal;
-  expect(refusal.error?.[0], 'the refusal must name the field and the only accepted value, in the pydantic shape pylon clients parse').toEqual({
+  expect(refusal.error?.[0], 'the refusal must name the field and the only accepted value, in the pydantic shape legacy clients parse').toEqual({
     type: 'value_error',
     loc: ['tool_name'],
     msg: "Input should be 'index_data'",

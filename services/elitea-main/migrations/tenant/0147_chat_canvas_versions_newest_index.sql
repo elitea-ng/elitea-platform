@@ -1,9 +1,9 @@
 -- 0147_chat_canvas_versions_newest_index.sql — index the "newest version of
 -- this canvas" lookup.
 --
--- chat_canvas_versions (0129) carries only its primary key and pylon's
--- `created_at` index. Every read of a canvas asks for ONE canvas's newest
--- version — `WHERE canvas_item_id = $1 ORDER BY created_at DESC, id DESC
+-- chat_canvas_versions (0129) carries only its primary key and the legacy
+-- runtime's `created_at` index. Every read of a canvas asks for ONE canvas's
+-- newest version — `WHERE canvas_item_id = $1 ORDER BY created_at DESC, id DESC
 -- LIMIT 1` (ConversationsRepo.readCanvas) — and since a canvas became part of
 -- the chat history the model is shown, both turn resolvers in agent_chat.sql
 -- ask it several times per canvas on EVERY turn: once to project the canvas,

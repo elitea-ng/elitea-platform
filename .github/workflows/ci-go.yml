@@ -24,11 +24,16 @@ on:
       - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
       # The secured NATS permission tests (#1076) run elitea-main's and the
-      # scheduler's real NATS paths against the nats.conf the NATS chart
-      # renders, after the real bootstrap.sh. A change to the permission
+      # scheduler's real NATS paths against the nats.conf the elitea chart's
+      # bundled NATS renders, after the real bootstrap.sh. A change to the permission
       # table, the bootstrap or the render script must run them.
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       # internal/transport/commandbus pins its constants to the command bus
       # contract document.
@@ -39,56 +44,108 @@ on:
       # same false green in another costume (#409).
       - "scripts/go/**"
       - "scripts/contract/check_compiled_snapshots_postgres.sh"
+      - "scripts/contract/generate_proto.sh"
       - "scripts/coverage/**"
       - "Taskfile.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "services/elitea-main/**"
-      - "services/elitea-scheduler/**"
-      - "services/elitea-subapp-host/**"
-      - "services/elitea-egress-proxy/**"
-      - "libs/go/**"
-      - "libs/proto/**"
-      # The native client conformance module (ADR-0025 WP7) is in go.work, so
-      # its helpers' unit tests, vet and lint run here; the suite itself is
-      # behind the `conformance` tag and runs in ci-web-e2e.yml.
-      - "conformance/nativeclient/**"
-      - "go.work"
-      - "go.work.sum"
-      - ".github/workflows/ci-go.yml"
-      - "deploy/helm/elitea-main/**"
-      - "deploy/helm/elitea/**"
-      - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
-      # The secured NATS permission tests (#1076) run elitea-main's and the
-      # scheduler's real NATS paths against the nats.conf the NATS chart
-      # renders, after the real bootstrap.sh. A change to the permission
-      # table, the bootstrap or the render script must run them.
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
-      - "scripts/nats/**"
-      # internal/transport/commandbus pins its constants to the command bus
-      # contract document.
-      - "docs/runtime-command-bus.md"
-      # The vet and test steps below run scripts/go/workspace-run.sh. A change
-      # to that script, or to the Taskfile that calls it, must run this
-      # workflow. A gate that does not trigger on the file it guards is the
-      # same false green in another costume (#409).
-      - "scripts/go/**"
-      - "scripts/contract/check_compiled_snapshots_postgres.sh"
-      - "scripts/coverage/**"
-      - "Taskfile.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "7 0 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
   contents: read
 
 jobs:
+  proto:
+    name: Protobuf contracts (lint, breaking, generated drift)
+    runs-on: ubuntu-latest
+    # #1359 D3: libs/proto is the one protobuf tree (the legacy proto/ +
+    # gen/ were deleted), and every internal hop is gRPC, so a contract edit
+    # is a wire change. Three gates, run only when the contracts, their
+    # generator or this workflow changed:
+    #   - buf lint (libs/proto/buf.yaml);
+    #   - buf breaking against the base commit (FILE rules) — a rolling
+    #     deploy runs old and new peers side by side;
+    #   - the checked-in Go and Python stubs equal a fresh
+    #     scripts/contract/generate_proto.sh run with the pinned toolchain
+    #     (libs/proto/toolchain.lock; the script refuses any other version).
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Did the contracts change?
+        id: changes
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # No usable base (a new branch, a force push) runs every gate.
+          if [ -z "$BASE" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "No usable base commit; running the contract gates."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            BASE="$(git rev-parse HEAD~1)"
+          elif git diff --quiet "$BASE" HEAD -- libs/proto scripts/contract/generate_proto.sh .github/workflows/ci-go.yml; then
+            echo "Contracts unchanged since ${BASE}; the gates have nothing to check."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          cache: false
+          go-version-file: go.work
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          python-version: "3.12"
+      - name: Install the pinned protobuf toolchain
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          lock=libs/proto/toolchain.lock
+          tools="$RUNNER_TEMP/proto-tools"
+          GOBIN="$tools" GOWORK=off go install "github.com/bufbuild/buf/cmd/buf@v$(jq -r '.buf' "$lock")"
+          GOBIN="$tools" GOWORK=off go install "google.golang.org/protobuf/cmd/protoc-gen-go@v$(jq -r '."protoc-gen-go"' "$lock")"
+          GOBIN="$tools" GOWORK=off go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v$(jq -r '."protoc-gen-go-grpc"' "$lock")"
+          python -m pip install --quiet --target "$RUNNER_TEMP/proto-tools-py" \
+            "grpcio-tools==$(jq -r '."grpcio-tools"' "$lock")" \
+            "protobuf==$(jq -r '."protobuf-python"' "$lock")"
+          {
+            echo "ELITEA_PROTO_GO_TOOLS=$tools"
+            echo "ELITEA_PROTO_PYTHON_TOOLS=$RUNNER_TEMP/proto-tools-py"
+            echo "ELITEA_PROTO_PYTHON=$(command -v python)"
+            echo "BUF_CACHE_DIR=$RUNNER_TEMP/buf-cache"
+          } >> "$GITHUB_ENV"
+      - name: buf lint and format
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          "$ELITEA_PROTO_GO_TOOLS/buf" lint libs/proto
+          "$ELITEA_PROTO_GO_TOOLS/buf" format --diff --exit-code libs/proto
+      - name: buf breaking against the base commit
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.changes.outputs.base }}
+        run: '"$ELITEA_PROTO_GO_TOOLS/buf" breaking libs/proto --against ".git#ref=${BASE},subdir=libs/proto"'
+      - name: Generated stubs match the contracts
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          scripts/contract/generate_proto.sh
+          git diff --exit-code -- libs/proto
+          untracked="$(git status --porcelain --untracked-files=all -- libs/proto)"
+          if [ -n "$untracked" ]; then
+            echo "generate_proto.sh produced files that are not checked in:" >&2
+            echo "$untracked" >&2
+            exit 1
+          fi
+
   sqlc:
     name: Reproduce SQLC queries
     runs-on: ubuntu-latest
@@ -133,10 +190,9 @@ jobs:
     runs-on: ubuntu-latest
     # Issue #427. This job used to carry a hand-written matrix of two modules,
     # `services/elitea-main` and `services/elitea-scheduler`, while go.work
-    # names nine. gen/go, libs/go/authlib, libs/go/eventslib,
-    # libs/go/observability, libs/go/rpclib, libs/proto/gen/go and tools/uictl
-    # were never linted, and this workflow triggers on `libs/go/**` — so it ran
-    # on their changes and looked at none of them.
+    # named many more (twelve today). The libs/go modules, libs/proto/gen/go
+    # and the other services were never linted, and this workflow triggers on
+    # `libs/go/**` — so it ran on their changes and looked at none of them.
     #
     # A hand-written matrix cannot report what it left out. The module list is
     # read from go.work at run time instead, by the same script the vet and
@@ -154,17 +210,15 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          # This job lints nine modules now, so the cache key reads every module
-          # that has a go.sum. tools/uictl has none — it declares no external
-          # dependency. The block below is a literal string, so a comment
-          # inside it would become a path.
+          # This job lints every go.work module, so the cache key reads every
+          # module that has a go.sum. The block below is a literal string, so a
+          # comment inside it would become a path.
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum
             services/elitea-subapp-host/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            gen/go/go.sum
             conformance/nativeclient/go.sum
 
       # golangci-lint-action installs AND runs in one step, and it runs in one
@@ -199,16 +253,7 @@ jobs:
     # server instance, so a single service container is enough.
     services:
       postgres:
-        # pgvector, not plain postgres: the projectprovisioning tests run
-        # CREATE EXTENSION vector, and four other tests skip themselves on a
-        # server without it. Same PG major and same credentials, so the DSN
-        # below is unchanged. The four projectprovisioning tests DO carry a
-        # skip guard now — without one they reported the missing extension as
-        # a code defect on every developer's stock postgres — but this job
-        # sets ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST below, which turns that
-        # guard into a t.Fatal. Losing the image here fails the job; it can
-        # never turn it green with zero execution.
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -327,7 +372,7 @@ jobs:
           exit 1
 
       # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
-      # starts nats-server on the nats.conf `helm template deploy/helm/nats`
+      # starts nats-server on the nats.conf `helm template deploy/helm/elitea`
       # renders and runs elitea-main's and the scheduler's real NATS paths as
       # their certificate identities, after the real bootstrap.sh. The script
       # renders that config (helm + the upstream subchart), fetches the pinned
@@ -337,7 +382,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: Provision the secured NATS permission tests
         env:
@@ -387,13 +432,6 @@ jobs:
           ELITEA_REQUIRE_LEGACY_RBAC_POSTGRES_TEST: "true"
           ELITEA_REQUIRE_PROMPT_CONTEXT_POSTGRES_TEST: "true"
 
-          # Same shape, for the four projectprovisioning tests that run
-          # CREATE EXTENSION vector. They t.Skip on a server without pgvector
-          # so a local stock postgres does not read as a code defect; this
-          # service HAS pgvector, so a skip here would mean the image changed
-          # under us. That must read as a failure, not as silence (#423).
-          ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST: "true"
-
           # The NATS (JetStream) container started above.
           ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
@@ -421,7 +459,7 @@ jobs:
 
           # A skip that nothing declares FAILS this job. Locally the ledger
           # only reports, so a developer with no PostgreSQL or NATS can still
-          # run `task test`. Same shape as CONTRACT_REQUIRE_PARITY.
+          # run `task test`.
           ELITEA_REQUIRE_DECLARED_SKIPS: "1"
         # One aggregation for CI and for `task test`. The inline loop that used
         # to live here reported the status of its LAST module, and it ended
@@ -492,7 +530,6 @@ jobs:
             services/elitea-main/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-            gen/go/go.sum
       - name: Check the editor fixture CI gate
         run: python3 -m unittest discover -s scripts/go/tests -p 'test_editor_lifecycle_ci.py' -v
       - name: Run required editor PostgreSQL acceptance
@@ -510,11 +547,11 @@ jobs:
           if-no-files-found: error
 
   integration:
-    name: Integration (Postgres + pgvector)
+    name: Integration (Postgres)
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg18-trixie
+        image: postgres:18
         env:
           POSTGRES_USER: elitea
           POSTGRES_PASSWORD: elitea
@@ -546,13 +583,14 @@ jobs:
           go test -count=1 -timeout=120s ./tests/integration/
 
   # The `container-scan` job that PR #432 added here (issue #224) now lives in
-  # .github/workflows/ci-image-scan.yml, together with the five other published
+  # .github/workflows/ci-image-scan.yml (since 2026-10-20 the nightly scan of
+  # the published `latest`, nightly-image-scan.yml), together with the five other published
   # images that had no scan at all (#433). Nothing about the elitea-main scan
   # changed — same `target: final` build, same HIGH,CRITICAL threshold, same
   # "a report with no Go binary is a failure" guard.
   #
-  # It moved because path filters are per workflow. elitea-web and elitea-ui are
-  # published images too, and adding apps/elitea-web/** to this workflow's
+  # It moved because path filters are per workflow. elitea-web is a published
+  # image too, and adding apps/elitea-web/** to this workflow's
   # triggers would run the Postgres service, the storage emulators and the whole
   # Go test suite on every front-end change.
 
@@ -562,7 +600,9 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16-trixie
+        # Plain PostgreSQL 18 (Debian 13): the compiled-snapshot tests need no
+        # extension.
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

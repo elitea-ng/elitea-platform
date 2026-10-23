@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // BrowserWriteOrigin refuses a state-changing request that a browser cookie
@@ -66,23 +66,12 @@ func browserWriteAllowed(r *http.Request) bool {
 }
 
 // cookieAuthenticated reports whether a browser cookie authenticated r: the
-// elitea_session cookie, or the edge session cookie that ForwardAuth projected
-// as a forwarded USER identity. A forwarded TOKEN identity is a bearer
-// credential the edge verified, not a cookie.
+// `elitea_session` cookie or the Form session cookie. apimw.Auth reports both
+// as AuthenticationSourceSession, so a Form session gets the same cross-site
+// write check (#1359).
 func cookieAuthenticated(r *http.Request) bool {
 	source, ok := auth.AuthenticationSourceFromContext(r.Context())
-	if !ok {
-		return false
-	}
-	switch source {
-	case auth.AuthenticationSourceSession:
-		return true
-	case auth.AuthenticationSourceForwarded:
-		user, ok := auth.UserFromContext(r.Context())
-		return ok && user.TokenID == ""
-	default:
-		return false
-	}
+	return ok && source == auth.AuthenticationSourceSession
 }
 
 func originMatchesHost(r *http.Request) bool {

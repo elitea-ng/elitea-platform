@@ -2,9 +2,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  # elitea-llm-gateway-svc — the internal ClusterIP the edge reverse-proxies to
-  # over mTLS. Named explicitly (not the release-derived fullname) because the
-  # design, runbook and edge config all reference `elitea-llm-gateway-svc`.
+  # elitea-llm-gateway-svc — the plaintext HTTP listener: /healthz, /readyz and
+  # /metrics only (#1359). /llm is NOT here; it is the gRPC Service below.
+  # Named explicitly (not the release-derived fullname) because the runbook and
+  # the monitoring config reference `elitea-llm-gateway-svc`.
   name: {{ .Values.llmGateway.service.name }}
   labels:
     {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
@@ -13,15 +14,34 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  # ClusterIP only — mTLS-internal, NEVER public (design §9.1). Do not switch to
-  # LoadBalancer/NodePort; the gateway must be reachable solely from elitea-main
-  # on the mTLS-internal network.
+  # ClusterIP only, NEVER public (design §9.1).
   type: ClusterIP
   ports:
-    - name: https
+    - name: http
       port: {{ .Values.llmGateway.service.port }}
       targetPort: http
       protocol: TCP
+  selector:
+    {{- include "elitea-llm-gateway.selectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # The GatewayService gRPC listener (#1359): every /llm call from elitea-main,
+  # over mutual TLS. HEADLESS on purpose: elitea-main resolves one address per
+  # ready replica and balances calls round_robin across them. A ClusterIP would
+  # pin each long-lived HTTP/2 connection, and so all its calls, to one replica.
+  name: {{ .Values.llmGateway.service.grpcName }}
+  labels:
+    {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: grpc
+      port: {{ .Values.llmGateway.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
   selector:
     {{- include "elitea-llm-gateway.selectorLabels" . | nindent 4 }}
 {{- end }}

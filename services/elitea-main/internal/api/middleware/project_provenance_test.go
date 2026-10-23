@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // These tests restore the fail-closed identity rule of the /llm edge (issue
@@ -89,15 +89,14 @@ func TestProject_FailsClosedWithoutTrustedProvenance(t *testing.T) {
 	}
 }
 
-// TestProject_AcceptsEveryTrustedProvenance is direction 2: each of the four
+// TestProject_AcceptsEveryTrustedProvenance is direction 2: each of the three
 // accepted provenance values still resolves the caller's project. The rule
 // refuses an unrecorded identity, and it costs an authenticated caller nothing.
 func TestProject_AcceptsEveryTrustedProvenance(t *testing.T) {
 	cases := map[string]auth.AuthenticationSource{
-		"forwarded": auth.AuthenticationSourceForwarded,
-		"api key":   auth.AuthenticationSourceAPIKey,
-		"token":     auth.AuthenticationSourceToken,
-		"session":   auth.AuthenticationSourceSession,
+		"api key": auth.AuthenticationSourceAPIKey,
+		"token":   auth.AuthenticationSourceToken,
+		"session": auth.AuthenticationSourceSession,
 	}
 
 	for name, source := range cases {

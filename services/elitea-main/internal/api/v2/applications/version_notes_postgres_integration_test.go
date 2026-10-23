@@ -5,7 +5,7 @@ package applications_test
 // The field was written, unit-tested and mounted by nobody, because
 // `version_details.notes` "has no column on `application_versions`, no
 // property on `VersionWriteRequest`, and no branch in `UpdateVersion`". It
-// never wanted a column: pylon stores it inside the `meta` jsonb
+// never wanted a column: the legacy runtime stores it inside the `meta` jsonb
 // (elitea_issues #5410 chose that over a per-tenant schema migration), folds
 // the top-level write field in, and lifts it back out on read. This service
 // does the same, so both spellings — top-level `notes` and `meta.notes` —
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func notesOf(t *testing.T, body map[string]any) string {
@@ -34,7 +34,7 @@ func metaNotesOf(t *testing.T, body map[string]any) string {
 	return notes
 }
 
-// The write path a pylon-shaped client uses: `notes` at the top level.
+// The write path a legacy-shaped client uses: `notes` at the top level.
 func TestHandlerPostgres_VersionNotesRoundTripThroughTheTopLevelField(t *testing.T) {
 	pool := newHandlerTestPool(t)
 	seedHandlerUser(t, pool, 1, "one@elitea.ai")
@@ -133,7 +133,7 @@ func TestHandlerPostgres_VersionNotesSurviveASaveThatDoesNotNameThem(t *testing.
 	}
 }
 
-// The ceiling pylon's model declares (max_length=1000), enforced here so an
+// The ceiling the legacy model declares (max_length=1000), enforced here so an
 // API caller cannot store what the editor can never show back.
 func TestHandlerPostgres_VersionNotesRefuseMoreThanAThousandCharacters(t *testing.T) {
 	pool := newHandlerTestPool(t)

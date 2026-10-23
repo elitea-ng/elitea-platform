@@ -1,7 +1,7 @@
 package auth
 
 // auth_core__user.last_login is `timestamp` WITHOUT time zone holding the
-// UTC wall clock, like every pylon-era naive column. now() stored into it
+// UTC wall clock, like every legacy-era naive column. now() stored into it
 // goes through the SESSION time zone, so a first-login INSERT that wrote a
 // bare now() stored local time on a non-UTC session. The pool here runs in
 // the testpg zone (America/Toronto by default), so that bug is visible.
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 )
 
 func TestPostgresLoginStoresLastLoginAsTheUTCWallClock(t *testing.T) {

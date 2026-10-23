@@ -2,9 +2,8 @@ package social_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,11 +11,12 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -33,9 +33,8 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 		repository,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: currentFeedbackIntegrationPeerVerifier{
-				trustedRemote: "10.0.0.8:43120",
-			},
+			FormSessions:       authtest.FormSessions{},
+			Validator:          authtest.Tokens{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -124,6 +123,7 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 		authID     string
 		userID     string
 		remote     string
+		forged     bool
 		wantStatus int
 	}{
 		{
@@ -133,12 +133,13 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "untrusted forwarded identity",
+			// #1359: no header projects an identity any more. A forged
+			// X-Auth-*/X-Elitea-* identity naming a project member, with no
+			// credential, is an unauthenticated request.
+			name:       "forged X-Auth identity without a session",
 			target:     "/api/v2/social/feedbacks/default/7",
-			authType:   "user",
-			authID:     "41",
-			userID:     "41",
 			remote:     "192.0.2.9:443",
+			forged:     true,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -202,6 +203,9 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 				"",
 			)
 			request.Body = body
+			if test.forged {
+				authtest.ForgeXAuth(request, "41")
+			}
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
 			if response.Code != test.wantStatus {
@@ -266,19 +270,6 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 	})
 }
 
-type currentFeedbackIntegrationPeerVerifier struct {
-	trustedRemote string
-}
-
-func (verifier currentFeedbackIntegrationPeerVerifier) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	if request.RemoteAddr != verifier.trustedRemote {
-		return errors.New("untrusted peer")
-	}
-	return nil
-}
-
 func currentFeedbackIntegrationRequest(
 	target string,
 	authType string,
@@ -293,10 +284,10 @@ func currentFeedbackIntegrationRequest(
 	request.RemoteAddr = remote
 	request.Header.Set("Content-Type", "application/json")
 	if authID != "" {
-		request.Header.Set("X-Auth-Type", authType)
-		request.Header.Set("X-Auth-ID", authID)
 		if authType == "token" {
-			request.Header.Set("X-Auth-User-ID", userID)
+			authtest.BearerToken(request, authID, userID)
+		} else {
+			authtest.SignIn(request, authID)
 		}
 	}
 	if referrer != "" {

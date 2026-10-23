@@ -52,6 +52,40 @@ host's value never reaches the engine container.
 {{- end }}
 
 {{/*
+elitea-inventory.modelCalls — "true" when this release runs the engine sidecar
+(inventory.enabled, host runner sidecar) with the native engine
+(inventory.engine.runner native; the fixture runner calls no model), the
+container that makes
+Inventory's model calls. Those go over elitea.llm.v1.ModelService on
+elitea-main's platform listener (#1359 U2) — the listener serves no HTTP, and
+the engine refuses a cleartext model origin — so the sidecar always gets the
+runtime CA, the callback client certificate (inventory.callbackClient) and
+ELITEA_INVENTORY_MODEL_SERVICE_URL.
+*/}}
+{{- define "elitea-inventory.modelCalls" -}}
+{{- if .Values.inventory.enabled -}}
+{{- if and (include "elitea-inventory.sidecar" .) (eq (.Values.inventory.engine.runner | toString) "native") -}}true{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-inventory.callbackMaterial — "true" whenever Inventory runs: the HOST
+container uploads and reads graph artifacts over ArtifactObjectService on
+elitea-main's platform listener (#1359 U5), so the pod always mounts the
+runtime CA and the callback client certificate, sidecar or not.
+*/}}
+{{- define "elitea-inventory.callbackMaterial" -}}
+{{- if .Values.inventory.enabled -}}true{{- end -}}
+{{- end }}
+
+{{/* Where the host and the engine find the runtime CA for the platform hop. */}}
+{{- define "elitea-inventory.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
+
+{{/* Where the engine's callback client certificate (tls.crt / tls.key of
+     inventory.callbackClient.secretName) is mounted. */}}
+{{- define "elitea-inventory.callbackClientPath" -}}/run/elitea-callback-client{{- end -}}
+
+{{/*
 elitea-inventory.platformGrpc — "true" when the platform gRPC service is on:
 inventory.platformGrpc.clients names at least one certificate identity. Empty
 otherwise, and the service is then not configured, exposed or admitted at all.
@@ -69,7 +103,7 @@ configmap.yaml derives ELITEA_INVENTORY_PLATFORM_GRPC_TARGET from it.
 */}}
 {{- define "elitea-inventory.platformGrpcTarget" -}}
 {{- if and .Values.inventory.enabled (include "elitea-inventory.platformGrpc" .) -}}
-{{- printf "%s:%d" .Values.inventory.service.name (.Values.inventory.platformGrpc.port | int) -}}
+{{- printf "%s:%d" (.Values.inventory.service.grpcName | default .Values.inventory.service.name) (.Values.inventory.platformGrpc.port | int) -}}
 {{- end -}}
 {{- end }}
 
@@ -85,6 +119,24 @@ another.
 {{- $picked := pick $all "ELITEA_INVENTORY_DATABASE_URL" -}}
 {{- if not (get $picked "ELITEA_INVENTORY_DATABASE_URL") -}}{{- $picked = dict -}}{{- end -}}
 {{- $picked | toJson -}}
+{{- end }}
+
+{{/*
+elitea-inventory.hostStoreSecrets — the database URL secret for the HOST's
+invocation store, as JSON: elitea-inventory.databaseSecrets, but only under
+the condition that renders the migrate Job (a sidecar and migrate.enabled).
+Engine migration 0009 creates the host's tables (invocations,
+invocation_events, host_replicas). Without the Job nothing creates them, and a
+host that got the URL would fail at its first query and restart for ever. So
+without the Job the host gets no URL: it keeps its invocations in memory, and
+validateGuards keeps it at one replica.
+*/}}
+{{- define "elitea-inventory.hostStoreSecrets" -}}
+{{- if and (include "elitea-inventory.sidecar" .) .Values.inventory.migrate.enabled -}}
+{{- include "elitea-inventory.databaseSecrets" . -}}
+{{- else -}}
+{}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -128,6 +180,46 @@ elitea-main
 {{- end -}}
 
 {{- define "elitea-inventory.validateGuards" -}}
+{{- /*
+  More than one replica (scaling). GetInvocation is answered "from the shared
+  invocation store" (libs/proto/elitea/subapp/v1/provider.proto). The
+  Inventory host keeps its invocations in the engine's database
+  (inventory_graph.invocations, engine migration 0009), so a poll, a cancel or
+  a deletion is served by any replica. Without that database each replica
+  keeps its invocations in memory, and a poll that reaches another replica
+  answers NOT_FOUND for a running ingestion. So more than one replica needs
+  the database secret, and the migrate Job that creates the host's tables
+  (elitea-inventory.hostStoreSecrets).
+*/ -}}
+{{- if and (gt (int (include "elitea.scaling.maxReplicas" .Values.inventory)) 1) (not (fromJson (include "elitea-inventory.hostStoreSecrets" .))) -}}
+{{- fail (printf "inventory can run %d replicas (%s), but its host has no invocation store. The store needs a database secret (inventory.secrets.ELITEA_INVENTORY_DATABASE_URL or postgresql.existingSecret) and the migrate Job that creates its tables (the host runner \"sidecar\" and inventory.migrate.enabled=true). Without it each replica keeps its invocations in memory, and a poll that reaches another replica answers not-found for a running ingestion. Configure both, or keep one replica (inventory.autoscaling.enabled=false)." (int (include "elitea.scaling.maxReplicas" .Values.inventory)) (ternary "autoscaling.maxReplicas" "replicaCount" (eq (include "elitea.scaling.autoscaled" .Values.inventory) "true"))) -}}
+{{- end -}}
+{{- /*
+  The provider's one listener is gRPC over mutual TLS (#1359): the SPI and the
+  platform operations, every caller authorised by its verified client
+  certificate. So mtls is mandatory, the allowlist cannot be empty, and the
+  HTTPS SPI port is gone.
+*/ -}}
+{{- if hasKey (.Values.inventory.service | default dict) "port" -}}
+{{- fail "inventory.service.port was removed with the HTTPS SPI (#1359): the provider serves gRPC only, on inventory.platformGrpc.port. Remove service.port (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if not .Values.inventory.mtls.enabled -}}
+{{- fail "inventory.mtls.enabled is false, but the provider serves gRPC over mutual TLS only (#1359) and refuses to start without its server certificate and client CA. Enable mtls." -}}
+{{- end -}}
+{{- /*
+  The native engine keeps every graph's entity vectors in elitea-vector (ADR-0031; PostgreSQL holds
+  none) and REFUSES to start without ELITEA_INVENTORY_VECTOR_URL. The chart sets it
+  from this release's elitea-vector, so a native runner needs vector.enabled,
+  or inventory.env.ELITEA_INVENTORY_VECTOR_URL naming one deployed elsewhere (whose
+  certificate the runtime CA signs and whose client CA trusts the callback
+  identity). Without this guard the refusal is a sidecar in CrashLoopBackOff.
+*/ -}}
+{{- if and (include "elitea-inventory.modelCalls" .) (not .Values.vector.enabled) (not (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_VECTOR_URL")) -}}
+{{- fail "inventory.engine.runner is \"native\" but vector.enabled is false and inventory.env.ELITEA_INVENTORY_VECTOR_URL is unset. The native engine keeps every graph's entity vectors in elitea-vector (ADR-0031) and refuses to start without it; PostgreSQL holds no vector. Enable vector (this chart's elitea-vector and Qdrant), name an external elitea-vector in inventory.env.ELITEA_INVENTORY_VECTOR_URL, or use runner fixture." -}}
+{{- end -}}
+{{- if not (include "elitea-inventory.platformGrpc" .) -}}
+{{- fail "inventory.platformGrpc.clients is empty, so the provider's one listener admits nobody and elitea-main's facade is refused on every call (#1359). The default is [elitea-main]." -}}
+{{- end -}}
 {{- $env := .Values.inventory.env | default dict -}}
 {{- $runner := get $env "ELITEA_INVENTORY_RUNNER" | toString -}}
 {{- $hostSidecar := has $runner (list "sidecar" "legacy") -}}
@@ -140,9 +232,6 @@ elitea-main
 {{- if include "elitea-inventory.platformGrpc" . -}}
 {{- if not .Values.inventory.mtls.enabled -}}
 {{- fail "inventory.platformGrpc.clients is set, but inventory.mtls.enabled is false: the platform service authorises a caller by its verified client certificate and refuses to start without mutual TLS. Enable mtls, or empty platformGrpc.clients." -}}
-{{- end -}}
-{{- if eq (.Values.inventory.platformGrpc.port | int) 8080 -}}
-{{- fail "inventory.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
 {{- end -}}
 {{- /*
   The allowlist must name the identity elitea-main presents on this hop. When
@@ -168,6 +257,45 @@ elitea-main
 {{- end -}}
 {{- if or (hasKey $env "ELITEA_INVENTORY_PLATFORM_CLIENTS") (hasKey $env "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") -}}
 {{- fail "inventory.env sets ELITEA_INVENTORY_PLATFORM_CLIENTS or ELITEA_INVENTORY_PLATFORM_GRPC_ADDR; the chart renders both from inventory.platformGrpc (clients, port). Remove them from env." -}}
+{{- end -}}
+{{- if hasKey $env "ELITEA_INVENTORY_ADMIN_ADDR" -}}
+{{- fail "inventory.env sets ELITEA_INVENTORY_ADMIN_ADDR; the chart renders it from inventory.admin.port, which the probes and the NetworkPolicy also use. Remove it from env." -}}
+{{- end -}}
+{{- if eq ((.Values.inventory.admin | default dict).port | int) (.Values.inventory.platformGrpc.port | int) -}}
+{{- fail "inventory.admin.port equals inventory.platformGrpc.port; the plain-HTTP admin port and the mutual-TLS gRPC listener cannot share a port." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  Guard #0b: the engine's model path (#1359 U2). The engine sidecar makes its
+  model calls over ModelService on elitea-main's platform listener; Guard #0c
+  below requires that listener (main.runtime) and the runtime-CA client
+  certificate for every Inventory install, sidecar or not, because the host
+  needs them too. inventory.engine.callbackCa (a private CA for an
+  https callback origin) is retired: the model origin is now always the
+  platform listener, whose CA is the runtime CA the chart mounts itself. The
+  chart owns the model-hop settings, so inventory.env may not repeat them.
+*/}}
+{{- if hasKey (.Values.inventory.engine | default dict) "callbackCa" -}}
+{{- fail "inventory.engine.callbackCa was removed (#1359 U2): the engine's model calls go over ModelService on elitea-main's platform listener, and the chart mounts the runtime CA (worker.materialSecretName, key runtime-ca.crt) and inventory.callbackClient for that hop itself. Remove inventory.engine.callbackCa and set inventory.callbackClient.secretName (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- range $name := list "ELITEA_INVENTORY_MODEL_SERVICE_URL" "ELITEA_INVENTORY_ARTIFACT_SERVICE_URL" "ELITEA_INVENTORY_CALLBACK_CA_FILE" "ELITEA_INVENTORY_CALLBACK_CERT_FILE" "ELITEA_INVENTORY_CALLBACK_KEY_FILE" -}}
+{{- if hasKey $env $name -}}
+{{- fail (printf "inventory.env sets %s, which the chart renders itself: the host's artifact calls and the engine's model and artifact calls go to elitea-main's platform listener (worker.runtime.platformOrigin) with the runtime CA and inventory.callbackClient. Remove it from inventory.env." $name) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+  Guard #0c: the host's artifact hop (#1359 U5). The host uploads and reads
+  graph artifacts over ArtifactObjectService on the platform listener whatever
+  runner it uses, so every Inventory install needs the runtime and the
+  callback client certificate.
+*/}}
+{{- if .Values.inventory.enabled -}}
+{{- if not .Values.main.runtime.enabled -}}
+{{- fail "inventory.enabled needs main.runtime.enabled: the provider host reads and writes graph artifacts over elitea.runtime.v1.ArtifactObjectService on elitea-main's platform gRPC listener (#1359 U5), which only the runtime opens, so every import and export would fail. Turn the runtime on (main.runtime.enabled)." -}}
+{{- end -}}
+{{- if not (.Values.inventory.callbackClient | default dict).secretName -}}
+{{- fail "inventory.enabled needs inventory.callbackClient.secretName: the provider host reaches elitea-main's platform listener for its artifacts (ArtifactObjectService, #1359 U5), and the listener requires a client certificate the runtime CA signed, admitted as dns:elitea-subapp-callback. Create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key; DeepWiki's callbackClient Secret can be reused) and name it there." -}}
 {{- end -}}
 {{- end -}}
 

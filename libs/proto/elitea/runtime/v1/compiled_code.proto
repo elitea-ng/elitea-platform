@@ -5,7 +5,7 @@ import "elitea/runtime/v1/common.proto";
 import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/sandbox.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // Main/worker integration must bind one of these distinct purposes into verified
 // authority before the supervisor derives immutable PID 1 launch configuration.

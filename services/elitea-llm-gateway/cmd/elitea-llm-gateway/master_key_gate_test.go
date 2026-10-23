@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 )
 
 // testMasterKey is a well-formed Fernet key that protects nothing. Tests that
@@ -105,7 +105,7 @@ func TestGatewayRefusesToStartWithoutAMasterKey(t *testing.T) {
 
 	command := func(ctx context.Context, masterKey, optOut string) (*exec.Cmd, *bytes.Buffer) {
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGatewayRefusesToStartWithoutAMasterKey$")
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(append(os.Environ(), grpcListenerTestEnv(t)...),
 			masterKeySubprocessEnv+"=1",
 			account.MasterKeyEnvVar+"="+masterKey,
 			account.AllowUnwrappedEnvVar+"="+optOut,

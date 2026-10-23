@@ -13,6 +13,7 @@ import { PERMISSIONS } from '@/shared/lib/permissions';
 import type { ControlsDropdownItem } from '@/shared/ui/ControlsDropdown';
 import { EditIcon } from '@/shared/ui/icons/edit-icon';
 import { PinIcon } from '@/shared/ui/icons/pin-icon';
+import { GroupActivitySummary } from '@/shared/ui/ConversationActivity';
 
 import type { FolderListItem, NewFolderDraft } from '../../lib/hooks/conversationListState.types';
 import { useHasPermission } from '../../lib/useHasPermission';
@@ -306,6 +307,7 @@ export function FolderItem({
       items={[
         {
           title: name,
+          adornment: <GroupActivitySummary rows={folder.conversations} serverNeedsYou={folder.needsYou} />,
           content: (
             <FolderAccordionItem
               folder={folder}

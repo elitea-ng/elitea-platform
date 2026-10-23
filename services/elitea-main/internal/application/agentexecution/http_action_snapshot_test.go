@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestCurrentPipelineStartWithoutHTTPNodesSkipsHTTPSnapshotGrammar(t *testing
 		t.Run(name, func(t *testing.T) {
 			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})
 			require.NoError(t, err)
-			input, err := currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "")
+			input, err := currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, "", "")
 			require.NoError(t, err)
 			require.NotContains(t, string(input.GetApplication()), "http_action_snapshot")
 			require.Contains(t, string(input.GetApplication()), "state_modifier")
@@ -74,7 +74,7 @@ func TestCurrentPipelineStartOverTheSharedBoundsReturnsTheTypedLimitError(t *tes
 		t.Run(name, func(t *testing.T) {
 			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": tc.instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})
 			require.NoError(t, err)
-			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "")
+			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, "", "")
 			require.ErrorIs(t, err, tc.want)
 			require.ErrorIs(t, err, ErrUnsupportedCurrentAgentStart)
 		})
@@ -97,7 +97,7 @@ func TestCurrentPipelineStartNamesTheNodeTheRuntimeWouldRefuse(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": tc.instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})
 			require.NoError(t, err)
-			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, SourceVersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, nil, "", "")
+			_, err = currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41, Variables: json.RawMessage(`[]`), VersionDetails: details, SourceVersionDetails: details, ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`)}, nil, nil, "", "")
 			require.ErrorIs(t, err, ErrUnsupportedCurrentAgentStart)
 			refusal := pipelinelimits.Refusal(err)
 			require.NotNil(t, refusal, "start error %v carries no typed refusal", err)

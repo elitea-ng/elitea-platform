@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 // projectIconUploadRequest is iconUploadRequest with the two form fields the
@@ -151,7 +151,7 @@ func TestListProjectIconsHonoursSkipAndLimit(t *testing.T) {
 		t.Fatalf("total on an empty page = %v, want 5", pastTotal)
 	}
 
-	// A missing or unparseable value is pylon's default, not a 500.
+	// A missing or unparseable value is the legacy default, not a 500.
 	whole, _ := listProjectIcons(t, handler, "?skip=&limit=notanumber")
 	if len(whole) != 5 {
 		t.Fatalf("default page returned %d rows, want all 5", len(whole))
@@ -163,7 +163,7 @@ func TestListProjectIconsHonoursSkipAndLimit(t *testing.T) {
 // RED before this change: there was NO cap. ParseMultipartForm's argument is a
 // memory budget, not a limit, and its error was discarded, so a file of any
 // size was streamed into the object store under a permission a project editor
-// holds. pylon answers 400 "File size exceeds 512 KB".
+// holds. The legacy runtime answers 400 "File size exceeds 512 KB".
 func TestCreateProjectIconRefusesAnOversizedFile(t *testing.T) {
 	store := newListingIconStore()
 	handler := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))

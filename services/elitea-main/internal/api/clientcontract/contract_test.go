@@ -16,9 +16,9 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	specfiles "github.com/EliteaAI/elitea-platform/services/elitea-main/api/openapi"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/clientcontract"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
+	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/clientcontract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 )
 
 // update rewrites the lock of the current major from the spec. It is the only
@@ -620,6 +620,52 @@ func TestCompareAcceptsAdditiveChanges(t *testing.T) {
 				t.Fatalf("the change is invisible to the lock, so -update would never record it")
 			}
 		})
+	}
+}
+
+// TestCompareJudgesOneOfArmsByShape: an arm that gained an optional
+// response property is the same promise; an arm that lost one is not.
+func TestCompareJudgesOneOfArmsByShape(t *testing.T) {
+	const doc = `
+openapi: 3.0.3
+info: { title: t, version: '1', x-elitea-client-contract: '1.0' }
+paths:
+  /things:
+    post:
+      operationId: postThing
+      tags: [things, client]
+      responses:
+        '400':
+          description: bad
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Plain'
+                  - $ref: '#/components/schemas/Coded'
+components:
+  schemas:
+    Plain:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    Coded:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+`
+	locked := normalizeYAML(t, doc)
+	grown := normalizeYAML(t, strings.Replace(doc, "        message: { type: string }\n", "        message: { type: string }\n        reason: { type: string }\n", 1))
+	if problems := clientcontract.Compare(locked, grown); len(problems) > 0 {
+		t.Fatalf("an arm that gained an optional property was refused:\n  %s", strings.Join(problems, "\n  "))
+	}
+	shrunk := normalizeYAML(t, strings.Replace(doc, "        details: { type: object, additionalProperties: true }\n", "", 1))
+	if problems := clientcontract.Compare(locked, shrunk); !strings.Contains(strings.Join(problems, "\n"), "alternative changed or removed") {
+		t.Fatalf("an arm that lost a property passed: %v", problems)
 	}
 }
 

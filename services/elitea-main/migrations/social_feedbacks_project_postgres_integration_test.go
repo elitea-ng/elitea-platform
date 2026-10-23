@@ -14,7 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	migrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const socialFeedbacksColumns = `

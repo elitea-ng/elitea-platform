@@ -5,14 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func testResumeCursor(now time.Time) resumeCursor {
@@ -158,6 +158,7 @@ type resumeToolkitStub struct {
 	observed   toolkitexecutionapp.ReadToolResultReference
 	admissions int
 	err        error
+	delay      time.Duration
 }
 
 func (s *resumeToolkitStub) Execute(context.Context, toolkitexecutionapp.ExecuteCurrentReadToolRequest) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error) {
@@ -170,6 +171,7 @@ func (s *resumeToolkitStub) Admit(context.Context, toolkitexecutionapp.ExecuteCu
 }
 func (s *resumeToolkitStub) WaitForResult(_ context.Context, r toolkitexecutionapp.ReadToolResultReference) (toolkitexecutionapp.CurrentReadToolExecutionOutcome, error) {
 	s.observed = r
+	time.Sleep(s.delay)
 	return toolkitexecutionapp.CurrentReadToolExecutionOutcome{ExecutionID: r.ExecutionID, Completion: toolkitexecutionapp.Completion{ResultJSON: json.RawMessage(`{"marker":"one-result"}`)}}, s.err
 }
 
@@ -209,5 +211,49 @@ func TestToolkitResumeGETUsesOnlyOriginalResultReference(t *testing.T) {
 				t.Fatalf("unexpected stream: %s", response.Body.String())
 			}
 		})
+	}
+}
+
+// TestResumeStreamKeepsAnIdleWaitAlive: between the primed cursor and the
+// result a tools/call stream waits up to mcpRunDeadline (90 seconds) in
+// silence, within a second or two of the 100-second idle timeout of a
+// Cloudflare-style proxy in front of the load balancer. The stream writes an
+// SSE comment while it waits, and the result still arrives as one event.
+func TestResumeStreamKeepsAnIdleWaitAlive(t *testing.T) {
+	previous := streamKeepalive
+	streamKeepalive = 20 * time.Millisecond
+	t.Cleanup(func() { streamKeepalive = previous })
+
+	codec, _ := NewResumeCursorCodec(bytes.Repeat([]byte{42}, 32))
+	cursor := testResumeCursor(time.Now())
+	cursor.ApplicationID = 0
+	cursor.ApplicationVersionID = 0
+	cursor.ResponseMessageID = ""
+	cursor.ToolkitID = 31
+	cursor.ToolkitResult = &toolkitexecutionapp.ReadToolResultReference{ExecutionID: cursor.ExecutionID, ToolkitType: "mcp", ToolkitName: "echo", ToolName: "echo_marker"}
+	encoded, err := codec.seal(cursor, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &resumeToolkitStub{delay: 150 * time.Millisecond}
+	handler := NewHandler(nil, nil, nil, allowRuns(), WithResumeCursorCodec(codec), WithToolkitExecuteRead(service))
+	handler.source = &funcSource{fn: func(string, scope) ([]Tool, error) {
+		return []Tool{{Name: cursor.ToolName, toolkitID: 31, toolkitToolName: "echo_marker"}}, nil
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/app/2/mcp", nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "7", UserID: "7"}))
+	request.Header.Set("Accept", "text/event-stream")
+	request.Header.Set("Last-Event-ID", encoded)
+	response := httptest.NewRecorder()
+	newTestRouter(handler).ServeHTTP(response, request)
+
+	body := response.Body.String()
+	keepalive := strings.Index(body, ": keepalive\n\n")
+	message := strings.Index(body, "event: message")
+	if response.Code != 200 || keepalive < 0 || message < 0 || keepalive > message {
+		t.Fatalf("status=%d stream=%q; want a keepalive comment before the one result event", response.Code, body)
+	}
+	if strings.Count(body, "event: message") != 1 || !strings.Contains(body, "one-result") {
+		t.Fatalf("the result did not arrive intact: %q", body)
 	}
 }

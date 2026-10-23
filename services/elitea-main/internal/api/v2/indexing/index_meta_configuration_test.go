@@ -9,10 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentIndexConfigurationStub struct {
@@ -45,12 +46,7 @@ func newCurrentIndexConfigurationRoute(
 				}
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -62,8 +58,7 @@ func newCurrentIndexConfigurationRoute(
 
 func currentIndexConfigurationRequest(path, body string) *http.Request {
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
@@ -141,12 +136,14 @@ func TestCurrentIndexConfigurationRouteAuthorizesBeforeSaving(t *testing.T) {
 
 	for name, test := range map[string]struct {
 		remote      string
+		forged      bool
 		permissions []string
 		wantStatus  int
 		wantCalls   int
 	}{
-		"untrusted peer": {
+		"forged X-Auth-* identity without a session": {
 			remote:      "192.0.2.8:443",
+			forged:      true,
 			permissions: []string{handler.CurrentIndexConfigurationPermission},
 			wantStatus:  http.StatusUnauthorized,
 		},
@@ -175,6 +172,11 @@ func TestCurrentIndexConfigurationRouteAuthorizesBeforeSaving(t *testing.T) {
 				`{"index_configuration":{}}`,
 			)
 			request.RemoteAddr = test.remote
+			if test.forged {
+				// The retired edge projection, and no session (#1359).
+				request.Header.Del("Cookie")
+				authtest.ForgeXAuth(request, "11")
+			}
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
 			if response.Code != test.wantStatus || saver.calls != test.wantCalls {
@@ -230,8 +232,8 @@ func TestCurrentIndexConfigurationRouteRefusesAMalformedBody(t *testing.T) {
 	}
 }
 
-// Every application refusal has to arrive as its own status. A save that lost
-// the PgVector target and a save against an index that does not exist are
+// Every application refusal has to arrive as its own status. A save whose
+// index storage is unavailable and a save against an index that does not exist are
 // different problems for the person looking at the screen, and the delete
 // route already answers them apart.
 func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {
@@ -246,13 +248,9 @@ func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {
 			err: indexmetaapp.ErrCurrentIndexMetaToolkitMissing, wantStatus: http.StatusBadRequest,
 			wantBody: "Toolkit id is missing for toolkit 9",
 		},
-		"no pgvector": {
+		"no index storage": {
 			err: indexmetaapp.ErrCurrentIndexMetaTargetMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "PGVector configuration is missing for toolkit 9",
-		},
-		"no connection string": {
-			err: indexmetaapp.ErrCurrentIndexMetaConnectionMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "Connection string is missing in PGVector configuration for toolkit 9",
+			wantBody: "Index storage is not available for toolkit 9",
 		},
 		"index missing": {
 			err: indexmetaapp.ErrCurrentIndexMetaNotFound, wantStatus: http.StatusNotFound,
@@ -297,7 +295,7 @@ func TestNewCurrentIndexConfigurationRouteRefusesMissingDependencies(t *testing.
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			return user, nil
 		}),
-		ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(*http.Request) error { return nil }),
+		FormSessions: authtest.FormSessions{},
 	}
 	if _, err := handler.NewCurrentIndexConfigurationRoute(nil, authConfig, resolver); !errors.Is(err, handler.ErrInvalidCurrentIndexConfigurationRoute) {
 		t.Fatalf("err=%v", err)

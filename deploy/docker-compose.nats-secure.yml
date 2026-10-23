@@ -11,7 +11,7 @@
 # client logs nats_auth=none at WARN. This overlay switches all three NATS
 # users in compose to the cluster posture:
 #
-#   * `nats` runs the nats.conf rendered from deploy/helm/nats — TLS required,
+#   * `nats` runs the nats.conf rendered from deploy/helm/elitea — TLS required,
 #     verify_and_map, the chart's own accounts and permission table — with the dev NATS CA
 #     material mounted at the chart's container paths, so the config needs no
 #     edit;
@@ -20,6 +20,8 @@
 #   * `elitea-main` presents its own identity (URI SAN
 #     spiffe://elitea.internal/nats/elitea-main) over tls://, and its runtime
 #     plane presents elitea-main-runtime (the command bus producer);
+#   * the sub-application hosts (elitea-deepwiki, elitea-inventory) present
+#     their own identities in SUBAPP, for the cancellation fan-out;
 #   * the worker (standalone-full only) needs one more overlay,
 #     docker-compose.nats-secure-worker.yml: it presents elitea-worker (the
 #     command bus consumer) with deploy/runtime/worker-runtime.nats-secure.json.
@@ -64,3 +66,25 @@ services:
     volumes:
       - ./certs/nats/clients/elitea-main:/etc/nats-client:ro
       - ./certs/nats/clients/elitea-main-runtime:/etc/runtime-nats-client:ro
+
+  # The sub-application hosts' cancellation fan-out (#1359): each presents its
+  # own identity, which may publish and subscribe its application's
+  # elitea.subapp.<app>.cancel.* and nothing else. Both services are profile-
+  # or stack-gated in the files this overlays; this adds only the NATS half.
+  elitea-deepwiki:
+    environment:
+      ELITEA_DEEPWIKI_NATS_URL: "tls://nats:4222"
+      ELITEA_DEEPWIKI_NATS_TLS_CA_FILE: /etc/nats-client/ca.crt
+      ELITEA_DEEPWIKI_NATS_TLS_CERT_FILE: /etc/nats-client/tls.crt
+      ELITEA_DEEPWIKI_NATS_TLS_KEY_FILE: /etc/nats-client/tls.key
+    volumes:
+      - ./certs/nats/clients/elitea-deepwiki:/etc/nats-client:ro
+
+  elitea-inventory:
+    environment:
+      ELITEA_INVENTORY_NATS_URL: "tls://nats:4222"
+      ELITEA_INVENTORY_NATS_TLS_CA_FILE: /etc/nats-client/ca.crt
+      ELITEA_INVENTORY_NATS_TLS_CERT_FILE: /etc/nats-client/tls.crt
+      ELITEA_INVENTORY_NATS_TLS_KEY_FILE: /etc/nats-client/tls.key
+    volumes:
+      - ./certs/nats/clients/elitea-inventory:/etc/nats-client:ro

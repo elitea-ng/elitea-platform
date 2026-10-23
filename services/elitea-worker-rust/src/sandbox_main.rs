@@ -12,7 +12,9 @@ fn profile_paths(args: &[OsString]) -> Option<Vec<PathBuf>> {
         return None;
     }
     Some(
-        args.chunks_exact(2)
+        args.as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| PathBuf::from(&pair[1]))
             .collect(),
     )

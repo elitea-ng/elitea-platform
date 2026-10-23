@@ -419,14 +419,18 @@ impl MapWorkerGraphFactory for CompilerMapWorker {
                     .resolver
                     .as_ref()
                     .ok_or_else(|| map_error("invalid_worker"))?;
+                let mut failure_events = None;
                 let resolver = match self.events.as_ref() {
-                    Some(events) => resolver
-                        .for_map_events(
-                            events
-                                .for_map_item(execution)
-                                .map_err(|_| map_error("invalid_item_scope"))?,
-                        )
-                        .map_err(|_| map_error("invalid_item_scope"))?,
+                    Some(events) => {
+                        let item_events = events
+                            .for_map_item(execution)
+                            .map_err(|_| map_error("invalid_item_scope"))?;
+                        // An item's typed refusal reaches the run's terminal (RECOVERY_REFUSED).
+                        failure_events = Some(item_events.clone());
+                        resolver
+                            .for_map_events(item_events)
+                            .map_err(|_| map_error("invalid_item_scope"))?
+                    }
                     None => Arc::clone(resolver),
                 };
                 // Existing exact task and variable mappings own the opaque item boundary.
@@ -437,7 +441,8 @@ impl MapWorkerGraphFactory for CompilerMapWorker {
                     execution.checkpointer(),
                 )
                 .map_err(|_| map_error("invalid_worker"))?
-                .with_parallel_inputs();
+                .with_parallel_inputs()
+                .with_failure_events(failure_events);
                 graph.add_node(execution.wrap_node(node))
             }
             _ => return Err(map_error("invalid_worker")),

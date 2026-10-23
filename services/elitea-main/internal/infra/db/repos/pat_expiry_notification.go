@@ -16,7 +16,7 @@ package repos
 //
 // # Raw pgx, not sqlc
 //
-// Every statement here reads or writes two tables — one pylon-owned
+// Every statement here reads or writes two tables — one legacy-owned
 // (public.auth_core__token), one this corpus owns — and the sweep's predicate
 // is the feature. Keeping it in one file, readable beside the rule it
 // implements, is worth more than a generated binding; admin_background_jobs.go
@@ -33,7 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
 )
 
 // PATExpiryNotificationEventType is the event_type the web client already
@@ -101,7 +101,7 @@ func NewPATExpiryNotificationRepository(pool *pgxpool.Pool) (*PATExpiryNotificat
 //	                                eligible under any window, because for a
 //	                                fresh key "time left" and "whole lifetime"
 //	                                are the same number. An UNKNOWN issued_at
-//	                                (a pre-0125 token, or one pylon minted)
+//	                                (a pre-0125 token, or one legacy minted)
 //	                                counts as old enough: the warning is the
 //	                                safe side of that doubt.
 //	user_id IS NOT NULL             there is no one to notify otherwise, and
@@ -243,7 +243,7 @@ VALUES (FALSE, $1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC', now() AT TIME ZO
 // token can never exist without its issue stamp.
 //
 // It is what makes ELITEA-0755 answerable at all: auth_core__token carries no
-// creation timestamp and this corpus does not add columns to a pylon-owned
+// creation timestamp and this corpus does not add columns to a legacy-owned
 // table (0071's header, 0125's header).
 func RecordPATIssued(ctx context.Context, executor PATLifecycleExecutor, tokenID int64, issuedAt time.Time) error {
 	if _, err := executor.Exec(ctx, `

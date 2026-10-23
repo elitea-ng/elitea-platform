@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 type Handler struct {
@@ -77,8 +77,8 @@ type Handler struct {
 	toolkitTypePolicy ToolkitTypePolicyStore
 	// The platform's own background jobs behind `Admin › Tasks`
 	// (background_jobs.go). Nil unless WithBackgroundJobs is applied, and the
-	// routes answer 503 while it is — never an empty list, for the reason
-	// arbiterTaskNodeUnavailable states below.
+	// routes answer 503 while it is — never an empty list, which would read
+	// as "nothing is running" when the truth is "this cannot be seen".
 	backgroundJobs BackgroundJobsStore
 	// The evaluation-run half of the Tasks page's cancel (background_jobs.go).
 	// Nil unless WithEvalRunCancel is applied; an eval row's cancel then
@@ -151,21 +151,20 @@ func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
 //
 // # Why this used to be a permanent 501
 //
-// pylon's `system_info` reports the versions of six NAMED plugins —
+// The legacy `system_info` reports the versions of six NAMED plugins —
 // elitea_core, admin, notifications, configurations, sdk_plugin and
 // indexer_worker — read out of `self.module.remote_runtimes`, the registry of
-// pylons that announced themselves on the Arbiter bus in the last 60 seconds
+// runtimes that announced themselves on the Arbiter bus in the last 60 seconds
 // (legacy/plugins/admin/api/v2/system_info.py). It is a FLEET inventory: the
-// answer names other processes, not the process that serves the request. That
-// is the same registry `RuntimeRemote` above reads, and `RuntimeRemote`
-// answers 501 for the same reason. AGENTS.md names Pylon plugin loading and
+// answer names other processes, not the process that serves the request.
+// AGENTS.md names legacy plugin loading and
 // Arbiter transport as things the target architecture does not preserve, so
 // this service loads no plugins and has no such fleet to ask — that part of
-// pylon's answer has no equivalent here and never will, and this handler must
-// not invent one (#219: it once answered 200 with a hardcoded `elitea_core`/
-// `auth` map at a literal "2.0.0", in the wrong shape besides — pylon returns
-// `plugins` as an ARRAY, not an object — so it rendered as nothing and nobody
-// noticed).
+// the legacy answer has no equivalent here and never will, and this handler
+// must not invent one (#219: it once answered 200 with a hardcoded
+// `elitea_core`/ `auth` map at a literal "2.0.0", in the wrong shape besides —
+// the legacy runtime returns `plugins` as an ARRAY, not an object — so it
+// rendered as nothing and nobody noticed).
 //
 // # What changed
 //
@@ -181,19 +180,18 @@ func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
 //
 // So the route now reports two REAL, LOCAL facts — this binary's own release
 // version and the schema version its database is running — as `components`,
-// in the same `[{name, version}]` shape pylon used, so the existing Help
-// Center tooltip rendering needs no reshaping. It still reports NOTHING about
-// plugins, workers or the gateway: this service has no fleet telemetry for
-// any of those, and a `components` entry that named one without a real
-// source would be exactly the #219 defect again in new clothes. That remains
-// open (tracked in #892's follow-up), not faked here.
+// in the same `[{name, version}]` shape the legacy runtime used, so the
+// existing Help Center tooltip rendering needs no reshaping. It still reports
+// NOTHING about plugins, workers or the gateway: this service has no fleet
+// telemetry for any of those, and a `components` entry that named one without a
+// real source would be exactly the #219 defect again in new clothes. That
+// remains open (tracked in #892's follow-up), not faked here.
 //
 // The migration read degrades openly rather than failing the whole request:
 // if the pool is nil (unit tests) or the query errors (a database blip), the
 // response still carries `elitea-main`'s own version and simply omits the
-// `migrations` entry — the same fail-open choice `RuntimeRemote`'s siblings
-// make elsewhere in this file, applied to an informational tooltip rather
-// than a security check.
+// `migrations` entry — a fail-open choice, made for an informational tooltip
+// rather than a security check.
 func (h *Handler) SystemInfo(w http.ResponseWriter, r *http.Request) {
 	components := []map[string]any{
 		{"name": "elitea-main", "version": buildinfo.Version},
@@ -262,49 +260,6 @@ func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// pylonRuntimeUnavailable is what the five Pylon-runtime endpoints behind the
-// Configuration page's Advanced section answer, and why.
-//
-// Each of them drives a live Pylon: `plugin_config_restart` fires a reload or a
-// process restart onto the Arbiter bus; `runtime_remote` lists the plugins every
-// pylon announced in the last 60 seconds; `runtime_remote_config` reads and
-// writes a plugin's raw YAML; `runtime_plugin` resolves and installs plugin
-// versions from a repository; `runtime_pylons` tails a pylon's in-memory log
-// buffer (legacy/plugins/admin/api/v2/*.py). AGENTS.md names Pylon plugin
-// loading and Arbiter transport as things the target architecture does not
-// preserve, so there is nothing to point these at.
-//
-// Until this unit all five answered 200: `{"status":"ok"}` for the two that act,
-// `{"remotes":[]}`/`{"logs":[]}`/`{"config":{}}` for the three that read. That is
-// the failure the `Tasks` comment below already condemns, twice over — a restart
-// signal that reports success and does nothing, and an empty plugin list that
-// reads as "this pylon has no plugins" rather than "this platform cannot see
-// any". `runtime_remote` did not even return the shape its client reads
-// (`{"remotes": …}` against a client indexing `data.rows`), so the Advanced
-// table was structurally empty as well.
-const pylonRuntimeUnavailable = "pylon runtime administration (plugin reload, remote plugin config, plugin " +
-	"updates and pylon logs) has no equivalent in this service; see AGENTS.md architecture boundaries"
-
-func (h *Handler) PluginConfigRestart(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": pylonRuntimeUnavailable})
-}
-
-func (h *Handler) RuntimeRemoteConfig(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": pylonRuntimeUnavailable})
-}
-
-func (h *Handler) RuntimePlugin(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": pylonRuntimeUnavailable})
-}
-
-func (h *Handler) RuntimePylonLogs(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": pylonRuntimeUnavailable})
-}
-
-func (h *Handler) RuntimeRemote(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": pylonRuntimeUnavailable})
-}
-
 // PluginConfigSuggestions is implemented in config_suggestions.go.
 
 // `ModerationStatuses` and `ModerationStatusSingle` used to sit here: two copies
@@ -320,10 +275,10 @@ func (h *Handler) RuntimeRemote(w http.ResponseWriter, _ *http.Request) {
 // It was first registered on BOTH verbs pointing at one handler, so the PUT
 // discarded its body and the GET reported `enabled: false` unconditionally — a
 // switch that always read "off" and could never be turned on. Unit A14 replaced
-// that with a 501 saying pylon's maintenance mode is a request hook this service
-// does not install, which was true then and is the sentence the Configuration
-// section has now earned its way out of: `internal/api/middleware`'s Maintenance
-// middleware enforces the switch.
+// that with a 501 saying the legacy maintenance mode is a request hook this
+// service does not install, which was true then and is the sentence the
+// Configuration section has now earned its way out of:
+// `internal/api/middleware`'s Maintenance middleware enforces the switch.
 //
 // # Why this is READ-ONLY
 //
@@ -332,19 +287,20 @@ func (h *Handler) RuntimeRemote(w http.ResponseWriter, _ *http.Request) {
 // page, and this endpoint reads the same rows the middleware reads. A second
 // write path is how a switch acquires two sources of truth that disagree.
 //
-// pylon's PUT took `splash_template` HTML, and that capability IS ported — as
-// the `maintenance_html` field of the same Configuration section, validated on
-// the way in (config_values.go's validateSplashHTML). The GET below reports it
-// under pylon's own key so a reference-shaped client reads what it expects; the
-// WRITE stays on the one path.
+// The legacy PUT took `splash_template` HTML, and that capability IS ported —
+// as the `maintenance_html` field of the same Configuration section, validated
+// on the way in (config_values.go's validateSplashHTML). The GET below reports
+// it under the legacy key so a reference-shaped client reads what it expects;
+// the WRITE stays on the one path.
 //
 // The route therefore answers 405 on PUT rather than 501: the capability exists,
 // this is not where it is exercised, and the reason names where it is.
 //
-// `pylon_id` is not marshalled. The reference returned it because maintenance
-// was per-pylon state and an operator had to know WHICH runtime they had just
-// taken down. Here it is one platform-wide row, and inventing an id for a
-// process that has none would restate a topology this platform does not have.
+// The runtime id is not marshalled. The reference returned it because
+// maintenance was per-runtime state and an operator had to know WHICH runtime
+// they had just taken down. Here it is one platform-wide row, and inventing an
+// id for a process that has none would restate a topology this platform does
+// not have.
 func (h *Handler) Maintenance(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
@@ -368,40 +324,10 @@ func (h *Handler) Maintenance(w http.ResponseWriter, r *http.Request) {
 		"enabled": state.Enabled,
 		"title":   state.Title,
 		"message": state.Message,
-		// pylon's own key for the same value, so a reference-shaped client
+		// The legacy key for the same value, so a reference-shaped client
 		// reads the splash body without knowing this platform's field name.
 		"splash_template": state.HTML,
 	})
-}
-
-// arbiterTaskNodeUnavailable is what `/admin/tasks` and `/admin/active_tasks`
-// answer, and why. Both surfaces are pure Pylon runtime introspection: pylon's
-// handlers reach into `self.module.context.module_manager.modules[…].task_node`
-// and read its in-process `global_task_state` / `global_pool_state`, then start
-// and stop tasks through the Arbiter (legacy/plugins/admin/api/v2/tasks.py and
-// active_tasks.py). There is no such registry in this service and there is not
-// meant to be one: AGENTS.md's architecture boundaries name "Pylon plugin
-// loading" and "Arbiter pickle payloads" as things the target architecture does
-// NOT preserve.
-//
-// Until unit A14 both answered 200 with an empty collection. That is the worse
-// failure: "no maintenance tasks are running" and "this deployment cannot see
-// whether any are running" render identically, and an operator reading the
-// former during an incident concludes the system is idle. `ActiveTasks` did not
-// even return the shape its client reads (`{"lines": []}` against a client
-// expecting `{"nodes": […]}`), so the emptiness was structural.
-//
-// 501 with a reason is the honest answer, and it is what the ported admin page
-// renders as an unavailable tab rather than as an empty list.
-const arbiterTaskNodeUnavailable = "admin task nodes are a Pylon/Arbiter runtime surface with no equivalent in " +
-	"this service; see AGENTS.md architecture boundaries"
-
-func (h *Handler) Tasks(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": arbiterTaskNodeUnavailable})
-}
-
-func (h *Handler) ActiveTasks(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": arbiterTaskNodeUnavailable})
 }
 
 func paginationParams(r *http.Request) (limit, offset int) {

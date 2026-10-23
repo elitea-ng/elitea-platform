@@ -183,7 +183,7 @@ impl PipelineApplicationNodeRuntime {
         .map_err(|_| failure())?;
         let (invocation, author, branch) =
             graph_invocation_identity_with_events(context, Some(&self.events))?;
-        let (receipt, fresh) = prepare_graph_call(
+        let (mut receipt, fresh) = prepare_graph_call(
             checkpointer,
             &self.prepare_gate,
             context,
@@ -195,7 +195,7 @@ impl PipelineApplicationNodeRuntime {
             &branch,
         )
         .await?;
-        match receipt.outcome() {
+        match receipt.outcome().clone() {
             GraphCallOutcome::Completed { result, terminal } => {
                 self.forward(
                     receipt.original_start().clone(),
@@ -214,14 +214,45 @@ impl PipelineApplicationNodeRuntime {
                 return Ok((result.clone(), receipt.activation().call_id().to_owned()));
             }
             GraphCallOutcome::Paused { result } => {
-                if !self
-                    .applications
-                    .resume_coordinator()
-                    .ok_or_else(failure)?
+                let coordinator = self.applications.resume_coordinator().ok_or_else(failure)?;
+                if !coordinator
                     .has_resume(receipt.invocation_id(), receipt.activation().call_id())
                     .await
                 {
-                    return Ok((result.clone(), receipt.activation().call_id().to_owned()));
+                    return Ok((result, receipt.activation().call_id().to_owned()));
+                }
+                // An approval may dispatch an effect: record durably that its resume
+                // started, so no stale copy of this receipt can drop it.
+                if coordinator
+                    .approves_sensitive_call(
+                        receipt.invocation_id(),
+                        receipt.activation().call_id(),
+                    )
+                    .await
+                {
+                    receipt = finish_graph_call(
+                        checkpointer,
+                        &self.prepare_gate,
+                        context,
+                        &receipt,
+                        GraphCallOutcome::Resuming { result },
+                    )
+                    .await?;
+                }
+            }
+            GraphCallOutcome::Resuming { result } => {
+                // An earlier continuation of this approval started the child and
+                // stopped. The decision carries the root dispatch journal's facts
+                // (FU-226): a recorded outcome is served, a dispatch without one is
+                // refused as "may have started", and a call that never started runs
+                // once. Without a pending resume (a later turn) the pause result
+                // stands.
+                let coordinator = self.applications.resume_coordinator().ok_or_else(failure)?;
+                if !coordinator
+                    .has_resume(receipt.invocation_id(), receipt.activation().call_id())
+                    .await
+                {
+                    return Ok((result, receipt.activation().call_id().to_owned()));
                 }
             }
             GraphCallOutcome::Started if !fresh => {
@@ -257,7 +288,10 @@ impl PipelineApplicationNodeRuntime {
             .restore(receiver)
             .await
             .map_err(|_| failure())?;
-        let result = result?;
+        let result = match result {
+            Ok(result) => result,
+            Err(refusal) => return Err(self.child_failure(refusal).await),
+        };
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
         {
@@ -287,6 +321,39 @@ impl PipelineApplicationNodeRuntime {
         Ok((result, receipt.activation().call_id().to_owned()))
     }
 
+    /// Report a typed child refusal with its registered public reason.
+    async fn child_failure(&self, refusal: ChildFailure) -> GraphError {
+        let (code, error) = match refusal {
+            ChildFailure::Scope(error) => return error,
+            // The decided call never ran (FU-226).
+            ChildFailure::ReplayUnsupported => (
+                REPLAY_UNSUPPORTED_PUBLIC_CODE,
+                replay_unsupported(&self.node_name),
+            ),
+            // The approved call may have run (not repeated), or its dispatch
+            // record could not be written (it never ran). The run ends with the
+            // registered reason, as an unscoped Agent node does
+            // (`graph/application.rs` `child_failure`).
+            ChildFailure::ApprovedCallStop(code) => {
+                return self
+                    .events
+                    .approved_call_stop(code, &self.node_name)
+                    .await
+                    .unwrap_or_else(failure);
+            }
+            // Another typed refusal of the decided card (stale, invalid or
+            // corrupt decision, or an exhausted budget): the node fails with a
+            // registered reason, not as a broken scope.
+            ChildFailure::Refused(code) => (code, node_refused(&self.node_name)),
+            // Not a refusal of the decided card: unchanged scope failure.
+            ChildFailure::Child => return failure(),
+        };
+        match self.events.send_execution_failure(code).await {
+            Ok(()) => error,
+            Err(_) => failure(),
+        }
+    }
+
     /// Run the child tool while forwarding its events, then drain what it
     /// queued. The tool is driven (`DrivenTask`): forwarding a child event is a
     /// bounded send the Runner drains by persisting it, so it must never leave
@@ -299,14 +366,18 @@ impl PipelineApplicationNodeRuntime {
         graph_scope: Option<&PipelineNodeEventScope>,
         root_container: &str,
         terminal: &mut Option<Event>,
-    ) -> Result<Value, GraphError> {
+    ) -> Result<Value, ChildFailure> {
         let mut future = DrivenTask::new(work);
         let result = loop {
             tokio::select! {
-                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
+                value = &mut future => break match value {
+                    Ok(Ok(value)) => Ok(value),
+                    Ok(Err(error)) => Err(ChildFailure::from_child(error.code)),
+                    Err(_) => Err(ChildFailure::Scope(failure())),
+                },
                 signal = receiver.recv() => match signal {
                     Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(error); },
-                    None => break Err(failure()),
+                    None => break Err(ChildFailure::Scope(failure())),
                 }
             }
         };
@@ -326,6 +397,9 @@ impl PipelineApplicationNodeRuntime {
         result
     }
 
+    /// Forward one queued child signal. A child that stopped on an approved
+    /// call (FU-226) reports that typed stop on its stream as well as in its
+    /// result; any other failed signal breaks the scope.
     async fn drain(
         &self,
         signal: ApplicationEventSignal,
@@ -333,8 +407,27 @@ impl PipelineApplicationNodeRuntime {
         graph_scope: Option<&PipelineNodeEventScope>,
         root_container: &str,
         terminal: &mut Option<Event>,
+    ) -> Result<(), ChildFailure> {
+        let event =
+            application_signal_event(signal).map_err(|error| {
+                match ChildFailure::from_child(error.code) {
+                    stop @ ChildFailure::ApprovedCallStop(_) => stop,
+                    _ => ChildFailure::Scope(failure()),
+                }
+            })?;
+        self.drain_event(event, receipt, graph_scope, root_container, terminal)
+            .await
+            .map_err(ChildFailure::Scope)
+    }
+
+    async fn drain_event(
+        &self,
+        mut event: Event,
+        receipt: &PipelineGraphCallReceipt,
+        graph_scope: Option<&PipelineNodeEventScope>,
+        root_container: &str,
+        terminal: &mut Option<Event>,
     ) -> Result<(), GraphError> {
-        let mut event = application_signal_event(signal).map_err(|_| failure())?;
         let calls = event.tool_calls();
         if event.invocation_id == receipt.invocation_id()
             && calls
@@ -487,6 +580,68 @@ fn may_have_started() -> GraphError {
     }
 }
 
+/// Why the child call of one scoped Agent node did not produce a value.
+#[derive(Debug)]
+enum ChildFailure {
+    /// The scope, its receipt or the child stream broke an invariant.
+    Scope(GraphError),
+    /// The nested Agent refused its decided call before running it.
+    ReplayUnsupported,
+    /// The approved call may have started (`RECOVERY_REFUSED_UPSTREAM_CODE`),
+    /// or its dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`).
+    ApprovedCallStop(&'static str),
+    /// The nested Agent refused its decided card for another typed reason;
+    /// the registered public code.
+    Refused(&'static str),
+    /// The child failed for a reason that is not a direct-HITL refusal.
+    Child,
+}
+
+impl ChildFailure {
+    /// Classify a child tool error by its code. The nested Agent keeps each
+    /// direct-HITL refusal's typed code (FU-226).
+    fn from_child(code: &str) -> Self {
+        use crate::agents::direct_hitl::DirectHitlErrorCode;
+        use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
+        use crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE;
+        if code == RECOVERY_REFUSED_UPSTREAM_CODE {
+            Self::ApprovedCallStop(RECOVERY_REFUSED_UPSTREAM_CODE)
+        } else if code == DISPATCH_UNRECORDED_CODE {
+            Self::ApprovedCallStop(DISPATCH_UNRECORDED_CODE)
+        } else if code == DirectHitlErrorCode::UnsupportedCapability.as_str() {
+            Self::ReplayUnsupported
+        } else if code == DirectHitlErrorCode::ResourceExhausted.as_str() {
+            Self::Refused(REFUSED_LIMIT_PUBLIC_CODE)
+        } else if code.starts_with("direct_hitl.") {
+            Self::Refused(REFUSED_PUBLIC_CODE)
+        } else {
+            Self::Child
+        }
+    }
+}
+
+/// Registered public code for a decided call that cannot run (no effect ran).
+const REPLAY_UNSUPPORTED_PUBLIC_CODE: &str = "pipeline.tool_unavailable";
+/// Registered public code for a decided card the nested Agent refused as stale,
+/// invalid or corrupt.
+const REFUSED_PUBLIC_CODE: &str = "pipeline.input_invalid";
+/// Registered public code for a decided card refused for an exhausted budget.
+const REFUSED_LIMIT_PUBLIC_CODE: &str = "pipeline.input_limit";
+
+fn node_refused(node: &str) -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: node.to_owned(),
+        message: "the pipeline Agent node failed".to_owned(),
+    }
+}
+
+fn replay_unsupported(node: &str) -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: node.to_owned(),
+        message: "the decided tool call cannot run on this deployment; nothing ran".to_owned(),
+    }
+}
+
 fn failure() -> GraphError {
     GraphError::NodeExecutionFailed {
         node: "application_scope".to_owned(),
@@ -507,6 +662,75 @@ mod tests {
     use adk_rust::graph::{Checkpoint, ExecutionConfig, MemoryCheckpointer, State};
     use adk_rust::{Content, FunctionResponseData};
     use serde_json::json;
+
+    /// Each typed refusal of a scoped Agent node's child ends the run with its
+    /// registered public code; a broken scope or an untyped child failure sends
+    /// none and keeps the scope failure.
+    #[tokio::test]
+    async fn every_child_refusal_reports_its_registered_public_code() {
+        use crate::agents::direct_hitl::DirectHitlErrorCode;
+        use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
+        use crate::protocol::output::RuntimeFailureKind;
+        use crate::protocol::output::{RECOVERY_REFUSED_UPSTREAM_CODE, model_failure};
+        let definition=PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").unwrap();
+        let cases = [
+            (
+                DirectHitlErrorCode::UnsupportedCapability.as_str(),
+                Some(RuntimeFailureKind::PipelineToolUnavailable),
+            ),
+            (
+                DirectHitlErrorCode::StaleDecision.as_str(),
+                Some(RuntimeFailureKind::PipelineInputInvalid),
+            ),
+            (
+                DirectHitlErrorCode::InvalidInput.as_str(),
+                Some(RuntimeFailureKind::PipelineInputInvalid),
+            ),
+            (
+                DirectHitlErrorCode::CorruptSession.as_str(),
+                Some(RuntimeFailureKind::PipelineInputInvalid),
+            ),
+            (
+                DirectHitlErrorCode::ResourceExhausted.as_str(),
+                Some(RuntimeFailureKind::PipelineInputLimit),
+            ),
+            (
+                RECOVERY_REFUSED_UPSTREAM_CODE,
+                Some(RuntimeFailureKind::RecoveryRefused),
+            ),
+            (DISPATCH_UNRECORDED_CODE, Some(RuntimeFailureKind::Internal)),
+            ("model_gateway.provider_error", None),
+        ];
+        for (child_code, expected) in cases {
+            let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+            let (events, receiver) = pipeline_node_event_channel();
+            let runtime = PipelineApplicationNodeRuntime::new(
+                scope,
+                "child".to_owned(),
+                Arc::new(ApplicationRuntimeProjection::default()),
+                events,
+                Arc::new(Mutex::new(())),
+            );
+            let error = runtime
+                .child_failure(ChildFailure::from_child(child_code))
+                .await;
+            let sent = receiver.try_failure_code().await;
+            assert_eq!(
+                sent.map(|code| model_failure(Some(code))),
+                expected,
+                "{child_code}"
+            );
+            let GraphError::NodeExecutionFailed { node, .. } = error else {
+                panic!("{child_code}: a node failure");
+            };
+            let expected_node = if expected.is_some() {
+                "child"
+            } else {
+                "application_scope"
+            };
+            assert_eq!(node, expected_node, "{child_code}");
+        }
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // Keep start, child events, completion, and routing assertions in one ordered proof.

@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -144,8 +144,8 @@ func TestInitializeNamesTheNewestVersionForAnUnknownRequest(t *testing.T) {
 // `prompts` would make a client send resources/list and prompts/list, both of
 // which this server answers "method not found"; declaring
 // `tools.listChanged: true` would make it wait for a notification that can
-// never arrive on a stateless endpoint with no open stream. pylon declares all
-// of them.
+// never arrive on a stateless endpoint with no open stream. The legacy runtime
+// declares all of them.
 func TestInitializeDeclaresOnlyImplementedCapabilities(t *testing.T) {
 	router := newTestRouter(newTestHandler(t, staticSource()))
 	recorder := post(t, router, "/app/7/mcp", `{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
@@ -189,7 +189,7 @@ func TestInitializeNamesTheScope(t *testing.T) {
 
 // A notification has no id, so there is no response to correlate. 202 with an
 // empty body is what the specification requires and is the one place this port
-// deliberately departs from pylon, which answers 200 `{}`.
+// deliberately departs from the legacy runtime, which answers 200 `{}`.
 func TestNotificationIsAcceptedWithNoBody(t *testing.T) {
 	router := newTestRouter(newTestHandler(t, staticSource()))
 	recorder := post(t, router, "/app/7/mcp", `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
@@ -336,11 +336,11 @@ func TestCatalogReceivesTheURLProjectSchema(t *testing.T) {
 	}
 }
 
-// pylon's OpenAPI-section categories publish REST operations as tools, which
+// The legacy OpenAPI-section categories publish REST operations as tools, which
 // this server does not serve. Answering them with the project's agents instead
 // would hand a legacy client a plausible listing containing none of the tools
 // it asked for.
-func TestPylonAPICategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
+func TestOpenAPISectionCategoriesAreRefusedRatherThanReinterpreted(t *testing.T) {
 	source := staticSource(Tool{Name: "some_agent"})
 	router := newTestRouter(newTestHandler(t, source))
 

@@ -39,7 +39,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 const (
@@ -129,7 +129,12 @@ func (r *Runner) Labels(call spi.Invoke) map[string]string {
 //
 // An ingest whose toolkit the host could not name (its label is empty)
 // matches EVERY toolkit of its project: stopping one ingest too many is the
-// safe side of a deletion.
+// safe side of a deletion. An ingest with no project label matches every
+// project, for the same reason (spi.StopFence).
+//
+// Until ctx ends, a new matching ingest is refused on every replica (the
+// stop fence, spi.Manager.StopMatching). So the caller passes the context
+// of the deletion and cancels it when the deletion ends.
 func (r *Runner) StopIngests(ctx context.Context, project, toolkit string) error {
 	if r.manager == nil {
 		return nil
@@ -138,12 +143,9 @@ func (r *Runner) StopIngests(ctx context.Context, project, toolkit string) error
 	if wait <= 0 {
 		wait = DefaultStopWait
 	}
-	remaining := r.manager.StopMatching(ctx, func(running spi.RunningInvocation) bool {
-		if running.Tool != ingestTool || running.Labels[labelProject] != project {
-			return false
-		}
-		ingesting := running.Labels[labelToolkit]
-		return toolkit == "" || ingesting == "" || ingesting == toolkit
+	remaining := r.manager.StopMatching(ctx, spi.StopFence{
+		Tool:   ingestTool,
+		Labels: map[string]string{labelProject: project, labelToolkit: toolkit},
 	}, wait)
 	if remaining > 0 {
 		r.logger().Warn("ingests are still running after the wait; the deletion is refused",
@@ -166,6 +168,9 @@ func (r *Runner) DeleteToolkit(ctx context.Context, projectID, toolkitID int32) 
 		return nil, spi.Failf(spi.KindValue, "project %d, toolkit %d: both must be positive ids", projectID, toolkitID)
 	}
 	project, toolkit := strconv.Itoa(int(projectID)), strconv.Itoa(int(toolkitID))
+	// The stop fence lives until the deletion returns.
+	ctx, done := context.WithCancel(ctx)
+	defer done()
 	if err := r.StopIngests(ctx, project, toolkit); err != nil {
 		return nil, err
 	}
@@ -197,6 +202,9 @@ func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.Proje
 	if projectID <= 0 {
 		return nil, spi.Failf(spi.KindValue, "%d is not a project id", projectID)
 	}
+	// The stop fence lives until the deletion returns.
+	ctx, done := context.WithCancel(ctx)
+	defer done()
 	if err := r.StopIngests(ctx, strconv.Itoa(int(projectID)), ""); err != nil {
 		return nil, err
 	}

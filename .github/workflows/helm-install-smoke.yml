@@ -12,11 +12,21 @@ name: CI — Helm install smoke
 #
 # This job installs THIS repository's chart into a kind cluster on the runner
 # through deploy/kind/kind-stack.sh — the same script an engineer runs
-# locally, driven with docker instead of podman — and runs its `verify`: every
-# pod Ready, the provider pod's two containers with the runners the chart
-# sets, the facade's provider registration row healthy over the mTLS hop, and
-# a fixture generation completing through the facade. The runtime plane, the
-# workers and the LLM gateway stay off, as they do in that stack: this proves
+# locally, driven with docker instead of podman — on the chart's SHIPPED
+# DEFAULTS (S10): the runtime plane, elitea-vector with the bundled Qdrant
+# subchart over TLS, DeepWiki and Inventory, every runtime-CA certificate
+# issued by cert-manager. Its `verify` asserts every pod Ready (Qdrant,
+# elitea-vector and Inventory included), the DeepWiki provider pod's two
+# containers with the runners the chart sets, the facade's provider
+# registration row healthy over the mTLS hop, and a fixture generation
+# completing through the facade, and (S11) the bundled KEDA: keda.enabled
+# installs KEDA in the same release, DeepWiki and Inventory autoscale on
+# their invocation stores through KEDA's postgresql trigger, and each
+# ScaledObject — created by a post-install hook on this FIRST install, since
+# the CRDs arrive with it — must turn Ready=True. Last, `helm uninstall` must
+# return and leave no ScaledObject and no KEDA CRD in Terminating (the
+# pre-delete hook, templates/keda-cleanup.yaml). The worker, the LLM gateway, the web UI and
+# the scheduler stay off for weight, as they do in that stack: this proves
 # the chart, not the product.
 #
 # Runs on changes to the chart, the kind stack and the composition code the
@@ -34,27 +44,18 @@ on:
       - "deploy/kind/**"
       - "deploy/scripts/gen-runtime-certs.sh"
       - "services/elitea-main/internal/runtimecomposition/**"
-      # The two images this job builds and whose containers `verify` asserts.
+      # The images this job builds and whose pods `verify` asserts.
       - "services/elitea-subapp-host/**"
       - "services/elitea-deepwiki-engine/**"
+      - "services/elitea-inventory-engine/**"
+      - "services/elitea-vector/**"
       - "libs/rust/**"
+      # What those images COPY beside their own trees (#1359): the
+      # subapp-host's go.mod replaces libs/proto/gen/go and libs/go/natsconn;
+      # the engine's gRPC crates compile libs/proto.
+      - "libs/proto/**"
+      - "libs/go/natsconn/**"
       # The bake step reads its targets and contexts from here.
-      - "docker-bake.hcl"
-      - ".github/workflows/helm-install-smoke.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "deploy/helm/**"
-      - "!deploy/helm/tests/**"
-      - "!deploy/helm/**/*.md"
-      - "deploy/kind/**"
-      - "deploy/scripts/gen-runtime-certs.sh"
-      - "services/elitea-main/internal/runtimecomposition/**"
-      # The two images this job builds and whose containers `verify` asserts.
-      - "services/elitea-subapp-host/**"
-      - "services/elitea-deepwiki-engine/**"
-      - "libs/rust/**"
       - "docker-bake.hcl"
       - ".github/workflows/helm-install-smoke.yml"
   schedule:
@@ -64,7 +65,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -73,27 +74,32 @@ jobs:
   install:
     name: Chart installs into kind and verifies
     runs-on: ubuntu-latest
-    # A cold run is a kind cluster, cert-manager, three image builds warmed by
-    # the shared layer cache, six side-loads, the chart's hook Jobs and one
+    # A cold run is a kind cluster, cert-manager, five image builds warmed by
+    # the shared layer cache, the side-loads, the chart's hook Jobs and one
     # fixture generation. Measured on the first green run (2026-09-03):
-    # the whole job in under 15 min with the three images warm from the
-    # shared cache, seven side-loads (three built, four third-party).
-    timeout-minutes: 40
-    # The cache-write policy: a push to main exports every layer; everything
-    # else (pull requests, the weekly schedule — which also carries the main
-    # ref — and a dispatch) exports NOTHING. An empty `<target>.cache-to=`
-    # clears the target's cache-to in bake (docker-bake.hcl's own mode=max
-    # line included). The condition is spelled on each `cache-to=` line below,
-    # not through an env indirection, so scripts/ci/check_workflow_cache_writes.py
-    # can read it. Same rule as .github/actions/build-stack-images'
-    # `cache-write` input: pull-request mode=min exports were evicted before
-    # the next push could read them, and evicted main's on the way.
+    # the whole job in under 15 min with three images warm from the shared
+    # cache. S10 added the Inventory engine and elitea-vector (two more Rust
+    # builds, both cached by ci-web-e2e.yml) and Qdrant. Warm, the whole job
+    # takes 22-30 min. Fully COLD (a change that touches every Go module and a
+    # shared Rust crate, #1406) the image bake alone took 47 min, and a PR
+    # writes no cache, so a rerun is just as cold: 50 min cancelled it in the
+    # side-load step. 80 leaves room for that case and still ends a hang.
+    timeout-minutes: 80
+    # The cache policy: READ ONLY, on every event. Each image reads the
+    # registry layer cache ci-web-e2e.yml's build-once jobs write for the
+    # same Containerfile and stage (ghcr.io/elitea-ng/ci-cache-<image>:
+    # linux-amd64, public, written by a run on main only), and an empty
+    # `<target>.cache-to=` clears any export. That ref has ONE writer: a
+    # second writer of a mode=max cache replaces the first's manifest, so the
+    # smoke writing it too would cost the E2E stacks their layers on every
+    # weekly run. (Until 2026-10-20 this wrote `type=gha,mode=max` from main,
+    # into the 10 GB Actions cache that kept evicting it.)
     steps:
       - uses: actions/checkout@v7
 
-      # No disk-clearing step: the three images (the engine sidecar is one
-      # distroless Rust binary), four pinned third-party images and a
-      # kind node are ~3 GB against the runner's ~21 GB free. The first version
+      # No disk-clearing step: the five images (the engines and elitea-vector
+      # are distroless Rust binaries), the pinned third-party images and a
+      # kind node are ~4 GB against the runner's ~21 GB free. The first version
       # purged $AGENT_TOOLSDIRECTORY — the whole /opt/hostedtoolcache on
       # GitHub's runners — and helm/kind-action, which installs INTO it, died.
 
@@ -104,14 +110,14 @@ jobs:
           # digest: no anonymous Docker Hub pull per job.
           driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
-      - name: Build the three images the chart installs (shared layer cache)
+      - name: Build the five images the chart installs (shared layer cache)
         # Under the tags kind-stack.sh looks for (KIND_IMAGE_TAG default
         # `kind`), so its own build step finds them present and skips; the
         # tags and the `e2e` target restate deploy/kind/kind-stack.sh's
-        # defaults and must move with them. The same scopes the E2E stacks,
-        # the image scan and the release share; the write mode is LAYER_MODE
-        # above. The native engine compiles ~420 crates cold, so its own
-        # scope is what keeps a pull request's run warm.
+        # defaults and must move with them. The layer cache the E2E stacks
+        # write (read only here; the policy is on the job above). The native
+        # engine compiles ~420 crates cold, so that cache is what keeps a
+        # pull request's run warm.
         uses: docker/bake-action@v7
         with:
           source: .
@@ -121,27 +127,35 @@ jobs:
             elitea-main
             elitea-subapp-host
             elitea-deepwiki-engine-native
+            elitea-inventory-engine
+            elitea-vector
           load: true
           provenance: false
           set: |
             *.platform=linux/amd64
             elitea-main.target=e2e
             elitea-main.tags=ghcr.io/elitea-ng/elitea-main:kind
-            elitea-main.cache-from=type=gha,scope=elitea-main-linux-amd64
-            elitea-main.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-main-linux-amd64,ignore-error=true' || '' }}
+            elitea-main.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-main:linux-amd64
+            elitea-main.cache-to=
             elitea-subapp-host.tags=ghcr.io/elitea-ng/elitea-subapp-host:kind
-            elitea-subapp-host.cache-from=type=gha,scope=elitea-subapp-host-linux-amd64
-            elitea-subapp-host.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-subapp-host-linux-amd64,ignore-error=true' || '' }}
+            elitea-subapp-host.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-subapp-host:linux-amd64
+            elitea-subapp-host.cache-to=
             elitea-deepwiki-engine-native.tags=ghcr.io/elitea-ng/elitea-deepwiki-engine-native:kind
-            elitea-deepwiki-engine-native.cache-from=type=gha,scope=elitea-deepwiki-engine-native-linux-amd64
-            elitea-deepwiki-engine-native.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true' || '' }}
+            elitea-deepwiki-engine-native.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-deepwiki-engine-native:linux-amd64
+            elitea-deepwiki-engine-native.cache-to=
+            elitea-inventory-engine.tags=ghcr.io/elitea-ng/elitea-inventory-engine:kind
+            elitea-inventory-engine.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-inventory-engine:linux-amd64
+            elitea-inventory-engine.cache-to=
+            elitea-vector.tags=ghcr.io/elitea-ng/elitea-vector:kind
+            elitea-vector.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-vector:linux-amd64
+            elitea-vector.cache-to=
 
       - name: Pin Helm to the version helm-lint renders with
         # Same pin as helm-lint.yml, so the chart is INSTALLED by the Helm
         # that RENDERED it; the runner image's bundled helm is whatever it is.
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: The runtime-material minting needs python3 'cryptography'
         # deploy/scripts/gen-runtime-certs.sh mints Ed25519 keys with it and
@@ -179,6 +193,7 @@ jobs:
         run: |
           kubectl --context kind-elitea-kind -n elitea get pods -o wide || true
           kubectl --context kind-elitea-kind -n elitea get events --sort-by=.lastTimestamp | tail -60 || true
+          kubectl --context kind-elitea-kind -n elitea get scaledobjects,triggerauthentications,hpa -o wide || true
           for pod in $(kubectl --context kind-elitea-kind -n elitea get pods -o name 2>/dev/null); do
             echo "== $pod"; kubectl --context kind-elitea-kind -n elitea logs --all-containers --tail=80 "$pod" 2>&1 || true
           done

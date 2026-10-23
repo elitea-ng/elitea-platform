@@ -564,3 +564,116 @@ describe('LlmProxyProvidersPanel — the offered provider types', () => {
     expect(await screen.findByTestId('adopt-models-list')).toHaveTextContent('gpt-4o');
   });
 });
+
+describe('LlmProxyProvidersPanel — keyless authentication and the vLLM switch', () => {
+  const DIAL_KEYLESS = {
+    ...SEALED_OPENAI,
+    id: 9,
+    elitea_title: 'platform-dial',
+    type: 'ai_dial',
+    endpoint: 'https://dial.example.com/openai',
+    secrets: [],
+    auth_mode: 'workload_identity',
+    token_audience: '',
+  };
+
+  function useWorkloadIdentity(enabled: boolean | undefined): void {
+    server.use(
+      http.get('*/admin/gateway/status', () =>
+        HttpResponse.json({
+          reachable: true,
+          gateway:
+            enabled === undefined ? { enabled: true } : { enabled: true, workload_identity_enabled: enabled },
+        }),
+      ),
+    );
+  }
+
+  it('opens a keyless DIAL row with no API key, the token audience and the Helm warning', async () => {
+    useProviders([DIAL_KEYLESS]);
+    useWorkloadIdentity(false);
+    const bodies: unknown[] = [];
+    server.use(
+      http.put('*/admin/gateway/providers/9', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: 9 });
+      }),
+    );
+    renderAdminRoute(<LlmProxyProvidersPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    expect(await screen.findByRole('radio', { name: 'Workload identity (GKE service account)' })).toBeChecked();
+    expect(screen.queryByTestId('llm-provider-api_key')).toBeNull();
+    expect(screen.getByTestId('llm-provider-token_audience')).toHaveAttribute(
+      'placeholder',
+      'https://dial.example.com',
+    );
+    expect(await screen.findByTestId('llm-provider-workload-identity-off')).toHaveTextContent(
+      'llmGateway.workloadIdentity.enabled',
+    );
+
+    await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await waitFor(() => {
+      expect(bodies).toHaveLength(1);
+    });
+    const sent = (bodies[0] as { data: Record<string, unknown> }).data;
+    expect(sent['auth_mode']).toBe('workload_identity');
+    expect(Object.hasOwn(sent, 'api_key')).toBe(false);
+  });
+
+  it('shows no warning when the gateway does not report the field', async () => {
+    useProviders([DIAL_KEYLESS]);
+    useWorkloadIdentity(undefined);
+    renderAdminRoute(<LlmProxyProvidersPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await screen.findByRole('radio', { name: 'Key' });
+    expect(screen.queryByTestId('llm-provider-workload-identity-off')).toBeNull();
+  });
+
+  it('switches back to a key and shows the API key field again', async () => {
+    useProviders([DIAL_KEYLESS]);
+    useWorkloadIdentity(true);
+    renderAdminRoute(<LlmProxyProvidersPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.click(await screen.findByRole('radio', { name: 'Key' }));
+    expect(await screen.findByTestId('llm-provider-api_key')).toBeVisible();
+    expect(screen.queryByTestId('llm-provider-token_audience')).toBeNull();
+    expect(screen.queryByTestId('llm-provider-workload-identity-off')).toBeNull();
+  });
+
+  it('reads and sends the vLLM Anthropic switch as a boolean', async () => {
+    useProviders([
+      {
+        ...SEALED_OPENAI,
+        id: 11,
+        elitea_title: 'platform-vllm',
+        type: 'vllm',
+        endpoint: 'http://vllm:8000/v1',
+        secrets: [],
+        settings: { use_anthropic_endpoints: 'true' },
+      },
+    ]);
+    const bodies: unknown[] = [];
+    server.use(
+      http.put('*/admin/gateway/providers/11', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ id: 11 });
+      }),
+    );
+    renderAdminRoute(<LlmProxyProvidersPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const toggle = await screen.findByRole('checkbox', { name: 'Use Anthropic-compatible endpoints' });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByTestId('llm-provider-save'));
+
+    await waitFor(() => {
+      expect(bodies).toHaveLength(1);
+    });
+    expect((bodies[0] as { data: Record<string, unknown> }).data['use_anthropic_endpoints']).toBe(false);
+  });
+});

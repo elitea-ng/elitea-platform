@@ -6,7 +6,7 @@ package applications
 // table drives that read directly. The route's PostgreSQL suite
 // (version_expanded_postgres_integration_test.go) proves the same rules through
 // the served response; this file proves the rules themselves, and it is the
-// test that fails first if the pylon fallback returns.
+// test that fails first if the legacy fallback returns.
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // stubSecretsReader answers the one vault read the check makes.
@@ -72,8 +72,8 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 			wantMessage: "Invalid secret header",
 		},
 		{
-			// The defect this issue closes. Pylon answers 200 here.
-			name:        "the pylon literal is refused when the project has no value",
+			// The defect this issue closes: the old runtime answered 200 here.
+			name:        "the legacy secret literal is refused when the project has no value",
 			err:         fmt.Errorf("look up p_1 secret: %w: %q", secrets.ErrSecretNotFound, "secrets_header_value"),
 			received:    "secret",
 			wantStatus:  http.StatusForbidden,
@@ -81,7 +81,7 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 		},
 		{
 			// The same fault reached through the other typed error.
-			name:        "the pylon literal is refused when the project has no vault",
+			name:        "the legacy secret literal is refused when the project has no vault",
 			err:         fmt.Errorf("look up p_1 secret: %w", secrets.ErrVaultAbsent),
 			received:    "secret",
 			wantStatus:  http.StatusForbidden,
@@ -155,7 +155,7 @@ func TestSecretHeaderRefusalTable(t *testing.T) {
 
 // The literal must not survive anywhere in the package. A constant deleted from
 // the comparison but kept for "documentation" is one edit away from returning.
-func TestThePylonLiteralIsNotAConstantHere(t *testing.T) {
+func TestTheLegacySecretLiteralIsNotAConstantHere(t *testing.T) {
 	t.Parallel()
 
 	reader := &stubSecretsReader{err: secrets.ErrSecretNotFound}

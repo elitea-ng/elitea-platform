@@ -16,9 +16,10 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 )
 
 const interruptContractDir = "../../../../../../libs/jsonschema/runtime/v1"
@@ -115,12 +116,7 @@ func newInterruptTestRoute(t *testing.T, useCase ExecutionInterruptUseCase, gran
 	t.Helper()
 	config := apimw.AuthConfig{
 		PrincipalValidator: currentStartPrincipalValidatorFunc(func(_ context.Context, u auth.User) (auth.User, error) { return u, nil }),
-		ForwardedIdentityVerifier: currentStartPeerVerifierFunc(func(r *http.Request) error {
-			if r.RemoteAddr != "10.0.0.8:43120" {
-				return errors.New("peer denied")
-			}
-			return nil
-		}),
+		FormSessions:       authtest.FormSessions{},
 	}
 	permissions := currentStartPermissionResolverFunc(func(_ context.Context, _ auth.User, mode, project string) (auth.PermissionResolution, error) {
 		if mode != auth.PermissionModeDefault || project != "7" {
@@ -137,8 +133,7 @@ func newInterruptTestRoute(t *testing.T, useCase ExecutionInterruptUseCase, gran
 
 func interruptRequest(method, path string, body []byte) *http.Request {
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
-	req.Header.Set("X-Auth-Type", "user")
-	req.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(req, "11")
 	req.RemoteAddr = "10.0.0.8:43120"
 	return req
 }

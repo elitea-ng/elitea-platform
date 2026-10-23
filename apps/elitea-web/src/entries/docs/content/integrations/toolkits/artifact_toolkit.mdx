@@ -8,7 +8,7 @@ The Artifact toolkit gives an agent, pipeline or conversation direct read/write 
 ## Prerequisites
 
 - A bucket to point the toolkit at, or permission to create one from the toolkit form itself.
-- If you want the toolkit to index file contents for retrieval: a `pgvector` credential and an embedding model, configured under AI providers.
+- If you want the toolkit to index file contents for retrieval: an embedding model, configured under AI providers.
 
 ## Connect the toolkit
 
@@ -20,7 +20,7 @@ In the left navigation, open **Toolkits**, then select **New**. Filter the type 
 Choose an existing bucket, or use the toolkit's own **Create new bucket** tool the first time an agent needs one — no separate credential is required to reach your own project's storage.
 </Step>
 <Step title="Add indexing settings (optional)">
-If you plan to index the bucket's contents, set an **embedding model** and a **pgvector** credential. Leave both empty to use the toolkit for plain file read/write.
+If you plan to index the bucket's contents, set an **embedding model**. Indexes are kept in the platform's vector store, so there is no vector-storage setting to pick. Leave it empty to use the toolkit for plain file read/write.
 </Step>
 <Step title="Save">
 Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.

@@ -37,6 +37,18 @@
 # Usage: deploy/helm/tests/render-worker-extractor.sh
 # Needs: helm, python3 + PyYAML. No cluster, no network.
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO_ROOT="$(cd "$DIR/.." && pwd)"
@@ -63,12 +75,10 @@ RENDER=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
-# A Rust-indexing deployment (render-indexing-runtime.sh explains the replica
-# count).
+# A Rust-indexing deployment.
 RUST=(
   --set worker.implementation=rust --set worker.indexingRuntime=rust
-  --set vector.enabled=true --set main.autoscaling.maxReplicas=3
-  --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key
+  --set vector.enabled=true --set qdrant.enabled=true
 )
 
 "$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" >"$TMP/off.yaml" 2>"$TMP/off.err" \
@@ -210,7 +220,9 @@ echo "== refusals =="
 refused() {
   local reason="$1"
   shift
-  if "$HELM" template t "$CHART" "${RENDER[@]}" "$@" >"$TMP/refused.yaml" 2>"$TMP/refused.err"; then
+  # With a vector store, so the render reaches the worker's own guard instead
+  # of stopping at "indexing needs a vector store".
+  if "$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" "$@" >"$TMP/refused.yaml" 2>"$TMP/refused.err"; then
     return 1
   fi
   grep -qF "$reason" "$TMP/refused.err"

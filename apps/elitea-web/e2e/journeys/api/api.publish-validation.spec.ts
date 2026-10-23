@@ -265,7 +265,7 @@ test('a well-formed agent passes, and the result carries every list the dialog r
     // running the check again.
     expect(typeof result.validation_token, JSON.stringify(result)).toBe('string');
 
-    // #913 — what a PASS says about TAGS, now that the three rules pylon has
+    // #913 — what a PASS says about TAGS, now that the three legacy rules
     // are ported (`legacy/plugins/elitea_core/utils/publish_utils.py:2824-2851`).
     // This fixture carries ONE non-generic tag, which is the quiet case: no
     // Critical (that is the zero-tag rule), no Warning (that is the

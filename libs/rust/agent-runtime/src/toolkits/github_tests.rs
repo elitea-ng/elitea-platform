@@ -49,7 +49,6 @@ fn settings(configuration: &Value, selected_tools: &[&str]) -> Map<String, Value
         "active_branch": "feature/runtime",
         "base_branch": "main",
         "selected_tools": selected_tools,
-        "pgvector_configuration": null,
         "embedding_model": null
     })
     .as_object()
@@ -362,7 +361,7 @@ fn github_app_probe_accepts_pkcs8_and_creates_a_short_lived_rs256_jwt() {
     assert_eq!(payload["iss"], "123456");
     assert_eq!(payload["iat"], 1_700_000_000_u64);
     assert_eq!(payload["exp"], 1_700_000_600_u64);
-    assert!(!parts[2].is_empty());
+    assert_ne!(parts[2], "");
 }
 
 #[test]

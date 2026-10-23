@@ -12,7 +12,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 )
 
 // newHopTestAccount builds an account with the hop marker armed.

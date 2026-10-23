@@ -12,17 +12,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
-	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
-	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
-	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	v2artifacts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
+	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
 // ---------------------------------------------------------------------------

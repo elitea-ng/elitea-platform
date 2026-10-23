@@ -6,13 +6,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
-	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 // composeResolvedVersion builds resolveApplicationVersion (ADR-0029 decision
@@ -39,6 +39,10 @@ func composeResolvedVersion(
 // where no toolkit worker or no agent plane is composed, and the route then
 // answers 501. The worker implementation only words the refusal of a tool the
 // worker cannot run remotely (the Rust worker admits read-only tools only).
+// platformTools runs a platform MCP server's tool (toolkit id 0) in process;
+// the router binds it to the MCP server it builds. platformReplays is the
+// cross-replica Idempotency-Key store those calls claim (nil without the
+// live-update NATS: platform calls then answer 501).
 func composeRemoteToolkit(
 	pool *pgxpool.Pool,
 	toolRuns toolkitrun.UseCase,
@@ -46,6 +50,8 @@ func composeRemoteToolkit(
 	workerImplementation string,
 	policy localturn.PolicyReader,
 	recorder audit.Recorder,
+	platformTools *desktopopsapi.PlatformToolBridge,
+	platformReplays desktopopsapi.PlatformReplayStore,
 	groupAuth apimw.AuthConfig,
 	logger *slog.Logger,
 ) (http.Handler, error) {
@@ -59,6 +65,7 @@ func composeRemoteToolkit(
 	}
 	return desktopopsapi.NewRemoteToolkitRoute(desktopopsapi.RemoteToolkitDependencies{
 		Runs: toolRuns, Worker: workerImplementation, Authorizer: authorizer, Turns: turns,
-		Confirmations: localTurns, Audit: recorder,
+		Confirmations: localTurns, Audit: recorder, Platform: platformTools,
+		Replays: platformReplays,
 	}, groupAuth, legacyrbac.NewPostgresResolver(pool))
 }

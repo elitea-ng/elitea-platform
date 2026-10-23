@@ -1,4 +1,5 @@
 {{- if .Values.main.enabled }}
+{{- include "elitea.applyFeatureSwitches" . }}{{- /* idempotent; see _feature-switches.tpl */}}
 {{- /*
   The database secret, resolved once for every component that reads it.
   An explicit `secrets.DATABASE_URL` under this component wins and is taken
@@ -27,17 +28,18 @@ metadata:
   labels:
     {{- include "elitea-main.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.main.autoscaling.enabled }}
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.main "field" "main") }}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.main) }}
   replicas: {{ .Values.main.replicaCount }}
   {{- end }}
+  {{- /* No `replicas:` while the HPA owns the Deployment: see elitea.scaling.autoscaled. */}}
   selector:
     matchLabels:
       {{- include "elitea-main.selectorLabels" . | nindent 6 }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+      {{- toYaml .Values.main.rollingUpdate | nindent 6 }}
   template:
     metadata:
       labels:
@@ -49,7 +51,18 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-main.serviceAccountName" . }}
-      terminationGracePeriodSeconds: 30
+      {{- /*
+        One clock for the whole shutdown (main.preStop in values.yaml): the
+        preStop sleep, then ELITEA_SHUTDOWN_TIMEOUT of drain after SIGTERM,
+        then 10s for the pools and NATS to close. It was a hard-coded 30,
+        which the default 15s drain plus a load balancer's deregistration
+        delay could already exceed.
+      */}}
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.main) }}
+      {{- $drain := include "elitea.durationSeconds" (dict "field" "main.env.ELITEA_SHUTDOWN_TIMEOUT" "value" (get (.Values.main.env | default dict) "ELITEA_SHUTDOWN_TIMEOUT" | default "15s")) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "main" "grace" .Values.main.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "ELITEA_SHUTDOWN_TIMEOUT" $drain) (list "pool and NATS close" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.main.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.main "selector" (include "elitea-main.selectorLabels" .)) | nindent 6 }}
       {{- $runtimeMaterialInit := and .Values.main.runtime.enabled .Values.main.runtime.material.secretName }}
       {{- $authMaterialInit := and .Values.main.fileConfig.authConfig.enabled .Values.main.fileConfig.authConfig.material.secretName }}
       {{- if or $runtimeMaterialInit $authMaterialInit }}
@@ -165,9 +178,9 @@ spec:
               containerPort: 8080
               protocol: TCP
             {{- if .Values.main.runtime.enabled }}
-            # The runtime plane's three listeners (issue #382). The agent
-            # worker dials all three, so they must be reachable on the Service
-            # as well as declared here.
+            # The runtime plane's listeners (issue #382). The agent worker
+            # dials all of them, so they must be reachable on the Service as
+            # well as declared here.
             - name: runtime-control
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
               protocol: TCP
@@ -176,6 +189,14 @@ spec:
               protocol: TCP
             - name: runtime-content
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.contentAddress }}
+              protocol: TCP
+            # The platform listener (#1359): elitea-main's internal gRPC port
+            # (mTLS, per-service workload allowlists) for the worker, the
+            # engines and the sub-application host. gRPC only — no HTTP probe
+            # may target it. The name is "runtime-plat" because Kubernetes caps
+            # a port name at 15 characters.
+            - name: runtime-plat
+              containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
               protocol: TCP
             {{- end }}
           envFrom:
@@ -218,25 +239,55 @@ spec:
             - name: BRAND_PACK_PATH
               value: {{ .Values.main.fileConfig.brandPack.mountPath }}
             {{- end }}
+            {{- with include "elitea-main.webUpstream" . }}
+            # elitea-main is the browser edge (#1359 P3): it redirects `/` to
+            # `/app/` and relays `/app…` and `/docs…` to elitea-web, keeping the
+            # MCP server and its own file servers under `/app`. See
+            # elitea-main.webUpstream in templates/main/_helpers.tpl.
+            - name: ELITEA_WEB_UPSTREAM
+              value: {{ . | quote }}
+            {{- end }}
+          {{- /*
+            With the browser edge on, elitea-main refuses /readyz and /startupz
+            to every caller that is not loopback (their bodies name each
+            dependency's state), and a kubelet httpGet arrives from the node.
+            The startup and readiness probes then run the binary's own
+            `-healthcheck <path>`, which requests the path over loopback inside
+            the container — the compose healthcheck's mechanism. The liveness
+            path, /healthz, is public and stays an httpGet.
+          */}}
+          {{- $edge := include "elitea-main.webUpstream" . }}
           startupProbe:
+            {{- if $edge }}
+            {{- include "elitea-main.healthcheckExec" (list . .Values.main.probes.startup.path) | nindent 12 }}
+            {{- else }}
             httpGet:
               path: {{ .Values.main.probes.startup.path }}
               port: http
+            {{- end }}
             initialDelaySeconds: {{ .Values.main.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.main.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.main.probes.startup.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.main.probes.startup.failureThreshold }}
           livenessProbe:
             httpGet:
               path: {{ .Values.main.probes.liveness.path }}
               port: http
             periodSeconds: {{ .Values.main.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.main.probes.liveness.timeoutSeconds | default 1 }}
             failureThreshold: {{ .Values.main.probes.liveness.failureThreshold }}
           readinessProbe:
+            {{- if $edge }}
+            {{- include "elitea-main.healthcheckExec" (list . .Values.main.probes.readiness.path) | nindent 12 }}
+            {{- else }}
             httpGet:
               path: {{ .Values.main.probes.readiness.path }}
               port: http
+            {{- end }}
             periodSeconds: {{ .Values.main.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.main.probes.readiness.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.main.probes.readiness.failureThreshold }}
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
           resources:
             {{- toYaml .Values.main.resources | nindent 12 }}
           volumeMounts:
@@ -310,12 +361,12 @@ spec:
               mountPath: {{ .Values.main.fileConfig.vectorClientMaterial.mountPath }}
               readOnly: true
             {{- end }}
-            {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+            {{- if and .Values.natsClient.tls.enabled (include "elitea-main.usesNats" .) }}
             # The live-update plane's NATS client certificate
             # (templates/natsClient.yaml).
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
-            {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+            {{- if and .Values.natsClient.tls.enabled (.Values.main.runtime | default dict).enabled }}
             # The runtime plane's NATS identity, elitea-main-runtime: the
             # command bus producer (templates/natsClient.yaml).
             - name: runtime-nats-client-tls
@@ -366,7 +417,10 @@ spec:
         - name: egress-token-signing-key
           secret:
             secretName: {{ .Values.egressProxy.signingKey.existingSecret }}
-            defaultMode: 0400
+            # Readable by Main's non-root user: the pod sets no fsGroup, so
+            # 0400 left the file root-only and Main exited on "permission
+            # denied". The same mode as the other Secret sources here.
+            defaultMode: 0444
             items:
               - key: {{ .Values.egressProxy.signingKey.key }}
                 path: {{ .Values.egressProxy.signingKey.key }}
@@ -472,10 +526,10 @@ spec:
             defaultMode: {{ .Values.main.fileConfig.vectorClientMaterial.defaultMode }}
           {{- end }}
         {{- end }}
-        {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+        {{- if and .Values.natsClient.tls.enabled (include "elitea-main.usesNats" .) }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-main.fullname" .))) | nindent 8 }}
         {{- end }}
-        {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+        {{- if and .Values.natsClient.tls.enabled (.Values.main.runtime | default dict).enabled }}
         - name: runtime-nats-client-tls
           secret:
             secretName: {{ printf "%s-runtime-nats-client-tls" (include "elitea-main.fullname" .) }}

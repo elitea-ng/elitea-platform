@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // stubRepo answers every method with the same outcome, so one case covers the
@@ -354,7 +354,7 @@ func TestDetailBranchesCarryNoZeroKpiBlock(t *testing.T) {
 // `start_date`/`end_date` and `date_from`/`date_to` both reach the same window.
 // The second pair is what the web client sends; the first is what parseParams
 // has always read first, and dateWindow — /analytics_costs' transcription of
-// the pylon reference — knows only the second. A caller using the first pair
+// the legacy reference — knows only the second. A caller using the first pair
 // getting the DEFAULT window instead of theirs is a plausible wrong answer over
 // a range nobody asked for, which no status code would reveal.
 func TestBothDateSpellingsReachTheSameWindow(t *testing.T) {

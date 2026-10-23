@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
 
 // The caller's personal project and the team project are deliberately
@@ -334,7 +334,7 @@ func TestProjectSelector_BlankValueIsAbsent(t *testing.T) {
 }
 
 // TestProjectSelector_RepeatedHeaderIsAbsent follows the
-// uniqueForwardedIdentityHeader posture in auth.go: when two copies of an
+// posture this service applies to identity-bearing headers: when two copies of an
 // identity-bearing header disagree, no rule can say which copy the caller
 // meant, so the selector is absent.
 func TestProjectSelector_RepeatedHeaderIsAbsent(t *testing.T) {

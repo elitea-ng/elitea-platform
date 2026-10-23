@@ -18,8 +18,8 @@ package eliteacore_test
 //   2. What is recorded is INACTIVE. This deployment cannot activate a
 //      provider, and the route must not imply it did.
 //   3. `healthy` is null when no probe has reported, true or false when one
-//      has. Pylon could only say true or false, so a provider nobody had
-//      probed looked broken.
+//      has. The legacy runtime could only say true or false, so a provider
+//      nobody had probed looked broken.
 //   4. DELETE revokes and does NOT delete the row. An admission that was once
 //      in force is a fact about what this deployment ran.
 
@@ -36,7 +36,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // admissionPool is the descriptor harness's pool with 0107 applied on top.
@@ -46,13 +46,15 @@ func admissionPool(t *testing.T) *pgxpool.Pool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	sql, err := os.ReadFile(filepath.Join(
-		"..", "..", "..", "..", "migrations", "shared", "0107_provider_admitted_revisions.sql"))
-	if err != nil {
-		t.Fatalf("read 0107: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(sql)); err != nil {
-		t.Fatalf("apply 0107: %v", err)
+	// 0107 creates the plane; 0171 admits the grpcs:// listener origin.
+	for _, file := range []string{"0107_provider_admitted_revisions.sql", "0171_provider_origin_grpcs.sql"} {
+		sql, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "migrations", "shared", file))
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
 	}
 	return pool
 }
@@ -183,7 +185,7 @@ func TestHealthIsNullUntilSomethingProbes(t *testing.T) {
 		return body.Rows[0].Healthy
 	}
 
-	// NOBODY HAS PROBED. Null, not false — the distinction pylon's page could
+	// NOBODY HAS PROBED. Null, not false — the distinction the legacy page could
 	// not express, and the reason an operator can tell a broken provider from
 	// a probe that has stopped running.
 	if healthy := read(); healthy != nil {
@@ -267,5 +269,25 @@ func TestRevokingAProviderNobodyRegisteredIsNotReportedAsDone(t *testing.T) {
 	// believing they had turned something off.
 	if recorder.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 (body %s)", recorder.Code, recorder.Body.String())
+	}
+}
+
+// The facades' registrar records a provider at its gRPC listener,
+// grpcs://host:port, and the listing shows that origin; an operator who
+// re-registers what the listing shows (DWIKI-013b re-admits a revoked provider
+// exactly so) must be accepted. A path, or a scheme that is neither http(s)
+// nor grpcs, is still refused with a message, not a constraint error.
+func TestRegistrationAcceptsTheGRPCListenerOriginAndRefusesOthers(t *testing.T) {
+	pool := admissionPool(t)
+	router := admissionRouterFor(t, pool)
+	accepted := postDescriptor(t, router, `{"provider_name":"wikis","service_location_url":"grpcs://elitea-deepwiki:9443","descriptor":{"name":"wikis"}}`)
+	if accepted.Code != http.StatusAccepted {
+		t.Fatalf("grpcs origin: %d %s", accepted.Code, accepted.Body.String())
+	}
+	for _, origin := range []string{"grpcs://elitea-deepwiki:9443/x", "grpc://elitea-deepwiki:9443", "grpcs://"} {
+		refused := postDescriptor(t, router, `{"provider_name":"wikis","service_location_url":"`+origin+`","descriptor":{"name":"wikis"}}`)
+		if refused.Code != http.StatusBadRequest {
+			t.Fatalf("origin %q: %d %s, want 400", origin, refused.Code, refused.Body.String())
+		}
 	}
 }

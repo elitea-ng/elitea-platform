@@ -1,17 +1,15 @@
 package output
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
 
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 const MaxNodeEventOutputBytes = 64 * 1024
@@ -64,41 +62,6 @@ func (f NodeEventFrame) Validate() error {
 		return ErrInvalidNodeEventOutput
 	}
 	return nil
-}
-
-// CurrentIndexMetaTaskRestampSource selects only the current index_data
-// in-progress callback and returns its SDK-created metadata generation marker.
-// All target identity is deliberately absent: the projector derives it from
-// the authenticated immutable admission.
-func (f NodeEventFrame) CurrentIndexMetaTaskRestampSource() (float64, bool) {
-	var event struct {
-		Type             string          `json:"type"`
-		ResponseMetadata json.RawMessage `json:"response_metadata"`
-	}
-	if err := json.Unmarshal(f.BrowserData, &event); err != nil ||
-		event.Type != "agent_index_data_status" ||
-		len(event.ResponseMetadata) == 0 {
-		return 0, false
-	}
-	var metadata struct {
-		State     string          `json:"state"`
-		CreatedAt json.RawMessage `json:"created_at"`
-	}
-	if err := json.Unmarshal(event.ResponseMetadata, &metadata); err != nil ||
-		metadata.State != "in_progress" ||
-		len(metadata.CreatedAt) == 0 {
-		return 0, false
-	}
-	rawCreatedOn := bytes.TrimSpace(metadata.CreatedAt)
-	if len(rawCreatedOn) == 0 || rawCreatedOn[0] == '"' {
-		return 0, false
-	}
-	createdOn, err := strconv.ParseFloat(string(rawCreatedOn), 64)
-	if err != nil || math.IsNaN(createdOn) || math.IsInf(createdOn, 0) ||
-		createdOn <= 0 {
-		return 0, false
-	}
-	return createdOn, true
 }
 
 func canonicalOutputEventID(commandID string, sequence uint64) string {

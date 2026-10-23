@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
 const (
@@ -87,6 +87,14 @@ type Config struct {
 	FormBegin            Policy
 	FormCredentialClient Policy
 	FormCredentialLogin  Policy
+	// The single-sign-on planes' per-client limits (#1078). Like FormBegin,
+	// none counts against Global: the identity provider verifies the
+	// credential, and these bound only the state, redirects and assertion
+	// work one client can cause.
+	OIDCBegin    Policy
+	OIDCCallback Policy
+	SAMLBegin    Policy
+	SAMLACS      Policy
 	// MaxConcurrentAdmissions is the per-replica bound on admissions that
 	// reach the database. Zero selects DefaultMaxConcurrentAdmissions.
 	MaxConcurrentAdmissions int
@@ -115,9 +123,9 @@ type PostgresAdmitter struct {
 	pool       *pgxpool.Pool
 	keySecret  [sha256.Size]byte
 	global     Policy
-	formBegin  Policy
 	formClient Policy
 	formLogin  Policy
+	clientOnly map[browserapp.BrowserAttemptStage]Policy
 	slots      chan struct{}
 	denied     *deniedCache
 	now        func() time.Time
@@ -127,6 +135,8 @@ func NewPostgresAdmitter(pool *pgxpool.Pool, config Config) (*PostgresAdmitter, 
 	if pool == nil || !validKeySecret(config.KeySecret) ||
 		!validPolicy(config.Global) || !validPolicy(config.FormBegin) ||
 		!validPolicy(config.FormCredentialClient) || !validPolicy(config.FormCredentialLogin) ||
+		!validPolicy(config.OIDCBegin) || !validPolicy(config.OIDCCallback) ||
+		!validPolicy(config.SAMLBegin) || !validPolicy(config.SAMLACS) ||
 		config.Global.Window < config.FormCredentialClient.Window ||
 		config.Global.Window < config.FormCredentialLogin.Window ||
 		config.MaxConcurrentAdmissions < 0 {
@@ -140,12 +150,18 @@ func NewPostgresAdmitter(pool *pgxpool.Pool, config Config) (*PostgresAdmitter, 
 		pool:       pool,
 		keySecret:  sha256.Sum256(config.KeySecret),
 		global:     config.Global,
-		formBegin:  config.FormBegin,
 		formClient: config.FormCredentialClient,
 		formLogin:  config.FormCredentialLogin,
-		slots:      make(chan struct{}, slots),
-		denied:     newDeniedCache(maxDeniedEntries),
-		now:        time.Now,
+		clientOnly: map[browserapp.BrowserAttemptStage]Policy{
+			browserapp.BrowserAttemptFormBegin:    config.FormBegin,
+			browserapp.BrowserAttemptOIDCBegin:    config.OIDCBegin,
+			browserapp.BrowserAttemptOIDCCallback: config.OIDCCallback,
+			browserapp.BrowserAttemptSAMLBegin:    config.SAMLBegin,
+			browserapp.BrowserAttemptSAMLACS:      config.SAMLACS,
+		},
+		slots:  make(chan struct{}, slots),
+		denied: newDeniedCache(maxDeniedEntries),
+		now:    time.Now,
 	}, nil
 }
 
@@ -429,15 +445,16 @@ func (a *PostgresAdmitter) deny(
 }
 
 func (a *PostgresAdmitter) policies(stage browserapp.BrowserAttemptStage) ([]Policy, bool) {
-	switch stage {
-	case browserapp.BrowserAttemptFormBegin:
-		// No global policy: see Config.Global.
-		return []Policy{a.formBegin}, true
-	case browserapp.BrowserAttemptFormCredential:
+	if stage == browserapp.BrowserAttemptFormCredential {
 		return []Policy{a.global, a.formClient, a.formLogin}, true
-	default:
+	}
+	// Every other stage is a begin-like stage: no global policy, see
+	// Config.Global.
+	policy, ok := a.clientOnly[stage]
+	if !ok {
 		return nil, false
 	}
+	return []Policy{policy}, true
 }
 
 func (a *PostgresAdmitter) keys(attempt browserapp.BrowserAttempt) []attemptKey {

@@ -18,7 +18,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 )
 
 // systemInfoBody serves the handler once and returns its status and decoded body.
@@ -64,7 +64,7 @@ func componentNames(t *testing.T, body map[string]any) []string {
 // TestSystemInfoReportsNoPluginFleet is the #219 regression guard. This
 // service loads no plugins and has no Arbiter bus to ask about other
 // processes, so it must never report a fleet — not a fabricated one, and not
-// under any of the six Pylon plugin names.
+// under any of the six legacy plugin names.
 func TestSystemInfoReportsNoPluginFleet(t *testing.T) {
 	_, body := systemInfoBody(t)
 

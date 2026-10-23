@@ -60,8 +60,8 @@ export function userRow(user: AnalyticsEstimateUser): EstimateRow {
  * The label falls back to the numeric application id when the tenant chat
  * projection carries no display name — a real state (agentUsage's own
  * `nameSelect` falls back to `''` for a Go-bootstrapped database with no
- * pylon-owned `applications` table), and a blank cell would read as a row
- * with no owner.
+ * legacy-runtime-owned `applications` table), and a blank cell would read as a
+ * row with no owner.
  */
 export function agentRow(agent: AnalyticsEstimateAgent): EstimateRow {
   const label =

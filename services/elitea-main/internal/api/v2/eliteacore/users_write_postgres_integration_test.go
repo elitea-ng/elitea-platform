@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,9 +29,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
-	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
+	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 const usersWriteProjectID = 1
@@ -296,7 +296,7 @@ func TestUsersWriteVerbsPersistProjectMembership(t *testing.T) {
 
 	// Administration mode used to answer 501 here, and this case used to assert
 	// it. That was a hole, not a policy: `/admin/users/{mode}/{projectID}`
-	// carries the project id in its own path, pylon's users.py maps BOTH modes
+	// carries the project id in its own path, the legacy users.py maps BOTH modes
 	// to the same body, and the admin Projects page's member dialog is exactly
 	// this call — so it reached a Not Implemented (unit A14, #200). It writes
 	// for real now; what differs between the modes is the route-level GATE

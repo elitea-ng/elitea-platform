@@ -73,9 +73,9 @@ const ADMIN_USERS_PERMISSION = 'admin.auth.users';
 export function AdminUsers() {
   const state = useAdminUsersPage();
   // The cross-project bulk invite (issue 247). It lives on this page because
-  // its subject is ACCOUNTS: pylon put "add every user to a project" under
-  // Invites, beside the global user list, and the picker it needs is the very
-  // list this page already holds.
+  // its subject is ACCOUNTS: the legacy runtime put "add every user to a
+  // project" under Invites, beside the global user list, and the picker it
+  // needs is the very list this page already holds.
   const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
   // The devices drawer (ADR-0025 WP3). Its permission is the one the device
   // routes require — `admin.auth.users`, the one that gates suspension — so

@@ -35,6 +35,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/indexing/indexing-tools', title: 'Index and search data with tools' },
         { kind: 'page', slug: 'how-tos/indexing/schedule-indexing', title: 'Schedule re-indexing' },
         { kind: 'page', slug: 'how-tos/indexing/index-sources', title: 'Index data from a source' },
+        { kind: 'page', slug: 'how-tos/indexing/desktop-local-index', title: 'Search a local folder (desktop)' },
       ],
     },
     {

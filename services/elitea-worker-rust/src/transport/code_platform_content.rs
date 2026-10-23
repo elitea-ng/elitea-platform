@@ -1,13 +1,20 @@
 //! One claim-scoped Main broker step. No Code frames or runtime selectors cross here.
 use super::{
-    Body, CLAIM_HEADER, CONTENT_LENGTH, CONTENT_TYPE, Duration, FENCE_HEADER, InputContentClient,
-    InputContentError, Method, PATH_SEGMENT, Request, StatusCode, Version, timeout,
-    utf8_percent_encode,
+    Code, Duration, InputContentClient, InputContentError, Status, claim_request, content_scope,
+    is_transport_status, timeout,
 };
 use crate::protocol::control::ClaimBoundSandboxAuthority;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use http_body_util::BodyExt as _;
+use crate::protocol::elitea::runtime::v1::{
+    ReadCodePlatformEffectsRequestV1, StepCodePlatformRequestV1,
+};
 use serde::{Deserialize, Serialize};
+
+/// The broker's two reads, one RPC each.
+#[derive(Clone, Copy)]
+enum Exchange {
+    Step,
+    Effects,
+}
 
 #[derive(Serialize)]
 struct StepRequest {
@@ -57,7 +64,7 @@ impl InputContentClient {
         let raw = self
             .code_platform_exchange(
                 claim,
-                "step",
+                Exchange::Step,
                 "elitea.runtime.code-platform-step-request.v1",
                 dispatch,
                 prepared_fingerprint,
@@ -78,7 +85,7 @@ impl InputContentClient {
         let raw = self
             .code_platform_exchange(
                 claim,
-                "effects",
+                Exchange::Effects,
                 "elitea.runtime.code-platform-effects-request.v1",
                 dispatch,
                 prepared_fingerprint,
@@ -89,7 +96,7 @@ impl InputContentClient {
     async fn code_platform_exchange(
         &self,
         claim: &ClaimBoundSandboxAuthority,
-        route: &str,
+        exchange: Exchange,
         request_schema: &'static str,
         dispatch: [u8; 32],
         prepared_fingerprint: [u8; 32],
@@ -105,63 +112,51 @@ impl InputContentClient {
         })
         .map_err(|_| invalid())?;
         let (execution, generation, claim_id, fence) = claim.intent_content_binding();
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri(format!(
-                "{}/executions/{}/generations/{generation}/code-platform/{route}",
-                self.config.origin,
-                utf8_percent_encode(execution, PATH_SEGMENT)
-            ))
-            .header(CLAIM_HEADER, claim_id)
-            .header(FENCE_HEADER, URL_SAFE_NO_PAD.encode(fence))
-            .header(CONTENT_TYPE, "application/json")
-            .header(CONTENT_LENGTH, payload.len())
-            .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                payload,
-            ))))
-            .map_err(|_| invalid())?;
+        let scope = Some(content_scope(execution, generation));
+        let mut rpc = self.rpc();
         timeout(self.config.deadline.min(Duration::from_secs(10)), async {
-            let mut response = self
-                .rpc
-                .get(request)
-                .await
-                .map_err(InputContentError::Transport)?;
-            if matches!(
-                response.status(),
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT
-            ) {
-                return Err(InputContentError::AuthorizationFailed(
-                    "the original Code broker step was refused",
-                ));
+            let raw = match exchange {
+                Exchange::Step => {
+                    let request = StepCodePlatformRequestV1 {
+                        scope,
+                        request_json: payload,
+                    };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.step_code_platform(request)
+                        .await
+                        .map(|response| response.into_inner().response_json)
+                }
+                Exchange::Effects => {
+                    let request = ReadCodePlatformEffectsRequestV1 {
+                        scope,
+                        request_json: payload,
+                    };
+                    let request = claim_request(request, claim_id, fence).ok_or_else(invalid)?;
+                    rpc.read_code_platform_effects(request)
+                        .await
+                        .map(|response| response.into_inner().response_json)
+                }
             }
-            if response.status() != StatusCode::OK
-                || response.version() != Version::HTTP_2
-                || response
-                    .headers()
-                    .get(CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .is_none_or(|v| v.split(';').next() != Some("application/json"))
-            {
+            .map_err(platform_status)?;
+            if raw.len() > 512 {
                 return Err(invalid());
-            }
-            let mut raw = Vec::new();
-            while let Some(frame) = response.body_mut().frame().await {
-                let frame = frame.map_err(|_| unavailable())?;
-                if frame.is_trailers() {
-                    return Err(invalid());
-                }
-                if let Ok(bytes) = frame.into_data() {
-                    if raw.len().checked_add(bytes.len()).is_none_or(|n| n > 512) {
-                        return Err(invalid());
-                    }
-                    raw.extend_from_slice(&bytes);
-                }
             }
             Ok(raw)
         })
         .await
         .map_err(|_| unavailable())?
+    }
+}
+/// A stale claim or a conflicting step is a refusal; any other answer from
+/// Main leaves the observation unproven.
+fn platform_status(status: Status) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied | Code::Aborted => {
+            InputContentError::AuthorizationFailed("the original Code broker step was refused")
+        }
+        Code::DeadlineExceeded => unavailable(),
+        _ if is_transport_status(&status) => InputContentError::transport(status),
+        _ => invalid(),
     }
 }
 fn parse_effects(raw: &[u8]) -> Result<CodePlatformEffects, InputContentError> {
@@ -203,7 +198,7 @@ fn parse_step(raw: &[u8]) -> Result<CodePlatformStep, InputContentError> {
         return Err(invalid());
     }
     let mut digest = [0; 32];
-    for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let number = |v: u8| {
             if v.is_ascii_digit() {
                 v - b'0'

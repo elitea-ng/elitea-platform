@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 )
 
 // ContextManagementGate reads the authoritative project setting without

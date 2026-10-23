@@ -19,30 +19,35 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Agent, Content, Event, Part, RunConfig, StreamingMode, ToolConcurrencyConfig,
+    Agent, Content, Event, Llm, Part, RunConfig, StreamingMode, ToolConcurrencyConfig,
     ToolExecutionStrategy, Toolset,
 };
 use adk_runner::Runner;
 use async_trait::async_trait;
+use elitea_agent_runtime::context::ToolResultElision;
+use elitea_agent_runtime::context_budget::RequestContextBudget;
+use elitea_agent_runtime::context_management::{SUMMARY_MAX_OUTPUT_TOKENS, StepCompaction};
 use elitea_agent_runtime::host::{
     EventSink, ExecutionGuard, HostError, LocalExecutionGuard, LocalStop, ModelRequest,
     ModelTransport, RunOutcome, ToolProvider, ToolsetRequest,
 };
 use elitea_agent_runtime::instruction_authority::InstructionPlan;
+use elitea_agent_runtime::planner::{self, Planner};
+use elitea_agent_runtime::request::ModelContextLimits;
 use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
 use elitea_agent_runtime::step_limit::{self, StepBudget};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
-use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
+use elitea_local_tools::approvals::{JsonFileChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
@@ -57,8 +62,10 @@ use super::api::{
 };
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
+use super::catalogue::{self, Catalogue};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
-use super::definition::{self, Admitted};
+use super::context::{self, ContextHost, TurnContext};
+use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents};
 use super::framing;
@@ -66,19 +73,32 @@ use super::mentions;
 use super::model::GatewayTransport;
 use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
-    RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
+    MCP_AUTHORIZATION_WAIT, RemoteContext, RemoteToolProvider, RetryPolicy,
+    TOOLSET_NAME as REMOTE_TOOLSET,
 };
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
-use super::tools::{ObservedToolset, ToolObserver};
-use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
+use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
+use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
+use crate::history::{
+    HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
+};
 use crate::index::IndexRegistry;
+use crate::rules::{RuleFiles, WorkspaceRuleSink};
 use crate::sessions::DesktopStateStore;
 use crate::workspaces::{Workspace, WorkspaceStore};
 
 const APP_NAME: &str = crate::sessions::APP_NAME;
 const AGENT_NAME: &str = AGENT_AUTHOR;
 const USER_ID: &str = crate::sessions::ADK_USER;
+/// The runtime planner's tools, as the environment section names them.
+const PLANNER_TOOLS: [&str; 5] = [
+    planner::UPDATE_PLAN,
+    planner::START_STEP,
+    planner::COMPLETE_STEP,
+    planner::GET_PLAN_STATUS,
+    planner::DELETE_PLAN,
+];
 /// How long one tool call may take (an approval can keep it waiting).
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// At most this many tool calls of one model step run at once (adk's
@@ -152,6 +172,21 @@ pub struct TurnRequest {
     /// Skills the person picked with "/" (names, or frozen ids, of the
     /// agent version's own skills), applied to this turn up front.
     pub skills: Vec<String>,
+    /// `/compact`: compact the session's context at the turn's first model
+    /// call, whatever its size (#1217).
+    pub compact: bool,
+    /// The model the person chose for this turn (#1228); kept as the
+    /// thread's model for its next turns. `None`: the thread's kept choice,
+    /// else the agent's model.
+    pub model: Option<ModelChoice>,
+    /// Project skills the person picked with "/" (their ids, as the UI
+    /// sent them): the host reads each itself and applies it like a
+    /// version skill, within the same limits.
+    pub project_skills: Vec<Value>,
+    /// A custom command the person picked with "/": the host reads and
+    /// expands it itself, and the expansion is what the model gets; the
+    /// prompt becomes the literal `/<name> <arguments>`.
+    pub command: Option<CommandPick>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -215,6 +250,13 @@ pub struct HostDeps {
     /// The app's identifier from its Tauri config: the library derives the
     /// default directories under it (a fallback to `sandbox_deny`).
     pub app_id: Option<String>,
+    /// The app config directory, which holds the person's approval rules
+    /// for every workspace (`rules.json`, src/rules.rs); `None`: no user
+    /// rules.
+    pub user_rules_dir: Option<PathBuf>,
+    /// The person's own custom commands (`<app config dir>/commands`,
+    /// `slash_commands`); `None`: only the workspace's.
+    pub user_commands_dir: Option<PathBuf>,
 }
 
 /// The app's resolved directories as deny entries, as given (the deny list
@@ -237,6 +279,27 @@ struct WorkspaceSession {
     session: Arc<LocalSession>,
     prompt: Arc<UiPrompt>,
     policy: LocalWorkPolicy,
+    /// When the approval rule files it loaded last changed.
+    rules_stamp: Mutex<crate::rules::Stamp>,
+}
+
+impl WorkspaceSession {
+    /// Load the rule files into the session's engine again when either
+    /// changed since it last did (checked at a turn's start).
+    fn refresh_rules(&self, files: &RuleFiles, workspace_id: &str) {
+        let Ok(mut stamp) = self.rules_stamp.lock() else {
+            return;
+        };
+        if *stamp == files.stamp(workspace_id) {
+            return;
+        }
+        let loaded = files.load(workspace_id);
+        for error in &loaded.errors {
+            log::warn!("approval rules not loaded: {error}");
+        }
+        self.session.rules().set_command_rules(loaded.rules);
+        *stamp = loaded.stamp;
+    }
 }
 
 /// What holds a workspace now.
@@ -383,6 +446,35 @@ async fn start_turn(
             }),
         )
         .await?)
+}
+
+/// The project skills `request` picks, read by the host (`getSkill`) and
+/// admitted, in request order (an id picked twice is read once, at its
+/// first place), all read at once. A skill the person cannot read (`403`,
+/// `404`) is `skill_unknown`.
+async fn project_skills(
+    api: &PlatformApi,
+    request: &TurnRequest,
+) -> Result<Vec<InvokedSkill>, TurnError> {
+    let mut ids = skills::project_ids(&request.project_skills)?;
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(*id));
+    futures::future::try_join_all(ids.into_iter().map(|id| async move {
+        let skill = api
+            .project_skill(request.project_id, id)
+            .await
+            .map_err(|error| match error.status {
+                Some(403 | 404) => TurnError::new(
+                    "skill_unknown",
+                    format!(
+                        "The project has no skill {id} you can use. Pick one from the / menu, or check the project's skills in the web app."
+                    ),
+                ),
+                _ => TurnError::from(error),
+            })?;
+        skills::from_project(request.project_id, id, &skill)
+    }))
+    .await
 }
 
 /// The platform refused a start for its conversation or participant
@@ -648,6 +740,8 @@ pub struct AgentHost {
     /// Whose history the signed-in session writes: the session's identity
     /// (origin and sign-in) and the owner it resolved to.
     owner: Mutex<Option<(String, Owner)>>,
+    /// The approval rule files (user and per workspace).
+    rules: Arc<RuleFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -719,27 +813,28 @@ pub fn with_project_instructions(
 }
 
 /// A turn's system prompt, in the order of authority: the agent's
-/// instructions, the host's environment section (trusted: not framed),
-/// the skills picked for the turn and the workspace's AGENTS.md (both
-/// untrusted, framed under `nonce`), then the memory recall.
+/// instructions, the stable part of the host's environment section
+/// (trusted: not framed), the skills picked for the turn and the
+/// workspace's AGENTS.md (both untrusted, framed under `nonce`), then the
+/// environment's volatile part (`current`: the date and the git line, last
+/// so a prompt cache keeps everything before it) and the memory recall.
 #[must_use]
 pub fn system_instruction(
     agent: &str,
     environment: &str,
     invoked: &[InvokedSkill],
     project: &ProjectInstructions,
+    current: &str,
     recall: &str,
     nonce: &str,
 ) -> String {
     let authored = splice_memory(agent, environment);
-    splice_memory(
-        &with_project_instructions(
-            &skills::with_invoked_skills(&authored, invoked, nonce),
-            project,
-            nonce,
-        ),
-        recall,
-    )
+    let stable = with_project_instructions(
+        &skills::with_invoked_skills(&authored, invoked, nonce),
+        project,
+        nonce,
+    );
+    splice_memory(&splice_memory(&stable, current), recall)
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -796,9 +891,14 @@ impl AgentHost {
             deps.credentials.clone(),
             &deps.client_version,
         ));
+        let rules = Arc::new(RuleFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
+            rules,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -856,6 +956,7 @@ impl AgentHost {
         if let Some(existing) = sessions.get(workspace_id)
             && &existing.policy == policy
         {
+            existing.refresh_rules(&self.rules, workspace_id);
             return Ok(existing.clone());
         }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
@@ -867,6 +968,11 @@ impl AgentHost {
                 format!("could not prepare the workspace data: {e}"),
             )
         })?;
+        // Command choices an older host remembered become workspace rules
+        // (once); the file choices stay in choices.json.
+        if let Err(error) = self.rules.migrate_choices(workspace_id) {
+            log::warn!("remembered choices were not migrated: {error}");
+        }
         let choices = JsonFileChoices::open(data_dir.join("choices.json"))
             .map_err(|e| TurnError::new("storage", e.message().to_owned()))?;
         let prompt = Arc::new(UiPrompt::new(self.broker.clone()));
@@ -881,12 +987,27 @@ impl AgentHost {
             shell: None,
             deny_read: self.deps.sandbox_deny.clone(),
             app_id: self.deps.app_id.clone(),
+            budgets: elitea_local_tools::budget::Budgets::default(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
+        // Layer 3: the workspace's rules, then the person's (a broken file
+        // loads none; its error is logged and shown in the rules panel).
+        let loaded = self.rules.load(workspace_id);
+        for error in &loaded.errors {
+            log::warn!("approval rules not loaded: {error}");
+        }
+        session.rules().set_command_rules(loaded.rules);
+        session
+            .rules()
+            .set_rule_sink(Some(Arc::new(WorkspaceRuleSink::new(
+                self.rules.clone(),
+                workspace_id,
+            ))));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
             policy: policy.clone(),
+            rules_stamp: Mutex::new(loaded.stamp),
         });
         sessions.insert(workspace_id.to_owned(), entry.clone());
         Ok(entry)
@@ -906,6 +1027,29 @@ impl AgentHost {
             .session
             .sandbox_request(SandboxMode::WorkspaceWrite, false)
             .expect("request")
+    }
+
+    /// The workspace's local session, opened as a turn opens it (tests).
+    #[cfg(test)]
+    pub(super) fn local_session_for_tests(
+        &self,
+        workspace_id: &str,
+        root: PathBuf,
+    ) -> Arc<LocalSession> {
+        let policy = self.policy().expect("policy");
+        self.session(workspace_id, root, &policy)
+            .expect("session")
+            .session
+            .clone()
+    }
+
+    /// Whether the workspace's settings let a turn run on another model
+    /// than the agent's (#1228; unreadable settings: the default, allowed).
+    fn model_override_allowed(&self, workspace_id: &str) -> bool {
+        self.deps
+            .workspaces
+            .agent_settings(workspace_id)
+            .map_or(true, |settings| settings.model_override_allowed())
     }
 
     /// The step limit the workspace's settings set, if any (unreadable
@@ -1060,6 +1204,125 @@ impl AgentHost {
         mentions::files(&folder, query, limit)
     }
 
+    /// The workspace's folder as a command file is read from: `path_deny`
+    /// and the session's deny list both apply.
+    fn command_folder(
+        &self,
+        path: &str,
+        policy: &LocalWorkPolicy,
+    ) -> Result<elitea_local_tools::workspace::Workspace, TurnError> {
+        Ok(mentions::open(Path::new(path), &policy.path_deny)?.with_deny_list(self.host_deny()))
+    }
+
+    /// `commands_list`: the custom commands of a workspace and of the
+    /// person's own folder (created `0700` when missing), by name, the
+    /// workspace's shadowing the person's. Not under the workspace's claim:
+    /// it only reads, so it also answers while a turn runs.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`.
+    pub fn commands_list(&self, workspace_id: &str) -> Result<Vec<ListedCommand>, TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let folder = self.command_folder(&workspace.path, &policy)?;
+        if let Some(dir) = &self.deps.user_commands_dir
+            && !dir.exists()
+            && let Err(error) = elitea_local_index::fs::create_private_dir(dir)
+        {
+            log::warn!("the commands folder could not be created: {error}");
+        }
+        Ok(slash_commands::listed(
+            elitea_local_tools::slash_commands::list(
+                Some(&folder),
+                self.deps.user_commands_dir.as_deref(),
+            ),
+        ))
+    }
+
+    /// The approval rule files (IPC `rules_*`, src/rules.rs).
+    pub fn rule_files(&self) -> &Arc<RuleFiles> {
+        &self.rules
+    }
+
+    /// A workspace's folder and the `path_deny` its proposal is read under
+    /// (IPC `rules_*`).
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `storage`.
+    pub fn rules_folder(&self, workspace_id: &str) -> Result<(PathBuf, Vec<String>), TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        Ok((PathBuf::from(workspace.path), policy.path_deny))
+    }
+
+    /// `rules_explain`: how the approval layers would decide `command` in
+    /// the workspace now, as a confined `workspace-write` call without the
+    /// network. A session that is open answers with its own engine (its
+    /// rules reloaded if a file changed); otherwise an engine of the same
+    /// layers is built for the question, and no session is opened.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rules_folder`]; `workspace_unavailable` when the folder
+    /// cannot be opened.
+    pub fn explain_command(
+        &self,
+        workspace_id: &str,
+        command: &str,
+    ) -> Result<elitea_local_tools::approvals::Decision, TurnError> {
+        use elitea_local_tools::approvals::{RulesEngine, ToolCall, ToolKind};
+        let policy = self.policy()?;
+        let (root, _) = self.rules_folder(workspace_id)?;
+        let call = ToolCall {
+            command: Some(command.to_owned()),
+            ..ToolCall::new(ToolKind::RunCommand)
+        };
+        let existing = self
+            .sessions
+            .lock()
+            .map_err(|_| TurnError::new("internal", "session table poisoned"))?
+            .get(workspace_id)
+            .filter(|existing| existing.policy == policy)
+            .cloned();
+        if let Some(existing) = existing {
+            existing.refresh_rules(&self.rules, workspace_id);
+            return Ok(existing.session.rules().decide(&call));
+        }
+        let unavailable = |e: elitea_local_tools::error::ToolError| {
+            TurnError::new("workspace_unavailable", e.message().to_owned())
+        };
+        let folder = elitea_local_tools::workspace::Workspace::open(&root, &policy.path_deny)
+            .map_err(unavailable)?;
+        let choices = JsonFileChoices::open(
+            self.deps
+                .workspaces
+                .data_dir(workspace_id)
+                .join("choices.json"),
+        )
+        .map_err(|e| TurnError::new("storage", e.message().to_owned()))?;
+        let engine = RulesEngine::new(
+            policy,
+            &folder,
+            WorkspaceSettings::default(),
+            Arc::new(choices),
+        )
+        .map_err(unavailable)?;
+        engine.set_command_rules(self.rules.load(workspace_id).rules);
+        Ok(engine.decide(&call))
+    }
+
     /// `reveal_path` / `open_path`: a workspace-relative path, resolved and
     /// confined the way the turn's session sees the folder (`path_deny`
     /// included, no symlink escape).
@@ -1096,7 +1359,15 @@ impl AgentHost {
     ///
     /// A refusal (`secrets_withheld`, `local_work_disabled`, …) or a failed
     /// platform call.
-    pub async fn start(self: &Arc<Self>, request: TurnRequest) -> Result<TurnStarted, TurnError> {
+    pub async fn start(
+        self: &Arc<Self>,
+        mut request: TurnRequest,
+    ) -> Result<TurnStarted, TurnError> {
+        // A command's turn is recorded everywhere (history, start, commit)
+        // as the person typed it; only the model gets the expansion.
+        if let Some(pick) = &request.command {
+            request.prompt = slash_commands::literal(pick);
+        }
         let turn_id = uuid::Uuid::new_v4().to_string();
         let started_at = chrono::Utc::now().timestamp_millis();
         let tap = TurnTap::new(self.deps.emitter.clone(), self.deps.history.clone());
@@ -1164,7 +1435,9 @@ impl AgentHost {
     /// picked skills (one of this version's own, as the platform answered
     /// it to this person) and the rest of the runtime's instruction
     /// admission (the project context, the catalogue's bounds). `run_agent`
-    /// admits the same definition again under the real ids.
+    /// admits the same definition again under the real ids. The model the
+    /// person chose is applied apart ([`Self::requested_model`]): its
+    /// refusals say nothing about the version, which stays cached.
     fn admit(
         &self,
         request: &TurnRequest,
@@ -1187,6 +1460,104 @@ impl AgentHost {
             )
         })?;
         Ok((admitted, invoked))
+    }
+
+    /// `admitted` on the model the person chose (#1228): refused when the
+    /// agent pins its model (`model_pinned`) or the workspace's settings
+    /// turn the choice off (`model_override_disabled`).
+    fn chosen_model(
+        &self,
+        workspace_id: &str,
+        admitted: Admitted,
+        choice: &ModelChoice,
+    ) -> Result<Admitted, TurnError> {
+        let chosen = admitted
+            .with_model_choice(choice)
+            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
+        if chosen.model_chosen && !self.model_override_allowed(workspace_id) {
+            return Err(TurnError::new(
+                "model_override_disabled",
+                "This workspace's settings run every turn on the agent's own model.",
+            ));
+        }
+        Ok(chosen)
+    }
+
+    /// `admitted` on the model the request chose, if any (#1228), checked
+    /// against the project's chat models `models` (when they could be
+    /// read): `model_pinned`, `model_override_disabled`, `model_unavailable`.
+    fn requested_model(
+        &self,
+        request: &TurnRequest,
+        admitted: Admitted,
+        models: Option<&Catalogue>,
+    ) -> Result<Admitted, TurnError> {
+        match &request.model {
+            Some(choice) => catalogued(
+                self.chosen_model(&request.workspace_id, admitted, choice)?,
+                models,
+            ),
+            None => Ok(admitted),
+        }
+    }
+
+    /// The thread's model for this turn, kept in its session (#1228): the
+    /// request's choice is kept when it changed; a request without one
+    /// runs on the kept choice, unless the agent now pins its model or the
+    /// workspace turned the choice off (then on the agent's, as admitted).
+    /// A kept choice is checked against the project's chat models like a
+    /// requested one: one they no longer list is dropped (the thread is back
+    /// on the agent's model, and a `status` notice says so). With the
+    /// catalogue the turn read, if any.
+    async fn thread_model(
+        &self,
+        request: &TurnRequest,
+        api: &PlatformApi,
+        events: &TurnEvents,
+        admitted: Admitted,
+        memory: &SessionPlan,
+        models: Option<Arc<Catalogue>>,
+    ) -> (Admitted, Option<Arc<Catalogue>>) {
+        let kept = memory.model_choice().await;
+        if let Some(choice) = &request.model {
+            let keep = admitted.model_chosen.then_some(choice);
+            if kept.as_ref() != keep {
+                memory.keep_model_choice(keep).await;
+            }
+            return (admitted, models);
+        }
+        let Some(kept) = kept else {
+            return (admitted, models);
+        };
+        let chosen = match self.chosen_model(&request.workspace_id, admitted.clone(), &kept) {
+            Ok(chosen) if chosen.model_chosen => chosen,
+            Ok(_) => return (admitted, models),
+            Err(error) => {
+                log::info!(
+                    "the thread's model choice does not apply to this turn: {}",
+                    error.code
+                );
+                return (admitted, models);
+            }
+        };
+        let models = match models {
+            Some(models) => Some(models),
+            None => catalogue::read(api, &self.caches.catalogues, request.project_id).await,
+        };
+        match catalogued(chosen, models.as_deref()) {
+            Ok(chosen) => (chosen, models),
+            Err(_) => {
+                memory.keep_model_choice(None).await;
+                events.status(
+                    Phase::Starting,
+                    Some(&format!(
+                        "The model {} is no longer one of this project's chat models, so this thread is back on the agent's model.",
+                        kept.name
+                    )),
+                );
+                (admitted, models)
+            }
+        }
     }
 
     /// The conversation's agent session for this turn (see [`SessionPlan`]).
@@ -1261,6 +1632,10 @@ impl AgentHost {
             plan_mode: false,
             mentions: Vec::new(),
             skills: Vec::new(),
+            compact: false,
+            model: None,
+            project_skills: Vec::new(),
+            command: None,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1302,6 +1677,20 @@ impl AgentHost {
         if let (Some(Ok(answering)), Some(key)) = (participant, &participant_key) {
             self.caches.keep_participant(key.clone(), &answering);
         }
+        // The model's context limits (#1217), so the turn reads none.
+        if let Some(cached) = self.caches.version(&version_key)
+            && let Ok(admitted) = definition::admit(&cached.resolved, &local_tool_names())
+        {
+            context::model_facts(
+                &api,
+                &self.caches,
+                request.project_id,
+                &admitted.model.model_name,
+                &admitted.version_details,
+                None,
+            )
+            .await;
+        }
         Ok(Prewarmed {
             version: self.caches.version(&version_key).is_some(),
             participant: participant_key
@@ -1321,10 +1710,33 @@ impl AgentHost {
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
-        skills::check(&request.skills)?;
+        skills::check(&request.skills, &request.project_skills)?;
+        if let Some(pick) = &request.command {
+            slash_commands::check(pick)?;
+        }
         // Checked first, so a refusal costs no request; again under the claim.
         let bound = self.bound_workspace(request)?;
         let policy = self.policy()?;
+        // A custom command is read again now (it may have changed since the
+        // menu listed it) and expanded here, before any request.
+        // The files are read off the async executor.
+        let command = match &request.command {
+            Some(pick) => {
+                let folder = self.command_folder(&bound.path, &policy)?;
+                let user_dir = self.deps.user_commands_dir.clone();
+                let pick = pick.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        slash_commands::resolve(Some(&folder), user_dir.as_deref(), &pick)
+                    })
+                    .await
+                    .map_err(|_| {
+                        TurnError::new("internal", "the command lookup stopped unexpectedly")
+                    })??,
+                )
+            }
+            None => None,
+        };
         // The "@" references, checked against the folder the way the
         // session sees it (path_deny included), become part of the prompt
         // every later step (start, run, commit) carries.
@@ -1333,7 +1745,15 @@ impl AgentHost {
         let folder = mentions::open(Path::new(&bound.path), &policy.path_deny)?;
         let checked = mentions::check(&folder, &request.mentions)?;
         let project = project_instructions::load(&folder, &checked);
+        // The files the thread references are embedded first.
+        if let Some(index) = &self.deps.index {
+            index.prioritise(&request.workspace_id, checked.iter().cloned());
+        }
         drop(folder);
+        let command = command.map(|command| CommandTurn {
+            mentions: checked.clone(),
+            command,
+        });
         let request = &TurnRequest {
             prompt: mentions::with_mentions(&request.prompt, &checked),
             mentions: Vec::new(),
@@ -1371,7 +1791,7 @@ impl AgentHost {
         // together (neither depends on the other), with whose session this
         // is (cached after the session's first turn).
         let reading = std::time::Instant::now();
-        let (fetched, looked_up, owner) = tokio::join!(
+        let (fetched, looked_up, owner, models) = tokio::join!(
             async {
                 if warm.is_some() {
                     return None;
@@ -1396,6 +1816,16 @@ impl AgentHost {
                 Some(answer)
             },
             async { self.owner(&api).await.ok() },
+            // A chosen model is checked against the project's chat models
+            // (#1228), read beside the rest (kept for a minute).
+            async {
+                match &request.model {
+                    Some(_) => {
+                        catalogue::read(&api, &self.caches.catalogues, request.project_id).await
+                    }
+                    None => None,
+                }
+            },
         );
         // The version's refusals come before the conversation's.
         let (resolved_withheld, (admitted, invoked), revalidate) = match (warm, fetched) {
@@ -1425,9 +1855,20 @@ impl AgentHost {
                 ));
             }
         };
+        // A chosen model the project's catalogue does not list is refused
+        // before anything starts; one it could not answer for is left to the
+        // gateway, which governs every request.
+        let admitted = self.requested_model(request, admitted, models.as_deref())?;
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
+        // The project skills picked by id: read by the host under the
+        // person's token, checked with the version's picks before the start.
+        // Joined with the version's picks now, so a turn they do not fit is
+        // refused before its start; joined again only when the revalidation
+        // beside the start brings a changed version.
+        let project_skills = project_skills(&api, request).await?;
+        let invoked = skills::with_project(&invoked, &project_skills)?;
         let fresh_participant = match looked_up {
             Some(answer) => {
                 let answering = answer?;
@@ -1443,6 +1884,9 @@ impl AgentHost {
         // for (that turn's conversation is read after it, below).
         let claim =
             WorkspaceClaim::take_for_turn(&self.busy, &request.workspace_id, TURN_RUNNING).await?;
+        // The index's background embedding, and any idle rebuild, wait
+        // while the turn runs.
+        let _index_held = self.deps.index.as_ref().map(|index| index.hold_for_turn());
         // Read again under the claim: the workspace may have been removed or
         // re-bound while the version and the conversation were read (neither
         // can happen from here on, both take the claim).
@@ -1570,7 +2014,11 @@ impl AgentHost {
                 if resolved.project_context_withheld && !resolved_withheld {
                     events.status(Phase::Starting, Some(CONTEXT_WITHHELD));
                 }
-                readmitted
+                let (readmitted, invoked) = readmitted;
+                (
+                    self.requested_model(request, readmitted, models.as_deref())?,
+                    skills::with_project(&invoked, &project_skills)?,
+                )
             }
             Some(Err(error)) => {
                 self.caches.forget_version(&version_key);
@@ -1579,12 +2027,16 @@ impl AgentHost {
         };
         events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
+        let (admitted, models) = self
+            .thread_model(request, &api, events, admitted, &memory, models)
+            .await;
         Ok(Prepared {
             conversation,
             conversation_uuid: answering.conversation_uuid,
             tap,
             project,
             invoked,
+            command,
             request: request.clone(),
             events: events.clone(),
             workspace: workspace_session,
@@ -1599,6 +2051,8 @@ impl AgentHost {
                 Path::new(&workspace.path),
                 std::env::home_dir().as_deref(),
             ),
+            mentioned: checked,
+            models,
         })
     }
 
@@ -1609,10 +2063,12 @@ impl AgentHost {
         mut guard: LocalExecutionGuard,
     ) {
         let Prepared {
+            conversation,
             conversation_uuid,
             tap,
             project,
             invoked,
+            command,
             request,
             events,
             workspace,
@@ -1623,6 +2079,8 @@ impl AgentHost {
             api,
             mut memory,
             folder,
+            mentioned,
+            models,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -1631,14 +2089,42 @@ impl AgentHost {
             recorder: recorder.clone(),
         }));
         let session = workspace.session.clone();
-        session.set_plan_mode(request.plan_mode);
+        // The turn's permission profile (#1225): plan mode until the person
+        // accepts the plan (`exit_plan_mode`), which switches it to Build
+        // within this run.
+        session.set_profile(if request.plan_mode {
+            PermissionProfile::Plan
+        } else {
+            PermissionProfile::Build
+        });
+        // The turn's spilled outputs are its conversation's: read_output in
+        // another thread of this folder does not see them.
+        session.set_conversation(Some(&conversation));
+        // The edit tools that suit the admitted model (#1214): stable for
+        // the thread unless its model or meta.edit_format changes.
+        session.set_edit_profile(admitted.edit_profile);
         session.begin_turn(&checkpoint_label(&request.prompt));
-        events.running(&project.paths());
+        events.running(&project.paths(), &turn_model(&admitted));
 
-        let sink = Arc::new(TurnSink::default());
+        let sink = Arc::new(TurnSink::with_events(events.clone()));
+        let turn_context = TurnContext::default();
         let run = self.run_agent(
-            &request, &events, &workspace, &admitted, &project, &invoked, &started, &recorder,
-            &sink, &api, &memory, &folder,
+            &request,
+            &events,
+            &workspace,
+            &admitted,
+            &project,
+            &invoked,
+            command.as_ref(),
+            &started,
+            &recorder,
+            &sink,
+            &api,
+            &memory,
+            &folder,
+            &turn_context,
+            &mentioned,
+            models.as_deref(),
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -1674,7 +2160,7 @@ impl AgentHost {
                 .await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
-            self.index_changed(&request.workspace_id, changes.len());
+            self.index_changed(&request.workspace_id, &changes);
             tap.changes(&changes);
             events.tools_done();
             events.log_timings();
@@ -1733,7 +2219,8 @@ impl AgentHost {
         }
         events.tools_done();
         let sandbox_mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
-        let mut assistant = json!({ "content": answer });
+        // The model the turn ran on, as the cloud's turns carry it.
+        let mut assistant = json!({ "content": answer, "model_name": admitted.model.model_name });
         if let Some(error) = &failure {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
@@ -1742,8 +2229,10 @@ impl AgentHost {
             user_message: json!({ "content": request.prompt }),
             assistant_message: assistant,
             tool_calls: recorder.tool_calls(),
+            thinking_steps: recorder.thinking_steps(),
             hitl_exchanges: recorder.hitl_exchanges(),
             local_work: recorder.work_report(sandbox_mode.as_str()),
+            context_summary: turn_context.take_summary(),
         }
         .encode();
         // The workspace stays held by the commit (below) until it settles:
@@ -1751,7 +2240,7 @@ impl AgentHost {
         // saved (or its commit failed), and the next turn waits for it.
         let claim = claim.into_commit();
         let changes = recorder.changes(session.workspace());
-        self.index_changed(&request.workspace_id, changes.len());
+        self.index_changed(&request.workspace_id, &changes);
         tap.changes(&changes);
         if failure.is_some() {
             events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
@@ -1956,6 +2445,70 @@ impl AgentHost {
         )
     }
 
+    /// The agent's model behind the step compaction (#1217, `context.rs`),
+    /// or as it is when the agent's settings turn compaction off or its
+    /// limits admit no budget.
+    #[allow(clippy::too_many_arguments)]
+    fn compacting_model(
+        &self,
+        transport: &GatewayTransport,
+        model_request: ModelRequest,
+        model: Arc<dyn Llm>,
+        limits: ModelContextLimits,
+        admitted: &Admitted,
+        host: ContextHost,
+        compact: bool,
+        turn_context: &TurnContext,
+    ) -> Result<Arc<dyn Llm>, TurnError> {
+        let Some(policy) = context::policy(&admitted.version_details) else {
+            return Ok(model);
+        };
+        let budget = match RequestContextBudget::resolve(
+            Some(limits),
+            &Map::new(),
+            model_request.max_tokens,
+        ) {
+            Ok(Some(budget)) => budget,
+            Ok(None) | Err(_) => {
+                log::warn!(
+                    "the model's limits admit no context budget; the turn runs without compaction"
+                );
+                return Ok(model);
+            }
+        };
+        // The summary model: the agent's own, quiet, on the turn's transport
+        // (its execution id: the spend is the turn's).
+        let summarizer = GatewayTransport {
+            quiet: true,
+            ..transport.clone()
+        }
+        .bind(ModelRequest {
+            system_instruction: String::new(),
+            max_tokens: Some(SUMMARY_MAX_OUTPUT_TOKENS.min(limits.max_output_tokens)),
+            temperature: None,
+            reasoning_effort: None,
+            max_model_turns: 1,
+            ..model_request.clone()
+        })
+        .map_err(|e| TurnError::new("model_unavailable", e.to_string()))?
+        .adk_model();
+        let compaction = Arc::new(StepCompaction::new(
+            policy,
+            Arc::new(context::ProviderBudget {
+                model: model_request,
+                budget,
+                replay: transport.replay,
+            }),
+            summarizer,
+            Arc::new(host),
+        ));
+        if compact {
+            compaction.force_next();
+        }
+        turn_context.bind(compaction.clone());
+        Ok(compaction.wrap(model))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run_agent(
         &self,
@@ -1965,12 +2518,16 @@ impl AgentHost {
         admitted: &Admitted,
         project: &ProjectInstructions,
         invoked: &[InvokedSkill],
+        command: Option<&CommandTurn>,
         started: &LocalTurnStarted,
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
         api: &Arc<PlatformApi>,
         memory: &SessionPlan,
         folder: &str,
+        turn_context: &TurnContext,
+        mentioned: &[String],
+        models: Option<&Catalogue>,
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
@@ -1986,7 +2543,19 @@ impl AgentHost {
             .iter()
             .map(|tool| tool.name.to_owned())
             .collect();
-        let (index, mut facts) = tokio::join!(
+        // The model's context limits (the frozen ones, else the catalogue's,
+        // kept for the app's session) and its family (whether reasoning goes
+        // back to the provider) are read beside them, from the catalogue the
+        // turn already read if any (one read per turn at most). The frozen
+        // ones are the agent's model's: another model's come from the
+        // catalogue (an effort chosen for the agent's own keeps them).
+        let unfrozen = Map::new();
+        let frozen_from = if admitted.on_own_model() {
+            &admitted.version_details
+        } else {
+            &unfrozen
+        };
+        let (index, mut facts, model_facts) = tokio::join!(
             async {
                 match &self.deps.index {
                     Some(registry) => registry.for_turn(&request.workspace_id).await,
@@ -1999,13 +2568,28 @@ impl AgentHost {
                 &workspace.policy,
                 request.plan_mode,
                 local_offered,
+                mentioned,
+            ),
+            context::model_facts(
+                api,
+                &self.caches,
+                request.project_id,
+                &admitted.model.model_name,
+                frozen_from,
+                models,
             ),
         );
+        let context::ModelFacts { limits, replay } = model_facts;
+        // The runtime's planner, offered to every workspace turn (a coding
+        // agent needs its checklist), plan mode included: it changes only
+        // the session's plan state (#1225).
+        let planner = Planner::new();
+        let mut extra_tools: Vec<String> = Vec::new();
         if index.is_some() {
-            facts
-                .tools
-                .extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
+            extra_tools.extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
         }
+        extra_tools.extend(PLANNER_TOOLS.iter().map(|name| (*name).to_owned()));
+        facts.tools.extend(extra_tools.iter().cloned());
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -2013,44 +2597,81 @@ impl AgentHost {
             project_id: request.project_id,
             execution_id: started.execution_id.clone(),
             events: events.clone(),
+            quiet: false,
+            recorder: Some(recorder.clone()),
+            replay,
+        };
+        let instruction = system_instruction(
+            &admitted.instructions,
+            &environment::preamble(&facts),
+            invoked,
+            project,
+            &environment::current(&facts),
+            &started.memory_recall.text,
+            &nonce,
+        );
+        // The transport sends the instruction outside adk's contents: the
+        // elision below counts it as the provider request carries it.
+        let instruction_tokens =
+            elitea_agent_runtime::context_budget::estimate_tokens(instruction.len());
+        // The agent's `max_tokens`, at most what a chosen model can answer.
+        let max_tokens = admitted.model.max_tokens.map(|tokens| {
+            if admitted.model_chosen && !limits.max_output_fallback {
+                tokens.min(limits.max_output_tokens)
+            } else {
+                tokens
+            }
+        });
+        let model_request = ModelRequest {
+            model_project_id: check_project_id(request.project_id)?,
+            model_name: admitted.model.model_name.clone(),
+            system_instruction: instruction,
+            max_tokens,
+            temperature: admitted.model.temperature,
+            reasoning_effort: admitted.model.reasoning_effort,
+            response_schema: None,
+            allow_text_continuation: false,
+            max_model_turns: admitted.step_limit,
         };
         let bound = transport
-            .bind(ModelRequest {
-                model_project_id: check_project_id(request.project_id)?,
-                model_name: admitted.model.model_name.clone(),
-                system_instruction: system_instruction(
-                    &admitted.instructions,
-                    &environment::preamble(&facts),
-                    invoked,
-                    project,
-                    &started.memory_recall.text,
-                    &nonce,
-                ),
-                max_tokens: admitted.model.max_tokens,
-                temperature: admitted.model.temperature,
-                reasoning_effort: admitted.model.reasoning_effort,
-                response_schema: None,
-                allow_text_continuation: false,
-                max_model_turns: admitted.step_limit,
-            })
+            .bind(model_request.clone())
             .map_err(|e| failed("model_unavailable", &e.to_string()))?;
+        let model = self.compacting_model(
+            &transport,
+            model_request,
+            bound.adk_model(),
+            limits,
+            admitted,
+            ContextHost {
+                events: events.clone(),
+                recorder: recorder.clone(),
+                service: memory.service.clone(),
+                session_id: memory.session_id.clone(),
+                limits,
+            },
+            request.compact,
+            turn_context,
+        )?;
 
         // Skills and project context: the runtime's instruction authority.
-        let plan = InstructionPlan::admit(&execution_request(
+        let mut execution = execution_request(
             request,
             admitted,
             &started.execution_id,
             &started.question_id,
-        ))
-        .map_err(|_| {
+        );
+        execution.payload.model_context_limits = Some(limits);
+        let plan = InstructionPlan::admit(&execution).map_err(|_| {
             failed(
                 "skills_invalid",
                 "The agent's frozen skills could not be loaded.",
             )
         })?;
 
-        // ToolProvider: local tools, then the remote toolkits (none in plan
-        // mode: a remote tool may write, and plan mode is read-only).
+        // ToolProvider: local tools, then the remote toolkits (offered only
+        // outside plan mode: a remote tool may write, and plan mode is
+        // read-only; `PlanGatedToolset` offers them once the plan is
+        // accepted, in the same run).
         let remote = Arc::new(RemoteContext {
             api: api.clone(),
             project_id: request.project_id,
@@ -2059,15 +2680,14 @@ impl AgentHost {
             version_id: request.version_id,
             prompt: workspace.prompt.clone(),
             retry: self.deps.retry,
+            authorization_wait: MCP_AUTHORIZATION_WAIT,
         });
-        let remote_specs = if request.plan_mode {
-            Vec::new()
-        } else {
-            admitted.remote_tools.clone()
-        };
+        let remote_specs = admitted.remote_tools.clone();
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
-            provider = provider.with(Arc::new(IndexToolProvider::new(index)));
+            provider = provider.with(Arc::new(
+                IndexToolProvider::new(index).with_execution_id(started.execution_id.clone()),
+            ));
         }
         let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
         let toolsets = provider
@@ -2081,10 +2701,11 @@ impl AgentHost {
             events: events.clone(),
             recorder: recorder.clone(),
             session: Some(workspace.session.clone()),
+            planner: Some(planner.clone()),
         };
 
         let mut builder = LlmAgentBuilder::new(AGENT_NAME)
-            .model(bound.adk_model())
+            .model(model)
             .max_iterations(admitted.step_limit)
             .tool_timeout(TOOL_TIMEOUT)
             .disallow_transfer_to_parent(true)
@@ -2095,16 +2716,51 @@ impl AgentHost {
             // adk takes it from the agent: RunConfig has no such field.
             .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
+        // A plan-mode turn whose plan the person accepts goes on in Build:
+        // its later model steps read the build-mode environment (#1225).
+        if request.plan_mode {
+            builder = AcceptedPlanNote {
+                session: workspace.session.clone(),
+                folder: folder.to_owned(),
+                policy: workspace.policy.clone(),
+                mentioned: mentioned.to_vec(),
+                extra_tools: extra_tools.clone(),
+            }
+            .bind_builder(builder);
+        }
+        // A long turn's older tool results go to the model as notes once
+        // the request passes 60% of the model's window; the session keeps
+        // them whole. The window is the model's limits (`context.rs`). The
+        // elision runs first (a callback before the model); the step
+        // compaction wrapping the model then measures what it left.
+        builder = ToolResultElision::for_limits(execution.payload.model_context_limits)
+            .with_fixed_tokens(instruction_tokens)
+            .bind_builder(builder);
         for toolset in toolsets {
             // The local tools and the index tools run here; only the
             // toolkits' tools are remote.
             let remote = toolset.name() == REMOTE_TOOLSET;
+            let toolset = if remote {
+                Arc::new(PlanGatedToolset::new(toolset, workspace.session.clone()))
+                    as Arc<dyn Toolset>
+            } else {
+                toolset
+            };
             builder = builder.toolset(Arc::new(ObservedToolset::new(
                 toolset,
                 observer.clone(),
                 remote,
             )) as Arc<dyn Toolset>);
         }
+        builder = builder.toolset(Arc::new(ObservedToolset::new(
+            planner.toolset(),
+            ToolObserver {
+                session: None,
+                planner: None,
+                ..observer.clone()
+            },
+            false,
+        )) as Arc<dyn Toolset>);
         #[cfg(test)]
         for toolset in self.test_toolsets.lock().expect("lock").iter() {
             builder = builder.toolset(Arc::new(ObservedToolset::new(
@@ -2118,6 +2774,7 @@ impl AgentHost {
                 toolset,
                 ToolObserver {
                     session: None,
+                    planner: None,
                     ..observer.clone()
                 },
                 false,
@@ -2154,7 +2811,18 @@ impl AgentHost {
         // approvals); on "continue" the same runner runs again on the same
         // session, within this execution, from the host's own prompt.
         let mut budget = StepBudget::new(admitted.step_limit);
-        let mut content = Content::new("user").with_text(request.prompt.clone());
+        // A command's expansion, framed under this turn's nonce, is the
+        // person's message to the model; anything else goes as typed.
+        let message = command.map_or_else(
+            || request.prompt.clone(),
+            |turn| {
+                mentions::with_mentions(
+                    &slash_commands::model_prompt(&turn.command, &nonce),
+                    &turn.mentions,
+                )
+            },
+        );
+        let mut content = Content::new("user").with_text(message);
         loop {
             match run_once(&runner, &session_id, content, sink, recorder).await? {
                 RunEnd::Answered => {
@@ -2288,12 +2956,17 @@ impl AgentHost {
             .clear();
     }
 
-    /// A turn changed `files` files of the workspace: its index (if open)
-    /// says it may be out of date, and refreshes a few seconds later. A
-    /// signal only: the turn's end never waits on the index.
-    fn index_changed(&self, workspace_id: &str, files: usize) {
+    /// A turn changed `changes` in the workspace: its index (if open)
+    /// says it may be out of date, and refreshes a few seconds later; the
+    /// changed files' chunks are embedded first. A signal only: the turn's
+    /// end never waits on the index.
+    fn index_changed(&self, workspace_id: &str, changes: &[FileChange]) {
         if let Some(index) = &self.deps.index {
-            index.mark_changed(workspace_id, files);
+            index.mark_changed(workspace_id, changes.len());
+            index.prioritise(
+                workspace_id,
+                changes.iter().map(|change| change.path.clone()),
+            );
         }
     }
 
@@ -2468,10 +3141,127 @@ impl AgentHost {
             self.forget_session(&owner.origin, owner.user_id, &uuid)
                 .await;
         }
+        // And its spilled tool outputs (the open session's, or on disk).
+        self.forget_outputs(workspace_id, &conversation);
         history
             .forget_thread(owner, workspace_id.to_owned(), conversation)
             .await
             .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// `thread_history_fork`: copy the stored turns of one thread of the
+    /// signed-in account into the new conversation a server fork made
+    /// (`forkConversation`), in the same workspace: the turns up to and
+    /// including `up_to_turn` (all when `None`), never one still running.
+    /// The new thread's agent session is not copied: the first turn there
+    /// seeds it from the server conversation, which holds the copied
+    /// messages. `messages` is the server fork's `forked_messages` (source
+    /// message UUID to the copy's): the copied `done` events name the
+    /// copies. The number of turns copied; 0 without a history store.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request` (a malformed id, or `target_uuid` not a UUID),
+    /// `turn_unknown` (`up_to_turn` is not a turn of the thread),
+    /// `turn_running` (it has not ended), `thread_not_empty` (the target
+    /// already has turns), `not_signed_in`, the user lookup failed, or
+    /// `storage`.
+    pub async fn fork_thread_history(
+        &self,
+        workspace_id: &str,
+        source_conversation_id: &str,
+        target: (&str, &str),
+        up_to_turn: Option<&str>,
+        messages: HashMap<String, String>,
+    ) -> Result<usize, TurnError> {
+        let source = conversation_key(&Value::String(source_conversation_id.to_owned()))?;
+        let target_id = conversation_key(&Value::String(target.0.to_owned()))?;
+        let target_uuid = uuid::Uuid::parse_str(target.1)
+            .map_err(|_| {
+                TurnError::new(
+                    "invalid_request",
+                    "target_uuid must be the new conversation's UUID",
+                )
+            })?
+            .to_string();
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(0);
+        };
+        let owner = self.owner(&self.api).await?;
+        // A turn that has not ended is never copied half-way.
+        let running: HashSet<String> = {
+            let table = self
+                .turns
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            table
+                .entries
+                .iter()
+                .filter(|(_, entry)| {
+                    entry
+                        .done
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_none()
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        if let Some(last) = up_to_turn
+            && running.contains(last)
+        {
+            return Err(TurnError::new(
+                "turn_running",
+                "This turn is still running. Fork it once it ends.",
+            ));
+        }
+        let (workspace, last) = (workspace_id.to_owned(), up_to_turn.map(str::to_owned));
+        let copied = tokio::task::spawn_blocking(move || {
+            history.copy_thread(
+                &owner,
+                &workspace,
+                &source,
+                ThreadCopyTarget {
+                    id: &target_id,
+                    uuid: &target_uuid,
+                    messages: &messages,
+                },
+                last.as_deref(),
+                &running,
+            )
+        })
+        .await
+        .map_err(|e| TurnError::new("internal", format!("the history copy stopped: {e}")))?
+        .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        match copied {
+            ThreadCopy::Copied(count) => Ok(count),
+            ThreadCopy::UnknownTurn => Err(TurnError::new(
+                "turn_unknown",
+                "That turn is not in this thread's history on this computer.",
+            )),
+            ThreadCopy::TargetNotEmpty => Err(TurnError::new(
+                "thread_not_empty",
+                "The new thread already has turns, so nothing was copied.",
+            )),
+        }
+    }
+
+    /// Remove one conversation's spilled tool outputs in a workspace (best
+    /// effort: they expire on their own after a day).
+    fn forget_outputs(&self, workspace_id: &str, conversation: &str) {
+        let open = self
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(workspace_id).cloned());
+        match open {
+            Some(open) => open.session.spill_store().forget_conversation(conversation),
+            None => elitea_local_tools::budget::forget_conversation_outputs(
+                &self.deps.workspaces.data_dir(workspace_id),
+                workspace_id,
+                conversation,
+            ),
+        }
     }
 
     /// Forget one conversation's agent session (best effort: a cache).
@@ -2750,6 +3540,12 @@ impl crate::doctor::DoctorHooks for AgentHost {
 
     fn signed_out(&self) {
         self.forget_identity();
+        // The indexes stay; their folders are no longer watched.
+        if let Some(index) = &self.deps.index
+            && let Err(error) = drive(index.stop_watching())
+        {
+            log::warn!("the folder watches did not stop: {error}");
+        }
     }
 
     fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
@@ -2772,6 +3568,22 @@ impl crate::doctor::DoctorHooks for AgentHost {
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
         match &self.deps.index {
             Some(index) => drive(index.enable(workspace_id))?
+                .map(|_| ())
+                .map_err(|error| error.message),
+            None => Err("the local index is not available".into()),
+        }
+    }
+
+    fn index_watching(&self, workspace_id: &str) -> bool {
+        self.deps
+            .index
+            .as_ref()
+            .is_some_and(|index| index.is_watching(workspace_id))
+    }
+
+    fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
+        match &self.deps.index {
+            Some(index) => drive(index.refresh(workspace_id, false))?
                 .map(|_| ())
                 .map_err(|error| error.message),
             None => Err("the local index is not available".into()),
@@ -2817,6 +3629,12 @@ struct FailedCommit {
     entry: Arc<TurnEntry>,
 }
 
+/// A command's turn: the expansion and the "@" references listed under it.
+struct CommandTurn {
+    command: ExpandedCommand,
+    mentions: Vec<String>,
+}
+
 struct Prepared {
     /// The conversation as the UI named it (its id or UUID).
     conversation: String,
@@ -2828,6 +3646,8 @@ struct Prepared {
     project: ProjectInstructions,
     /// The skills the person picked for this turn, resolved.
     invoked: Vec<InvokedSkill>,
+    /// The custom command the person picked, read and expanded.
+    command: Option<CommandTurn>,
     request: TurnRequest,
     events: Arc<TurnEvents>,
     workspace: Arc<WorkspaceSession>,
@@ -2841,6 +3661,12 @@ struct Prepared {
     memory: SessionPlan,
     /// The folder's name as the environment section shows it.
     folder: String,
+    /// The turn's checked `@` references: project detection looks in
+    /// their folders too.
+    mentioned: Vec<String>,
+    /// The project's chat models, when the turn read them (a chosen or
+    /// kept model is checked against them).
+    models: Option<Arc<Catalogue>>,
 }
 
 /// The body of `local_turn_commit`, encoded with its `tool_calls` in the
@@ -2850,8 +3676,16 @@ struct CommitBody {
     user_message: Value,
     assistant_message: Value,
     tool_calls: ToolCalls,
+    /// Each model step's reasoning (#1228), bounded (`recorder`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    thinking_steps: Vec<Value>,
     hitl_exchanges: Vec<Value>,
     local_work: Value,
+    /// The latest `context_summary` v1 record the turn's requests carried
+    /// (#1217): the cloud executor continues from it. Additive: a server
+    /// that does not know it ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_summary: Option<Value>,
 }
 
 impl CommitBody {
@@ -2936,7 +3770,47 @@ async fn run_once(
     Ok(RunEnd::Answered)
 }
 
+/// A chosen model against the project's chat models (#1228): refused
+/// (`model_unavailable`) when they do not list it, fitted to its row when
+/// they do ([`Admitted::fit_reasoning`]), as chosen when they could not be
+/// read (the gateway governs every request).
+fn catalogued(chosen: Admitted, models: Option<&Catalogue>) -> Result<Admitted, TurnError> {
+    let Some(models) = models.filter(|_| chosen.model_chosen) else {
+        return Ok(chosen);
+    };
+    match models.find(&chosen.model.model_name) {
+        Some(model) => Ok(chosen.fit_reasoning(Some(&model.row))),
+        None => Err(TurnError::new(
+            "model_unavailable",
+            format!(
+                "The model {} is not one of this project's chat models.",
+                chosen.model.model_name
+            ),
+        )),
+    }
+}
+
+/// The model a turn runs on, as its `status` `running` event names it.
+fn turn_model(admitted: &Admitted) -> Value {
+    let mut model = json!({
+        "name": admitted.model.model_name,
+        "chosen": admitted.model_chosen,
+        "pinned": admitted.model.pinned,
+    });
+    if let Some(effort) = admitted.model.reasoning_effort {
+        model["reasoning_effort"] = json!(definition::effort_name(effort));
+    }
+    model
+}
+
 fn model_failure(text: &str) -> TurnError {
+    // A second overflow after the step compaction's one retry (#1217).
+    if let Some(start) = text.find("context_overflow: ") {
+        return TurnError::new(
+            "context_overflow",
+            text[start + "context_overflow: ".len()..].to_owned(),
+        );
+    }
     // `model_gateway.<code>: message` from the model adapter keeps its code,
     // whatever prefix the adk error's display adds.
     text.find("model_gateway.")
@@ -3031,9 +3905,12 @@ fn execution_request(
 
 /// The runtime's [`EventSink`] on the desktop: the adk events in order
 /// (the UI gets its events from the model adapter and the tool wrapper),
-/// keeping the last model text as the answer of a run that failed late.
+/// keeping the last model text as the answer of a run that failed late,
+/// and sending each plan change the planner's events carry as
+/// `plan_updated` (#1225).
 #[derive(Default)]
 pub struct TurnSink {
+    events: Option<Arc<TurnEvents>>,
     last_text: Mutex<String>,
     /// The model's last text, with tool calls or without (what it said it
     /// was doing): the "Continue?" question shows it.
@@ -3042,6 +3919,13 @@ pub struct TurnSink {
 }
 
 impl TurnSink {
+    fn with_events(events: Arc<TurnEvents>) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::default()
+        }
+    }
+
     fn last_text(&self) -> String {
         self.last_text
             .lock()
@@ -3062,6 +3946,14 @@ impl EventSink for TurnSink {
     async fn emit(&self, event: &Event) -> Result<(), HostError> {
         if event.llm_response.partial {
             return Ok(());
+        }
+        // The planner's state rides its tool-result events: the todo pane's
+        // feed, stored in the thread history like every event.
+        if let (Some(events), Some(plan)) = (
+            &self.events,
+            planner::plan_update(&event.actions.state_delta),
+        ) {
+            events.send("plan_updated", json!({ "plan": plan }));
         }
         if let Some(content) = &event.llm_response.content {
             let has_calls = content
@@ -3214,9 +4106,10 @@ mod tests {
         }];
         let assembled = system_instruction(
             "Be brief.",
-            "## Environment\n- Today: 2026-10-10",
+            "## Environment\n- OS: macOS",
             &skill,
             &project,
+            "## Environment (this turn)\n- Today: 2026-10-10",
             "Memory: tea.",
             NONCE,
         );
@@ -3227,7 +4120,7 @@ mod tests {
         };
         let order = [
             at("Be brief."),
-            at("## Environment"),
+            at("## Environment\n"),
             at(skills::SKILLS_HEADING),
             at(skills::SKILLS_PRECEDENCE),
             at("Write tersely."),
@@ -3236,6 +4129,7 @@ mod tests {
             at(PROJECT_PRECEDENCE),
             at("Run task test."),
             at(END_OF_PROJECT_INSTRUCTIONS),
+            at("## Environment (this turn)\n- Today: 2026-10-10"),
             at("Memory: tea."),
         ];
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{assembled}");
@@ -3253,6 +4147,78 @@ mod tests {
         assert!(PROJECT_PRECEDENCE.contains(
             "the environment section and any skill picked for this turn, all above, outrank them"
         ));
+    }
+
+    /// #1314: two turns whose facts differ only in the date and the git line
+    /// assemble byte-identical prompts up to the environment's volatile part,
+    /// so a provider prompt cache keeps the skills and AGENTS.md text.
+    #[test]
+    fn the_date_and_git_line_leave_the_cached_prefix_unchanged() {
+        use elitea_local_tools::project_instructions::InstructionFile;
+        let project = ProjectInstructions {
+            files: vec![InstructionFile {
+                path: "AGENTS.md".into(),
+                text: "Run task test.".into(),
+                truncated: false,
+            }],
+            skipped: Vec::new(),
+        };
+        let skill = [InvokedSkill {
+            name: "Style".into(),
+            instructions: "Write tersely.".into(),
+        }];
+        let monday = environment::Facts {
+            os: "macOS 26.0 (arm64)".into(),
+            today: "2026-10-12".into(),
+            folder: "repo".into(),
+            git: environment::Git::Repo {
+                branch: Some("main".into()),
+                changed: 0,
+            },
+            sandbox: environment::Sandbox::NoCommands,
+            network: false,
+            plan_mode: false,
+            tools: vec!["read_file".into(), "search_files".into()],
+            project: None,
+        };
+        let mut tuesday = monday.clone();
+        tuesday.today = "2026-10-13".into();
+        tuesday.git = environment::Git::Repo {
+            branch: Some("main".into()),
+            changed: 4,
+        };
+        let assemble = |facts: &environment::Facts| {
+            system_instruction(
+                "Be brief.",
+                &environment::preamble(facts),
+                &skill,
+                &project,
+                &environment::current(facts),
+                "Memory: tea.",
+                NONCE,
+            )
+        };
+        let (one, two) = (assemble(&monday), assemble(&tuesday));
+        assert_ne!(one, two);
+        let split = |text: &str| -> usize {
+            text.find(environment::CURRENT_HEADING)
+                .unwrap_or_else(|| panic!("{text}"))
+        };
+        assert_eq!(split(&one), split(&two));
+        let prefix = &one[..split(&one)];
+        assert_eq!(prefix, &two[..split(&two)]);
+        // The prefix carries the stable environment, the skill and AGENTS.md.
+        for needle in [
+            "## Environment\n",
+            "Write tersely.",
+            END_OF_PROJECT_INSTRUCTIONS,
+        ] {
+            assert!(prefix.contains(needle), "{needle}: {prefix}");
+        }
+        assert!(!prefix.contains("2026-10-1"), "{prefix}");
+        assert!(
+            two.ends_with("- Workspace: repo (git: branch main, 4 changed files)\n\nMemory: tea.")
+        );
     }
 
     #[test]
@@ -3307,5 +4273,14 @@ mod tests {
         assert_eq!(error.code, "model_gateway.member_budget_exhausted");
         assert_eq!(error.message, "your budget");
         assert_eq!(model_failure("boom").code, "agent_failed");
+        let overflow = model_failure(
+            &elitea_agent_runtime::context_management::context_overflow().to_string(),
+        );
+        assert_eq!(overflow.code, "context_overflow");
+        assert!(
+            overflow
+                .message
+                .starts_with("The conversation no longer fits")
+        );
     }
 }

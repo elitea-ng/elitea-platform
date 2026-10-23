@@ -16,7 +16,7 @@
  * Restoring is the host's job (`checkpoint_restore`); this card only asks, and
  * then re-reads `turn_changes` so what it shows is what is on disk now.
  */
-import { useState, type ReactNode } from 'react';
+import { useState, type MouseEvent, type ReactNode } from 'react';
 
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
@@ -56,6 +56,8 @@ export interface ChangedFilesCardProps {
   variant?: 'card' | 'panel';
   /** Extra per-file actions (the desktop's "Reveal in Finder" / "Open"). */
   fileActions?: ((file: ChangedFile) => ReactNode) | undefined;
+  /** Right-click on a file row (the desktop's native context menu). */
+  onFileContextMenu?: ((file: ChangedFile, event: MouseEvent) => void) | undefined;
   /** The turn's changes as recorded (`thread_history`): shown read-only, `turn_changes` is not asked. */
   files?: readonly ChangedFile[] | undefined;
 }
@@ -84,6 +86,7 @@ interface FileRowProps {
   onRevert: (() => void) | undefined;
   stacked: boolean;
   fileActions: ((file: ChangedFile) => ReactNode) | undefined;
+  onContextMenu: ((file: ChangedFile, event: MouseEvent) => void) | undefined;
 }
 
 /** The card's heading; the side panel has its own. */
@@ -99,7 +102,7 @@ function frameSx(stacked: boolean) {
       : { border: `1px solid ${theme.vars.palette.divider}`, borderRadius: theme.vars.shape.radiusMd, padding: 1.5 };
 }
 
-function FileRow({ file, busy, onRevert, stacked, fileActions }: FileRowProps): React.JSX.Element {
+function FileRow({ file, busy, onRevert, stacked, fileActions, onContextMenu }: FileRowProps): React.JSX.Element {
   const actions = fileActions === undefined ? null : fileActions(file);
   const [open, setOpen] = useState(false);
   const diffId = `diff-${file.path}`;
@@ -127,6 +130,7 @@ function FileRow({ file, busy, onRevert, stacked, fileActions }: FileRowProps): 
     <Box
       component="li"
       data-testid="changed-file"
+      onContextMenu={onContextMenu === undefined ? undefined : (event: MouseEvent) => onContextMenu(file, event)}
       sx={(theme: Theme) => ({ listStyle: 'none', paddingY: 0.5, borderBottom: stacked ? `1px solid ${theme.vars.palette.divider}` : undefined })}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -210,7 +214,9 @@ function Summary({ files, stacked, onUndo, older, undoDisabled, undone }: Summar
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
       <CardTitle hidden={stacked} />
       <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
-        {t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
+        {files.length === 1
+          ? t('workspace.changes.summaryOne', '1 file, +{{added}} -{{removed}}', { added, removed })
+          : t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
       </Typography>
       {undone && <Chip size="small" label={t('workspace.changes.undone', 'Undone')} />}
       {onUndo !== undefined && (
@@ -310,7 +316,7 @@ interface RestoreRequest {
   confirmOlder?: boolean;
 }
 
-export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions, files: recorded }: ChangedFilesCardProps): React.JSX.Element | null {
+export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions, onFileContextMenu, files: recorded }: ChangedFilesCardProps): React.JSX.Element | null {
   const stacked = variant === 'panel';
   const readOnly = recorded !== undefined;
   const queryClient = useQueryClient();
@@ -352,6 +358,7 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
             busy={restore.isPending}
             stacked={stacked}
             fileActions={fileActions}
+            onContextMenu={onFileContextMenu}
             onRevert={canRestore ? () => restore.mutate({ path: file.path }) : undefined}
           />
         ))}

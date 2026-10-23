@@ -12,8 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authstatetest"
 )
 
 func TestNewPostgresAdmitterRejectsIncompleteConfiguration(t *testing.T) {
@@ -29,6 +29,11 @@ func TestNewPostgresAdmitterRejectsIncompleteConfiguration(t *testing.T) {
 		func() Config { config := valid; config.Global.MaxAttempts = 0; return config }(),
 		func() Config { config := valid; config.Global.Window = 30 * time.Second; return config }(),
 		func() Config { config := valid; config.FormBegin.MaxAttempts = 0; return config }(),
+		// A single-sign-on stage left out cannot run unlimited (#1078).
+		func() Config { config := valid; config.OIDCBegin = Policy{}; return config }(),
+		func() Config { config := valid; config.OIDCCallback = Policy{}; return config }(),
+		func() Config { config := valid; config.SAMLBegin = Policy{}; return config }(),
+		func() Config { config := valid; config.SAMLACS = Policy{}; return config }(),
 		func() Config {
 			config := valid
 			config.FormCredentialClient.MaxAttempts = maxAttempts + 1
@@ -354,6 +359,40 @@ func TestPostgresAdmitterBeginNeverTouchesTheGlobalWindow(t *testing.T) {
 	}
 }
 
+// The single-sign-on stages (#1078) each count per client, in their own
+// window: one stage's full window neither denies another stage nor another
+// client, and none of them touches the global credential row.
+func TestPostgresAdmitterSingleSignOnStagesArePerClientAndPerStage(t *testing.T) {
+	pool := authstatetest.Pool(t, 4)
+	config := validConfig()
+	config.OIDCBegin = Policy{MaxAttempts: 2, Window: time.Minute}
+	limiter := admitterOn(t, pool, config)
+	begin := browserapp.BrowserAttempt{ClientKey: "2001:db8:1::/64", Stage: browserapp.BrowserAttemptOIDCBegin}
+	for index := 0; index < 2; index++ {
+		if _, err := limiter.Admit(context.Background(), begin); err != nil {
+			t.Fatalf("begin %d: %v", index, err)
+		}
+	}
+	retry, err := limiter.Admit(context.Background(), begin)
+	if !errors.Is(err, browserapp.ErrAttemptLimited) || retry <= 0 || retry > config.OIDCBegin.Window {
+		t.Fatalf("third begin: retry=%s err=%v, want limited", retry, err)
+	}
+	for _, other := range []browserapp.BrowserAttempt{
+		{ClientKey: "2001:db8:2::/64", Stage: browserapp.BrowserAttemptOIDCBegin},
+		{ClientKey: "2001:db8:1::/64", Stage: browserapp.BrowserAttemptOIDCCallback},
+		{ClientKey: "2001:db8:1::/64", Stage: browserapp.BrowserAttemptSAMLBegin},
+		{ClientKey: "2001:db8:1::/64", Stage: browserapp.BrowserAttemptSAMLACS},
+		{ClientKey: "2001:db8:1::/64", Stage: browserapp.BrowserAttemptFormBegin},
+	} {
+		if _, err := limiter.Admit(context.Background(), other); err != nil {
+			t.Fatalf("%+v was refused by another window: %v", other, err)
+		}
+	}
+	if got := storedAttempts(t, pool, limiter.key("", "global", nil)); got != 0 {
+		t.Fatalf("single-sign-on stages counted %d on the global window", got)
+	}
+}
+
 // The locked path can deny too: a replica whose lock-free read saw the
 // window below its limit must still deny when the locked read sees it full.
 func TestPostgresAdmitterLockedPathRollsBackADenial(t *testing.T) {
@@ -554,6 +593,10 @@ func validConfig() Config {
 		FormBegin:            Policy{MaxAttempts: 20, Window: time.Minute},
 		FormCredentialClient: Policy{MaxAttempts: 5, Window: time.Minute},
 		FormCredentialLogin:  Policy{MaxAttempts: 25, Window: time.Minute},
+		OIDCBegin:            Policy{MaxAttempts: 120, Window: time.Minute},
+		OIDCCallback:         Policy{MaxAttempts: 120, Window: time.Minute},
+		SAMLBegin:            Policy{MaxAttempts: 120, Window: time.Minute},
+		SAMLACS:              Policy{MaxAttempts: 120, Window: time.Minute},
 	}
 }
 

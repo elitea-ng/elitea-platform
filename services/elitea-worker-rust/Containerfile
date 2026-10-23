@@ -6,7 +6,7 @@
 # /usr/lib/<triplet>/, and its base package is gcc-14-base (gcc-12-base on
 # Debian 12). services/elitea-deepwiki-engine/Containerfile does the same.
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
-FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS runtime-libraries
+FROM rust:1.99.1-trixie@sha256:767c71592f7d1f3f242292000f8efd4e67b6732363da176772f4d220332e264f AS runtime-libraries
 COPY --from=runtime-cc /usr/lib/ /cc-lib/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
@@ -21,7 +21,14 @@ RUN cd /cc-lib && \
 FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
 COPY --from=runtime-libraries /runtime-files/ /
 
-FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder-base
+FROM rust:1.99.1-trixie@sha256:767c71592f7d1f3f242292000f8efd4e67b6732363da176772f4d220332e264f AS toolchain
+# A transient GitHub/crates.io failure must not fail the build: cargo's
+# built-in libgit2 fetch gave up on one TLS error ("SSL error: unknown error",
+# then "revision ... not found") for a pinned tree-sitter git dependency in
+# CI. The git CLI and more retries ride over it; the lockfile still pins
+# every revision and checksum.
+ENV CARGO_NET_RETRY=10 \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 WORKDIR /src
 
@@ -53,9 +60,9 @@ WORKDIR /src
 # what a scan of the base layers alone is. Dropping this line would not turn
 # the scan red — it would make it pass while measuring the base image, which is
 # the exact "absence reads as correctness" shape #433 was about.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    cargo install cargo-auditable --locked --version 0.7.5
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo install cargo-auditable --locked --version 0.7.5
 
 # Resolve every shipped ELF dependency against the final runtime without starting the application.
 COPY <<'VERIFY' /usr/local/bin/verify-runtime
@@ -83,6 +90,13 @@ cat /tmp/runtime-libraries
 awk '$2 == "=>" && $3 !~ /^\/runtime-root\// { exit 1 }' /tmp/runtime-libraries
 VERIFY
 
+WORKDIR /src/services/elitea-worker-rust
+
+# The build context's sources, laid out under /src, in ONE place: every stage
+# that needs them (the planner, the builder after its dependency layer, the
+# supervisor) copies this stage's /src, so the three cannot drift apart.
+FROM scratch AS sources
+WORKDIR /src
 COPY libs/proto ./libs/proto
 # The /llm caller contract crate (elitea-llm-wire) and the shared agent
 # runtime (elitea-agent-runtime, ADR-0029) are path dependencies under
@@ -93,42 +107,69 @@ COPY libs/proto ./libs/proto
 COPY libs/rust ./libs/rust
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
+# The sources over the toolchain, for the stages that build from them directly
+# (the planner below and the supervisor).
+FROM toolchain AS builder-base
+COPY --from=sources /src/ /src/
 WORKDIR /src/services/elitea-worker-rust
 
-FROM builder-base AS builder
-# Optional build-only concurrency bound for shared development hosts.
-ARG CARGO_BUILD_JOBS
-
-# The dependency build lives in the THREE CACHE MOUNTS below, not in a layer,
-# and that is deliberate: a cargo-chef style `target/` inside the image would
-# be a multi-gigabyte builder layer in the `elitea-worker-rust-linux-amd64`
-# GHA scope, and this repository's Actions cache was measured at 10.7 GB
-# against a 10 GB cap (see .github/actions/build-stack-images) — the layer
-# would evict the scopes it depends on. The mounts are the right home for it.
+# ── THE DEPENDENCY BUILD IS ITS OWN LAYER ───────────────────────────────────
 #
-# They were simply not working: see the 391 KB restore recorded in that
-# action's policy step. With the mount entry real, a pull request that touches
-# only src/ recompiles the local crates (this one and vendor/*) and relinks,
-# instead of building all 418 crates from an empty registry.
+# This used to live in three BuildKit cache MOUNTS (registry, git, and a
+# shared /cargo-target), and a layer was rejected on purpose: a target
+# directory inside the image is a multi-gigabyte builder layer, and the layer
+# cache lived in the repository's GitHub Actions cache, measured at 10.7 GB
+# against its 10 GB cap — that layer would have evicted the scopes it depends
+# on. The layer cache now lives in the registry instead (the CI-only
+# `ci-cache-<image>` packages, deploy/ci/bake-cache.hcl), outside that
+# cap, so the reason no longer holds and the layer is the better home: a mount
+# had to be restored from the Actions cache by every job before it was any
+# use, a layer is imported only when its inputs match.
 #
-# ── EVERY LOCAL CRATE IS REBUILT; ONLY REGISTRY CRATES COME FROM THE CACHE ──
+# Two steps. The planner writes the dependency SKELETON — every local
+# manifest verbatim, Cargo.lock, rust-toolchain.toml, an empty placeholder per
+# target (libs/rust/scripts/cargo-dependency-skeleton.py, which says why this
+# is not cargo-chef: chef drops path dependencies outside the crate). The
+# builder compiles every registry and git crate from that skeleton alone, in
+# a layer that changes only when a manifest or the lockfile does, then copies
+# the real sources over it and compiles only the local crates (this one,
+# libs/rust/*, vendor/*, the libs/proto build script).
 #
-# /cargo-target is one mount for every build on a host: every worktree, the
-# supervisor stage below and the DeepWiki engine. Cargo decides a path crate is
-# fresh by comparing source mtimes with its last compile, and COPY keeps the
-# build context's mtimes. A file last edited before ANOTHER checkout's build
-# therefore looked older than that build, and the image shipped the other
-# checkout's binary. `touch` puts every file under /src after any compile in the
-# mount, so each local crate (this one, vendor/*, the libs/proto build script)
-# is compiled from this context; registry and git crates are untouched.
-# `sharing=locked` keeps a concurrent build from compiling or overwriting the
-# binary between this step's touch and its copy.
+# Both steps run the same `cargo auditable build --frozen --release` after a
+# `cargo fetch --locked`, so the lockfile is enforced in both and the final binary carries the audit data
+# of the real build (verify-runtime asserts `.dep-v0` below).
+FROM builder-base AS planner
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target,sharing=locked \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock python3 /src/libs/rust/scripts/cargo-dependency-skeleton.py . /skeleton
+
+FROM toolchain AS builder
+# Optional build-only concurrency bound for shared development hosts.
+ARG CARGO_BUILD_JOBS
+COPY --from=planner /skeleton/ /src/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
+    CARGO_TARGET_DIR=/build-target cargo auditable build --frozen --release
+
+COPY --from=sources /src/ /src/
+
+# ── EVERY LOCAL CRATE IS REBUILT; ONLY REGISTRY CRATES COME FROM THE LAYER ──
+#
+# Cargo decides a path crate is fresh by comparing source mtimes with its last
+# compile, and COPY keeps the build context's mtimes. A file last edited
+# before the placeholder build above would look older than that build, and
+# the image would ship the placeholder. `touch` puts every file under /src
+# after it, so each local crate is compiled from this context; registry and
+# git crates are untouched. The target directory is removed in the same step,
+# so this layer holds the binary, not a second copy of the dependency build.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     find /src -type f -exec touch {} + && \
-    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
-    cp /cargo-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
+    CARGO_TARGET_DIR=/build-target cargo auditable build --frozen --release && \
+    cp /build-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust && \
+    rm -rf /build-target
 
 # Check audit metadata, diagnostics, CA roots, and the complete runtime library closure.
 RUN --mount=from=runtime-base,target=/runtime-root,readonly \
@@ -147,12 +188,19 @@ ENTRYPOINT ["/usr/local/bin/elitea-worker-rust"]
 FROM builder-base AS supervisor-builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
-# Local sources are touched under the lock for the reason given in `builder`.
+# Built only by the release (publish.yml), so it keeps the shared cache-mount
+# shape rather than the dependency layer `builder` uses. /cargo-target is this
+# image's mount (`id=`), shared by every build of it on a host (every
+# worktree), and cargo
+# judges a path crate fresh by mtime: a context older than another checkout's
+# build would ship that build's binary. Touching /src under `sharing=locked`
+# recompiles every local crate from this context; registry crates stay cached.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target,sharing=locked \
+    --mount=type=cache,id=elitea-worker-rust-cargo-target,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
-    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --frozen --release \
       --features sandbox-supervisor --bin elitea-sandbox-supervisor && \
     cp /cargo-target/release/elitea-sandbox-supervisor /usr/local/bin/elitea-sandbox-supervisor
 

@@ -16,9 +16,10 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
 )
 
 // deactivatedPrincipals is the shape authsvc.PrincipalValidator takes when the
@@ -54,13 +55,12 @@ func (activePrincipals) ValidatePrincipal(_ context.Context, principal auth.User
 func TestChatConfigAuthConfigReturnsAPIGroupAuthUnchanged(t *testing.T) {
 	tokens := &countingTokens{}
 	principals := &countingPrincipals{inner: activePrincipals{}}
-	forwardedIdentity := stubForwardedIdentityVerifier{}
 
 	apiGroupAuth := apimw.AuthConfig{
-		Validator:                 tokens,
-		PrincipalValidator:        principals,
-		ForwardedIdentityVerifier: forwardedIdentity,
-		SessionSecret:             "api-group-secret",
+		Validator:          tokens,
+		PrincipalValidator: principals,
+		FormSessions:       authtest.FormSessions{},
+		SessionSecret:      "api-group-secret",
 	}
 
 	got := chatConfigAuthConfig(apiGroupAuth)
@@ -72,8 +72,8 @@ func TestChatConfigAuthConfigReturnsAPIGroupAuthUnchanged(t *testing.T) {
 	if got.PrincipalValidator != apimw.PrincipalValidator(principals) {
 		t.Fatal("chatConfigAuthConfig dropped apiGroupAuth.PrincipalValidator (#301)")
 	}
-	if got.ForwardedIdentityVerifier != apimw.ForwardedIdentityPeerVerifier(forwardedIdentity) {
-		t.Fatal("chatConfigAuthConfig dropped apiGroupAuth.ForwardedIdentityVerifier")
+	if got.FormSessions != apiGroupAuth.FormSessions {
+		t.Fatal("chatConfigAuthConfig dropped apiGroupAuth.FormSessions")
 	}
 	if got.SessionSecret != apiGroupAuth.SessionSecret {
 		t.Fatalf("chatConfigAuthConfig.SessionSecret = %q, want %q",

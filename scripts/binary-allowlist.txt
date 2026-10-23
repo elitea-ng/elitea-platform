@@ -46,7 +46,7 @@ apps/elitea-web/e2e/snapshots/visual/*-snapshots/*.png
 #
 # Product art, not a build artifact: `src/shared/ui/EntityCardList/
 # EntityEmptyState.tsx` imports all six and paints one pair per list page, the
-# light/dark pick made in CSS. The baseline `apps/elitea-ui` ships the same
+# light/dark pick made in CSS. The former baseline `apps/elitea-ui` shipped the same
 # three pairs as PNGs under `src/assets/images/` at 1446px and ~1.1MB each, so
 # the repository rule here is "reviewed raster assets", not "SVG only" — the
 # onboarding entries above are the same class. These are re-encoded to 720px
@@ -106,3 +106,12 @@ apps/elitea-desktop/src-tauri/icons/*
 libs/rust/vendor/zavora-slide-render/fonts/*.ttf
 libs/rust/vendor/zavora-slide-pdf/fonts/*.ttf
 libs/rust/vendor/zavora-slide/tests/corpus/*.pptx
+
+# Mobile app icons and splash (apps/elitea-mobile/docs/assets.md): the Elitea
+# logo mark rasterised for the stores and the OS. Small, regenerable, required
+# by the Expo config. Exact directories; the mark inside the app is vector.
+apps/elitea-mobile/assets/images/*.png
+apps/elitea-mobile/assets/elitea.icon/Assets/*.png
+# Development-only document scan samples the scanner preview loads in __DEV__
+# builds (src/features/chat/attachments/scan/scanSamples.ts).
+apps/elitea-mobile/assets/dev/scan/*.jpg

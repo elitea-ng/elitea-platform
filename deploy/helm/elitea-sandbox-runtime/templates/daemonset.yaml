@@ -1,0 +1,108 @@
+{{- $env := list
+  (dict "name" "MODE" "value" .Values.mode)
+  (dict "name" "GVISOR_RELEASE" "value" (toString .Values.gvisor.release))
+  (dict "name" "GVISOR_BASE_URL" "value" .Values.gvisor.baseUrl)
+  (dict "name" "GVISOR_SHA512_X86_64" "value" .Values.gvisor.sha512.x86_64)
+  (dict "name" "GVISOR_SHA512_AARCH64" "value" .Values.gvisor.sha512.aarch64)
+  (dict "name" "K3S_SERVICE" "value" (toString .Values.k3s.service))
+  (dict "name" "CONTAINERD_CONFIG" "value" .Values.containerd.config)
+  (dict "name" "CONTAINERD_DROPIN_DIR" "value" .Values.containerd.dropinDir)
+  (dict "name" "PATCH_IMPORTS" "value" (toString .Values.containerd.patchImports))
+  (dict "name" "RESTART_TIMEOUT" "value" (toString .Values.restartTimeoutSeconds)) }}
+# The installer: privileged, hostPID, the host's / at /host, on the sandbox
+# nodes only. The init container installs and configures (install.sh); the
+# main container only waits, and is Ready when runsc answers on the host and
+# containerd lists the runtime (check.sh).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "elitea-sandbox-runtime.fullname" . }}-installer
+  namespace: {{ include "elitea-sandbox-runtime.namespace" . }}
+  labels:
+    {{- include "elitea-sandbox-runtime.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "elitea-sandbox-runtime.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # One node's container runtime restarts at a time.
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-sandbox-runtime.labels" . | nindent 8 }}
+      annotations:
+        # A new script or release re-runs the installer.
+        checksum/scripts: {{ printf "%s%s" (.Files.Get "files/install.sh") (.Files.Get "files/check.sh") | sha256sum }}
+        checksum/env: {{ toJson $env | sha256sum }}
+    spec:
+      hostPID: true
+      automountServiceAccountToken: false
+      priorityClassName: system-node-critical
+      terminationGracePeriodSeconds: 5
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: install
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/scripts/install.sh"]
+          env:
+            {{- toYaml $env | nindent 12 }}
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: host
+              mountPath: /host
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      containers:
+        - name: ready
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "trap 'exit 0' TERM; while :; do sleep 3600 & wait $!; done"]
+          env:
+            - name: MODE
+              value: {{ .Values.mode | quote }}
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "/scripts/check.sh"]
+            initialDelaySeconds: 2
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 2
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          resources:
+            requests: {cpu: 1m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - name: host
+              mountPath: /host
+              readOnly: true
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+            type: Directory
+        - name: scripts
+          configMap:
+            name: {{ include "elitea-sandbox-runtime.fullname" . }}-scripts

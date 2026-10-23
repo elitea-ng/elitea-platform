@@ -6,7 +6,7 @@ name: CI — Web E2E
 # These two jobs share a runtime surface that nothing in ci-web.yml has: they
 # build two container images from source, stand up the seven-service compose
 # stack in deploy/docker-compose.e2e-standalone.yml (postgres, nats, rustfs,
-# an OIDC mock, traefik, elitea-main, elitea-web) and drive real browsers at
+# an OIDC mock, elitea-main as the browser edge, elitea-web) and drive real browsers at
 # it. Six-to-seven minutes per E2E leg, and a failure mode set that has nothing
 # in common with a lint error. Keeping them here means:
 #   • `gh workflow run ci-web-e2e.yml` exercises the stack without dragging the
@@ -16,7 +16,11 @@ name: CI — Web E2E
 #
 # WHEN THEY FIRE:
 #   e2e     — every PR matching the paths below, pushes to main, `v*` tags,
-#             and workflow_dispatch. No job-level `if:` (issue #158).
+#             and workflow_dispatch. Its only job-level `if:` is the
+#             `model-path-changes` reaches-stack gate, which is true for every
+#             push and dispatch and false only for a pull request that changes
+#             nothing but docs, the desktop host or the chart (issue #158 was a
+#             gate that skipped EVERY pull request; this one cannot).
 #   visual  — the same set, and for the same reason (issue #159). It used to
 #             carry `if: startsWith(github.ref, 'refs/tags/v')`, which — with
 #             no `v*` tag ever cut — meant it had never run at all. Its very
@@ -90,7 +94,8 @@ on:
   pull_request:
     paths:
       - "apps/elitea-web/**"
-      - "tools/uictl/**"
+      # The shared client package the web image compiles from source.
+      - "libs/ts/client-core/**"
       - "services/elitea-main/**"
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
       # its fixture runner).
@@ -119,51 +124,43 @@ on:
       # The `native-client-conformance` job's own subject: the black-box
       # ADR-0025 suite it runs against the stack.
       - "conformance/nativeclient/**"
+      # The lane filter the `model-path-changes` job runs, and its test.
+      - "scripts/ci/e2e-lane-filter.sh"
+      - "scripts/ci/e2e-lane-filter-test.sh"
+      # The rest of what the stack images COPY and what this workflow runs:
+      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
+      # files' Containerfiles and this workflow's `scripts/` calls (with what
+      # each .mjs one imports), and fails
+      # when this list stops covering it (the scheduler, the inventory engine,
+      # the shared Go libraries and the protos were missing until it ran).
+      - "services/elitea-scheduler/**"
+      - "services/elitea-inventory-engine/**"
+      - "libs/go/**"
+      - "libs/proto/**"
+      - "scripts/ci/stack-images.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/package.json"
+      - "scripts/ci/package-lock.json"
+      - "scripts/ci/pull-third-party-images.sh"
+      - "scripts/ci/check-ci-image-references.mjs"
+      - "scripts/ci/check-workflow-cache-writes.mjs"
+      - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/elitea-web/**"
-      - "tools/uictl/**"
-      - "services/elitea-main/**"
-      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
-      # its fixture runner).
-      - "services/elitea-deepwiki-engine/**"
-      - "libs/rust/**"
-      - "services/elitea-subapp-host/**"
-      # The `chat-stream-rust` job runs the journeys against the native Rust
-      # runtime, so a change to it can break a browser journey while touching
-      # nothing under apps/elitea-web. Without this path the job that exists to
-      # catch that drift would not start on the change that caused it.
-      - "services/elitea-worker-rust/**"
-      # The `index-stream-rust` job (ADR-0030 Verification 3) runs the index
-      # journey on the Rust-only path: vectors in Qdrant behind elitea-vector,
-      # documents read by the extractor sidecar. Same reasoning as above.
-      - "services/elitea-vector/**"
-      - "services/elitea-doc-extractor/**"
-      # The real-model lane's own subjects: the gateway's SSE relay, the
-      # Rust worker's model path, and the shared build action every stack
-      # job here uses. The `model-path-changes` job names these; a prefix it
-      # names must also START this workflow, or the lane silently never runs
-      # for the change it exists to catch.
-      - "services/elitea-llm-gateway/**"
-      - ".github/actions/**"
-      - "deploy/**"
-      - "docker-bake.hcl"
-      # The `native-client-conformance` job's own subject: the black-box
-      # ADR-0025 suite it runs against the stack.
-      - "conformance/nativeclient/**"
-      - ".github/workflows/ci-web-e2e.yml"
-    # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.
-    # A GITHUB_TOKEN-created tag starts no workflow run, so this arm has never
-    # fired. Both jobs below reach every PR, every push to main and
-    # workflow_dispatch on their own, which is what has actually been running
-    # them; removing the dead arm changes no execution, only the claim.
+  # No push arm: a merge starts no run (no-binaries.yml's workflow-triggers).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "7 1 * * *"
 
+# A newer push cancels a pull request's run; main runs finish, because a
+# main run is the only writer of the build caches the next runs read (a
+# cancelled writer saves nothing). GitHub still holds at most one pending run
+# per group, so main cannot pile up a backlog.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
@@ -176,8 +173,169 @@ defaults:
     working-directory: apps/elitea-web
 
 jobs:
+  # ── BUILD ONCE PER COMMIT, FAN OUT ──────────────────────────────────────────
+  #
+  # Measured 2026-10-20: every journey lane baked the whole stack itself, so
+  # one pull-request commit built the Rust images ~7.6 times and elitea-main /
+  # subapp-host / web ~16 times; a bake took 35-48 min and lanes hit their
+  # 60-min timeout. Web E2E was 51% of the commit's median 518 runner-minutes.
+  #
+  # Now each image is built ONCE, one runner per heavy image so the builds run
+  # in parallel on separate machines, and pushed under a CI-only name,
+  # `ghcr.io/elitea-ng/ci-<image>:<sha>-<run>-<attempt>`. Each leg uploads its digest; every
+  # lane `needs:` these jobs, pulls by digest and asserts it
+  # (.github/actions/pull-stack-images). Two jobs, not one, so the lanes that
+  # run only the e2e compose (elitea-main, subapp-host, web) start as soon as
+  # those three are pushed instead of waiting for the Rust chain.
+  web-images:
+    name: Build once (${{ matrix.image }})
+    # Same repository and not Dependabot: a fork's token, and Dependabot's on
+    # `pull_request`, are read-only and cannot push packages. Their lanes see
+    # this job SKIPPED and build in-job instead (.github/actions/stack-images).
+    # And only when a lane will run: the same reaches-stack gate the lanes
+    # carry (`model-path-changes`), so a docs-only pull request builds nothing.
+    needs: &build-once-needs model-path-changes
+    if: &build-once-if >-
+      needs.model-path-changes.outputs.reaches-stack == 'true' &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: &build-once-permissions
+      contents: read
+      # The ONLY jobs in this workflow that write packages: they push the
+      # CI-only `ghcr.io/elitea-ng/ci-<image>` and, on a run on main, the
+      # `ci-cache-<image>` layer cache. Nothing that ships references either
+      # (scripts/ci/check-ci-image-references.mjs).
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # `mount-suffix` / `mount-writer`: the BuildKit cache MOUNTS (Go
+        # module + build caches, cargo registry, pip) are one Actions-cache
+        # entry per suffix with ONE writer on main. The lanes no longer build,
+        # so the writers are these legs.
+        include:
+          - image: elitea-main
+            targets: elitea-main
+            mount-suffix: go
+            mount-writer: "true"
+          # The sub-application host; `elitea-deepwiki` and `elitea-inventory`
+          # both run it, so one service names it.
+          - image: elitea-subapp-host
+            targets: elitea-deepwiki
+            mount-suffix: go
+            mount-writer: "false"
+          - image: elitea-web
+            targets: elitea-web
+            mount-suffix: light
+            mount-writer: "false"
+    steps: &build-once-steps
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build ${{ matrix.image }} once and push it by digest
+        uses: ./.github/actions/build-stack-images
+        with:
+          # The superset stack: every image any lane runs is a `build:`
+          # service here, with the SAME build spec the e2e compose declares
+          # (elitea-main at its `e2e` target, the others at their default).
+          # stack-images.mjs records each spec and the pulling lane refuses an
+          # entry whose spec differs from its own compose.
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: ${{ matrix.targets }}
+          mount-cache-suffix: ${{ matrix.mount-suffix }}
+          mount-cache-writer: ${{ matrix.mount-writer }}
+          push-prefix: ghcr.io/elitea-ng/ci-
+          # Unique to this run AND attempt, so the digest read back after the
+          # push can only be this push's (a re-run of the same commit gets
+          # its own tag).
+          push-tag: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          digests-file: ${{ runner.temp }}/stack-image-digests/${{ matrix.image }}.json
+      - name: Hand the digests to the lanes
+        uses: actions/upload-artifact@v7
+        with:
+          # `web-images-*` or `stack-images-*`: the e2e-compose lanes pull
+          # only the first.
+          name: stack-image-digests-${{ github.job }}-${{ matrix.image }}
+          path: ${{ runner.temp }}/stack-image-digests/${{ matrix.image }}.json
+          if-no-files-found: error
+          # The images themselves are pruned after 7 days (ci-image-cleanup.yml).
+          retention-days: 7
+
+  # The same job over the rest of the stack (YAML anchors: one definition of
+  # the gate, the permissions and the steps). Kept a SEPARATE job, not one
+  # matrix, on measurement: on run 39444875153 the three web images were
+  # pushed by +7.2 min and the e2e legs started from +9.9 min, while the Rust
+  # legs finished at +27.6 (worker) and +29.7 (inventory) — one matrix would
+  # hold every e2e leg behind the slowest Rust image.
+  stack-images:
+    name: Build once (${{ matrix.image }})
+    needs: *build-once-needs
+    if: *build-once-if
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: *build-once-permissions
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One runner per Rust image: each is its own cargo chain. Their
+          # mounts hold only the cargo registry and git checkouts now (the
+          # dependency build is a registry-cached layer); the worker's is the
+          # superset, so it is the one writer.
+          - image: elitea-worker-rust
+            targets: elitea-worker
+            mount-suffix: rust
+            mount-writer: "true"
+          - image: elitea-deepwiki-engine-native
+            targets: elitea-deepwiki-engine
+            mount-suffix: rust
+            mount-writer: "false"
+          - image: elitea-inventory-engine
+            targets: elitea-inventory-engine
+            mount-suffix: rust
+            mount-writer: "false"
+          - image: elitea-vector
+            targets: elitea-vector
+            mount-suffix: rust
+            mount-writer: "false"
+          - image: elitea-doc-extractor
+            targets: elitea-doc-extractor
+            mount-suffix: rust
+            mount-writer: "false"
+          # The two small Go services, and the four mocks, share a runner each.
+          - image: go-services
+            targets: elitea-scheduler,elitea-llm-gateway
+            mount-suffix: go
+            mount-writer: "false"
+          - image: mocks
+            targets: llm-mock,mcp-mock,qtest-mock,ado-mock
+            mount-suffix: light
+            mount-writer: "true"
+    steps: *build-once-steps
+
   e2e:
     name: E2E (${{ matrix.leg }})
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: [model-path-changes, web-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-stack == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # Runs on pull requests (issue #158). It previously carried
     #   if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     # which skipped it on every PR — confirmed on runs 31335173296 and
@@ -297,7 +455,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: The suite's shape still matches this workflow
         # Three seconds, on every leg, and it is here rather than only in
         # ci-web.yml because of what ci-web.yml does NOT fire on: its `paths`
@@ -323,27 +490,19 @@ jobs:
         # with no wait for this background one to finish).
         run: |
           nohup timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble >/tmp/playwright-pull.log 2>&1 &
-      - name: Build elitea-main:e2e, elitea-web:e2e and elitea-subapp-host:e2e
-        # Through the shared action rather than three plain `docker build`s:
-        # buildx bake over the SAME compose file the stack runs, one
-        # content-addressed layer cache per image shared with the release and
-        # the image scan, the dependency cache mounts carried across runs, and
-        # — the guard this job has always had — an assertion that every image
-        # compose would build is in the local store before compose runs. The
-        # action's own header carries the history (issue #154, and why a
-        # content-addressed cache cannot serve a stale fix).
-        #
-        # elitea-main uses the `e2e` target, which builds the admin SPA from
-        # apps/elitea-web/src/entries/admin — the same bundle the shipping
-        # `final` stage carries, since `final` derives from `e2e`.
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' }}
           compose-files: |
             docker-compose.e2e-standalone.yml
+          digests-pattern: stack-image-digests-web-images-*
           cache-hcl: |
             ci/bake-cache.hcl
           targets: e2e
-          mount-cache-suffix: e2e
+          mount-cache-suffix: go
       - name: Bring up E2E stack
         # e2e-stack.sh uses deploy/docker-compose.e2e-standalone.yml which references
         # elitea-main:e2e and elitea-web:e2e (both built and asserted above).
@@ -512,6 +671,16 @@ jobs:
 
   chat-stream-rust:
     name: Chat journey on the native Rust runtime (${{ matrix.leg }})
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: [model-path-changes, web-images, stack-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-stack == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # The SAME journeys as `chat-stream`, against the OTHER worker.
     #
     # `STANDALONE_WORKER=rust` swaps `elitea-worker` for the native Rust agent
@@ -571,7 +740,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -583,15 +761,12 @@ jobs:
         # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
-      - name: Build the stack images (shared cache)
-        # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
-        # below): every `build:` service of the compose file(s) the stack runs,
-        # baked with one shared layer cache per image and the cargo/Go/pip
-        # cache mounts restored from the previous run, then asserted present.
-        # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
-        # worker, 9.6 of it one sequential cargo chain) of every such job.
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -618,7 +793,7 @@ jobs:
           CHAT_STREAM_PROJECT: elitea-chatstream-rust-ci
           # NOT 8085: that is the stack's own gateway debug port
           # (STANDALONE_GATEWAY_PORT defaults to 8085 in
-          # deploy/docker-compose.standalone-full.yml), so traefik's bind on
+          # deploy/docker-compose.standalone-full.yml), so the browser edge's bind on
           # the same host port raced the gateway's and lost.
           CHAT_STREAM_PORT: "8086"
           MOCK_LLM_CHUNK_DELAY_MS: "120"
@@ -638,49 +813,81 @@ jobs:
           retention-days: 14
 
   model-path-changes:
-    name: Does this change reach the model path?
-    # Decides whether the real-model lane runs on a pull request. The lane's
-    # signal — the gateway's SSE relay against a vendor's real chunks, and a
-    # tool call the model chose — changes only when the gateway, a worker,
-    # the execution plane, the chat surface, the E2E harness or the stack
-    # itself changes. A pull request that touches none of those gets the mock
-    # lanes, which already prove the product's own code paths, and skips this
-    # one. Every push to main and every dispatch runs it.
+    name: Which E2E lanes does this change reach?
+    # Decides, on a pull request, which lanes below run. Two outputs:
     #
-    # A plain `git diff` against the pull request's base, not a third-party
-    # path-filter action: the list below is the whole mechanism, and it needs
-    # no extra token scope.
+    #   reaches-stack — false when EVERY changed path is outside the stack:
+    #     prose (*.md at the root, under docs/ or .github/), the desktop host
+    #     or the helm chart minus what a compose stack mounts
+    #     (scripts/ci/e2e-lane-filter.sh says exactly which, and why each is
+    #     safe). The six stack lanes then SKIP. Measured 2026-10-20:
+    #     this workflow ran on 97% of pull-request SHAs.
+    #   reaches-model — the real-model lane's signal (the gateway's SSE relay
+    #     against a vendor's real chunks, a tool call the model chose) changes
+    #     only when the gateway, a worker, the execution plane, the chat
+    #     surface, the E2E harness or the stack itself changes. A pull request
+    #     that touches none of those gets the mock lanes and skips this one.
+    #
+    # The nightly run on main and every dispatch reach everything, so the mount
+    # cache writers (`index-stream-rust`, `visual`) still run on main.
+    #
+    # A skipped job is reported as "skipped", which a required status check
+    # accepts as passing; nothing waits on a check that never starts. If THIS
+    # job fails, the lanes are skipped too — but this job is then red, so the
+    # skip cannot read as green.
+    #
+    # A plain `git diff`, not a third-party path-filter action: the script is
+    # the whole mechanism and it needs no extra token scope. It is on every
+    # stack lane's critical path, so it is cheap: a push or a dispatch answers
+    # from the expressions below with NO step run at all, and a pull request
+    # checks out its merge commit at depth 2 — the commit and its first
+    # parent, the base it merges onto — which is exactly the diff.
+    #
+    # Matrix lanes skipped by this gate report ONE check each, under the
+    # unexpanded name (e.g. `E2E (${{ matrix.leg }})`), not one per leg. No
+    # status check is required on main today; anyone making these lanes
+    # required must require that skipped name too, or gate inside the steps.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      reaches-model: ${{ steps.filter.outputs.reaches-model }}
+      reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
+      reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
     steps:
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
         with:
-          fetch-depth: 0
-      - id: filter
+          fetch-depth: 2
+      - name: The lane filter decides every case it is tested on
+        if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci/e2e-lane-filter-test.sh
+      - id: filter
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
         run: |
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "reaches-model=true" >> "$GITHUB_OUTPUT"
-            echo "not a pull request: the real-model lane runs"
-            exit 0
+          set -euo pipefail
+          # The pull_request checkout is refs/pull/N/merge: parents (base, head).
+          # Anything else and HEAD^1 is not the base, so fail rather than
+          # diff against the wrong commit.
+          parents="$(git rev-list --parents -n 1 HEAD | wc -w)"
+          if [ "$parents" -ne 3 ]; then
+            echo "::error::HEAD is not a two-parent merge commit (rev-list printed ${parents} ids); cannot diff the pull request against its base"
+            exit 1
           fi
-          changed="$(git diff --name-only "${BASE_SHA}...HEAD")"
-          pattern='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
-          if printf '%s\n' "$changed" | grep -qE "$pattern"; then
-            echo "reaches-model=true" >> "$GITHUB_OUTPUT"
-            echo "model path touched:"; printf '%s\n' "$changed" | grep -E "$pattern"
-          else
-            echo "reaches-model=false" >> "$GITHUB_OUTPUT"
-            echo "no model-path file changed; the real-model lane is skipped on this pull request"
-          fi
+          # A failed diff fails this job (pipefail), never an empty list.
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
+          bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
 
   chat-stream-real:
     name: Chat journeys against a real model
+    needs: [model-path-changes, web-images, stack-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-model == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # DELIBERATELY UNSHARDED, unlike the two lanes above. It is 13 min end to
     # end and it is conditional (`model-path-changes`), so it is never the job
     # a pull request waits for; and its stack carries a real vLLM, whose
@@ -688,8 +895,6 @@ jobs:
     # step that is a fraction of either mock lane's. Sharding it would cost
     # runner minutes and save no wall time. It reaches chat-stream-e2e.sh with
     # PLAYWRIGHT_SHARD unset, which is the script's untouched single-pass path.
-    needs: model-path-changes
-    if: needs.model-path-changes.outputs.reaches-model == 'true'
     # The structural chat journeys against a REAL model — Qwen3-0.6B under
     # llama.cpp, baked into an image built and smoke-tested in
     # github.com/elitea-ng/elitea-e2e-llm and pinned by digest in the compose
@@ -735,7 +940,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container and the model image (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -749,15 +963,12 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble ; timeout 900 docker compose -f deploy/docker-compose.standalone-full.yml --profile real-llm pull -q llm-real' >/tmp/prepull.log 2>&1 &
-      - name: Build the stack images (shared cache)
-        # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
-        # below): every `build:` service of the compose file(s) the stack runs,
-        # baked with one shared layer cache per image and the cargo/Go/pip
-        # cache mounts restored from the previous run, then asserted present.
-        # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
-        # worker, 9.6 of it one sequential cargo chain) of every such job.
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -809,11 +1020,18 @@ jobs:
 
   live-toolkits:
     name: Live toolkit and image lanes (real credentials)
+    needs: [web-images, stack-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && github.event_name == 'workflow_dispatch' && inputs.live_toolkits }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # workflow_dispatch ONLY, and only when asked for. These journeys create
     # rows in a real GitHub/Jira/GitLab/Bitbucket/Confluence account and spend
     # a real provider's quota; nothing about a pull request should do that on
     # its own.
-    if: github.event_name == 'workflow_dispatch' && inputs.live_toolkits
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -859,7 +1077,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Ask Playwright what the live lanes actually hold
         id: lanes
         # `--list` needs no stack: the gate is computed at config load from the
@@ -929,10 +1156,13 @@ jobs:
             echo "machine must produce — see apps/elitea-web/e2e/live/README.md for"
             echo "the variables to add as repository secrets."
           fi
-      - name: Build the stack images (shared cache)
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
         if: steps.lanes.outputs.toolkits != '0'
-        uses: ./.github/actions/build-stack-images
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -986,6 +1216,16 @@ jobs:
 
   deepwiki-stack:
     name: DeepWiki journeys through the facade and the provider
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: [model-path-changes, web-images, stack-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-stack == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # The provider-backed DeepWiki journeys (DWIKI-005/006/010/011/012):
     # generate → the provider's native engine sidecar on its fixture runner
     # (built from services/elitea-deepwiki-engine, cache scope
@@ -1009,7 +1249,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -1021,15 +1270,12 @@ jobs:
         # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
-      - name: Build the stack images (shared cache)
-        # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
-        # below): every `build:` service of the compose file(s) the stack runs,
-        # baked with one shared layer cache per image and the cargo/Go/pip
-        # cache mounts restored from the previous run, then asserted present.
-        # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
-        # worker, 9.6 of it one sequential cargo chain) of every such job.
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -1063,6 +1309,16 @@ jobs:
 
   native-client-conformance:
     name: Native client conformance (ADR-0025)
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: [model-path-changes, web-images, stack-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-stack == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # The black-box Go suite in conformance/nativeclient, run as a native app
     # would run it against a deployment: discovery from the origin alone, the
     # RFC 8252 sign-in through the deployment's own pages (OIDC, and SAML
@@ -1090,12 +1346,12 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           cache-dependency-path: conformance/nativeclient/go.sum
-      - name: Build the stack images (shared cache)
-        # The same bake every standalone-stack job here uses: the images are
-        # this commit's, from the shared content-addressed layer cache, and
-        # asserted present before compose runs (STANDALONE_SKIP_BUILD=1 below).
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -1117,6 +1373,16 @@ jobs:
 
   index-stream-rust:
     name: Index journey and lifecycle on the Rust-only runtime (ADR-0030 V3)
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: [model-path-changes, web-images, stack-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-stack == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # ADR-0030 Verification (3): "The Index definition-of-done journey (#93)
     # and the index lifecycle specs pass on a Rust-only deployment."
     #
@@ -1148,7 +1414,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -1160,15 +1435,12 @@ jobs:
         # registry (the mcr.microsoft.com timeout that killed PR #1001).
         run: |
           nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
-      - name: Build the stack images (shared cache)
-        # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
-        # below): every `build:` service of the compose file(s) the stack runs,
-        # baked with one shared layer cache per image and the cargo/Go/pip
-        # cache mounts restored from the previous run, then asserted present.
-        # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
-        # worker, 9.6 of it one sequential cargo chain) of every such job.
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
           compose-files: |
             docker-compose.standalone-full.yml
             docker-compose.standalone-rust-agent.yml
@@ -1214,6 +1486,16 @@ jobs:
 
   visual:
     name: Visual regression
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: [model-path-changes, web-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-stack == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # Release tags, pull requests, and manual dispatch.
     #
     # It used to be `startsWith(github.ref, 'refs/tags/v')` alone, and the `on:`
@@ -1243,7 +1525,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
 
       # The tag below is asserted against package.json's pinned
       # @playwright/test, so a version bump cannot silently leave baselines
@@ -1260,18 +1551,19 @@ jobs:
       # building the stack's two images from the compose `build:` stanzas, which
       # is CPU-bound, while the ~27s pull is network-bound. Overlapping them
       # takes the pull off the critical path of the snapshot step below.
-      - name: Build the E2E stack images (shared cache)
-        # Before `e2e-stack.sh up`: without this, compose falls through to its
-        # `build:` stanzas and rebuilds the three images cache-less on this
-        # runner — the same 3 minutes the `e2e` job's legs used to pay each.
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' }}
           compose-files: |
             docker-compose.e2e-standalone.yml
+          digests-pattern: stack-image-digests-web-images-*
           cache-hcl: |
             ci/bake-cache.hcl
           targets: e2e
-          mount-cache-suffix: e2e
+          mount-cache-suffix: go
       - name: Bring up the E2E stack (host)
         env:
           COMPOSE_BIN: docker compose
@@ -1462,13 +1754,20 @@ jobs:
 
   docs-shots:
     name: Docs screenshot capture (embedded-docs unit W3)
+    needs: [web-images]
+    # A skipped build-once job (a fork pull request) is not a failure: the
+    # lane then builds the stack itself. A FAILED build stops the lane.
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
     # Manual only — this job re-generates `content/img/*.webp` and uploads
     # them for a human to review and commit, exactly like `visual`'s
     # `update_visual_baselines` mode; it is never part of the signal a PR or
-    # a push to main is judged on, so it has its own `if:` rather than
+    # the nightly run is judged on, so it has its own `if:` rather than
     # sharing `e2e`/`chat-stream`/`visual`'s "runs on everything the `on:`
     # block admits" shape.
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1486,7 +1785,16 @@ jobs:
         # Also installs sharp's prebuilt linux-x64 binary and tsx — both
         # devDependencies as of this unit — from package-lock.json, the same
         # way this step installs everything else.
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
 
       - name: Playwright container tag matches the pinned library
         run: node scripts/check-playwright-image-tag.mjs
@@ -1495,18 +1803,26 @@ jobs:
       # (compose needs a container runtime), pull the pinned Playwright image
       # in the background while that CPU-bound build runs, then bring the
       # stack up and seed it.
-      - name: Build the E2E stack images (shared cache)
-        uses: ./.github/actions/build-stack-images
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        # Built ONCE per commit by the build-once jobs and pulled by digest
+        # (.github/actions/stack-images, which also answers issue #154).
+        uses: ./.github/actions/stack-images
         with:
+          built: ${{ needs.web-images.result == 'success' }}
           compose-files: |
             docker-compose.e2e-standalone.yml
+          digests-pattern: stack-image-digests-web-images-*
           cache-hcl: |
             ci/bake-cache.hcl
           targets: e2e
-          mount-cache-suffix: e2e
+          mount-cache-suffix: go
       - name: Bring up the E2E stack (host)
+        # E2E_PORT must match the 8080 the seed and capture steps target;
+        # without it the stack came up on the local default 8082 and the
+        # container's Playwright tried to start a second stack (no runtime).
         env:
           COMPOSE_BIN: docker compose
+          E2E_PORT: "8080"
         run: |
           # A single attempt here is purely an overlap optimisation, not the
           # last word on the image being present — the seed step below waits

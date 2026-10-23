@@ -1,7 +1,7 @@
 package applications
 
 import (
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // defaultVersionName is the well-known "unnamed default" version name shared

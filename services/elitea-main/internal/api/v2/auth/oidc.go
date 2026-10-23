@@ -16,10 +16,11 @@ import (
 
 	"errors"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/coreos/go-oidc/v3/oidc"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -96,6 +97,10 @@ type OIDCHandler struct {
 
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*oidcRuntime
+
+	// attempts is the begin/callback limiter (signin_attempts.go). Nil
+	// unless WithAttemptLimiter attached one.
+	attempts *signInAttempts
 }
 
 // NewOIDCHandler builds the handler.
@@ -162,6 +167,10 @@ func (h *OIDCHandler) WithPersonalProjectWait(wait time.Duration) *OIDCHandler {
 }
 
 func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
+	// Admitted before any provider resolution, cookie or redirect.
+	if !h.attempts.admit(w, r, browserapp.BrowserAttemptOIDCBegin) {
+		return
+	}
 	runtime, err := h.runtime(r.Context())
 	if err != nil {
 		// The cause is logged, never returned: it names the issuer, the vault
@@ -335,6 +344,11 @@ func (h *OIDCHandler) consumeNonce(w http.ResponseWriter, r *http.Request, token
 
 func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// Admitted before the code exchange and token verification.
+	if !h.attempts.admit(w, r, browserapp.BrowserAttemptOIDCCallback) {
+		return
+	}
 
 	// Resolved FIRST, and from the same source Login used. A callback that
 	// resolved a different provider from the login that started it would verify
@@ -759,11 +773,11 @@ func reuseLinkedAccount(
 // the guard silently stopped applying to it.
 //
 // The set is CLOSED, and deliberately does not match "any ref containing a
-// colon". Pylon writes two shapes this service must keep adoptable:
+// colon". The legacy runtime writes two shapes this service must keep adoptable:
 //
 //   - a BARE ref, the raw OIDC subject with no prefix at all
 //     (legacy/plugins/auth_init/rpc/processor.py:55). A namespace-blind guard
-//     refuses every pylon-created account with 409 on its first Go login.
+//     refuses every legacy-created account with 409 on its first Go login.
 //   - `cirro:invite:token:<token>`, written when an operator invites somebody
 //     (legacy/plugins/admin/api/v2/user_invite.py:83). That is an invite
 //     receipt, not a federated identity, and an invited person must be able to
@@ -783,7 +797,7 @@ func federatedRefPatterns() []string {
 // only path on which the email claim decides anything, so it is the narrow one.
 //
 // An account that another FEDERATED subject already holds is never adopted, in
-// either protocol and across the two. An account held only by a pylon bare ref
+// either protocol and across the two. An account held only by a legacy bare ref
 // or an invite receipt is adopted. This is how a person keeps one account across
 // a first single-sign-on. The deployment can also demand a verified address for
 // that step.
@@ -816,10 +830,10 @@ func joinAccountByEmail(
 	}
 
 	// The address is matched WITHOUT regard to case. SCIM stores a lower-case
-	// userName (scimdirectory.NormalizeUserName), pylon stored what the
-	// identity provider sent, and `email` is unique only as typed. The CTE
-	// picks the stored spelling of an existing account, an exact match first,
-	// so the upsert below conflicts with that row instead of inserting a
+	// userName (scimdirectory.NormalizeUserName), the legacy runtime stored
+	// what the identity provider sent, and `email` is unique only as typed. The
+	// CTE picks the stored spelling of an existing account, an exact match
+	// first, so the upsert below conflicts with that row instead of inserting a
 	// second account for the same person.
 	var userID int
 	err := tx.QueryRow(ctx,

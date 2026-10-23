@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
 )
 
 func TestCurrentIndexSchedulePresentPreservesCurrentMetadataShape(

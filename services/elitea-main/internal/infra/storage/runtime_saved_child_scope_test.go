@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	httpapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	httpapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 const savedChildHTTPYAML = `state: {report: dict}

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // The reads and the encoders that the export and the import paths share.
@@ -327,13 +327,14 @@ func (h *Handler) exportedVersionTags(ctx context.Context, schema string, versio
 // agent that went through any of those three came back with every skill gone,
 // with no message on the response, on the log or in the wizard (#611).
 //
-// The document shape is pylon's, because the same files move between the two
-// implementations: a version carries a `skills` array of REFERENCES, and the
-// document carries one top-level `skills` array with the content of each
-// referenced skill (legacy/plugins/elitea_core/utils/export_import.py,
-// `_export_skills_main`). A reference names a skill by `import_uuid` and a
-// version by `version_name`. It cannot name them by id: `skills.id` is local to
-// the project the file came from, and an import writes into a different one.
+// The document shape is the legacy runtime's, because the same files move
+// between the two implementations: a version carries a `skills` array of
+// REFERENCES, and the document carries one top-level `skills` array with the
+// content of each referenced skill
+// (legacy/plugins/elitea_core/utils/export_import.py, `_export_skills_main`). A
+// reference names a skill by `import_uuid` and a version by `version_name`. It
+// cannot name them by id: `skills.id` is local to the project the file came
+// from, and an import writes into a different one.
 //
 // The reference also carries `entity_type`, because that column is part of the
 // key the table is unique on and part of the predicate the chat read matches on
@@ -554,8 +555,8 @@ func (h *Handler) exportedSkillVersions(
 	// `status` is deliberately not selected. It says whether this project holds
 	// a twin of the version in the public project, which is true of the project
 	// the file came FROM and can never be true of the project it is imported
-	// into. Pylon leaves it out of the export model for the same reason
-	// (legacy/plugins/elitea_core/models/pd/skill_version.py,
+	// into. The legacy runtime leaves it out of the export model for the same
+	// reason (legacy/plugins/elitea_core/models/pd/skill_version.py,
 	// SkillVersionExportModel).
 	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, skill_id, name, instructions, COALESCE(meta::text, '{}'), author_id
@@ -747,7 +748,7 @@ func importChannels[T any](agents, toolkits, skills []T) map[string]any {
 // marketplace filters that count `application_version_tag_association`
 // (handler.go, runPublishValidation), and absent from the next export, so the
 // document could not survive a second round trip. `meta` cannot stand in for
-// it — pylon's `update_version` dumps with
+// it — the legacy runtime's `update_version` dumps with
 // `exclude={'tags', 'variables', 'tools'}`, so a tag never reaches that column
 // at all.
 //
@@ -843,8 +844,8 @@ func (h *Handler) importVersionTags(
 // writes ({name, data} — exportedVersionTags) and the object the editor sends
 // ({id, name, data} — applications/handler.go, tagNameFrom), plus the bare
 // string a hand-written file carries, which is what importSkillVersionTags and
-// pylon's `_normalize_tags` accept. An entry's `id` is ignored on purpose: it
-// names a row of the SOURCE project's `tags` table and means nothing here.
+// the legacy `_normalize_tags` accept. An entry's `id` is ignored on purpose:
+// it names a row of the SOURCE project's `tags` table and means nothing here.
 func importedTagFrom(raw any) (string, any) {
 	switch typed := raw.(type) {
 	case string:

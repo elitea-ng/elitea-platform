@@ -1269,6 +1269,7 @@ async fn every_sandbox_failure_has_its_own_sentence() {
         AnalysisCodeFailure::ResultTooLarge,
         AnalysisCodeFailure::Cancelled,
         AnalysisCodeFailure::Uncertain,
+        AnalysisCodeFailure::Interrupted,
     ] {
         *runner.reply.lock().unwrap() = Some(Err(failure.into()));
         sentences.push(
@@ -1282,8 +1283,9 @@ async fn every_sandbox_failure_has_its_own_sentence() {
     let mut unique = sentences.clone();
     unique.sort();
     unique.dedup();
-    assert_eq!(unique.len(), 7, "{sentences:?}");
+    assert_eq!(unique.len(), 8, "{sentences:?}");
     assert!(sentences[6].contains("may have run"));
+    assert!(sentences[7].contains("not an error in the code"));
     // The program's own stderr rides along on a failure, and is the only text.
     *runner.reply.lock().unwrap() = Some(Err(AnalysisCodeError {
         failure: AnalysisCodeFailure::Failed,

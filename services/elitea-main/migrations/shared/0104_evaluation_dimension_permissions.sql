@@ -21,9 +21,9 @@
 -- WHY THESE NAMES ARE NOT IN testdata/legacy/legacy-rbac-static-catalog.json,
 -- AND WHY THAT IS NOT A DEFECT HERE.
 --
--- The catalogue is generated from the pylon `check_api` declarations in the
--- plugin corpus this repository carries, and Agent Evaluation is not in that
--- corpus (`legacy/plugins/elitea_core/api/v2/` has no evaluation module at
+-- The catalogue is generated from the legacy runtime `check_api` declarations
+-- in the plugin corpus this repository carries, and Agent Evaluation is not in
+-- that corpus (`legacy/plugins/elitea_core/api/v2/` has no evaluation module at
 -- all). The strings are not invented here either: they are the product's own,
 -- transcribed verbatim from the baseline UI's
 -- `src/[fsd]/widgets/evaluation/lib/constants/evaluation.constants.js`
@@ -34,13 +34,13 @@
 -- the `projectPermission("...")` helper.
 -- TestEliteaCoreGatesNameOnlyRealLegacyPermissions asserts that every literal
 -- passed to that helper appears in the catalogue, and the assertion is right:
--- for a PORTED pylon route, a name the catalogue does not know is a typo, and a
--- typo ships as a permanent 403. This is not a ported route. It is a new
--- surface whose permission vocabulary arrives with it, so the evaluation gates
--- name their permissions through exported constants in
+-- for a PORTED legacy runtime route, a name the catalogue does not know is a
+-- typo, and a typo ships as a permanent 403. This is not a ported route. It is
+-- a new surface whose permission vocabulary arrives with it, so the evaluation
+-- gates name their permissions through exported constants in
 -- internal/api/v2/evaluation and pass them to
 -- `apimw.RequireResolvedPermissions` directly — the identical resolver, mode
--- and middleware `projectPermission` builds, with the pylon-provenance claim
+-- and middleware `projectPermission` builds, with the legacy-provenance claim
 -- dropped because it would be false.
 --
 -- The check that DOES still apply is the one that matters:

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
 )
 
 // Row is one raw `gateway.governance_config` row as the gateway reads it.

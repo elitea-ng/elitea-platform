@@ -11,9 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentIndexTypesReaderStub struct {
@@ -42,14 +43,6 @@ func (function currentIndexTypesPrincipalValidatorFunc) ValidatePrincipal(
 	principal auth.User,
 ) (auth.User, error) {
 	return function(ctx, principal)
-}
-
-type currentIndexTypesPeerVerifierFunc func(*http.Request) error
-
-func (function currentIndexTypesPeerVerifierFunc) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	return function(request)
 }
 
 type currentIndexTypesPermissionResolverFunc func(
@@ -141,18 +134,18 @@ func TestCurrentIndexTypesRoutePreservesUnchangedUIContract(t *testing.T) {
 		)
 	}
 
-	// The Pylon half stays byte for byte what the pinned SDK fixture holds.
+	// The legacy half stays byte for byte what the pinned SDK fixture holds.
 	// The body also carries the published `items`/`total` envelope since #394,
 	// so the whole body is no longer the fixture; decode the three maps back
 	// out and compare those. TestCurrentIndexTypesRouteAnswersPublishedEnvelope
-	// BesidePylonKeys covers the published half and holds the two halves to
+	// BesideLegacyKeys covers the published half and holds the two halves to
 	// the same rows.
-	var pylon handler.CurrentIndexTypes
-	if err := json.Unmarshal(response.Body.Bytes(), &pylon); err != nil {
+	var legacyMaps handler.CurrentIndexTypes
+	if err := json.Unmarshal(response.Body.Bytes(), &legacyMaps); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(pylon, fixture) {
-		t.Fatalf("pylon half drifted from the fixture: %+v", pylon)
+	if !reflect.DeepEqual(legacyMaps, fixture) {
+		t.Fatalf("legacy half drifted from the fixture: %+v", legacyMaps)
 	}
 
 	var topLevel map[string]json.RawMessage
@@ -383,9 +376,6 @@ func TestCurrentIndexTypesRouteRejectsIncompleteComposition(t *testing.T) {
 			return principal, nil
 		},
 	)
-	peer := currentIndexTypesPeerVerifierFunc(
-		func(*http.Request) error { return nil },
-	)
 	permissions := currentIndexTypesPermissionResolverFunc(
 		func(
 			context.Context,
@@ -397,8 +387,8 @@ func TestCurrentIndexTypesRouteRejectsIncompleteComposition(t *testing.T) {
 		},
 	)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}
 
 	for name, test := range map[string]struct {
@@ -407,7 +397,7 @@ func TestCurrentIndexTypesRouteRejectsIncompleteComposition(t *testing.T) {
 		permissions auth.PermissionResolver
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -480,9 +470,7 @@ func newCurrentIndexTypesRoute(
 		reader,
 		apimw.AuthConfig{
 			PrincipalValidator: principal,
-			ForwardedIdentityVerifier: currentIndexTypesPeerVerifierFunc(
-				func(*http.Request) error { return nil },
-			),
+			FormSessions:       authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -501,8 +489,7 @@ func currentIndexTypesRequest(
 	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = "10.0.0.8:43120"
 	if authenticated {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", userID)
+		authtest.SignIn(request, userID)
 	}
 	return request
 }

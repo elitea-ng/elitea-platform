@@ -1,0 +1,114 @@
+name: CI — Rust shared crates
+
+# The libs/rust workspace's own gate: fmt, Clippy, rustdoc and the tests of
+# every member (the engine cores, the agent runtime, llm-wire, the vendored
+# adk crates), plus the agent runtime's two serde_json orders and its two
+# production feature sets with the panic guard on.
+#
+# Moved out of ci-deepwiki-engine.yml's `engine` job (2026-10-20), with the
+# same commands and flags. There it ran on every DeepWiki-only change, took
+# 22 min cold, and sat on the engine's critical path: on PR #1329 the job
+# hit its 45-min timeout before the Go host tests ran (job 118778015092).
+# Here it runs when the workspace, or something its tests read, changes —
+# and in parallel with the engine jobs when both are touched.
+
+on:
+  pull_request:
+    paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
+      - "libs/rust/**"
+      # The build.rs of the gRPC crates compile these contracts (#1359):
+      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
+      # the artifact and internal-tool services of elitea.runtime.v1.
+      - "libs/proto/elitea/engine/**"
+      - "libs/proto/elitea/llm/**"
+      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
+      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
+      # What the workspace's tests read from outside it: the /llm caller
+      # contract, the agent runtime's SDK schema gate, and the office
+      # extraction fixtures.
+      - "conformance/llm-caller/**"
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
+      - "services/elitea-main/internal/infra/extract/testdata/**"
+      - ".github/workflows/ci-rust-shared.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "23 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  shared-crates:
+    name: Shared crates — formatting, Clippy, rustdoc, tests
+    runs-on: ubuntu-latest
+    # 22 min measured cold for the first step alone (no cache under this
+    # key yet); the agent-runtime steps reuse its build.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assert the pinned toolchain
+        working-directory: libs/rust
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      # Read everywhere, write on main only. Its own `shared-key`: rust-cache
+      # otherwise keys on the job id, and one key per target directory keeps
+      # one writer per entry.
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-shared-crates
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: libs/rust
+
+      - name: Shared crates — formatting, Clippy, rustdoc, tests
+        working-directory: libs/rust
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo doc --locked --workspace --no-deps --all-features
+          cargo test --locked --workspace --all-targets --all-features
+
+      # The workspace run above links serde_json `preserve_order` (other
+      # members enable it), which is how a desktop binary would link the
+      # agent runtime. Built alone with `toolkit-sql`, the runtime has it off
+      # and links sqlx, which is how the worker links it (the desktop build
+      # drops `toolkit-sql`). Its digest tests pin the same values both ways
+      # (ADR-0029 decision 2); the explicit feature run asserts the feature
+      # really reaches serde_json, with `toolkit-sql` so the SQL family's
+      # encodings are covered too.
+      - name: Agent runtime — digests with and without preserve_order
+        working-directory: libs/rust
+        run: |
+          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office
+          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office
+
+      # The workspace Clippy run above uses --all-features, which turns on
+      # `test-support`, and that switches off the crate's
+      # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the
+      # two production feature sets with the guard on: the worker's
+      # (`toolkit-sql`, `toolkit-office`) and the desktop host's (no features).
+      - name: Agent runtime — production feature sets (panic guard on)
+        working-directory: libs/rust
+        run: |
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings

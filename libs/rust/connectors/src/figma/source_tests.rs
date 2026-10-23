@@ -1123,7 +1123,7 @@ async fn named_nodes_missing_from_a_file_are_skipped_never_fatal() {
         &transport,
         &json!({"urls_or_file_keys": "https://www.figma.com/design/K1/x?node-id=0-9"}),
     );
-    assert!(source.list().await.expect("deleted URL node").is_empty());
+    assert_eq!(source.list().await.expect("deleted URL node"), []);
 
     // The surviving one of two URL nodes is still listed.
     let source = figma(

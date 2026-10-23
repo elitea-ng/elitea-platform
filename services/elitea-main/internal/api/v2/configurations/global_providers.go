@@ -79,8 +79,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -328,6 +328,14 @@ type GlobalProvider struct {
 	// Endpoint is `api_base` — not a secret, and the field an operator most
 	// often needs to check.
 	Endpoint string `json:"endpoint"`
+	// AuthMode is "key" or "workload_identity" (keyless_credentials.go). It is
+	// always set, so a client does not have to know that an absent field is
+	// the key mode. An unreadable stored value is reported as it is stored:
+	// the gateway refuses that row, and the screen must not call it "key".
+	AuthMode string `json:"auth_mode"`
+	// TokenAudience is the AI DIAL ID-token audience, empty for the default
+	// (the api_base origin). Not a secret.
+	TokenAudience string `json:"token_audience,omitempty"`
 	// Settings are the remaining NON-SECRET fields, by provider: api_version for
 	// Azure/DIAL, the AWS region and access-key id for Bedrock, the Vertex
 	// project and location. An allowlist rather than "data minus the secrets",
@@ -460,6 +468,8 @@ func scanGlobalProvider(scan func(...any) error) (GlobalProvider, error) {
 	_ = json.Unmarshal(data, &decoded)
 
 	item.Endpoint = globalProviderString(decoded, "api_base")
+	item.AuthMode = globalProviderAuthMode(decoded)
+	item.TokenAudience = globalProviderString(decoded, configurationapp.CredentialTokenAudienceField)
 	item.Settings = map[string]string{}
 	for _, field := range globalProviderSettingFields {
 		if value := globalProviderString(decoded, field); value != "" {
@@ -489,6 +499,19 @@ func scanGlobalProvider(scan func(...any) error) (GlobalProvider, error) {
 		item.UpdatedAt = updatedAt.Format(time.RFC3339)
 	}
 	return item, nil
+}
+
+// globalProviderAuthMode reports the row's keyless mode. A stored value that is
+// not a known mode is reported verbatim (or as "invalid" when it is not even a
+// string), never as "key": the gateway refuses that row.
+func globalProviderAuthMode(data map[string]any) string {
+	if mode, ok := configurationapp.CredentialAuthMode(data); ok {
+		return mode
+	}
+	if raw := globalProviderString(data, configurationapp.CredentialAuthModeField); raw != "" {
+		return raw
+	}
+	return "invalid"
 }
 
 // globalProviderString reads one `data` key as a string.
@@ -605,8 +628,110 @@ func (h *Handler) rewriteGlobalProviderBody(
 	body["section"] = GlobalProviderSection
 	if creating {
 		completeGlobalRowLabel(body)
+	} else if !h.mergeStoredGlobalProviderData(w, r, body) {
+		return nil, false
 	}
-	return encodeGlobalBody(w, r, body)
+	request, ok := encodeGlobalBody(w, r, body)
+	if !ok {
+		return nil, false
+	}
+	// The ONLY place that may arm the keyless `auth_mode`: this request is
+	// pinned to the public project and forced to shared, which is exactly the
+	// row the gateway accepts as a platform credential (keyless_credentials.go).
+	return request.WithContext(withPlatformCredentialWrite(request.Context())), true
+}
+
+// mergeStoredGlobalProviderData lays the stored row's `data` UNDER the body's,
+// so an update keeps every key the body omits.
+//
+// The delegated Update is partial per COLUMN: a present `data` is written
+// whole. The provider dialog never reads a secret back, so an edit that leaves
+// the key blank omits it — and a whole-column write then erased the sealed
+// `{{secret.NAME}}` reference, leaving a platform credential with no key after
+// an endpoint fix. On this surface an omitted key means "keep". The merged
+// stored reference is passed through by sealing, and a switch to the keyless
+// mode still clears it (admitKeylessCredentialData runs on the merged object).
+//
+// A body with no `data` object is left alone: the delegated handler then does
+// not touch the column, and a malformed `data` is its refusal to make.
+func (h *Handler) mergeStoredGlobalProviderData(
+	w http.ResponseWriter, r *http.Request, body map[string]any,
+) bool {
+	incoming, isObject := body["data"].(map[string]any)
+	// A nil pool is reachable only from a unit test that calls the rewrite
+	// directly: every route reaches it through pinPublicProject, which answers
+	// 503 for a missing store before this runs.
+	if !isObject || h.pool == nil {
+		return true
+	}
+	configID := chi.URLParam(r, "configID")
+	schema := pgx.Identifier{fmt.Sprintf("p_%d", h.publicProjectID)}.Sanitize()
+	var raw []byte
+	err := h.pool.QueryRow(r.Context(), fmt.Sprintf(
+		`SELECT data FROM %s.configuration WHERE %s = $1`,
+		schema, configurationIDColumn(configID)), configID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+			return false
+		}
+		slog.ErrorContext(r.Context(), "global provider stored data read failed",
+			"schema", schema, "configuration_id", configID, "err", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "internal server error")
+		return false
+	}
+	var stored map[string]any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "invalid stored configuration")
+			return false
+		}
+	}
+	sent := make(map[string]struct{}, len(incoming))
+	for key := range incoming {
+		sent[key] = struct{}{}
+	}
+	for key, value := range stored {
+		if _, present := incoming[key]; !present {
+			incoming[key] = value
+		}
+	}
+	dropMergedModeFields(incoming, sent)
+	return true
+}
+
+// keyModeOnlyFields are the `data` keys that mean something only in the
+// keyless mode. A switch back to the key mode must not keep them: the merge
+// above would otherwise resurrect a stale `token_audience` the dialog no
+// longer shows or sends.
+var keyModeOnlyFields = []string{configurationapp.CredentialTokenAudienceField}
+
+// dropMergedModeFields removes what the merge brought back that the merged
+// auth mode does not use. Only keys the body did NOT send are touched: a value
+// the operator typed is still judged by admitKeylessCredentialData.
+//
+//   - keyless mode: every stored key field. A stored key in ANY form (a
+//     `{{secret.NAME}}` reference, a legacy reference, plaintext, a JSON
+//     object) is the old mode's key; refusing it would fail the switch with
+//     a 400 naming a field the dialog does not even show.
+//   - key mode: the keyless-only fields.
+//
+// The stored row is read outside the update's transaction, so two concurrent
+// edits are last-writer-wins, as every edit of this surface already is.
+func dropMergedModeFields(data map[string]any, sent map[string]struct{}) {
+	mode, ok := configurationapp.CredentialAuthMode(data)
+	if !ok {
+		return // refused later with its own message
+	}
+	drop := keyModeOnlyFields
+	if mode == configurationapp.CredentialAuthModeWorkloadIdentity {
+		drop = globalProviderSecretFields
+	}
+	for _, field := range drop {
+		if _, typed := sent[field]; !typed {
+			delete(data, field)
+		}
+	}
 }
 
 // completeGlobalRowLabel gives a CREATE the display label the row contract

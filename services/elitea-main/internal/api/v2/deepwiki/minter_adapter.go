@@ -6,8 +6,8 @@ package deepwiki
 // DeepWiki's composition root already calls it by.
 
 import (
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 // NewAuthCallbackMinter wraps the platform's minter, and returns a true nil

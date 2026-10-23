@@ -3,18 +3,14 @@ package storage
 import (
 	"context"
 	"crypto/x509"
-	"encoding/base64"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"crypto/tls"
-
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	"github.com/go-chi/chi/v5"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	"google.golang.org/grpc/codes"
 )
 
 const effectsRequestSchema = "elitea.runtime.code-platform-effects-request.v1"
@@ -46,49 +42,17 @@ func TestCodePlatformEffectsStrictBodyPins(t *testing.T) {
 }
 
 func TestCodePlatformEffectsDefaultDisabledAndClaimBeforeBody(t *testing.T) {
-	route := "/runtime/content/executions/0123456789abcdef0123456789abcdef/generations/1/code-platform/effects"
-	s := &ContentServer{}
-	w := httptest.NewRecorder()
-	s.PostCodePlatformEffects(w, httptest.NewRequest(http.MethodPost, route, strings.NewReader(`{}`)))
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("disabled effects status %d", w.Code)
-	}
-	// The route is registered only with the pump, next to the step route.
-	if router := s.Routes(); router == nil {
-		t.Fatal("no router")
-	} else {
-		w = httptest.NewRecorder()
-		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/executions/e/generations/1/code-platform/effects", strings.NewReader(`{}`)))
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("unconfigured route status %d", w.Code)
-		}
-	}
+	scope := contentScope("0123456789abcdef0123456789abcdef", 1)
+	s := &ContentServer{requests: make(chan struct{}, 1)}
+	_, err := s.ReadCodePlatformEffects(context.Background(), &runtimev1.ReadCodePlatformEffectsRequestV1{Scope: scope, RequestJson: []byte(`{}`)})
+	requireContentCode(t, err, codes.Unimplemented)
 	s.codePlatformPump = &CodePlatformPump{}
-	w = httptest.NewRecorder()
-	s.PostCodePlatformEffects(w, httptest.NewRequest(http.MethodPost, route, strings.NewReader(strings.Repeat("x", 513))))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("missing claim reached body/pump: %d", w.Code)
-	}
-	w = httptest.NewRecorder()
-	s.PostCodePlatformEffects(w, httptest.NewRequest(http.MethodGet, route, nil))
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("GET status %d", w.Code)
-	}
-	w = httptest.NewRecorder()
-	s.PostCodePlatformEffects(w, httptest.NewRequest(http.MethodPost, route+"?x=1", strings.NewReader(`{}`)))
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("query status %d", w.Code)
-	}
-}
-
-func TestCodePlatformEffectsRouteRegisteredOnlyWithPump(t *testing.T) {
-	s := &ContentServer{requests: make(chan struct{}, 1), codePlatformPump: &CodePlatformPump{}}
-	w := httptest.NewRecorder()
-	// Reaches the handler (403: no verified TLS peer), not chi's 404.
-	s.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/executions/0123456789abcdef0123456789abcdef/generations/1/code-platform/effects", strings.NewReader(`{}`)))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("configured route status %d", w.Code)
-	}
+	// No claim metadata: refused before the body or the pump is touched.
+	_, err = s.ReadCodePlatformEffects(contentPeerContext(context.Background(), nil), &runtimev1.ReadCodePlatformEffectsRequestV1{Scope: scope, RequestJson: []byte(strings.Repeat("x", 513))})
+	requireContentCode(t, err, codes.PermissionDenied)
+	// No verified peer at all.
+	_, err = s.ReadCodePlatformEffects(context.Background(), &runtimev1.ReadCodePlatformEffectsRequestV1{Scope: scope, RequestJson: []byte(`{}`)})
+	requireContentCode(t, err, codes.PermissionDenied)
 }
 
 type effectsReaderFixture struct {
@@ -198,69 +162,61 @@ func TestCodePlatformEffectsAuthorizationFailsClosedBeforeReader(t *testing.T) {
 	})
 }
 
-// The HTTP surface: same claim parsing, status mapping, closed response.
-func effectsHTTP(t *testing.T, pump *CodePlatformPump, claim ContentClaim, body string) *httptest.ResponseRecorder {
+// The RPC surface: same claim parsing, status mapping, closed response.
+func effectsRPC(t *testing.T, pump *CodePlatformPump, claim ContentClaim, body string) (*runtimev1.ReadCodePlatformEffectsResponseV1, error) {
 	t.Helper()
 	s := &ContentServer{requests: make(chan struct{}, 2), codePlatformPump: pump}
-	router := chi.NewRouter()
-	router.Post("/executions/{executionID}/generations/{generation}/code-platform/effects", s.PostCodePlatformEffects)
-	r := httptest.NewRequest(http.MethodPost, "/executions/"+claim.ExecutionID+"/generations/1/code-platform/effects", strings.NewReader(body))
-	leaf := &x509.Certificate{}
-	r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}}
-	r.Header.Set(claimIDHeader, claim.ClaimID)
-	r.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(append(append([]byte(nil), claim.FenceToken...), make([]byte, 32-len(claim.FenceToken))...)))
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, r)
-	return w
+	fence := append(append([]byte(nil), claim.FenceToken...), make([]byte, 32-len(claim.FenceToken))...)
+	ctx := contentClaimContext(context.Background(), &x509.Certificate{}, claim.ClaimID, fence)
+	return s.ReadCodePlatformEffects(ctx, &runtimev1.ReadCodePlatformEffectsRequestV1{Scope: contentScope(claim.ExecutionID, 1), RequestJson: []byte(body)})
 }
 
-func TestCodePlatformEffectsHTTPDispositionsAndStatusMapping(t *testing.T) {
+func TestCodePlatformEffectsRPCDispositionsAndStatusMapping(t *testing.T) {
 	body := func(f *platformIntentFixture) string {
 		return `{"schema":"` + effectsRequestSchema + `","revision":1,"dispatch_activation":"` + f.intent.Binding.DispatchActivation + `","prepared_request_fingerprint":"` + f.broker.PreparedFingerprint + `"}`
 	}
-	// The fixture claim fence is 3 bytes; the route requires 32, so bind a full one.
-	run := func(mutate func(*CodePlatformPump, *platformIntentFixture, *effectsReaderFixture)) (*httptest.ResponseRecorder, *effectsReaderFixture) {
+	// The fixture claim fence is 3 bytes; the RPC requires 32, so bind a full one.
+	run := func(mutate func(*CodePlatformPump, *platformIntentFixture, *effectsReaderFixture)) (*runtimev1.ReadCodePlatformEffectsResponseV1, error) {
 		pump, f, reader, claim := effectsPumpFixture(t)
 		claim.FenceToken = make([]byte, 32)
 		if mutate != nil {
 			mutate(pump, f, reader)
 		}
-		return effectsHTTP(t, pump, claim, body(f)), reader
+		return effectsRPC(t, pump, claim, body(f))
 	}
 	for name, tc := range map[string]struct {
 		mutate func(*CodePlatformPump, *platformIntentFixture, *effectsReaderFixture)
-		status int
+		code   codes.Code
 		body   string
 	}{
-		"none":             {func(_ *CodePlatformPump, _ *platformIntentFixture, r *effectsReaderFixture) { r.possible = false }, 200, `{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none"}` + "\n"},
-		"possible":         {func(_ *CodePlatformPump, _ *platformIntentFixture, r *effectsReaderFixture) { r.possible = true }, 200, `{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"possible"}` + "\n"},
-		"authority-denied": {func(_ *CodePlatformPump, f *platformIntentFixture, _ *effectsReaderFixture) { f.denyAt = 1 }, 403, ""},
+		"none":             {func(_ *CodePlatformPump, _ *platformIntentFixture, r *effectsReaderFixture) { r.possible = false }, codes.OK, `{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none"}`},
+		"possible":         {func(_ *CodePlatformPump, _ *platformIntentFixture, r *effectsReaderFixture) { r.possible = true }, codes.OK, `{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"possible"}`},
+		"authority-denied": {func(_ *CodePlatformPump, f *platformIntentFixture, _ *effectsReaderFixture) { f.denyAt = 1 }, codes.PermissionDenied, ""},
 		"binding-refused": {func(_ *CodePlatformPump, f *platformIntentFixture, _ *effectsReaderFixture) {
 			f.broker.PreparedFingerprint = strings.Repeat("e", 64)
-		}, 409, ""},
-		"unavailable": {func(p *CodePlatformPump, _ *platformIntentFixture, _ *effectsReaderFixture) { p.WithEffectJournal(nil) }, 503, ""},
+		}, codes.Aborted, ""},
+		"unavailable": {func(p *CodePlatformPump, _ *platformIntentFixture, _ *effectsReaderFixture) { p.WithEffectJournal(nil) }, codes.Unavailable, ""},
 		"reader-failure": {func(_ *CodePlatformPump, _ *platformIntentFixture, r *effectsReaderFixture) {
 			r.err = errors.New("pq: raw driver text (token=abc)")
-		}, 503, ""},
+		}, codes.Unavailable, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			w, _ := run(tc.mutate)
-			if w.Code != tc.status {
-				t.Fatalf("status %d body %q", w.Code, w.Body.String())
-			}
-			if tc.status == 200 {
-				if w.Body.String() != tc.body || w.Header().Get("Content-Type") != "application/json" || w.Header().Get("Cache-Control") != "no-store" {
-					t.Fatalf("body %q headers %v", w.Body.String(), w.Header())
+			response, err := run(tc.mutate)
+			if tc.code == codes.OK {
+				if err != nil || string(response.GetResponseJson()) != tc.body {
+					t.Fatalf("response %q err %v", response.GetResponseJson(), err)
 				}
-			} else if strings.Contains(w.Body.String(), "token=abc") || strings.Contains(w.Body.String(), "driver") {
-				t.Fatalf("error text leaked: %q", w.Body.String())
+				return
+			}
+			requireContentCode(t, err, tc.code)
+			if strings.Contains(err.Error(), "token=abc") || strings.Contains(err.Error(), "driver") {
+				t.Fatalf("error text leaked: %q", err.Error())
 			}
 		})
 	}
 	t.Run("invalid-body", func(t *testing.T) {
 		pump, _, _, claim := effectsPumpFixture(t)
-		if w := effectsHTTP(t, pump, claim, `{"schema":"x"}`); w.Code != http.StatusBadRequest {
-			t.Fatalf("status %d", w.Code)
-		}
+		_, err := effectsRPC(t, pump, claim, `{"schema":"x"}`)
+		requireContentCode(t, err, codes.InvalidArgument)
 	})
 }

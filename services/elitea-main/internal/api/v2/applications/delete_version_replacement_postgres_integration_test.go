@@ -6,8 +6,8 @@ package applications_test
 // `replacement_version_id` has been a documented query parameter of the delete
 // route since the spec was written, and the handler never read it: the delete
 // went through regardless, leaving every parent that referenced the version
-// pointing at a row that no longer exists. Pylon refuses that delete and
-// repoints the references when a replacement is named
+// pointing at a row that no longer exists. The legacy runtime refuses that
+// delete and repoints the references when a replacement is named
 // (`legacy/plugins/elitea_core/rpc/application.py:1869-1961`).
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
@@ -21,7 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // attachSubAgentReference writes the pair every reader joins: a tool row of

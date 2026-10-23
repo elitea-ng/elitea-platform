@@ -20,8 +20,13 @@ import { playwright } from '@vitest/browser-playwright';
 // every *.stories.tsx CSF file into a Vitest test per story, running the
 // `play` function and the a11y check registered in .storybook/preview.tsx.
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
+// [client-core] The same dev-server `fs.allow` as the app: @elitea/client-core
+// lives outside this app's root, and the storybook project's browser-mode
+// server would otherwise refuse to serve it. Applied at the root so every
+// project (`extends: true`) inherits it.
+import { withClientCoreAccess } from './vite.config';
 
-export default defineConfig({
+export default defineConfig(withClientCoreAccess({
   plugins: [react(), tsconfigPaths(), svgr({ svgrOptions: { ref: true } })],
   test: {
     projects: [
@@ -171,4 +176,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

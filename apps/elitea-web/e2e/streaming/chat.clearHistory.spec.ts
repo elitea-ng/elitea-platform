@@ -24,9 +24,10 @@
  * (`chat_message_group` -> `chat_message_items` -> `chat_messages_text`), and
  * used to delete from a `chat_messages` table no migration creates — so a
  * clear answered 500 on a clean install and silently cleared nothing where
- * pylon had left the legacy table behind (#599). "The bubbles disappeared" is
- * therefore not evidence of anything on its own: `clearChat` empties the local
- * history whatever the server did. The store, read back after a reload, is.
+ * the legacy runtime had left its table behind (#599). "The bubbles
+ * disappeared" is therefore not evidence of anything on its own: `clearChat`
+ * empties the local history whatever the server did. The store, read back after
+ * a reload, is.
  *
  * The conversation itself must SURVIVE. The clear-all route
  * (`/messages/prompt_lib/{projectID}/{conversationID}`) and the delete-

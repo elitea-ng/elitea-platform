@@ -16,7 +16,7 @@ import (
 	"errors"
 	"testing"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 func TestCurrentApplicationStartRequestEmptyInputNeedsTheUnattendedOptIn(t *testing.T) {
@@ -55,8 +55,7 @@ func TestCurrentApplicationStartAdmitsAnUnattendedRunWithNoInput(t *testing.T) {
 		ExecutionID: "execution-1", CommandID: "command-1", Created: true,
 	}}
 	service, err := NewCurrentApplicationStartService(
-		resolver, resolver, resolver, resolver, resolver,
-		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+		resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,8 +5,6 @@ package projectprovisioning_test
 //   TestRowDeleteFailureLeavesTheProjectUnchangedAndUsable
 //       the deciding transaction fails at the row delete: the project, its
 //       resources and its admission are untouched, and no journal row exists.
-//   TestVectorStoreProbeFailureFailsTheDecision
-//       a probe error is not guessed around: nothing changes, retry later.
 //   TestProjectionJobsRefuseTheDelete
 //       a job that PROJECTS into the project counts like one that uses it.
 //   TestAdmissionRacingTheDecision
@@ -32,7 +30,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,12 +37,12 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const refuseProjectDeleteSQL = `
@@ -132,16 +129,14 @@ func projectRowCount(ctx context.Context, t *testing.T, pool *pgxpool.Pool, proj
 
 // THE INVARIANT THE REDESIGN RESTORES. The row delete fails inside the deciding
 // transaction: the delete answers ErrProjectNotRemoved, and the project is
-// exactly as it was — row, vault, buckets, system user, roles, configuration,
-// vector store — with no journal row, and new work is still admitted for it.
+// exactly as it was — row, vault, buckets, system user, roles — with no
+// journal row, and new work is still admitted for it.
 func TestRowDeleteFailureLeavesTheProjectUnchangedAndUsable(t *testing.T) {
-	skipWithoutVectorExtension(t)
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	seedPublicPgvectorBootstrap(ctx, t, pool)
-	provisioner := newVectorPurgingProvisioner(t, pool)
+	provisioner := newPurgingProvisioner(t, pool, newPurgeStore())
 	created, err := provisioner.Provision(ctx, projectprovisioning.Request{
 		Name: "Row Stays", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
 	})
@@ -149,7 +144,6 @@ func TestRowDeleteFailureLeavesTheProjectUnchangedAndUsable(t *testing.T) {
 		t.Fatalf("provision: %v", err)
 	}
 	projectID := created.ProjectID
-	dropProvisionedVectorStore(t, projectID)
 	if _, err := pool.Exec(ctx, `INSERT INTO elitea_storage.buckets (project_id, name, bucket_type) VALUES ($1, 'docs', 'local')`, projectID); err != nil {
 		t.Fatal(err)
 	}
@@ -169,9 +163,6 @@ func TestRowDeleteFailureLeavesTheProjectUnchangedAndUsable(t *testing.T) {
 		t.Fatal("the project row is gone after a failed decision")
 	}
 	assertProjectIntact(ctx, t, pool, projectID, before)
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); !database || !role {
-		t.Fatalf("the surviving project lost its vectors: database=%v role=%v", database, role)
-	}
 	if rows := journalRows(ctx, t, pool, projectID); rows != 0 {
 		t.Fatalf("a failed decision left %d journal row(s)", rows)
 	}
@@ -192,9 +183,6 @@ func TestRowDeleteFailureLeavesTheProjectUnchangedAndUsable(t *testing.T) {
 	if result, err := provisioner.Deprovision(ctx, projectID); err != nil {
 		t.Fatalf("delete after the blocker went: %v (steps=%+v)", err, result.RollbackSteps)
 	}
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); database || role {
-		t.Fatalf("after delete: database=%v role=%v", database, role)
-	}
 	if err := admitOne(ctx, pool, projectID, "after-delete"); !isForeignKeyViolation(err) {
 		t.Fatalf("admission for a deleted project = %v, want a foreign-key violation", err)
 	}
@@ -203,65 +191,14 @@ func TestRowDeleteFailureLeavesTheProjectUnchangedAndUsable(t *testing.T) {
 	}
 }
 
-// probeFailingStore is the real store whose "does the project have a vector
-// store?" read fails.
-type probeFailingStore struct {
-	projectprovisioning.ProjectVectorStore
-}
-
-func (probeFailingStore) ProjectHasVectorStore(context.Context, projectprovisioning.Querier, int64) (bool, error) {
-	return false, errors.New("transient read failure")
-}
-
-// A transient probe failure must not be guessed around: "had one" would report
-// a drop that never had to run, "had none" would leak a database. The decision
-// fails, nothing changes, and a retry is safe.
-func TestVectorStoreProbeFailureFailsTheDecision(t *testing.T) {
-	skipWithoutVectorExtension(t)
-	pool := newProvisioningPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	seedPublicPgvectorBootstrap(ctx, t, pool)
-	realStore := newProjectVectorStoreForTest(t, pool)
-	provisioner := projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), nil,
-		projectprovisioning.WithVectorStore(realStore),
-		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)))
-	created, err := provisioner.Provision(ctx, projectprovisioning.Request{
-		Name: "Probe Fails", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	projectID := created.ProjectID
-	dropProvisionedVectorStore(t, projectID)
-
-	failing := projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), nil,
-		projectprovisioning.WithVectorStore(probeFailingStore{realStore}),
-		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)))
-	if _, err := failing.Deprovision(ctx, projectID); !errors.Is(err, projectprovisioning.ErrProjectNotRemoved) {
-		t.Fatalf("err = %v, want ErrProjectNotRemoved", err)
-	}
-	if projectRowCount(ctx, t, pool, projectID) != 1 || journalRows(ctx, t, pool, projectID) != 0 {
-		t.Fatal("a failed probe changed the project or wrote a journal row")
-	}
-	if _, err := provisioner.Deprovision(ctx, projectID); err != nil {
-		t.Fatalf("retry with a working probe: %v", err)
-	}
-	if entry := readJournal(ctx, t, pool, projectID); entry.Cleanup["had_vector_store"] != true {
-		t.Fatalf("journal = %+v, want had_vector_store recorded", entry.Cleanup)
-	}
-}
-
 // A job that uses ANOTHER project's resources and projects its results into
 // this one counts like one of its own.
 func TestProjectionJobsRefuseTheDelete(t *testing.T) {
-	skipWithoutVectorExtension(t)
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	provisioner, projectID := provisionIndexableProject(ctx, t, pool, "Projected Into")
+	provisioner, projectID := provisionDeletableProject(ctx, t, pool, "Projected Into")
 	const bundle = "bundle-projection"
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_runtime.input_bundles
@@ -296,21 +233,17 @@ INSERT INTO elitea_runtime.execution_jobs (
 // Admission inserts rows with foreign keys to the project, which take a KEY
 // SHARE lock on its row.
 func TestAdmissionRacingTheDecision(t *testing.T) {
-	skipWithoutVectorExtension(t)
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	t.Run("admission waits for the decision and fails on the foreign key", func(t *testing.T) {
-		seedPublicPgvectorBootstrap(ctx, t, pool)
-		store := &blockingProbeStore{
-			ProjectVectorStore: newProjectVectorStoreForTest(t, pool),
-			entered:            make(chan struct{}),
-			release:            make(chan struct{}),
-		}
+		// The decision is parked INSIDE its transaction, after it took the
+		// project row FOR UPDATE, by an uncommitted journal row for the same
+		// id: its INSERT ... ON CONFLICT waits for that transaction.
 		provisioner := projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), nil,
-			projectprovisioning.WithVectorStore(store),
-			projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)))
+			projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)),
+			projectprovisioning.WithDecisionTimeouts(time.Minute, time.Minute))
 		created, err := provisioner.Provision(ctx, projectprovisioning.Request{
 			Name: "Admission Loses", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
 		})
@@ -318,21 +251,22 @@ func TestAdmissionRacingTheDecision(t *testing.T) {
 			t.Fatal(err)
 		}
 		projectID := created.ProjectID
-		dropProvisionedVectorStore(t, projectID)
-		store.armed.Store(true)
+		blocker, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = blocker.Rollback(context.WithoutCancel(ctx)) }()
+		if _, err := blocker.Exec(ctx,
+			`INSERT INTO centry.project_deletions (project_id, cleanup) VALUES ($1, '{}'::jsonb)`, projectID); err != nil {
+			t.Fatal(err)
+		}
 
 		deleted := make(chan error, 1)
 		go func() {
 			_, err := provisioner.Deprovision(ctx, projectID)
 			deleted <- err
 		}()
-		// The decision holds the row FOR UPDATE and is parked inside its
-		// transaction (in the vector-store probe).
-		select {
-		case <-store.entered:
-		case <-time.After(60 * time.Second):
-			t.Fatal("the decision never reached the probe")
-		}
+		waitForUngrantedLock(ctx, t, pool)
 		admitted := make(chan error, 1)
 		go func() { admitted <- admitOne(ctx, pool, projectID, "racing") }()
 		select {
@@ -340,7 +274,9 @@ func TestAdmissionRacingTheDecision(t *testing.T) {
 			t.Fatalf("admission did not wait for the decision's row lock: %v", err)
 		case <-time.After(500 * time.Millisecond):
 		}
-		close(store.release)
+		if err := blocker.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
 		if err := <-deleted; err != nil {
 			t.Fatalf("delete: %v", err)
 		}
@@ -350,7 +286,7 @@ func TestAdmissionRacingTheDecision(t *testing.T) {
 	})
 
 	t.Run("the decision waits for an admission and counts it", func(t *testing.T) {
-		provisioner, projectID := provisionIndexableProject(ctx, t, pool, "Decision Loses")
+		provisioner, projectID := provisionDeletableProject(ctx, t, pool, "Decision Loses")
 		admission, err := pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -399,37 +335,14 @@ INSERT INTO elitea_runtime.execution_jobs (
 	})
 }
 
-// blockingProbeStore parks the decision transaction in its vector-store probe
-// (once armed) until released.
-type blockingProbeStore struct {
-	projectprovisioning.ProjectVectorStore
-	armed   atomic.Bool
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func (s *blockingProbeStore) ProjectHasVectorStore(ctx context.Context, query projectprovisioning.Querier, projectID int64) (bool, error) {
-	if s.armed.Load() {
-		s.once.Do(func() { close(s.entered) })
-		select {
-		case <-s.release:
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
-	}
-	return s.ProjectVectorStore.ProjectHasVectorStore(ctx, query, projectID)
-}
-
 // SkipActiveWorkCheck is the ensurer's repair of a project whose creation never
 // finished. It skips the count, nothing else.
 func TestSkipActiveWorkCheckDeletesAProjectWithAStrayJob(t *testing.T) {
-	skipWithoutVectorExtension(t)
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	provisioner, projectID := provisionIndexableProject(ctx, t, pool, "Repair Skips The Count")
+	provisioner, projectID := provisionDeletableProject(ctx, t, pool, "Repair Skips The Count")
 	seedActiveJob(ctx, t, pool, projectID, "exec-skip-count", execution.IndexIngestCapability)
 
 	if _, err := provisioner.Deprovision(ctx, projectID); !errors.Is(err, projectprovisioning.ErrProjectWorkActive) {
@@ -444,32 +357,29 @@ func TestSkipActiveWorkCheckDeletesAProjectWithAStrayJob(t *testing.T) {
 	if got := countRows(ctx, t, pool, `SELECT count(*) FROM elitea_runtime.execution_jobs WHERE resource_project_id = $1`, projectID); got != 0 {
 		t.Fatalf("the stray job survived the delete: %d", got)
 	}
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); database || role {
-		t.Fatalf("database=%v role=%v, want both dropped", database, role)
-	}
 }
 
-// toggleDropStore is the real store with a drop that fails while failing is set.
-type toggleDropStore struct {
-	projectprovisioning.ProjectVectorStore
+// toggleBuckets is an object store with no storage behind it whose teardown
+// fails while failing is set.
+type toggleBuckets struct {
 	mu      sync.Mutex
 	failing bool
 }
 
-func (s *toggleDropStore) DropProjectVectorStore(ctx context.Context, projectID int64, hadStore bool) (string, error) {
-	s.mu.Lock()
-	failing := s.failing
-	s.mu.Unlock()
-	if failing {
-		return fmt.Sprintf("project_%d", projectID), errors.New("pg unreachable")
+func (*toggleBuckets) BootstrapProjectBuckets(context.Context, string) error { return nil }
+func (b *toggleBuckets) TeardownProjectBuckets(context.Context, string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failing {
+		return errors.New("object store unreachable")
 	}
-	return s.ProjectVectorStore.DropProjectVectorStore(ctx, projectID, hadStore)
+	return nil
 }
 
-func (s *toggleDropStore) set(failing bool) {
-	s.mu.Lock()
-	s.failing = failing
-	s.mu.Unlock()
+func (b *toggleBuckets) set(failing bool) {
+	b.mu.Lock()
+	b.failing = failing
+	b.mu.Unlock()
 }
 
 // A cleanup step that fails after the row is gone: the delete reports it by
@@ -477,15 +387,13 @@ func (s *toggleDropStore) set(failing bool) {
 // count and its backoff), and the real reconciler finishes it once the grace and
 // the backoff have passed — and not before.
 func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
-	skipWithoutVectorExtension(t)
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	seedPublicPgvectorBootstrap(ctx, t, pool)
-	store := &toggleDropStore{ProjectVectorStore: newProjectVectorStoreForTest(t, pool), failing: true}
+	store := &toggleBuckets{failing: true}
 	provisioner := projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), nil,
-		projectprovisioning.WithVectorStore(store),
+		projectprovisioning.WithArtifactBuckets(store),
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)))
 	created, err := provisioner.Provision(ctx, projectprovisioning.Request{
 		Name: "Journal Finishes", OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
@@ -494,26 +402,24 @@ func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectID := created.ProjectID
-	dropProvisionedVectorStore(t, projectID)
-	database := fmt.Sprintf("project_%d", projectID)
 
 	result, err := provisioner.Deprovision(ctx, projectID)
-	if !errors.Is(err, projectprovisioning.ErrVectorStoreNotDropped) || !strings.Contains(err.Error(), database) {
-		t.Fatalf("err = %v, want ErrVectorStoreNotDropped naming %s", err, database)
+	if !errors.Is(err, projectprovisioning.ErrArtifactsNotRemoved) {
+		t.Fatalf("err = %v, want ErrArtifactsNotRemoved", err)
 	}
 	if errors.Is(err, projectprovisioning.ErrTenantSchemaNotRemoved) {
 		t.Fatalf("err = %v names leftovers that were cleaned", err)
 	}
-	if result.VectorDatabase != database || !stepFailed(result.RollbackSteps, projectprovisioning.StepProjectPgvectorDrop) {
-		t.Fatalf("result = %+v, want the drop failed and %s named", result, database)
+	if !stepFailed(result.RollbackSteps, projectprovisioning.StepArtifactBuckets) {
+		t.Fatalf("result = %+v, want the artifact purge failed", result)
 	}
 	if projectRowCount(ctx, t, pool, projectID) != 0 {
 		t.Fatal("the project row survived the decision")
 	}
 
 	entry := readJournal(ctx, t, pool, projectID)
-	if entry.Completed || entry.Attempts != 1 || entry.LastError == nil || !strings.Contains(*entry.LastError, projectprovisioning.StepProjectPgvectorDrop) {
-		t.Fatalf("journal = %+v, want one failed run naming the drop", entry)
+	if entry.Completed || entry.Attempts != 1 || entry.LastError == nil || !strings.Contains(*entry.LastError, projectprovisioning.StepArtifactBuckets) {
+		t.Fatalf("journal = %+v, want one failed run naming the purge", entry)
 	}
 	if entry.Leased || !entry.BackedOff {
 		t.Fatalf("journal = %+v, want the lease released and a backoff set", entry)
@@ -527,8 +433,8 @@ func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
 			t.Errorf("identity step %s is in the journal, want it done by the decision: %+v", step, entry.Cleanup)
 		}
 	}
-	if entry.done(projectprovisioning.StepProjectPgvectorDrop) {
-		t.Error("the failed drop is recorded done")
+	if entry.done(projectprovisioning.StepArtifactBuckets) {
+		t.Error("the failed purge is recorded done")
 	}
 
 	reconciler, err := runtimecomposition.NewProjectDeletionReconciler(provisioner,
@@ -564,9 +470,6 @@ func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
 	if !entry.Completed || entry.Attempts != 2 || entry.LastError != nil || entry.Leased {
 		t.Fatalf("journal = %+v, want completed on the second run", entry)
 	}
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); database || role {
-		t.Fatalf("after the reconciler: database=%v role=%v, want both dropped", database, role)
-	}
 	// A complete row is never claimed again.
 	if worked, err := reconciler.RunOnce(ctx); err != nil || worked != 0 {
 		t.Fatalf("pass after completion: worked=%d err=%v", worked, err)
@@ -580,12 +483,11 @@ func TestCleanupFailureLeavesAJournalRowTheReconcilerFinishes(t *testing.T) {
 // connection back. One 200, one 404, and no deadlock: the delete holds no
 // session lock or extra connection while it waits.
 func TestConcurrentDeletesOnASmallPool(t *testing.T) {
-	skipWithoutVectorExtension(t)
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	_, projectID := provisionIndexableProject(ctx, t, pool, "Two Deletes Small Pool")
+	_, projectID := provisionDeletableProject(ctx, t, pool, "Two Deletes Small Pool")
 
 	config := pool.Config().Copy()
 	config.MaxConns = 2
@@ -596,7 +498,6 @@ func TestConcurrentDeletesOnASmallPool(t *testing.T) {
 	}
 	defer small.Close()
 	provisioner := projectprovisioning.New(small, migrate.New(small, platformmigrations.Files), nil,
-		projectprovisioning.WithVectorStore(newProjectVectorStoreForTest(t, small)),
 		projectprovisioning.WithProjectVault(v2secrets.NewHandler(small)))
 
 	holder, err := pool.Begin(ctx)
@@ -648,9 +549,6 @@ func TestConcurrentDeletesOnASmallPool(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"not found", "ok"}) {
 		t.Fatalf("results = %v, want one ok and one not found", got)
-	}
-	if database, role := vectorStoreResidue(ctx, t, pool, projectID); database || role {
-		t.Fatalf("database=%v role=%v, want both dropped", database, role)
 	}
 	if entry := readJournal(ctx, t, pool, projectID); !entry.Completed || entry.Attempts != 1 {
 		t.Fatalf("journal = %+v, want one complete run (no duplicated cleanup)", entry)
@@ -747,3 +645,39 @@ INSERT INTO centry.project_deletions (project_id, cleanup, created_at, next_atte
 		t.Fatalf("resume of an unknown id = %v, want ErrProjectNotFound", err)
 	}
 }
+
+// provisionDeletableProject provisions a plain project and returns the
+// provisioner that made it.
+func provisionDeletableProject(ctx context.Context, t *testing.T, pool *pgxpool.Pool, name string) (*projectprovisioning.Provisioner, int64) {
+	t.Helper()
+	provisioner := projectprovisioning.New(pool, migrate.New(pool, platformmigrations.Files), nil,
+		projectprovisioning.WithProjectVault(v2secrets.NewHandler(pool)))
+	result, err := provisioner.Provision(ctx, projectprovisioning.Request{
+		Name: name, OwnerID: 1, Limits: projectprovisioning.DefaultLimits(),
+	})
+	if err != nil {
+		t.Fatalf("provision: %v (steps=%+v)", err, result.Steps)
+	}
+	return provisioner, result.ProjectID
+}
+
+// waitForUngrantedLock waits until some backend waits on a lock: the decision
+// parked behind the test's uncommitted journal row.
+func waitForUngrantedLock(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_catalog.pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the decision never parked on the journal row")
+}
+
+// referenceProjectID is the public project every test database is seeded with.
+const referenceProjectID = 1

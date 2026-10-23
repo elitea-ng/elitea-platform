@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn nothing_is_found_in_text_that_is_not_a_patch() {
-        assert!(parse_patch("hello world").is_empty());
-        assert!(parse_patch("diff --git broken").is_empty());
+        assert_eq!(parse_patch("hello world"), []);
+        assert_eq!(parse_patch("diff --git broken"), []);
     }
 }

@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 pub mod codec;
 
 pub const MAX_NODE_ATTEMPTS: u16 = 16;
+/// Platform-owned re-runs of an attempt whose sandbox runtime was lost (node
+/// loss, eviction, a platform kill), on top of the node's own policy. They are
+/// granted only for a proven effect-free attempt and never by YAML.
+pub const MAX_RUNTIME_LOST_RETRIES: u16 = 2;
+/// A lost runtime is re-run only while this much time has passed since the
+/// node's first attempt started. A node policy's own `max_elapsed_ms`, when
+/// shorter, is the deadline instead.
+pub const RUNTIME_LOST_RETRY_WINDOW_MS: u64 = 900_000;
+/// Wait before re-running a lost runtime, times the number of re-runs so far.
+pub const RUNTIME_LOST_RETRY_DELAY_MS: u64 = 1_000;
 const MAX_BACKOFF_MS: u64 = 300_000;
 const MAX_ELAPSED_MS: u64 = 3_600_000;
 const MAX_OPERATOR_ACTIONS: usize = 16;
@@ -34,6 +44,10 @@ pub enum NodeFailureClass {
     Cancelled,
     LeaseLost,
     Unknown,
+    /// The sandbox runtime was lost before it reported a result (node loss,
+    /// eviction, a platform kill), proven by the supervisor and not by user
+    /// code. Only the platform retry allowance re-runs it; YAML cannot name it.
+    RuntimeLost,
 }
 
 impl NodeFailureClass {
@@ -52,7 +66,8 @@ impl NodeFailureClass {
             | Self::SensitiveRejected
             | Self::Cancelled
             | Self::LeaseLost
-            | Self::Unknown => None,
+            | Self::Unknown
+            | Self::RuntimeLost => None,
         }
     }
 
@@ -161,6 +176,7 @@ impl NodeErrorRoute {
             || contract.requires_success_output
             || contract.reexecutes_failed_operation
             || classes.iter().any(|class| class.control_stop())
+            || classes.contains(&NodeFailureClass::RuntimeLost)
             || (classes.iter().any(|class| class.denial()) && !contract.explicitly_handles_denial)
         {
             return Err(NodeRecoveryError::InvalidErrorRoute);
@@ -414,6 +430,60 @@ pub fn plan_after_failure(
     Ok(RecoveryDecision::Stop(reason))
 }
 
+/// The deadline of a lost-runtime re-run: the platform window from the first
+/// attempt, or the node policy's own elapsed limit when that is earlier.
+pub fn runtime_lost_deadline(
+    policy: &NodeRecoveryPolicy,
+    first_started_ms: u64,
+) -> Result<u64, NodeRecoveryError> {
+    let window = first_started_ms
+        .checked_add(RUNTIME_LOST_RETRY_WINDOW_MS)
+        .ok_or(NodeRecoveryError::InvalidClock)?;
+    Ok(policy
+        .deadline(first_started_ms)?
+        .map_or(window, |deadline| deadline.min(window)))
+}
+
+/// Decide after an attempt whose sandbox runtime was lost.
+///
+/// `granted` counts the lost-runtime re-runs earlier attempts already received.
+/// The failure must be proven effect-free: a lost runtime that may have left
+/// an effect is never classified [`NodeFailureClass::RuntimeLost`].
+pub fn plan_runtime_lost(
+    policy: &NodeRecoveryPolicy,
+    attempts_started: u16,
+    granted: u16,
+    first_started_ms: u64,
+    now_ms: u64,
+    failure: NodeFailure,
+) -> Result<RecoveryDecision, NodeRecoveryError> {
+    if failure.class != NodeFailureClass::RuntimeLost
+        || failure.replay != ReplaySafety::NoExternalEffect
+    {
+        return Err(NodeRecoveryError::InvalidEffectIdentity);
+    }
+    if attempts_started == 0 || granted >= attempts_started {
+        return Err(NodeRecoveryError::InvalidHistory);
+    }
+    if now_ms < first_started_ms {
+        return Err(NodeRecoveryError::InvalidClock);
+    }
+    if granted >= MAX_RUNTIME_LOST_RETRIES || attempts_started >= MAX_NODE_ATTEMPTS {
+        return Ok(RecoveryDecision::Stop(StopReason::AttemptsExhausted));
+    }
+    let retry_at = now_ms
+        .checked_add(RUNTIME_LOST_RETRY_DELAY_MS.saturating_mul(u64::from(granted) + 1))
+        .ok_or(NodeRecoveryError::InvalidClock)?;
+    if retry_at >= runtime_lost_deadline(policy, first_started_ms)? {
+        return Ok(RecoveryDecision::Stop(StopReason::ElapsedLimit));
+    }
+    Ok(RecoveryDecision::RetryAt {
+        not_before_ms: retry_at,
+        next_attempt: attempts_started + 1,
+        effect_id: None,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub enum AttemptOutcome {
@@ -522,19 +592,8 @@ impl NodeAttemptLedger {
         if now_ms < self.last_recorded_ms() {
             return Err(NodeRecoveryError::InvalidClock);
         }
-        let first = self
-            .history
-            .first()
-            .ok_or(NodeRecoveryError::InvalidHistory)?;
         let resolved = NodeFailure::new(failure.class, ReplaySafety::NoExternalEffect);
-        let decision = plan_after_failure(
-            &self.policy,
-            self.activation_id,
-            self.attempts_started()?,
-            first.started_ms,
-            now_ms,
-            resolved,
-        )?;
+        let decision = self.plan(&self.policy, resolved, now_ms)?;
         let mut next = self.next_revision()?;
         next.phase = NodeAttemptPhase::Failed(match decision {
             RecoveryDecision::RetryAt { .. } => {
@@ -684,7 +743,7 @@ impl NodeAttemptLedger {
             .history
             .first()
             .ok_or(NodeRecoveryError::InvalidHistory)?;
-        let Some(deadline) = self.policy.deadline(first.started_ms)? else {
+        let Some(deadline) = self.retry_deadline(first.started_ms)? else {
             return Ok(None);
         };
         if now_ms < self.last_recorded_ms() {
@@ -702,14 +761,7 @@ impl NodeAttemptLedger {
         };
         let failure = self.effective_failure()?;
         let mut next = self.next_revision()?;
-        next.phase = NodeAttemptPhase::Failed(plan_after_failure(
-            &self.policy,
-            self.activation_id,
-            self.attempts_started()?,
-            first.started_ms,
-            now_ms,
-            failure,
-        )?);
+        next.phase = NodeAttemptPhase::Failed(self.plan(&self.policy, failure, now_ms)?);
         next.events
             .push(codec::NodeRecoveryEvent::WaitExpired { now_ms });
         Ok(Some(next))
@@ -730,7 +782,7 @@ impl NodeAttemptLedger {
             }) if now_ms >= not_before_ms && next_attempt == expected => {}
             _ => return Err(NodeRecoveryError::InvalidTransition),
         }
-        if next_attempt > self.policy.max_attempts {
+        if next_attempt > self.attempt_limit()? {
             return Err(NodeRecoveryError::InvalidTransition);
         }
         if let Some(first) = self.history.first() {
@@ -738,8 +790,7 @@ impl NodeAttemptLedger {
                 return Err(NodeRecoveryError::InvalidClock);
             }
             if self
-                .policy
-                .deadline(first.started_ms)?
+                .retry_deadline(first.started_ms)?
                 .is_some_and(|deadline| now_ms >= deadline)
             {
                 return Err(NodeRecoveryError::ElapsedLimit);
@@ -765,18 +816,7 @@ impl NodeAttemptLedger {
     ) -> Result<Self, NodeRecoveryError> {
         self.require_running(now_ms)?;
         self.require_stable_effect(failure)?;
-        let first = self
-            .history
-            .first()
-            .ok_or(NodeRecoveryError::InvalidHistory)?;
-        let decision = plan_after_failure(
-            &self.policy,
-            self.activation_id,
-            self.attempts_started()?,
-            first.started_ms,
-            now_ms,
-            failure,
-        )?;
+        let decision = self.plan(&self.policy, failure, now_ms)?;
         let mut next = self.next_revision()?;
         let record = next
             .history
@@ -916,13 +956,10 @@ impl NodeAttemptLedger {
             .policy
             .clone()
             .with_retry_mode(NodeRetryMode::Automatic)?;
-        let planned = plan_after_failure(
+        let planned = self.plan(
             &automatic_policy,
-            self.activation_id,
-            self.attempts_started()?,
-            first.started_ms,
-            last.finished_ms.ok_or(NodeRecoveryError::InvalidHistory)?,
             failure,
+            last.finished_ms.ok_or(NodeRecoveryError::InvalidHistory)?,
         )?;
         if self
             .policy
@@ -960,6 +997,131 @@ impl NodeAttemptLedger {
 
     fn attempts_started(&self) -> Result<u16, NodeRecoveryError> {
         u16::try_from(self.history.len()).map_err(|_| NodeRecoveryError::InvalidHistory)
+    }
+
+    /// Lost-runtime re-runs granted by the attempts before the last one, or by
+    /// every attempt with `include_last`. They extend the node's attempt budget.
+    fn runtime_lost_retries(&self, include_last: bool) -> Result<u16, NodeRecoveryError> {
+        let end = if include_last {
+            self.history.len()
+        } else {
+            self.history.len().saturating_sub(1)
+        };
+        let granted = self.history[..end]
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.outcome,
+                    AttemptOutcome::Failed {
+                        failure: NodeFailure {
+                            class: NodeFailureClass::RuntimeLost,
+                            ..
+                        },
+                        decision: RecoveryDecision::RetryAt { .. },
+                    }
+                )
+            })
+            .count();
+        u16::try_from(granted).map_err(|_| NodeRecoveryError::InvalidHistory)
+    }
+
+    /// The node policy's attempts plus the lost-runtime re-runs already granted.
+    fn attempt_limit(&self) -> Result<u16, NodeRecoveryError> {
+        Ok(self
+            .policy
+            .max_attempts
+            .saturating_add(self.runtime_lost_retries(true)?)
+            .min(MAX_NODE_ATTEMPTS))
+    }
+
+    /// The deadline a pending retry must start before: the lost-runtime
+    /// deadline after a lost runtime, otherwise the node policy's own.
+    fn retry_deadline(&self, first_started_ms: u64) -> Result<Option<u64>, NodeRecoveryError> {
+        let lost = self.history.last().is_some_and(|record| {
+            matches!(
+                record.outcome,
+                AttemptOutcome::Failed {
+                    failure: NodeFailure {
+                        class: NodeFailureClass::RuntimeLost,
+                        ..
+                    },
+                    ..
+                }
+            )
+        });
+        if lost {
+            return runtime_lost_deadline(&self.policy, first_started_ms).map(Some);
+        }
+        self.policy.deadline(first_started_ms)
+    }
+
+    /// Plan the last attempt's failure. A lost runtime uses the platform
+    /// allowance first; every other failure, and a lost runtime past the
+    /// allowance, uses `policy` with the attempts the node policy itself paid
+    /// for, so a lost-runtime re-run never consumes them.
+    fn plan(
+        &self,
+        policy: &NodeRecoveryPolicy,
+        mut failure: NodeFailure,
+        now_ms: u64,
+    ) -> Result<RecoveryDecision, NodeRecoveryError> {
+        let first = self
+            .history
+            .first()
+            .ok_or(NodeRecoveryError::InvalidHistory)?;
+        let started = self.attempts_started()?;
+        let granted = self.runtime_lost_retries(false)?;
+        if failure.class == NodeFailureClass::RuntimeLost {
+            let decision =
+                plan_runtime_lost(policy, started, granted, first.started_ms, now_ms, failure)?;
+            if !matches!(decision, RecoveryDecision::Stop(_)) {
+                return Ok(decision);
+            }
+            // The allowance is spent or out of time: decide as a lost runtime
+            // was decided before the allowance existed, a failed result, so a
+            // configured error route still receives it.
+            failure = NodeFailure::new(NodeFailureClass::InvalidResult, failure.replay);
+        }
+        let budgeted = started
+            .checked_sub(granted)
+            .ok_or(NodeRecoveryError::InvalidHistory)?;
+        Ok(
+            match plan_after_failure(
+                policy,
+                self.activation_id,
+                budgeted,
+                first.started_ms,
+                now_ms,
+                failure,
+            )? {
+                RecoveryDecision::RetryAt {
+                    not_before_ms,
+                    next_attempt,
+                    effect_id,
+                } => {
+                    let next_attempt = next_attempt
+                        .checked_add(granted)
+                        .ok_or(NodeRecoveryError::InvalidHistory)?;
+                    if next_attempt > MAX_NODE_ATTEMPTS {
+                        RecoveryDecision::Stop(StopReason::AttemptsExhausted)
+                    } else {
+                        RecoveryDecision::RetryAt {
+                            not_before_ms,
+                            next_attempt,
+                            effect_id,
+                        }
+                    }
+                }
+                RecoveryDecision::ErrorRoute { route_id, failed } => RecoveryDecision::ErrorRoute {
+                    route_id,
+                    failed: FailedNodeOutput {
+                        attempt: started,
+                        ..failed
+                    },
+                },
+                other => other,
+            },
+        )
     }
 
     fn require_running(&self, now_ms: u64) -> Result<(), NodeRecoveryError> {
@@ -1078,3 +1240,7 @@ mod tests;
 #[cfg(test)]
 #[path = "node_recovery_no_effect_tests.rs"]
 mod no_effect_tests;
+
+#[cfg(test)]
+#[path = "node_recovery_runtime_lost_tests.rs"]
+mod runtime_lost_tests;

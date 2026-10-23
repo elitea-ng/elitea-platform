@@ -8,12 +8,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	localturnsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/localturns"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	localturnsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/localturns"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
 // composeLocalTurns builds startLocalTurn / commitLocalTurn (ADR-0029

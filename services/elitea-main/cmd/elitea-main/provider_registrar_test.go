@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,22 +12,22 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
 )
 
 // The composition root's rule: no database, no public project, or a
 // database the admission migration has not reached — the provider keeps
 // serving and nothing is registered. Nothing here panics on a nil pool.
 func TestProviderRegistrarSkipsWhatItCannotRegisterWith(t *testing.T) {
-	cfg := facade.Config{BaseURL: "https://elitea-deepwiki:8443"}
-	if startProviderRegistrar(context.Background(), nil, nil, 1, "deepwiki", cfg, "X") != nil {
+	cfg := facade.Config{Target: "elitea-deepwiki:9443"}
+	if startProviderRegistrar(context.Background(), nil, nil, 1, "deepwiki", cfg, "X", nil) != nil {
 		t.Fatal("started with no database")
 	}
 	pool := registrarTestPool(t)
-	if startProviderRegistrar(context.Background(), nil, pool, 0, "deepwiki", cfg, "X") != nil {
+	if startProviderRegistrar(context.Background(), nil, pool, 0, "deepwiki", cfg, "X", nil) != nil {
 		t.Fatal("started with no public project")
 	}
-	if startProviderRegistrar(context.Background(), nil, pool, 1, "deepwiki", cfg, "X") != nil {
+	if startProviderRegistrar(context.Background(), nil, pool, 1, "deepwiki", cfg, "X", nil) != nil {
 		t.Fatal("started against a database without the admission plane")
 	}
 	sql, err := os.ReadFile(filepath.Join("..", "..", "migrations", "shared", "0107_provider_admitted_revisions.sql"))
@@ -38,11 +38,10 @@ func TestProviderRegistrarSkipsWhatItCannotRegisterWith(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The plane is present, so the registrar is built — and refused here
-	// only because the client certificate does not exist, which proves the
-	// plane check was passed rather than short-circuited.
-	if startProviderRegistrar(context.Background(), nil, pool, 1, "deepwiki",
-		facade.Config{BaseURL: "https://elitea-deepwiki:8443", ClientCertFile: "/nonexistent/tls.crt", ClientKeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt"}, "X") != nil {
-		t.Fatal("started without a client certificate")
+	// only because no provider client was handed in, which proves the plane
+	// check was passed rather than short-circuited.
+	if startProviderRegistrar(context.Background(), nil, pool, 1, "deepwiki", cfg, "X", nil) != nil {
+		t.Fatal("started without the facade's provider client")
 	}
 }
 

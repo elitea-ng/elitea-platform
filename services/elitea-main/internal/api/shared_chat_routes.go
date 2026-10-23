@@ -3,7 +3,7 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 )
 
 // SharedChatViewPath is the anonymous read of a shared conversation.

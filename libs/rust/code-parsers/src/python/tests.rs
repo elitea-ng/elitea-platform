@@ -218,7 +218,7 @@ fn imports_and_exports_follow_the_module_info_rules() {
 #[test]
 fn syntax_errors_leave_only_the_error() {
     let result = parse_one("print 'x'\n");
-    assert!(result.symbols.is_empty());
+    assert_eq!(result.symbols, []);
     assert_eq!(
         result.errors,
         [
@@ -240,7 +240,7 @@ fn syntax_errors_leave_only_the_error() {
 #[test]
 fn python_recursion_limit_is_reproduced() {
     let chain = |n: usize| format!("x = {}\n", vec!["1"; n].join(" + "));
-    assert!(parse_one(&chain(492)).errors.is_empty());
+    assert_eq!(parse_one(&chain(492)).errors, [] as [String; 0]);
     assert_eq!(
         parse_one(&chain(493)).errors,
         ["Parse error: maximum recursion depth exceeded"]
@@ -298,7 +298,7 @@ fn reextraction_links_classes_and_functions_across_files() {
 #[test]
 fn tokenizer_limits_are_reproduced() {
     let brackets = |n: usize| format!("x = {}{}\n", "[".repeat(n), "]".repeat(n));
-    assert!(parse_one(&brackets(200)).errors.is_empty());
+    assert_eq!(parse_one(&brackets(200)).errors, [] as [String; 0]);
     assert_eq!(
         parse_one(&brackets(201)).errors,
         ["Syntax error: too many nested parentheses (mod.py, line 1)"]
@@ -315,7 +315,7 @@ fn tokenizer_limits_are_reproduced() {
         text.push_str("pass\n");
         text
     };
-    assert!(parse_one(&indented(98)).errors.is_empty());
+    assert_eq!(parse_one(&indented(98)).errors, [] as [String; 0]);
     assert_eq!(
         parse_one(&indented(100)).errors,
         ["Syntax error: too many levels of indentation (mod.py, line 101)"]
@@ -327,7 +327,7 @@ fn attribute_chains_hit_the_limit_sooner() {
     // `visit_Attribute` and `visit_Name` cost the relationship visitor a
     // frame more per level than `generic_visit` alone.
     let chain = |n: usize| format!("def f():\n    return a{}\n", ".b".repeat(n));
-    assert!(parse_one(&chain(326)).errors.is_empty());
+    assert_eq!(parse_one(&chain(326)).errors, [] as [String; 0]);
     assert_eq!(
         parse_one(&chain(327)).errors,
         ["Parse error: maximum recursion depth exceeded"]

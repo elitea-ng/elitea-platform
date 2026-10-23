@@ -6,17 +6,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // PositionGap is the spacing between two adjacent folders' positions. It
@@ -130,9 +131,23 @@ type conversationItem struct {
 	// `chat_conversations.source`. The rail reads it to tell a Local work
 	// thread (conversations.LocalWorkSource) from an ordinary chat: a search
 	// lists both, and the desktop opens a Local work row in its thread.
-	Source    string     `json:"source,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	Source    string    `json:"source,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is the row's revision time. For a row of a date group it is
+	// the conversation's last activity instead (see groupByDate), so the
+	// rail's own sort (`updatedAt ?? createdAt`) agrees with the bucket order.
 	UpdatedAt *time.Time `json:"updated_at"`
+	// activity is the conversation's last activity: the newest of its
+	// creation, its last revision and its newest message group. A message
+	// does not revise the conversation row, so without the message read a
+	// conversation someone writes in stays in the bucket of its creation.
+	activity time.Time
+	// Client contract 1.12: the activity status of the row (annotateActivity).
+	// Filled for the rows a response carries; a client treats an absent
+	// `activity` as idle and an absent `unread` as read.
+	Activity       *activityWire `json:"activity,omitempty"`
+	LastActivityAt string        `json:"last_activity_at,omitempty"`
+	Unread         bool          `json:"unread"`
 }
 
 type dateGroup struct {
@@ -146,6 +161,9 @@ type dateGroup struct {
 	// Offset is where the next page starts: the number of rows this response
 	// carries. The client sends it back as `?date_group=…&offset=…`.
 	Offset int `json:"offset"`
+	// NeedsYou (client contract 1.12) is how many conversations of the WHOLE
+	// bucket wait for the user (activity state needs_you), not of this page.
+	NeedsYou int `json:"needs_you"`
 }
 
 // groupOrder is the sidebar's date-group order, newest bucket first. Also
@@ -226,6 +244,11 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	//
 	// Project pins are shared. The row records the last pinner, not its reader.
 	// Chat authority still restricts the conversations returned by this listing.
+	//
+	// The project's archive (client contract 1.10, tenant/0151) takes a
+	// conversation out of this sidebar listing for every member, its pinned
+	// section included. Archived conversations are listed through
+	// listConversations with `archived=only`.
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id,
 		       EXISTS (SELECT 1 FROM centry.social_pins p
@@ -233,10 +256,14 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		                         AND p.project_id = $2::text::integer
 		                         AND p.entity_id = c.id) AS is_pinned,
 		       c.is_private, COALESCE(c.source, ''),
-		       c.created_at, c.updated_at
-		FROM %s.chat_conversations c
-		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %s AND %s
-		ORDER BY %s %s, c.id %s`, schema, visible, sourceFilter, orderCol, orderDir, orderDir)
+		       c.created_at, c.updated_at,
+		       GREATEST(c.created_at, c.updated_at,
+		                (SELECT g.created_at FROM %[1]s.chat_message_group g
+		                  WHERE g.conversation_id = c.id ORDER BY g.id DESC LIMIT 1)) AS activity
+		FROM %[1]s.chat_conversations c
+		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %[2]s AND %[3]s
+		  AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_conversation_archives ca WHERE ca.conversation_id = c.id)
+		ORDER BY %[4]s %[5]s, c.id %[5]s`, schema, visible, sourceFilter, orderCol, orderDir)
 	args = append(args, projectID)
 
 	rows, err := h.pool.Query(ctx, q, args...)
@@ -247,7 +274,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	for rows.Next() {
 		var c conversationItem
 		var updatedAt *time.Time
-		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.Source, &c.CreatedAt, &updatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.Source, &c.CreatedAt, &updatedAt, &c.activity); err != nil {
 			return nil, fmt.Errorf("folders: scan conversation: %w", err)
 		}
 		c.UpdatedAt = updatedAt
@@ -316,9 +343,17 @@ func partitionConversations(conversations []conversationItem) (pinned []conversa
 	return pinned, foldered, ungrouped
 }
 
-// groupByDate buckets ungrouped conversations by recency, keyed by the labels
-// in groupOrder. Every label is present in the returned map, possibly empty.
-func groupByDate(ungrouped []conversationItem, now time.Time) map[string][]conversationItem {
+// groupByDate buckets ungrouped conversations by their last activity
+// (conversationItem.activity), keyed by the labels in groupOrder. Every label
+// is present in the returned map, possibly empty.
+//
+// A message moves a conversation to Today: the bucket reads the newest message
+// group, not only the row's own timestamps. With the default sort (`updated_at`,
+// the rail's) each bucket is ordered by that activity too, newest first unless
+// `sort_order=asc`, so the conversation written in last is at the top. Each row
+// then reports its activity as `updated_at`, so the client's re-sort agrees.
+// Pinned and folder rows are not bucketed here and keep the listing's order.
+func groupByDate(ungrouped []conversationItem, now time.Time, r *http.Request) map[string][]conversationItem {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	yesterday := today.AddDate(0, 0, -1)
 	weekAgo := today.AddDate(0, 0, -7)
@@ -330,10 +365,9 @@ func groupByDate(ungrouped []conversationItem, now time.Time) map[string][]conve
 	}
 
 	for _, c := range ungrouped {
-		ts := c.CreatedAt
-		if c.UpdatedAt != nil {
-			ts = *c.UpdatedAt
-		}
+		ts := activityOf(c)
+		activity := ts
+		c.UpdatedAt = &activity
 		switch {
 		case !ts.Before(today):
 			groups["Today"] = append(groups["Today"], c)
@@ -347,7 +381,38 @@ func groupByDate(ungrouped []conversationItem, now time.Time) map[string][]conve
 			groups["Older"] = append(groups["Older"], c)
 		}
 	}
+	if sortBy := r.URL.Query().Get("sort_by"); sortBy == "" || sortBy == "updated_at" {
+		ascending := r.URL.Query().Get("sort_order") == "asc"
+		for label := range groups {
+			sortByActivity(groups[label], ascending)
+		}
+	}
 	return groups
+}
+
+// activityOf is the row's last activity; a row read without the activity
+// column (the zero time) falls back to its revision or creation time.
+func activityOf(c conversationItem) time.Time {
+	ts := c.CreatedAt
+	if c.UpdatedAt != nil && c.UpdatedAt.After(ts) {
+		ts = *c.UpdatedAt
+	}
+	if c.activity.After(ts) {
+		ts = c.activity
+	}
+	return ts
+}
+
+// sortByActivity orders one bucket by last activity, with the id as the
+// tie-break in the same direction (the SQL sort's rule, see loadConversations).
+func sortByActivity(bucket []conversationItem, ascending bool) {
+	sort.SliceStable(bucket, func(i, j int) bool {
+		a, b := activityOf(bucket[i]), activityOf(bucket[j])
+		if !a.Equal(b) {
+			return a.After(b) != ascending
+		}
+		return (bucket[i].ID > bucket[j].ID) != ascending
+	})
 }
 
 // normaliseGroupLabel folds a date-group name to a comparison key, so the
@@ -473,12 +538,23 @@ func (h *Handler) listFolderConversations(w http.ResponseWriter, r *http.Request
 	}
 
 	limit, offset := pageParams(r)
+	page := paginate(inFolder, limit, offset)
+	paused, err := h.pausedSet(ctx, projectID, inFolder)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := h.annotateActivity(ctx, projectID, page); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"folder_id":     folderID,
 		"total":         len(inFolder),
 		"limit":         limit,
 		"offset":        offset,
-		"conversations": paginate(inFolder, limit, offset),
+		"needs_you":     countNeedsYou(inFolder, paused),
+		"conversations": page,
 	})
 }
 
@@ -494,7 +570,7 @@ func (h *Handler) listDateGroupConversations(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	_, _, ungrouped := partitionConversations(conversations)
-	groups := groupByDate(ungrouped, time.Now())
+	groups := groupByDate(ungrouped, time.Now(), r)
 
 	want := normaliseGroupLabel(dateGroup)
 	matched := make([]conversationItem, 0)
@@ -512,13 +588,24 @@ func (h *Handler) listDateGroupConversations(w http.ResponseWriter, r *http.Requ
 	}
 
 	limit, offset := pageParams(r)
+	page := paginate(matched, limit, offset)
+	paused, err := h.pausedSet(ctx, projectID, matched)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := h.annotateActivity(ctx, projectID, page); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"date_group":               dateGroup,
 		"total":                    len(matched),
 		"limit":                    limit,
 		"offset":                   offset,
+		"needs_you":                countNeedsYou(matched, paused),
 		"selected_conversation_id": h.selectedConversationID(ctx, projectID),
-		"conversations":            paginate(matched, limit, offset),
+		"conversations":            page,
 	})
 }
 
@@ -532,7 +619,16 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 	}
 
 	pinned, foldered, ungrouped := partitionConversations(conversations)
-	groups := groupByDate(ungrouped, time.Now())
+	groups := groupByDate(ungrouped, time.Now(), r)
+	// Client contract 1.12: which conversations wait for the user, for each
+	// bucket's `needs_you`, read once for the whole listing.
+	paused, err := h.pausedSet(ctx, projectID, conversations)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	// The pages the response carries, annotated in one statement below.
+	pages := [][]conversationItem{pinned}
 
 	// One page per bucket, and a `total` that says how much is behind it.
 	// See firstPage for why a filtered listing is served whole.
@@ -544,11 +640,13 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		convs := groups[label]
 		if len(convs) > 0 {
 			page, total, offset := firstPage(convs, pageSize, paged)
+			pages = append(pages, page)
 			dateGroups = append(dateGroups, dateGroup{
 				Name:          label,
 				Conversations: page,
 				Total:         total,
 				Offset:        offset,
+				NeedsYou:      countNeedsYou(convs, paused),
 			})
 		}
 	}
@@ -573,6 +671,7 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		// `?folder_id=…&offset=…` is already served, so leaving folders whole
 		// here would keep half of #852 alive.
 		page, total, offset := firstPage(convs, pageSize, paged)
+		pages = append(pages, page)
 		row := map[string]any{
 			"id":            f.ID,
 			"name":          f.Name,
@@ -582,6 +681,7 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 			"conversations": page,
 			"total":         total,
 			"offset":        offset,
+			"needs_you":     countNeedsYou(convs, paused),
 		}
 		if f.Position != nil {
 			row["position"] = *f.Position
@@ -589,10 +689,15 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		foldersResponse = append(foldersResponse, row)
 	}
 
+	if err := h.annotateActivity(ctx, projectID, pages...); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"date_groups":              dateGroups,
 		"folders":                  foldersResponse,
-		"pinned":                   map[string]any{"conversations": pinned},
+		"pinned":                   map[string]any{"conversations": pinned, "needs_you": countNeedsYou(pinned, paused)},
 		"selected_conversation_id": h.selectedConversationID(ctx, projectID),
 		"total_folders":            len(folders),
 	})
@@ -616,7 +721,14 @@ func (h *Handler) selectedConversationID(ctx context.Context, projectID string) 
 	visibility, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
 	// A user has at most one selection row now (#6674), but rows written by
 	// an older race may still be duplicated. The newest row wins.
-	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %s.chat_selected_conversations selected JOIN %s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %s ORDER BY selected.id DESC LIMIT 1`, schema, schema, visibility)
+	//
+	// An archived conversation (client contract 1.10) is left out of this
+	// listing, so it is not the listing's selection either: the answer is
+	// null, as for no selection, and the client does not select a row it
+	// cannot show.
+	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %[1]s.chat_selected_conversations selected JOIN %[1]s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %[2]s
+		AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_conversation_archives ca WHERE ca.conversation_id = c.id)
+		ORDER BY selected.id DESC LIMIT 1`, schema, visibility)
 	var selID int
 	if err := h.pool.QueryRow(ctx, q, args...).Scan(&selID); err != nil {
 		return nil

@@ -52,8 +52,8 @@ import (
 // `system` is not one of them.
 var administrationSecretGrants = []surfaceGrant{
 	// The listing and the single-value read. The matrix withholds both from
-	// the administration-mode editor, which is pylon's write-without-read
-	// asymmetry, not a transcription slip.
+	// the administration-mode editor, which is the legacy runtime's
+	// write-without-read asymmetry, not a transcription slip.
 	{"configuration.secrets.secret.view", []string{"admin", "super_admin"}},
 	{"configuration.secrets.secret.create", []string{"admin", "editor", "super_admin"}},
 	{"configuration.secrets.secret.edit", []string{"admin", "editor", "super_admin"}},

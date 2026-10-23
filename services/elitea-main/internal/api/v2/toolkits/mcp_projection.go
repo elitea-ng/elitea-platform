@@ -49,7 +49,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 // remoteMCPToolkitType is the generic type a user picks to connect one remote
@@ -258,11 +258,11 @@ func (p *prebuiltMCPProjection) ProjectToolkitTypes(ctx context.Context) ([]Proj
 
 // prebuiltMCPType projects one catalogue row.
 //
-// The type name is pylon's: the normalised key with the `mcp_` prefix restored,
-// which is the exact string `mcpregistry.Resolve` matches when the create path
-// fills the row's URL, headers, timeout and credentials into the toolkit's own
-// settings. The two must agree or a pre-built toolkit is created with an empty
-// URL and no record of why.
+// The type name is the legacy one: the normalised key with the `mcp_` prefix
+// restored, which is the exact string `mcpregistry.Resolve` matches when the
+// create path fills the row's URL, headers, timeout and credentials into the
+// toolkit's own settings. The two must agree or a pre-built toolkit is created
+// with an empty URL and no record of why.
 //
 // `url` is NOT required here, and that is the difference from the generic type:
 // the catalogue supplies it server-side. The field stays in the schema so an

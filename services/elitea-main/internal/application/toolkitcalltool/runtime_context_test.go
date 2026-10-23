@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	configurations "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	indexing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	configurations "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	indexing "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"testing"
 )
 

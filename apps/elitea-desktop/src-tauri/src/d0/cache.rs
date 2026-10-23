@@ -17,6 +17,11 @@
 //!   platform refuses for it (`404`, `422`), is looked up again and the
 //!   start retried once.
 //!
+//! The model catalogue's context limits of each model (#1217), and its
+//! reasoning family (#1228), are kept the same way; a lookup that failed is not kept, so the next turn asks again.
+//! The catalogue of chat models a turn's chosen model is checked against
+//! (#1228) is kept for a minute per project (`super::catalogue`).
+//!
 //! The local turn's `start` itself is never cached: the memory recall it
 //! answers is computed fresh at every turn (ADR-0029 decision 8).
 
@@ -24,6 +29,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use super::api::{AnsweringParticipant, ResolvedVersion};
+use super::catalogue::Catalogues;
+use super::context::ModelFacts;
 
 /// An agent version as one session read it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -45,6 +52,15 @@ pub struct ParticipantKey {
     pub version_id: i64,
 }
 
+/// A model's context limits, as one session read them from the catalogue
+/// of the turn's project.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LimitsKey {
+    pub identity: String,
+    pub project_id: i64,
+    pub model_name: String,
+}
+
 /// A resolved version and the tag that revalidates it.
 #[derive(Clone, Debug)]
 pub struct CachedVersion {
@@ -60,6 +76,9 @@ const MAX_ENTRIES: usize = 256;
 pub struct TurnCaches {
     versions: Mutex<HashMap<VersionKey, CachedVersion>>,
     participants: Mutex<HashMap<ParticipantKey, AnsweringParticipant>>,
+    limits: Mutex<HashMap<LimitsKey, ModelFacts>>,
+    /// The projects' chat models (#1228), each kept for a minute.
+    pub catalogues: Catalogues,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -114,11 +133,22 @@ impl TurnCaches {
         locked(&self.participants).remove(key);
     }
 
+    #[must_use]
+    pub fn limits(&self, key: &LimitsKey) -> Option<ModelFacts> {
+        locked(&self.limits).get(key).copied()
+    }
+
+    pub fn keep_limits(&self, key: LimitsKey, facts: ModelFacts) {
+        bounded_insert(&mut locked(&self.limits), key, facts);
+    }
+
     /// Sign-out, a new sign-in, another deployment: nothing of the last
     /// session is reused.
     pub fn clear(&self) {
         locked(&self.versions).clear();
         locked(&self.participants).clear();
+        locked(&self.limits).clear();
+        self.catalogues.clear();
     }
 }
 

@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // The canvas half of the same fresh-install question the sibling file asks of
@@ -18,7 +18,7 @@ import (
 // ConversationsRepo — CreateCanvas INSERTs into both, GetMessageByUUID LEFT
 // JOINs the first — and created by NOTHING in this repository. They existed
 // only in the pg_catalog dump of the live legacy database, which is to say they
-// existed only where pylon had made them.
+// existed only where the legacy runtime had made them.
 //
 // WHAT THAT ACTUALLY BROKE, stated precisely because the two call sites are not
 // equally live:
@@ -26,9 +26,9 @@ import (
 //   - POST /api/v2/elitea_core/canvases/prompt_lib/{projectID} is a REGISTERED
 //     production route (router.go, behind `models.chat.canvas.create`, which
 //     shared/0068 seeds), pinned by production_router_test.go and exercised by
-//     router_elitea_core_project_scope_test.go. On any deployment pylon never
-//     touched it answered 42P01 the moment it got past the permission gate.
-//     That is the live defect.
+//     router_elitea_core_project_scope_test.go. On any deployment the legacy
+//     runtime never touched it answered 42P01 the moment it got past the
+//     permission gate. That is the live defect.
 //
 //   - GetMessageByUUID's LEFT JOIN was LATENT when this test was written:
 //     its only caller, `(*conversations.Handler).GetMessage`, was registered

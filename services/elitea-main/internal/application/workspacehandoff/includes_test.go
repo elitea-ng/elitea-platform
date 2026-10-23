@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 func amendedCeiling() platformconfig.CloudExecutorSettings {
 	ceiling := platformconfig.DefaultCloudExecutorSettings()
-	ceiling.Enabled = true
+	ceiling.Enabled, ceiling.ProjectDefaultEnabled = true, true
 	return ceiling
 }
 

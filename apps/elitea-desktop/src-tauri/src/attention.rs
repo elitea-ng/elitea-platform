@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use tauri::{AppHandle, Manager as _};
 
@@ -83,12 +83,17 @@ impl Tracker {
     pub fn observe(&mut self, event: &AgentEvent) -> Observed {
         let turn = event.turn_id.as_str();
         match event.kind {
-            "approval_request" => {
+            // A plan card (#1225) waits for the person like an approval.
+            "approval_request" | "plan_proposed" => {
                 let Some(request_id) = event.payload["request_id"].as_str() else {
                     return Observed::default();
                 };
                 self.pending.insert(request_id.to_owned(), turn.to_owned());
-                let tool = event.payload["tool"].as_str().unwrap_or("a tool");
+                let tool = if event.kind == "plan_proposed" {
+                    "the plan"
+                } else {
+                    event.payload["tool"].as_str().unwrap_or("a tool")
+                };
                 Observed {
                     badge_changed: true,
                     notice: Some(Notice::Approval {
@@ -97,6 +102,13 @@ impl Tracker {
                     }),
                 }
             }
+            // Closed at its wait without an answer: it no longer waits.
+            "approval_closed" => Observed {
+                badge_changed: event.payload["request_id"]
+                    .as_str()
+                    .is_some_and(|id| self.answered(id)),
+                notice: None,
+            },
             "error" => {
                 self.remember(turn, Outcome::Failed);
                 Observed::default()
@@ -179,6 +191,8 @@ pub struct Attention {
     app: AppHandle,
     tracker: Mutex<Tracker>,
     permission: AtomicU8,
+    /// Cloud threads waiting on the person (`activity.rs`): counted with the approvals on the Dock badge.
+    external: AtomicUsize,
 }
 
 impl Attention {
@@ -188,6 +202,7 @@ impl Attention {
             app,
             tracker: Mutex::new(Tracker::default()),
             permission: AtomicU8::new(PERMISSION_UNKNOWN),
+            external: AtomicUsize::new(0),
         }
     }
 
@@ -215,6 +230,13 @@ impl Attention {
         }
     }
 
+    /// The number of cloud threads waiting on the person changed.
+    pub fn set_external(&self, waiting: usize) {
+        if self.external.swap(waiting, Ordering::AcqRel) != waiting {
+            self.refresh_badge();
+        }
+    }
+
     /// `approval_respond` answered `request_id`.
     pub fn answered(&self, request_id: &str) {
         if self.tracker().answered(request_id) {
@@ -230,7 +252,7 @@ impl Attention {
             let Some(attention) = app.try_state::<std::sync::Arc<Attention>>() else {
                 return;
             };
-            let count = attention.tracker().pending();
+            let count = attention.tracker().pending() + attention.external.load(Ordering::Acquire);
             if let Some(window) = app.get_webview_window("main") {
                 // Windows has no badge count (unsupported, ignored).
                 let _ = window
@@ -328,6 +350,23 @@ mod tests {
         event(turn, "done", json!({"committed": true}))
     }
 
+    /// #1225: a plan card waits for the person like an approval: it counts
+    /// until answered, and its notice never carries the plan text.
+    #[test]
+    fn a_plan_card_is_pending_until_answered() {
+        let mut tracker = Tracker::default();
+        let seen = tracker.observe(&event(
+            "t1",
+            "plan_proposed",
+            json!({"request_id": "p1", "call_id": "c1", "plan": "# Secret plan"}),
+        ));
+        assert!(seen.badge_changed);
+        assert_eq!(tracker.pending(), 1);
+        assert!(!format!("{:?}", seen.notice).contains("Secret"));
+        assert!(tracker.answered("p1"));
+        assert_eq!(tracker.pending(), 0);
+    }
+
     #[test]
     fn approvals_count_until_answered_or_their_turn_ends() {
         let mut tracker = Tracker::default();
@@ -355,6 +394,26 @@ mod tests {
             tracker.pending(),
             0,
             "a sign-out cancels the turn, whose done clears it"
+        );
+    }
+
+    /// A question the host closed at its wait (`approval_closed`) no longer
+    /// counts.
+    #[test]
+    fn a_closed_question_stops_counting() {
+        let mut tracker = Tracker::default();
+        tracker.observe(&approval("t1", "r1"));
+        let closed = tracker.observe(&event(
+            "t1",
+            "approval_closed",
+            json!({"request_id": "r1", "reason": "timeout"}),
+        ));
+        assert!(closed.badge_changed);
+        assert_eq!(tracker.pending(), 0);
+        assert!(
+            !tracker
+                .observe(&event("t1", "approval_closed", json!({"request_id": "r1"})))
+                .badge_changed
         );
     }
 

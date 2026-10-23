@@ -28,9 +28,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -660,10 +660,11 @@ func equalInts(a, b []int) bool {
 	return true
 }
 
-// pylon seeded developer-mode roles, `admin` among them, on every legacy
-// database. #6880 refuses the mode for create and rename. A DELETE must still
-// remove those leftovers, including the ones with a built-in name: no code
-// names a developer-mode role. Create and rename in that mode stay refused.
+// The legacy runtime seeded developer-mode roles, `admin` among them, on every
+// legacy database. #6880 refuses the mode for create and rename. A DELETE must
+// still remove those leftovers, including the ones with a built-in name: no
+// code names a developer-mode role. Create and rename in that mode stay
+// refused.
 func TestAdminRoleDeleteRemovesALeftoverDeveloperRole(t *testing.T) {
 	pool, writes, _ := newRoleWriteEnvironment(t)
 

@@ -9,9 +9,9 @@ import (
 	"errors"
 	"time"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	recovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	recovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 )
 

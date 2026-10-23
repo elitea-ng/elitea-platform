@@ -235,7 +235,7 @@ impl Control {
 impl ContentSha256 {
     pub(crate) fn raw(&self) -> io::Result<[u8; 32]> {
         let mut out = [0; 32];
-        for (index, pair) in self.0.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in self.0.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             out[index] = u8::from_str_radix(std::str::from_utf8(pair).map_err(|_| invalid())?, 16)
                 .map_err(|_| invalid())?;
         }

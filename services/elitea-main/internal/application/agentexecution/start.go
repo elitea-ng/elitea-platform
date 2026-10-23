@@ -11,11 +11,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/google/uuid"
 )
 
@@ -115,18 +115,6 @@ type CurrentApplicationResolver interface {
 	) (CurrentApplicationTarget, error)
 }
 
-// NextInputSuggestionPolicyResolver resolves the current platform's effective,
-// project-scoped suggestion policy for one authenticated execution actor. The
-// policy is optional execution metadata: an unavailable current dependency must
-// never prevent the primary agent turn from being admitted.
-type NextInputSuggestionPolicyResolver interface {
-	ResolveNextInputSuggestionPolicy(
-		context.Context,
-		int64,
-		int64,
-	) (json.RawMessage, error)
-}
-
 type admissionSubmitter interface {
 	Submit(context.Context, SubmitRequest) (executionapp.AdmissionOutcome, error)
 }
@@ -200,7 +188,6 @@ type CurrentApplicationStartService struct {
 	adhocResolver        CurrentAdhocResolver
 	regenerationResolver CurrentRegenerationResolver
 	continuationResolver CurrentContinuationResolver
-	suggestionResolver   NextInputSuggestionPolicyResolver
 	guardrails           CurrentAgentGuardrailResolver
 	freezer              CurrentApplicationVersionFreezer
 	admissions           admissionSubmitter
@@ -243,13 +230,12 @@ func NewCurrentApplicationStartService(
 	adhocResolver CurrentAdhocResolver,
 	regenerationResolver CurrentRegenerationResolver,
 	continuationResolver CurrentContinuationResolver,
-	suggestionResolver NextInputSuggestionPolicyResolver,
 	guardrailPolicies CurrentAgentGuardrailResolver,
 	freezer CurrentApplicationVersionFreezer,
 	admissions admissionSubmitter,
 ) (*CurrentApplicationStartService, error) {
 	if resolver == nil || adhocResolver == nil || regenerationResolver == nil ||
-		continuationResolver == nil || suggestionResolver == nil || guardrailPolicies == nil ||
+		continuationResolver == nil || guardrailPolicies == nil ||
 		freezer == nil || admissions == nil {
 		return nil, errors.New("current application start dependencies are required")
 	}
@@ -258,7 +244,6 @@ func NewCurrentApplicationStartService(
 		regenerationResolver: regenerationResolver,
 		continuationResolver: continuationResolver,
 		guardrails:           guardrailPolicies,
-		suggestionResolver:   suggestionResolver,
 		freezer:              freezer, admissions: admissions,
 	}, nil
 }
@@ -303,10 +288,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	target.VersionDetails = frozenVersion
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
-	questionMeta := json.RawMessage(`{}`)
-	if request.InteractionUUID != "" {
-		questionMeta, _ = json.Marshal(map[string]string{"interaction_uuid": request.InteractionUUID})
-	}
+	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
 	attachments, err := currentTurnAttachmentsWithImages(
 		ctx,
 		int64(request.ProjectID),
@@ -318,11 +300,6 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
-	suggestionPolicy := service.resolveNextInputSuggestionPolicy(
-		ctx,
-		request.ProjectID,
-		request.ActorUserID,
-	)
 	toolkitGuardrails, err := service.resolveToolkitGuardrails(ctx)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -343,7 +320,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// see projectcontext.go's header.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	input, err := currentApplicationInput(
-		request, target, suggestionPolicy, toolkitGuardrails, attachments, memoryRecall.Text,
+		request, target, toolkitGuardrails, attachments, memoryRecall.Text,
 		projectContextText,
 	)
 	if err != nil {
@@ -410,7 +387,6 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 func currentApplicationInput(
 	request CurrentApplicationStartRequest,
 	target CurrentApplicationTarget,
-	nextInputSuggestion json.RawMessage,
 	toolkitGuardrails json.RawMessage,
 	attachments []CurrentTurnAttachment,
 	memoryText string,
@@ -515,7 +491,7 @@ func currentApplicationInput(
 		AttachedSkills:    skills.attached,
 		InputAttachments:  currentTurnInputAttachments(attachments),
 		ParallelReconcile: []byte(`null`), ParallelTerminalErrors: []byte(`[]`),
-		NextInputSuggestion: bytes.Clone(nextInputSuggestion),
+		NextInputSuggestion: noNextInputSuggestion(),
 		ToolkitGuardrails:   bytes.Clone(toolkitGuardrails),
 	}
 	if stepsLimit != nil {
@@ -635,11 +611,11 @@ func currentRuntimeInternalTools(raw json.RawMessage) ([]byte, error) {
 // resolveToolkitGuardrails marshals the live guardrails policy for the worker.
 //
 // It FAILS the turn on a read error, which is the opposite of what
-// resolveNextInputSuggestionPolicy below does with its own dependency, and the
-// difference is not a style choice:
+// resolveCurrentMemoryRecall (memories.go) does with its own dependency, and
+// the difference is not a style choice:
 //
-//   - a suggestion policy is optional execution metadata. Losing it costs the
-//     user a follow-up prompt, so an unavailable dependency degrades to `null`
+//   - recalled memories are optional context. Losing them costs the user that
+//     context for one turn, so an unavailable store degrades to "no memories"
 //     rather than refusing the turn.
 //   - a guardrails policy decides which tool calls stop and ask the user for
 //     authorization. Its degraded value is "no tool is sensitive", which means
@@ -665,20 +641,11 @@ func (service *CurrentApplicationStartService) resolveToolkitGuardrails(
 	return encoded, nil
 }
 
-func (service *CurrentApplicationStartService) resolveNextInputSuggestionPolicy(
-	ctx context.Context,
-	projectID int64,
-	actorUserID int64,
-) json.RawMessage {
-	policy, err := service.suggestionResolver.ResolveNextInputSuggestionPolicy(
-		ctx,
-		projectID,
-		actorUserID,
-	)
-	if err != nil || !validJSONObject(policy) {
-		return json.RawMessage(`null`)
-	}
-	return bytes.Clone(policy)
+// noNextInputSuggestion is the next_input_suggestion every turn carries. The
+// worker reads the field as an optional policy and does nothing for `null`;
+// the platform owns no suggestion policy (#334), so there is nothing to send.
+func noNextInputSuggestion() []byte {
+	return []byte(`null`)
 }
 
 func currentApplicationRuntimeLLM(version map[string]any) ([]byte, error) {

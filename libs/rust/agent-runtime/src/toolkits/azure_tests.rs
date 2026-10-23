@@ -448,7 +448,7 @@ async fn malformed_arguments_fail_before_api_or_network() {
     ] {
         assert!(tool.execute(context(), arguments).await.is_err());
     }
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 
     let transport = Arc::new(FixtureTransport::new([]));
     let client = client_with(transport.clone());
@@ -464,7 +464,7 @@ async fn malformed_arguments_fail_before_api_or_network() {
             .await
             .is_err()
     );
-    assert!(transport.requests().is_empty());
+    assert_eq!(transport.requests(), []);
 }
 
 #[test]

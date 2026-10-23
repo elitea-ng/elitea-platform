@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 )
 
 // The @mention notification producer (#977).
@@ -131,9 +131,9 @@ func (repo *ChatMentionNotificationRepo) WriteChatMentionNotifications(
 	// THE UUID IS SUPPLIED, NOT ASSUMED. `centry.notifications.uuid` is
 	// `NOT NULL`, and only the shape `internal/infra/db/migrations/001_initial.sql`
 	// creates carries `DEFAULT gen_random_uuid()`. On a database where the
-	// table came from pylon instead — which is every migrated deployment, and
-	// the integration harness's fresh Postgres — the column has no default and
-	// an INSERT that omits it dies with
+	// table came from the legacy runtime instead — which is every migrated
+	// deployment, and the integration harness's fresh Postgres — the column has
+	// no default and an INSERT that omits it dies with
 	//
 	//     null value in column "uuid" of relation "notifications"
 	//

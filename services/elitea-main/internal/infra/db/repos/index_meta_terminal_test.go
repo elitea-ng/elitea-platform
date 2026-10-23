@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -392,7 +392,7 @@ func TestIndexGenerationMigrationDefinesTargetScopedAuthority(t *testing.T) {
 // PostgreSQL migration, allocation, claim ownership and supersession
 // transition. It proves runtime generation remains one while the target-scoped
 // logical generation is the primary order even when admitted_at is equal;
-// it does not cross PgVector or the runtime reconciler process.
+// it does not cross the terminal effect or the runtime reconciler process.
 func TestPostgresCurrentIndexMetaLogicalGenerationSupersession(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{

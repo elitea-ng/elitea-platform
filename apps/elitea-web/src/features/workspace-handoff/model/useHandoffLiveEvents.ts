@@ -16,9 +16,10 @@
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
-import { useEventSource } from '@/shared/api/sse';
+import { useSharedEventSource } from '@/shared/api/sse';
 import { getConfig } from '@/shared/config';
 import { WORKSPACE_HANDOFF_STATES } from '@/shared/api/workspaceHandoffApi';
+import { CONVERSATION_ACTIVITY_EVENT, onActivityEvent } from '@/shared/lib/conversationActivity';
 import type { WorkspaceHandoffState } from '@/shared/api/workspaceHandoffApi';
 
 import { handoffStatusKey, handoffStatusManyKey } from './useHandoffStatus';
@@ -74,8 +75,9 @@ function applyHandoffEvent(queryClient: QueryClient, projectId: string, event: H
 
 /**
  * Subscribe to one project's handoff changes while `projectId` is set. On the
- * desktop the shared `useEventSource` rides the host's fetch-SSE with the
- * native token; in the browser, the cookie.
+ * desktop the shared `useSharedEventSource` rides the host's fetch-SSE with
+ * the native token; in the browser, the cookie. The project stream is one
+ * connection per tab, shared with the conversation lists.
  */
 export function useHandoffLiveEvents(projectId: string | number | null | undefined): void {
   const queryClient = useQueryClient();
@@ -83,8 +85,9 @@ export function useHandoffLiveEvents(projectId: string | number | null | undefin
   const serverUrl = config.status === 'ok' ? config.config.vite_server_url : null;
   const project = projectId === null || projectId === undefined || projectId === '' ? null : String(projectId);
   const streamUrl = useMemo(() => (project !== null && serverUrl ? `${serverUrl}/events/prompt_lib/${project}` : null), [project, serverUrl]);
-  useEventSource(
+  useSharedEventSource(
     streamUrl,
+    HANDOFF_EVENT,
     {
       [HANDOFF_EVENT]: (event: MessageEvent) => {
         const change = parseHandoffEvent(String(event.data));
@@ -101,4 +104,9 @@ export function useHandoffLiveEvents(projectId: string | number | null | undefin
       },
     },
   );
+  // The same stream carries the conversation activity frames (client
+  // contract 1.12): the Local work rows of a thread that runs in the cloud
+  // follow them. Under the activity channel, so a list that follows the
+  // same project does not apply each frame a second time.
+  useSharedEventSource(streamUrl, CONVERSATION_ACTIVITY_EVENT, { [CONVERSATION_ACTIVITY_EVENT]: onActivityEvent });
 }

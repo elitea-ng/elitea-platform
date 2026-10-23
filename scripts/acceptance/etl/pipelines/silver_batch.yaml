@@ -1,0 +1,344 @@
+# DRAFT fixture: silver_batch, the Map child of silver_clean (ACCEPTANCE-ETL.md §2.2). One row batch in, one JSON
+# text answer out: {batch_no, rows, valid_rows, quarantined_rows, quarantined_lines, rejects, reject_ppm, cleaning,
+# reject_list, order_ids, by_country, tag_counts, silver_file, route}.
+#
+# Order against the §2.2 table: enrich_fx runs before normalize, because net_amount_usd needs the FX rate
+# (manifest money.net_amount_usd = round_half_up(amount * (1 - discount_pct / 100) * rate, 2), on integer cents).
+# Typed reducers are not used here: a nested child refuses them (compiler.rs:1405-1408; decision X3 keeps the
+# refusal), so they live in gold_build and etl_job.
+# Budgets inside one child: <= 400 rows (manifest limits.batch_rows), every shaping output well under 32,768 values
+# and 512 KiB; the silver CSV stays under the 64 KiB-character artifact write cap (no tags or note columns).
+# The answer stays small for the parent's Map join: order_ids is ONE compact "seq:id;seq:id" string (one JSON value,
+# about 6 KB), so 64 batch results stay far below the 65,536-value whole-state checkpoint limit.
+# Oracle per batch: manifest datasets.<file>.batches[n] (rejects, reject_ppm, route, quarantined_lines).
+state:
+  input: {type: str}
+  messages: {type: list}
+  run_id: {type: str}
+  batch_no: {type: int}
+  batch_path: {type: str}
+  silver_name: {type: str}
+  batch_text: {type: str}
+  rows: {type: list}
+  reject_rows: {type: list}
+  check: {type: dict}
+  fx: {type: dict}
+  silver_rows: {type: list}
+  silver_csv: {type: str}
+  tag_rows: {type: list}
+  tag_counts: {type: list}
+  order_tags: {type: list}
+  country_stats: {type: list}
+  reject_summary: {type: list}
+  silver_receipt: {type: dict}
+entry_point: parse_task
+nodes:
+  - id: parse_task
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        task = json.loads(elitea_state['input'])
+        batch = task['batch']
+        {'run_id': task['run_id'], 'batch_no': batch['batch_no'],
+         'batch_path': f"/{task['bucket']}/{batch['file']}",
+         'silver_name': f"silver/{task['run_id']}/batch-{batch['batch_no']:04d}.csv"}
+    input: [input]
+    output: [run_id, batch_no, batch_path, silver_name]
+    transition: read_batch
+
+  # One text read, <= 200,000 characters (the artifact toolkit cap); a batch file is <= 190,000.
+  - id: read_batch
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: read_file
+    input_mapping:
+      filepath: {type: variable, value: batch_path}
+    input: [batch_path]
+    output: [batch_text]
+    transition: validate
+
+  # Cleaning, then Databricks-style expectations in manifest order; the first failing one names the reject.
+  # Python with prepared packages (python-dateutil, pycountry).
+  # TODO(1.5): 5b "continue via error output" for a batch that cannot be parsed at all.
+  - id: validate
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import micropip
+        await micropip.install(['python-dateutil==2.9.0.post0', 'six==1.16.0', 'pycountry==24.6.1'])
+        import csv, io, re
+        from dateutil.parser import isoparse
+        import pycountry
+        RATES = {'AUD', 'CAD', 'CHF', 'EUR', 'GBP', 'PLN', 'SEK', 'USD'}
+        HEADER = ['order_id', 'order_seq', 'customer_id', 'country', 'currency', 'amount', 'discount_pct',
+                  'ordered_at', 'ship_date', 'channel', 'sku', 'qty', 'tags', 'note']
+        stamp = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z')
+        batch_no = elitea_state['batch_no']
+        reader = csv.reader(io.StringIO(elitea_state['batch_text']))
+        if next(reader, None) != HEADER:
+            raise ValueError(f'etl.batch_header: batch {batch_no} has an unexpected header')
+        names = ('valid_date', 'positive_qty', 'known_currency', 'unique_order_id')
+        counts = dict.fromkeys(names, 0)
+        cleaning = dict.fromkeys(('country_normalized', 'channel_normalized', 'amount_trimmed', 'discount_null',
+                                  'ship_date_null', 'tags_null', 'note_null'), 0)
+        rows, reject_rows, seen, quarantined, total = [], [], set(), 0, 0
+        for f in reader:
+            if len(f) != len(HEADER):
+                quarantined += 1
+                reject_rows.append({'order_seq': 0, 'order_id': 'O00000000', 'batch_no': batch_no,
+                                    'expectation': 'well_formed_line'})
+                continue
+            total += 1
+            r = dict(zip(HEADER, f))
+            for key, clean in (('country', r['country'].strip().upper()), ('channel', r['channel'].strip().lower()),
+                               ('amount', r['amount'].strip())):
+                if clean != r[key]:
+                    cleaning['amount_trimmed' if key == 'amount' else key + '_normalized'] += 1
+                    r[key] = clean
+            for key in ('discount_pct', 'ship_date', 'tags', 'note'):
+                if not r[key]:
+                    cleaning[key.replace('_pct', '') + '_null'] += 1
+            try:
+                ok_date = bool(stamp.fullmatch(r['ordered_at'])) and isoparse(r['ordered_at']) is not None
+            except ValueError:
+                ok_date = False
+            try:
+                ok_qty = int(r['qty']) > 0
+            except ValueError:
+                ok_qty = False
+            if not ok_date:
+                name = 'valid_date'
+            elif not ok_qty:
+                name = 'positive_qty'
+            elif pycountry.currencies.get(alpha_3=r['currency']) is None or r['currency'] not in RATES:
+                name = 'known_currency'
+            elif r['order_id'] in seen:
+                name = 'unique_order_id'
+            else:
+                seen.add(r['order_id'])
+                rows.append({'order_id': r['order_id'], 'order_seq': int(r['order_seq']),
+                             'customer_id': r['customer_id'], 'country': r['country'], 'currency': r['currency'],
+                             'amount': r['amount'], 'discount_pct': r['discount_pct'] or '0',
+                             'ordered_at': r['ordered_at'], 'ship_date': r['ship_date'] or None,
+                             'channel': r['channel'], 'sku': r['sku'], 'qty': int(r['qty']),
+                             'tags': r['tags'].split('|') if r['tags'] else None, 'note': r['note'] or None})
+                continue
+            counts[name] += 1
+            reject_rows.append({'order_seq': int(r['order_seq']), 'order_id': r['order_id'], 'batch_no': batch_no,
+                                'expectation': name})
+        rejected = sum(counts.values())
+        {'rows': rows, 'reject_rows': reject_rows,
+         'check': {'batch_no': batch_no, 'rows': total, 'rejects': counts, 'cleaning': cleaning,
+                   'quarantined_lines': quarantined, 'reject_ppm': rejected * 1_000_000 // max(total, 1)}}
+    input: [batch_text, batch_no]
+    output: [rows, reject_rows, check]
+    settings:
+      on_error: error_output
+      error_transition: batch_failed
+    transition: route_quality
+
+  # Batch reject rate above 5 % (manifest limits.batch_reject_limit_ppm): error output.
+  - id: route_quality
+    type: router
+    condition: "{% if check.reject_ppm > 50000 %}batch_failed{% else %}enrich_fx{% endif %}"
+    routes: [batch_failed, enrich_fx]
+    default_output: batch_failed
+    input: [check]
+
+  # FX rates from the reference service (rule fx_reference.rates; see ../README.md "Admin rules"). GET is a safe
+  # method (class I): retries settle to at most one successful GET per batch in the mock journal.
+  # TODO(1.9): HTTP node admitted (5d-2). TODO(1.15): HTTP inside a Map child (5d-3).
+  # TODO(1.5): settings retry_on_fail / max_tries / wait_between_tries_ms / timeout_ms.
+  - id: enrich_fx
+    type: http
+    revision: 2
+    operation: fx_reference.rates
+    request:
+      path: {run_id: {from: run_id}, batch_no: {from: batch_no}}
+    response: {mode: json, accepted_statuses: [{first: 200, last: 200}], max_bytes: 16384}
+    settings:
+      retry_on_fail: true
+      max_tries: 3
+      wait_between_tries_ms: 1000
+      timeout_ms: 5000
+    input: [run_id, batch_no]
+    output: [fx]
+    transition: normalize
+
+  # Types, units and derived columns, exact: amount in cents, discount in tenths of a percent, rate in millionths,
+  # round half up. Writes the silver CSV text (no tags or note) for the loaders.
+  - id: normalize
+    type: code
+    language: typescript
+    code:
+      type: fixed
+      value: |
+        type Row = { order_id: string; order_seq: number; customer_id: string; country: string; currency: string;
+          amount: string; discount_pct: string; ordered_at: string; ship_date: string | null; channel: string;
+          sku: string; qty: number; tags: string[] | null; note: string | null };
+        const scaled = (text: string, places: number) => {
+          const [whole, frac = ""] = text.split(".");
+          return BigInt(whole + frac.padEnd(places, "0").slice(0, places));
+        };
+        const money = (cents: bigint) => `${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
+        export default (state: { rows: Row[]; fx: { data: { rates: Record<string, string> } } }) => {
+          const columns = ["order_id", "order_seq", "customer_id", "country", "currency", "amount", "discount_pct",
+            "net_amount_usd", "ordered_at", "order_month", "ship_date", "channel", "sku", "qty"];
+          const lines = [columns.join(",")];
+          const silver = state.rows.map((r) => {
+            const cents = scaled(r.amount, 2);
+            const keep = 1000n - scaled(r.discount_pct, 1);       // tenths of a percent kept
+            const micros = scaled(state.fx.data.rates[r.currency], 6);
+            const scale = 1000n * 1000000n;
+            const net = (cents * keep * micros + scale / 2n) / scale;
+            const row = { ...r, net_cents: Number(net), net_amount_usd: money(net), order_month: r.ordered_at.slice(0, 7) };
+            lines.push([r.order_id, r.order_seq, r.customer_id, r.country, r.currency, r.amount, r.discount_pct,
+              row.net_amount_usd, r.ordered_at, row.order_month, r.ship_date ?? "", r.channel, r.sku, r.qty].join(","));
+            return row;
+          });
+          return { silver_rows: silver, silver_csv: lines.join("\n") + "\n" };
+        };
+    input: [rows, fx]
+    output: [silver_rows, silver_csv]
+    transition: tags_split
+
+  # Split Out, mode rows_field over a multi-valued column: one row per (order, tag); orders without tags (null list)
+  # produce no rows; retain all parent fields (the tags list itself removed). <= 400 orders x 3 tags stays far
+  # below the 32,768-value and 512 KiB shaping ceilings.
+  - id: tags_split
+    type: split_out
+    source: silver_rows
+    output: [tag_rows]
+    split: {mode: rows_field, path: /tags}
+    destination: tag
+    retain: {mode: all}
+    missing_list: empty
+    null_list: empty
+    remove_source: true
+    transition: tag_counts
+
+  # Aggregate, layout split_out with group_by: orders and quantity per tag (oracle: manifest tag_counts, summed).
+  - id: tag_counts
+    type: aggregate
+    source: tag_rows
+    output: [tag_counts]
+    layout: split_out
+    group_by:
+      - {path: /tag, output: tag}
+    operations:
+      - {operation: count_rows, output: orders}
+      - {operation: sum_int, field: {path: /qty}, output: qty}
+    transition: tags_regroup
+
+  # Aggregate, layout split_out with regroup: parent: back to one row per tagged order (the split round-trips).
+  - id: tags_regroup
+    type: aggregate
+    source: tag_rows
+    output: [order_tags]
+    layout: split_out
+    regroup: parent
+    operations:
+      - {operation: first, field: {path: /order_id}, output: order_id}
+      - {operation: collect, field: {path: /tag}, output: tags}
+      - {operation: last, field: {path: /note, missing: null, null: keep}, output: note}
+    transition: country_stats
+
+  # Aggregate, layout plain, group_by two keys: per country and currency, exact integer sums and extremes.
+  - id: country_stats
+    type: aggregate
+    source: silver_rows
+    output: [country_stats]
+    group_by:
+      - {path: /country, output: country}
+      - {path: /currency, output: currency}
+    operations:
+      - {operation: count_rows, output: orders}
+      - {operation: sum_int, field: {path: /qty}, output: qty}
+      - {operation: sum_int, field: {path: /net_cents}, output: net_cents}
+      - {operation: min_int, field: {path: /net_cents}, output: min_net_cents}
+      - {operation: max_int, field: {path: /net_cents}, output: max_net_cents}
+      - {operation: first, field: {path: /order_id}, output: first_order_id}
+      - {operation: last, field: {path: /order_id}, output: last_order_id}
+    transition: reject_summary
+
+  # Aggregate, layout plain, group_by with missing: null and collect_rows (retain only): rejects per expectation.
+  - id: reject_summary
+    type: aggregate
+    source: reject_rows
+    output: [reject_summary]
+    group_by:
+      - {path: /expectation, output: expectation, missing: null}
+    operations:
+      - {operation: count_rows, output: rows}
+      - {operation: collect_rows, retain: {mode: only, fields: [{path: /order_seq, output: order_seq},
+                                                                {path: /order_id, output: order_id}]},
+         output: examples}
+      - {operation: min_int, field: {path: /order_seq}, output: first_seq}
+    transition: write_silver
+
+  # Effectful direct toolkit call (journaled, #1159); <= 64 KiB characters.
+  # TODO(1.14): an effectful node inside a Map child (map_nonpausing_effectfree).
+  - id: write_silver
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: create_file
+    input_mapping:
+      filename: {type: variable, value: silver_name}
+      filedata: {type: variable, value: silver_csv}
+    input: [silver_name, silver_csv]
+    output: [silver_receipt]
+    transition: finish
+
+  - id: finish
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        c = elitea_state['check']
+        rows = elitea_state['silver_rows']
+        by_country = {}
+        for s in elitea_state['country_stats']:
+            agg = by_country.setdefault(s['country'], {'country': s['country'], 'orders': 0, 'qty': 0, 'net_cents': 0})
+            for k in ('orders', 'qty', 'net_cents'):
+                agg[k] += s[k]
+        json.dumps({'batch_no': c['batch_no'], 'rows': c['rows'], 'valid_rows': len(rows), 'quarantined_rows': 0,
+                    'quarantined_lines': c['quarantined_lines'], 'rejects': c['rejects'], 'reject_ppm': c['reject_ppm'],
+                    'cleaning': c['cleaning'], 'route': 'continue',
+                    'reject_list': [[r['order_seq'], r['order_id'], r['batch_no'], r['expectation']]
+                                    for r in elitea_state['reject_rows']],
+                    'reject_summary': elitea_state['reject_summary'],
+                    'order_ids': ';'.join(f"{r['order_seq']}:{r['order_id']}" for r in rows),
+                    'by_country': sorted(by_country.values(), key=lambda x: x['country']),
+                    'tag_counts': elitea_state['tag_counts'], 'tagged_orders': len(elitea_state['order_tags']),
+                    'silver_file': elitea_state['silver_name']}, sort_keys=True)
+    input: [check, silver_rows, reject_rows, reject_summary, country_stats, tag_counts, order_tags, silver_name]
+    output: [messages]
+    transition: END
+
+  # Error output: the whole batch is quarantined (nothing loaded) and reported. The standard data sets never reach
+  # it (every manifest batch route is "continue"); a hand-edited batch above 5 % rejects does.
+  - id: batch_failed
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        c = elitea_state.get('check') or {'rows': 0, 'rejects': {}, 'cleaning': {}, 'reject_ppm': None,
+                                          'quarantined_lines': 0, 'batch_no': elitea_state['batch_no']}
+        rejected = sum(c['rejects'].values())
+        json.dumps({'batch_no': c['batch_no'], 'rows': c['rows'], 'valid_rows': 0,
+                    'quarantined_rows': c['rows'] - rejected, 'quarantined_lines': c['quarantined_lines'],
+                    'rejects': c['rejects'], 'reject_ppm': c['reject_ppm'], 'cleaning': c['cleaning'],
+                    'route': 'error_output', 'reject_list': [], 'order_ids': '', 'by_country': [],
+                    'tag_counts': [], 'silver_file': None}, sort_keys=True)
+    input: [check, batch_no]
+    output: [messages]
+    transition: END

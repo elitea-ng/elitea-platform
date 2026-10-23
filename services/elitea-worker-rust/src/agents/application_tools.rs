@@ -78,12 +78,14 @@ use crate::transport::model_facade::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
-pub(super) use materialization::ApplicationMaterializationPath;
+#[cfg(test)]
+pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
+pub(super) use materialization::{ApplicationContinuation, ApplicationMaterializationPath};
 pub(crate) use static_resume::{
     install_static_application_resume, prepare_static_application_resume,
 };
 
-const MAX_APPLICATION_HOPS: usize = 25;
+pub(in crate::agents) const MAX_APPLICATION_HOPS: usize = 25;
 /// The one child `agent_type` this worker compiles as a nested `LlmAgent`.
 const SUPPORTED_APPLICATION_AGENT_TYPE: &str = "agent";
 /// The child `agent_type` compiled as a checkpointed graph tool (#973).
@@ -102,6 +104,11 @@ const ADK_LLM_REQUEST_METADATA_KEY: &str = "gcp.vertex.agent.llm_request";
 const ADK_LLM_RESPONSE_METADATA_KEY: &str = "gcp.vertex.agent.llm_response";
 const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
 const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
+/// The execution whose ROOT continuation emitted a replay batch. A key of its
+/// own beside the batch (whose schema is strict), so a Worker without it still
+/// reads the batch; only that execution's replacement may continue behind it
+/// (`live_nested_events`).
+const APPLICATION_REPLAY_OWNER_KEY: &str = "elitea.application.replay_owner.v1";
 const APPLICATION_RETAINED_PAUSE_KEY: &str = "elitea.application.retained_pause.v1";
 const MAX_RETAINED_PAUSE_BYTES: usize = 512 * 1_024;
 const APPLICATION_RETAINED_PIPELINE_KEY: &str = "elitea.application.retained_pipeline.v1";
@@ -498,6 +505,24 @@ pub(super) enum ChildApplicationResumeAction {
     PipelineDescendants(Box<PreparedPipelineToolResume>),
 }
 
+impl ChildApplicationResumeAction {
+    fn approves_sensitive_call(&self) -> bool {
+        match self {
+            Self::Direct(decision) => decision.approves_sensitive_call(),
+            Self::Nested(children) => children
+                .values()
+                .any(|child| child.action.approves_sensitive_call()),
+            // Graph re-entry and retained results continue no tool replay here;
+            // their own nodes own their effects.
+            Self::Retained(_)
+            | Self::RetainedPipeline(_)
+            | Self::Pipeline(_)
+            | Self::PipelineStatic(_)
+            | Self::PipelineDescendants(_) => false,
+        }
+    }
+}
+
 impl ApplicationResumeCoordinator {
     pub(super) async fn observe_call_lineage(
         &self,
@@ -585,6 +610,24 @@ impl ApplicationResumeCoordinator {
             .is_some_and(|calls| calls.contains_key(call_id))
     }
 
+    /// Whether the pending resume of this call approves a sensitive-tool call at
+    /// any depth: the one continuation that may dispatch an effect, and so the one
+    /// a graph node marks durably before it runs the child.
+    pub(crate) async fn approves_sensitive_call(
+        &self,
+        parent_invocation_id: &str,
+        call_id: &str,
+    ) -> bool {
+        let stored = self.inner.lock().await;
+        let calls = stored
+            .by_parent_invocation
+            .get(parent_invocation_id)
+            .or(stored.root.as_ref());
+        calls
+            .and_then(|calls| calls.get(call_id))
+            .is_some_and(|resume| resume.action.approves_sensitive_call())
+    }
+
     pub(super) async fn take(
         &self,
         parent_invocation_id: &str,
@@ -666,7 +709,24 @@ pub(crate) async fn prepare_nested_application_resume(
     applications: &ApplicationToolPresentationCatalog,
     coordinator: &ApplicationResumeCoordinator,
     delegate: Arc<dyn Llm>,
+    owner: &super::dispatch_journal::DispatchOwner,
 ) -> Result<PreparedNestedApplicationResume, NativeAgentAssemblyError> {
+    let submitted = decisions
+        .iter()
+        .map(|decision| decision.interrupt_id().to_owned())
+        .collect::<HashSet<_>>();
+    // A dead continuation of this same answer by this execution is set aside;
+    // its journal records stay in the resolved decisions.
+    let events = live_nested_events(events, &submitted, owner)?;
+    if decisions
+        .iter()
+        .any(ResolvedDirectHitlDecision::has_unrecorded_dispatch)
+    {
+        // An approved nested call was dispatched without a recorded outcome. It
+        // is never repeated: the run ends with the registered reason before any
+        // parent or child call, not as a tool error the parent model could read past.
+        return Err(super::direct_hitl::recovery_refused_error());
+    }
     let (child_resumes, submitted_interrupt_ids) =
         build_nested_application_resume(events, decisions, applications)?;
     let calls = application_replay_calls(&child_resumes)?;
@@ -681,10 +741,88 @@ pub(crate) async fn prepare_nested_application_resume(
             batch,
             previous_markers: nested_resume_markers(events)?,
             replay_marker: user_content.clone(),
+            owner: Some(owner.clone()),
         }),
         user_content,
         run_config: application_run_config(),
     })
+}
+
+/// The root events a nested continuation resolves against.
+///
+/// A root continuation that answered these cards and then died left its suffix
+/// behind: its marker, its replay batch, the child's events, the child's call
+/// results and the journal records of the approved calls. When that suffix
+/// belongs to THIS execution (Main re-claims a lost execution under the same
+/// identity) and answered exactly these cards, it is set aside and the answer
+/// is rebuilt from the session before it: a recorded outcome is then served
+/// from the journal (class R) and an unrecorded dispatch is refused. Any other
+/// consumer of these cards, a different execution (a duplicate or late
+/// submission), a different card set, or an advance of the parent (its own
+/// model output or a new pause) makes the decision stale.
+fn live_nested_events<'a>(
+    events: &'a [Event],
+    submitted: &HashSet<String>,
+    owner: &super::dispatch_journal::DispatchOwner,
+) -> Result<&'a [Event], NativeAgentAssemblyError> {
+    let stale = || {
+        super::direct_hitl::assembly_error(
+            &super::direct_hitl::DirectHitlError::new(
+                super::direct_hitl::DirectHitlErrorCode::StaleDecision,
+            ),
+            "the nested decision was already answered",
+        )
+    };
+    let expected = submitted.iter().cloned().collect::<BTreeSet<_>>();
+    let marker = nested_resume_user_content(submitted);
+    let is_marker_content =
+        |content: &Content| content.role == marker.role && content.parts == marker.parts;
+    let is_marker = |event: &Event| event.content().is_some_and(is_marker_content);
+    let mut dead = None;
+    for (index, event) in events.iter().enumerate() {
+        // A descendant's own replay batch (a child agent, or an agent inside a
+        // pipeline tool) carries a grandchild's cards too; only the root
+        // Agent's batch, on the root application branch, consumes them.
+        if event.branch != super::events::APPLICATION_BRANCH_ROOT {
+            continue;
+        }
+        let Some(batch) = replay_batch(event)? else {
+            continue;
+        };
+        if batch.interrupt_ids.is_disjoint(&expected) {
+            continue;
+        }
+        if batch.interrupt_ids != expected || replay_owner(event)?.as_ref() != Some(owner) {
+            return Err(stale());
+        }
+        if dead.is_none() {
+            let start = events[..index]
+                .iter()
+                .rposition(|candidate| {
+                    candidate.invocation_id == event.invocation_id
+                        && candidate.author == "user"
+                        && is_marker(candidate)
+                })
+                .ok_or_else(stale)?;
+            dead = Some((start, event.branch.clone()));
+        }
+    }
+    let Some((start, branch)) = dead else {
+        return Ok(events);
+    };
+    let tail = &events[start..];
+    super::dispatch_journal::records_bound_to(tail, owner, |id| submitted.contains(id))
+        .map_err(|_| stale())?;
+    let mut suffix = ContinuationSuffix::default();
+    for event in tail {
+        let set_aside = super::dispatch_journal::is_dispatch_record(event)
+            || (replay_batch(event)?.is_some() && event.branch == branch)
+            || suffix.owns(event, is_marker_content);
+        if !set_aside {
+            return Err(stale());
+        }
+    }
+    Ok(&events[..start])
 }
 
 pub(crate) async fn install_nested_application_resume(
@@ -1494,12 +1632,17 @@ fn resume_interrupt_ids(
     Ok(interrupt_ids)
 }
 
-fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+/// One typed value of a replayed model response's provider metadata: the live
+/// response's and ADK's serialized copy must agree.
+fn replay_metadata<T: serde::de::DeserializeOwned + PartialEq>(
+    event: &Event,
+    key: &str,
+) -> Result<Option<T>, NativeAgentAssemblyError> {
     let live = event
         .llm_response
         .provider_metadata
         .as_ref()
-        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+        .and_then(|metadata| metadata.get(key));
     let encoded = event
         .provider_metadata
         .get(ADK_LLM_RESPONSE_METADATA_KEY)
@@ -1510,20 +1653,30 @@ fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeA
     let serialized = encoded
         .as_ref()
         .and_then(|response| response.provider_metadata.as_ref())
-        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+        .and_then(|metadata| metadata.get(key));
     let decode = |raw: Option<&Value>| {
-        raw.map(|raw| {
-            serde_json::from_value::<ApplicationReplayBatch>(raw.clone())
-                .map_err(|_| invalid_configuration())
-        })
-        .transpose()
+        raw.map(|raw| serde_json::from_value::<T>(raw.clone()).map_err(|_| invalid_configuration()))
+            .transpose()
     };
-    let live = decode(live)?;
-    let serialized = decode(serialized)?;
-    let batch = match (live, serialized) {
-        (Some(live), Some(serialized)) if live != serialized => return Err(invalid_configuration()),
-        (Some(value), _) | (_, Some(value)) => value,
-        (None, None) => return Ok(None),
+    match (decode(live)?, decode(serialized)?) {
+        (Some(live), Some(serialized)) if live != serialized => Err(invalid_configuration()),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// The execution whose root continuation emitted this replay batch, if stamped.
+fn replay_owner(
+    event: &Event,
+) -> Result<Option<super::dispatch_journal::DispatchOwner>, NativeAgentAssemblyError> {
+    replay_metadata(event, APPLICATION_REPLAY_OWNER_KEY)
+}
+
+fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+    let Some(batch) =
+        replay_metadata::<ApplicationReplayBatch>(event, APPLICATION_REPLAY_BATCH_KEY)?
+    else {
+        return Ok(None);
     };
     if batch.event_id.is_empty()
         || batch.event_id.len() > 512
@@ -2294,11 +2447,128 @@ fn nested_resume_markers(events: &[Event]) -> Result<Vec<Content>, NativeAgentAs
         .collect())
 }
 
+const NESTED_RESUME_PREFIX: &str = "[Elitea nested HITL ";
+const NESTED_RESUME_SUFFIX: &str = "] Resume the exact paused saved-agent calls.";
+
+/// Whether `content` is exactly a nested resume marker (`nested_resume_user_content`).
+fn is_nested_resume_marker(content: &Content) -> bool {
+    let [Part::Text { text }] = content.parts.as_slice() else {
+        return false;
+    };
+    text.strip_prefix(NESTED_RESUME_PREFIX)
+        .and_then(|rest| rest.strip_suffix(NESTED_RESUME_SUFFIX))
+        .is_some_and(|ids| !ids.is_empty() && !ids.contains(char::is_whitespace))
+}
+
+/// The events a dead continuation of decided cards left after it began, read
+/// in order. It owns only what it wrote while its children had not moved past
+/// the decided message: its resume marker, the root's replayed application call,
+/// each child's replayed call (the first call event of that child invocation)
+/// and the results of those calls, and content-free recovery bookkeeping.
+/// Anything else is an advance, and re-running the continuation would repeat
+/// it: a new pause, a nested interrupt result, a child's result reaching the
+/// parent (it finished), a child's later model turn (text, or calls after its
+/// replayed one), a node's output or state changes.
+#[derive(Default)]
+pub(crate) struct ContinuationSuffix {
+    replayed_children: HashSet<String>,
+    /// Parent call ids that started a child (from its forwarded events): their
+    /// results mean that child finished.
+    child_calls: HashSet<String>,
+}
+
+impl ContinuationSuffix {
+    /// Whether `event` is the dead continuation's own (dispatch records are
+    /// checked by the caller). `is_marker` names the continuation's marker.
+    pub(crate) fn owns(&mut self, event: &Event, is_marker: impl Fn(&Content) -> bool) -> bool {
+        if event.actions.tool_confirmation.is_some() {
+            return false;
+        }
+        // A model-checkpoint record (`elitea-recovery`, always with its state
+        // delta) of the dead invocation would stay live for model recovery while
+        // the continuation is rebuilt; two recoveries must never act on one
+        // continuation, so such a suffix is not a dead one (stale, F).
+        if event.author == "elitea-recovery" {
+            return false;
+        }
+        if let Some(parent_call) = event.provider_metadata.get(DESCENDANT_PARENT_CALL_KEY) {
+            self.child_calls.insert(parent_call.clone());
+        }
+        // A child's result at any depth: it finished, so re-running it would
+        // repeat its later calls.
+        if event.tool_results().iter().any(|result| {
+            result
+                .call_id
+                .is_some_and(|call_id| self.child_calls.contains(call_id))
+                || is_nested_interrupt_result(result.response)
+        }) {
+            return false;
+        }
+        let Some(content) = event.llm_response.content.as_ref() else {
+            // An agent's state-only start (its instruction or planner state).
+            return super::instruction_authority::valid_state_delta(&event.actions.state_delta);
+        };
+        if !event.actions.state_delta.is_empty() || content.parts.is_empty() {
+            return false;
+        }
+        if event.author == "user" {
+            return is_marker(content);
+        }
+        let calls = content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::FunctionCall { .. }));
+        let results = content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::FunctionResponse { .. }));
+        if event.branch == super::events::APPLICATION_BRANCH_ROOT {
+            // The replayed application call; a result here means a child finished.
+            return calls;
+        }
+        if !is_child_branch(event)
+            && !event
+                .provider_metadata
+                .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
+        {
+            return false;
+        }
+        if calls {
+            // Only the child's replayed message; a later call is a new model turn.
+            return self.replayed_children.insert(event.invocation_id.clone());
+        }
+        results
+    }
+}
+
+/// The event rule of a pipeline continuation's suffix (`continuation_pause`).
+pub(crate) fn pipeline_continuation_suffix() -> impl FnMut(&Event) -> bool {
+    let mut suffix = ContinuationSuffix::default();
+    move |event| suffix.owns(event, is_pipeline_resume_marker)
+}
+
+/// Whether `content` is a pipeline application continuation's marker.
+pub(crate) fn is_pipeline_resume_marker(content: &Content) -> bool {
+    is_nested_resume_marker(content)
+        || matches!(
+            content.parts.as_slice(),
+            [Part::Text { text }] if text == super::session::PIPELINE_RESUME_MARKER
+        )
+}
+
+/// A child's own event (its branch lies below the root application branch).
+fn is_child_branch(event: &Event) -> bool {
+    event
+        .branch
+        .strip_prefix(super::events::APPLICATION_BRANCH_ROOT)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
 fn nested_resume_user_content(interrupt_ids: &HashSet<String>) -> Content {
     let mut interrupt_ids = interrupt_ids.iter().map(String::as_str).collect::<Vec<_>>();
     interrupt_ids.sort_unstable();
     Content::new("user").with_text(format!(
-        "[Elitea nested HITL {}] Resume the exact paused saved-agent calls.",
+        "{NESTED_RESUME_PREFIX}{}{NESTED_RESUME_SUFFIX}",
         interrupt_ids.join(",")
     ))
 }
@@ -2314,6 +2584,8 @@ struct ApplicationReplayModel {
     batch: ApplicationReplayBatch,
     previous_markers: Vec<Content>,
     replay_marker: Content,
+    /// Set for the ROOT batch only (`APPLICATION_REPLAY_OWNER_KEY`).
+    owner: Option<super::dispatch_journal::DispatchOwner>,
 }
 
 #[async_trait]
@@ -2360,7 +2632,13 @@ impl Llm for ApplicationReplayModel {
                     }),
                     finish_reason: Some(FinishReason::Stop),
                     turn_complete: true,
-                    provider_metadata: Some(json!({APPLICATION_REPLAY_BATCH_KEY: self.batch})),
+                    provider_metadata: Some(match &self.owner {
+                        Some(owner) => json!({
+                            APPLICATION_REPLAY_BATCH_KEY: self.batch,
+                            APPLICATION_REPLAY_OWNER_KEY: owner,
+                        }),
+                        None => json!({APPLICATION_REPLAY_BATCH_KEY: self.batch}),
+                    }),
                     ..LlmResponse::default()
                 };
                 Ok(Box::pin(stream::once(async move { Ok(response) })))
@@ -2662,7 +2940,7 @@ pub(crate) async fn materialize_application_runtime(
         selected_aliases,
     )
     .await?;
-    let mut materialized = materialize_application_tools(
+    let (mut materialized, skipped_nested) = materialize_application_tools(
         snapshot,
         platform,
         runtime_context,
@@ -2673,6 +2951,18 @@ pub(crate) async fn materialize_application_runtime(
     )
     .await?;
     materialized.extend(pipeline_children);
+    // A nested Agent's unbuildable pipeline attachment degrades the same way a
+    // root one does (#990): skipped and named on the root's notice, never a
+    // failed turn for the Agents that do not call it.
+    let mut skipped_pipeline_children = skipped_pipeline_children;
+    for child in skipped_nested {
+        if skipped_pipeline_children.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+            break;
+        }
+        if !skipped_pipeline_children.contains(&child) {
+            skipped_pipeline_children.push(child);
+        }
+    }
     // No TOOL means no descendant channel: `ApplicationEventStreamingAgent`
     // selects on a receiver whose only senders live in the tools, so installing
     // it with none would leave it selecting on a closed channel forever. The
@@ -2828,10 +3118,16 @@ pub(crate) async fn materialize_application_tools(
     fallback_profile: &OrdinaryNoToolProfile,
     dependencies: ApplicationToolDependencies<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
-) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
+) -> Result<
+    (
+        Vec<MaterializedApplicationTool>,
+        Vec<SkippedApplicationChild>,
+    ),
+    NativeAgentAssemblyError,
+> {
     let references = application_references(snapshot, selected_aliases)?;
     if references.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut state = ApplicationAssemblyState {
         platform,
@@ -2851,6 +3147,7 @@ pub(crate) async fn materialize_application_tools(
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
         materialization: dependencies.materialization,
+        skipped: Vec::new(),
     };
     let mut tools = Vec::with_capacity(references.len());
     for reference in references {
@@ -2875,7 +3172,7 @@ pub(crate) async fn materialize_application_tools(
             )),
         });
     }
-    Ok(tools)
+    Ok((tools, state.skipped))
 }
 
 struct ApplicationAssemblyState<'a> {
@@ -2896,6 +3193,9 @@ struct ApplicationAssemblyState<'a> {
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
     materialization: ApplicationMaterializationPath,
+    /// Nested pipeline attachments this Worker could not build, named on the
+    /// root's skipped notice (#990).
+    skipped: Vec<SkippedApplicationChild>,
 }
 
 impl ApplicationAssemblyState<'_> {
@@ -3075,11 +3375,13 @@ impl ApplicationAssemblyState<'_> {
     }
 
     async fn materialize_nested_pipeline_children(
-        &self,
+        &mut self,
         frozen: &AdmittedToolSnapshot<'_>,
         profile: &OrdinaryNoToolProfile,
     ) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
-        if !self.materialization.scoped_ready() {
+        // A conversation an older worker left paused never offered nested pipeline attachments;
+        // its Agent keeps the tool set it paused with.
+        if !self.materialization.is_scoped() {
             return Ok(Vec::new());
         }
         if self.conversation_thread_id.is_none()
@@ -3109,9 +3411,18 @@ impl ApplicationAssemblyState<'_> {
             None,
         )
         .await?;
-        // Scoped projection must contain every frozen pipeline attachment.
-        if !built.skipped.is_empty() {
-            return Err(unsupported_capability());
+        // One attachment this Worker cannot build is skipped and named (#990),
+        // as at the root: the nested Agent keeps every attachment it can run,
+        // and a turn that never calls it is unaffected. A conversation paused
+        // inside a child that can no longer be built is refused when it is
+        // continued (`validate_continuation`), not here.
+        for child in built.skipped {
+            if self.skipped.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+                break;
+            }
+            if !self.skipped.contains(&child) {
+                self.skipped.push(child);
+            }
         }
         Ok(built.tools)
     }
@@ -3566,6 +3877,13 @@ impl LazyNestedAgent {
             || model.clone(),
             |checkpoint| checkpoint.clone().delegation_model(model.clone()),
         );
+        // Every child model step of the invocation stops after a failed dispatch
+        // record. Outermost, so no replay layer (a pending delegation, a saved
+        // output prefix) emits past it.
+        let model = match self.model_scopes.as_ref() {
+            Some(scopes) => scopes.dispatch_abort().guard(model),
+            None => model,
+        };
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())
             .model(model)
@@ -3645,11 +3963,28 @@ impl LazyNestedAgent {
                 } else {
                     (*decision).into_direct_replay(sensitive_tools)
                 }
-                .map_err(direct_hitl_execution_error)?;
+                .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
-                let prepared = replay.bind(bound.provider_model());
-                let (model, run_input, toolsets) = prepared.into_parts(self.toolsets.clone());
+                // An approved sensitive-tool replay journals each call that may not
+                // simply run again in the root session first, so a later
+                // continuation never runs it twice and serves its recorded outcome
+                // instead. A call that can re-run costs no journal writes; a
+                // clarifying or authorization continuation journals nothing, and no
+                // tool of either starts after the invocation's stop.
+                let journal = self
+                    .model_scopes
+                    .as_ref()
+                    .and_then(ModelScopeSessions::dispatch_journal);
+                let (model, run_input, toolsets) = replay
+                    .bind(bound.provider_model())
+                    .into_parts(
+                        self.toolsets.clone(),
+                        journal.as_ref(),
+                        super::dispatch_journal::JournalOutcomes::Recorded,
+                        sensitive_tools,
+                    )
+                    .map_err(|_| agent_configuration_error())?;
                 let (user_content, run_config) = run_input.into_parts();
                 let checkpoint = self
                     .context_checkpoint(&bound, Some(user_content.clone()))?
@@ -3678,6 +4013,7 @@ impl LazyNestedAgent {
                     batch,
                     previous_markers: Vec::new(),
                     replay_marker: user_content.clone(),
+                    owner: None,
                 });
                 Ok(PreparedChildApplicationResume {
                     agent: self.build_agent(
@@ -3892,6 +4228,19 @@ impl ApplicationAgentTool {
                 .await?;
         }
         let result = self.drain_child(ctx.as_ref(), agent, child_context).await?;
+        // A child can end normally after its approved call's dispatch record
+        // failed (its step limit spent on that call): the run still stops here.
+        if let Some(error) = self
+            .application
+            .agent
+            .model_scopes
+            .as_ref()
+            .and_then(|scopes| scopes.dispatch_abort().error())
+        {
+            self.send_fatal(ApplicationEventFailure::Model(error.code))
+                .await?;
+            return Err(error);
+        }
         if pipeline_container && !is_nested_interrupt_result(&result) {
             self.send_container_result(ctx.as_ref(), result.clone())
                 .await?;
@@ -3939,9 +4288,12 @@ impl ApplicationAgentTool {
                                 super::model_checkpoint::output::ContinuationFailure::ChildFailure,
                             ),
                         )
-                    } else if crate::protocol::output::model_failure(Some(error.code))
-                        != crate::protocol::output::RuntimeFailureKind::Internal
+                    } else if error.code == super::dispatch_journal::DISPATCH_UNRECORDED_CODE
+                        || crate::protocol::output::model_failure(Some(error.code))
+                            != crate::protocol::output::RuntimeFailureKind::Internal
                     {
+                        // A failed dispatch record keeps its own code: it is never
+                        // returned to the parent model as data (`child_failure_report`).
                         ApplicationEventFailure::Model(error.code)
                     } else {
                         ApplicationEventFailure::ChildExecution
@@ -5118,13 +5470,24 @@ pub(super) fn child_execution_error() -> AdkError {
     )
 }
 
-fn direct_hitl_execution_error(_error: super::direct_hitl::DirectHitlError) -> AdkError {
-    AdkError::new(
-        ErrorComponent::Agent,
-        ErrorCategory::InvalidInput,
-        "elitea_nested_agent.invalid_resume",
-        "the nested agent continuation is invalid",
-    )
+/// A nested Agent's decided card cannot continue. The typed direct-HITL code is
+/// kept as the error code, so the parent reports a readable reason: a "may
+/// have started" refusal carries the registered recovery-refused code.
+fn direct_hitl_execution_error(error: &super::direct_hitl::DirectHitlError) -> AdkError {
+    match error.code() {
+        super::direct_hitl::DirectHitlErrorCode::MayHaveStarted => AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+        ),
+        code => AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::InvalidInput,
+            code.as_str(),
+            "the nested agent continuation is invalid",
+        ),
+    }
 }
 
 fn nested_resume_execution_error(_error: NativeAgentAssemblyError) -> AdkError {
@@ -5725,6 +6088,219 @@ mod tests {
         assert_eq!(
             error.code(),
             NativeAgentAssemblyErrorCode::InvalidConfiguration
+        );
+    }
+}
+
+#[cfg(test)]
+mod live_nested_events_tests {
+    use super::*;
+    use crate::agents::dispatch_journal::{DispatchOwner, test_dispatched_record};
+
+    fn owner() -> DispatchOwner {
+        DispatchOwner::new("execution-1", 1)
+    }
+
+    fn batch_event(branch: &str, owner: Option<&DispatchOwner>, child: bool) -> Event {
+        let batch = ApplicationReplayBatch {
+            event_id: "original-batch".to_owned(),
+            interrupt_ids: BTreeSet::from(["hitl-1".to_owned()]),
+            call_ordinals: BTreeMap::from([("call_child".to_owned(), 1)]),
+        };
+        let mut event = Event::new("inv-2");
+        "elitea-agent".clone_into(&mut event.author);
+        branch.clone_into(&mut event.branch);
+        event.llm_response.content = Some(Content {
+            role: "model".to_owned(),
+            parts: vec![Part::FunctionCall {
+                name: "elitea_agent_31_v_41".to_owned(),
+                args: json!({}),
+                id: Some("call_child".to_owned()),
+                thought_signature: None,
+            }],
+        });
+        event.llm_response.provider_metadata = Some(match owner {
+            Some(owner) => json!({
+                APPLICATION_REPLAY_BATCH_KEY: batch,
+                APPLICATION_REPLAY_OWNER_KEY: owner,
+            }),
+            None => json!({ APPLICATION_REPLAY_BATCH_KEY: batch }),
+        });
+        if child {
+            event.provider_metadata.insert(
+                DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+                "elitea-child-1".to_owned(),
+            );
+        }
+        event
+    }
+
+    fn dead_continuation(root_owner: Option<&DispatchOwner>) -> Vec<Event> {
+        let submitted = HashSet::from(["hitl-1".to_owned()]);
+        let mut earlier = Event::new("inv-1");
+        earlier.llm_response.content = Some(Content::new("user").with_text("current"));
+        let mut marker = Event::new("inv-2");
+        "user".clone_into(&mut marker.author);
+        marker.llm_response.content = Some(nested_resume_user_content(&submitted));
+        vec![
+            earlier,
+            marker,
+            batch_event("elitea.saved_applications", root_owner, false),
+            // A depth-2 child forwards its own batch for the same grandchild card.
+            batch_event("elitea.saved_applications.application_1", None, true),
+            test_dispatched_record("elitea-child-2", "hitl-1", "call_mcp", owner()),
+        ]
+    }
+
+    /// #1321 review rounds 5–6: a dead continuation owns its marker, the root's
+    /// replayed call, each child's replayed call and those calls' results. A new
+    /// pause, a child's later turn (another call, or text), a child result at the
+    /// parent (it finished), model text or another user turn is an advance.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One ordered table of owned and advancing events.
+    fn a_dead_continuation_owns_only_its_marker_replayed_calls_and_their_results() {
+        let owns = |events: &[&Event]| {
+            let mut suffix = ContinuationSuffix::default();
+            events
+                .iter()
+                .all(|event| suffix.owns(event, is_pipeline_resume_marker))
+        };
+        let mut marker = Event::new("inv-2");
+        "user".clone_into(&mut marker.author);
+        marker.llm_response.content =
+            Some(Content::new("user").with_text(crate::agents::session::PIPELINE_RESUME_MARKER));
+        let replayed = batch_event("elitea.saved_applications", None, false);
+        let child_call = batch_event("elitea.saved_applications.application_1", None, true);
+        let mut child_result = Event::new(&child_call.invocation_id);
+        "elitea.saved_applications.application_1".clone_into(&mut child_result.branch);
+        child_result.llm_response.content = Some(Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_rust::FunctionResponseData::new(
+                    "lookup",
+                    json!({"written": true}),
+                ),
+                id: Some("call_mcp".to_owned()),
+                annotations: None,
+            }],
+        });
+        assert!(owns(&[&marker, &replayed, &child_call, &child_result]));
+        // The child's next turn called another tool: an advance.
+        assert!(!owns(&[
+            &marker,
+            &replayed,
+            &child_call,
+            &child_result,
+            &child_call
+        ]));
+        let mut child_text = child_result.clone();
+        child_text.llm_response.content = Some(Content::new("model").with_text("child answer"));
+        assert!(!owns(&[&marker, &replayed, &child_call, &child_text]));
+        let mut paused = child_call.clone();
+        paused.actions.tool_confirmation = Some(adk_rust::ToolConfirmationRequest {
+            tool_name: "lookup".to_owned(),
+            function_call_id: Some("call_mcp".to_owned()),
+            args: json!({}),
+        });
+        assert!(!owns(&[&paused]), "a new pause is an advance");
+        let mut finished = child_result.clone();
+        "elitea.saved_applications".clone_into(&mut finished.branch);
+        finished.provider_metadata.clear();
+        assert!(
+            !owns(&[&finished]),
+            "a child result at the parent is an advance"
+        );
+        let mut text = Event::new("inv-2");
+        "elitea-agent".clone_into(&mut text.author);
+        "elitea.saved_applications".clone_into(&mut text.branch);
+        text.llm_response.content = Some(Content::new("model").with_text("node output"));
+        assert!(!owns(&[&text]), "model text is an advance");
+        let mut other_user = Event::new("inv-3");
+        "user".clone_into(&mut other_user.author);
+        other_user.llm_response.content = Some(Content::new("user").with_text("a new turn"));
+        assert!(!owns(&[&other_user]));
+
+        // A model-checkpoint record is never set aside (no double recovery).
+        let mut recovery = Event::new("inv-2");
+        "elitea-recovery".clone_into(&mut recovery.author);
+        recovery
+            .actions
+            .state_delta
+            .insert("elitea.agent.recovery.v1".to_owned(), json!({"version": 1}));
+        assert!(
+            !owns(&[&marker, &recovery, &replayed]),
+            "a model-checkpoint record is not a dead continuation's"
+        );
+        // A child agent's state-only start (its instruction or planner state).
+        let mut start = Event::new(&child_call.invocation_id);
+        "elitea.saved_applications.application_1".clone_into(&mut start.branch);
+        let scope = "s:a";
+        start.actions.state_delta.insert(
+            format!(
+                "{}{}",
+                elitea_agent_runtime::planner::STATE_PREFIX,
+                elitea_agent_runtime::instruction_authority::content_digest(scope)
+            ),
+            json!({"schema": 1, "scope": scope, "plan": null}),
+        );
+        assert!(
+            owns(&[&replayed, &start, &child_call]),
+            "a state-only start is owned"
+        );
+        let mut node_state = start.clone();
+        node_state.actions.state_delta = HashMap::from([("result".to_owned(), json!(1))]);
+        assert!(!owns(&[&node_state]), "other state changes are an advance");
+        // A grandchild's result reaching its parent child: that child finished.
+        let mut grandchild = batch_event(
+            "elitea.saved_applications.application_1.application_1",
+            None,
+            true,
+        );
+        "elitea-grandchild-1".clone_into(&mut grandchild.invocation_id);
+        grandchild.provider_metadata.insert(
+            DESCENDANT_PARENT_CALL_KEY.to_owned(),
+            "call_grandchild".to_owned(),
+        );
+        let mut grandchild_result = child_result.clone();
+        if let Some(Part::FunctionResponse { id, .. }) = grandchild_result
+            .llm_response
+            .content
+            .as_mut()
+            .and_then(|content| content.parts.first_mut())
+        {
+            *id = Some("call_grandchild".to_owned());
+        }
+        assert!(owns(&[&replayed, &child_call, &grandchild]));
+        assert!(
+            !owns(&[&replayed, &child_call, &grandchild, &grandchild_result]),
+            "a grandchild's result at its parent is an advance"
+        );
+    }
+
+    /// #1321 code review round 3: the replacement of the same execution sets the
+    /// dead continuation aside, also when a depth-2 child forwarded its own batch;
+    /// another execution, or a batch without an owner, is stale.
+    #[test]
+    fn only_this_executions_dead_root_continuation_is_set_aside() {
+        let submitted = HashSet::from(["hitl-1".to_owned()]);
+        let events = dead_continuation(Some(&owner()));
+        let live = live_nested_events(&events, &submitted, &owner()).expect("same execution");
+        assert_eq!(
+            live.len(),
+            1,
+            "everything from the dead marker on is set aside"
+        );
+        assert!(
+            live_nested_events(&events, &submitted, &DispatchOwner::new("execution-2", 1)).is_err()
+        );
+        let unstamped = dead_continuation(None);
+        assert!(live_nested_events(&unstamped, &submitted, &owner()).is_err());
+        // No consumer of the card: the session is used as it is.
+        assert_eq!(
+            live_nested_events(&events[..1], &submitted, &owner())
+                .expect("untouched")
+                .len(),
+            1
         );
     }
 }

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/go-chi/chi/v5"
 )
 

@@ -60,10 +60,10 @@ const PLACEHOLDER_TEXT = 'autotest-placeholder';
  *
  * `CredentialForm` renders one picker for two routes, and the routes ask the
  * catalogue for DIFFERENT sections. `useTypeSections`
- * (`src/pages/credentials/useTypeSections.ts:27-36,98`) sends
- * `/settings/create-configuration` — `mode.configurationMode` — the seven
- * MODEL sections (`llm`, `embedding`, `vectorstorage`, `ai_credentials`,
- * `image_generation`, `asr`, `tts`), and `/credentials/create-credential` the
+ * (`src/pages/credentials/useTypeSections.ts:27-35,98`) sends
+ * `/settings/create-configuration` — `mode.configurationMode` — the six
+ * MODEL sections (`llm`, `embedding`, `ai_credentials`, `image_generation`,
+ * `asr`, `tts`), and `/credentials/create-credential` the
  * single `credentials` section. Every type in this file is
  * `section: "credentials"`
  * (`services/elitea-main/internal/application/configurations/

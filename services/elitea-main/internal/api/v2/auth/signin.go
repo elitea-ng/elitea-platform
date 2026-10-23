@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 )
 
 // issueBrowserSession writes the credential a successful login answers with.

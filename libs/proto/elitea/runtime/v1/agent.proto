@@ -4,7 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // AgentExecutionCommandV1 is shared by the two current execution semantics:
 // agent.execute.application.v1 and agent.execute.adhoc.v1. The capability ID
@@ -81,8 +81,8 @@ message AgentExecutionInputV1 {
   optional bool debug_mode = 36;
   // A bounded, non-secret snapshot of the current live guardrail. The Go
   // admission path resolves this policy before dispatch; the worker never
-  // reads Pylon configuration directly and treats suggestion generation as a
-  // best-effort post-response side effect.
+  // reads the legacy runtime's configuration directly and treats suggestion
+  // generation as a best-effort post-response side effect.
   bytes next_input_suggestion = 37;
   // The platform-wide toolkit guardrails, as one bounded, non-secret JSON
   // object: `sensitive_tools`, `blocked_toolkits`, `blocked_tools` and the two
@@ -177,10 +177,11 @@ message AgentExecutionArtifactReferenceV1 {
 // AgentExecutionAttachmentContentV1 returns ONE attachment item's enriched
 // content so the platform can persist what the worker extracted (#607).
 //
-// Pylon extracts a document's text once, at message-persist time, and stores
-// it: rpc/chat_all.py:344-377 reads the files through the SDK artifact toolkit
-// and appends the text as a second `{"type": "text"}` chunk of the item's
-// `content`, with `flag_modified(item, "content")` at :376. Every later turn is
+// The legacy runtime extracts a document's text once, at message-persist time,
+// and stores it (paths in the legacy/plugins/elitea_core dev clone):
+// rpc/chat_all.py:346-379 reads the files through the SDK artifact toolkit and
+// appends the text as a second `{"type": "text"}` chunk of the item's
+// `content`, with `flag_modified(item, "content")` at :378. Every later turn is
 // then pure DB — utils/chat_history.py:67-73 extends the stored chunks straight
 // into the message and re-reads nothing.
 //
@@ -204,7 +205,7 @@ message AgentExecutionAttachmentContentV1 {
   // value `chat_messages_attachment.content` is to hold, not a delta. It is the
   // admission scaffold's own header chunk — marker included, byte-for-byte —
   // followed by the extracted text as a second `{"type": "text"}` chunk, which
-  // is the shape pylon's extraction step leaves behind and the shape the
+  // is the shape the legacy extraction step leaves behind and the shape the
   // worker's own reader recognises as "already extracted".
   bytes content = 2;
   reserved 3 to 15;

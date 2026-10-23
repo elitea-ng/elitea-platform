@@ -22,8 +22,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type fakeBackgroundJobs struct {
@@ -88,9 +88,9 @@ func decodeJobsBody(t *testing.T, recorder *httptest.ResponseRecorder) map[strin
 
 /* ── the read ─────────────────────────────────────────────────────────── */
 
-// An unconfigured deployment says so. It must never answer an empty list: that
-// is the exact correction arbiterTaskNodeUnavailable records, and repeating it
-// here would reintroduce it under a new route.
+// An unconfigured deployment says so. It must never answer an empty list:
+// "nothing is running" and "this deployment cannot see what is running" must
+// not render identically.
 func TestBackgroundJobs_NoStoreAnswers503(t *testing.T) {
 	recorder := serve(t, newBackgroundJobsRouter(), http.MethodGet, "/admin/background_jobs/administration")
 	if recorder.Code != http.StatusServiceUnavailable {

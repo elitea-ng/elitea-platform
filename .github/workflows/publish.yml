@@ -1,10 +1,45 @@
 name: Release & Publish
 
+# THREE CHANNELS, NONE OF THEM A MERGE. A merge to main starts no run of this
+# workflow (nor of any other: scripts/ci/check-no-push-triggers.mjs). Releasing
+# on every merge cut a release per pull request — v4.66.0 to v6.0.0 in two
+# days — so a release is now a decision:
+#
+#   release   workflow_dispatch from main. semantic-release, exactly as before:
+#             the conventional commits since the last stable tag decide the
+#             bump, and it creates the tag and the GitHub release. Moves
+#             `latest` and `<major>.<minor>`. Nothing releasable: no-op.
+#   nightly   the schedule below, from main. A pre-release
+#             `<next>-nightly.<yyyymmdd>.<run>`. Skipped when HEAD already
+#             carries a release or nightly tag (no commits since the last one).
+#   dev       workflow_dispatch from ANY branch. A pre-release `<next>-dev.<run>`.
+#
+# `<next>` is the version semantic-release would cut from that ref now (a dry
+# run with the ref as its only branch), so a pre-release always sorts BEFORE the
+# release it previews. With nothing releasable since the last stable tag it is
+# that tag's patch + 1. Pre-release tags never feed the bump: semantic-release
+# ignores pre-release versions when it looks for the last release of `main`.
+#
+# A pre-release builds, scans, signs and publishes the same images, charts and
+# signed macOS app (the `desktop` job) a release does, under its own version only — the manifest step never gives a
+# version with a `-` the moving tags. The `prune` job keeps the newest
+# PRERELEASE_KEEP of each pre-release channel and deletes the rest.
 on:
-  push:
-    branches:
-      - main
-      - next
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: >-
+          release — a stable release from main (semantic-release decides the
+          version). dev — a pre-release `<next>-dev.<run>` of the dispatched
+          ref, any branch. nightly — what the schedule runs, by hand.
+        type: choice
+        options:
+          - release
+          - dev
+          - nightly
+        default: release
+  schedule:
+    - cron: "7 2 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +50,8 @@ env:
   # Read by the chart job. Pinned, not "latest" — an unpinned third-party
   # download is a hard dependency of every release.
   YQ_VERSION: v4.44.6
+  # Pre-releases kept per channel (nightly, dev) by the `prune` job.
+  PRERELEASE_KEEP: "14"
 
 permissions:
   contents: write
@@ -24,20 +61,64 @@ permissions:
   id-token: write
 
 jobs:
-  # ── Job 1: Semantic Release — determine version, create tag & GitHub release ─
+  # ── Job 1: Version — decide the version, create the tag & GitHub release ────
+  #
+  # Every later job reads only these three outputs, whichever channel set them.
   release:
-    name: Semantic Release
+    name: Version (${{ github.event_name == 'schedule' && 'nightly' || inputs.channel }})
     runs-on: ubuntu-latest
     outputs:
-      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
-      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
-      new_release_git_tag: ${{ steps.semantic.outputs.new_release_git_tag }}
+      new_release_published: ${{ steps.stable.outputs.new_release_published || steps.pre.outputs.published }}
+      new_release_version: ${{ steps.stable.outputs.new_release_version || steps.pre.outputs.version }}
+      new_release_git_tag: ${{ steps.stable.outputs.new_release_git_tag || steps.pre.outputs.git_tag }}
+      channel: ${{ steps.channel.outputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Channel
+        id: channel
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          channel="$INPUT"
+          if [ "$EVENT" = "schedule" ]; then channel=nightly; fi
+          case "$channel" in
+            release|nightly)
+              # A stable release, and the nightly preview of the next one, come
+              # from main only. A dev pre-release is the one channel for a branch.
+              if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+                echo "::error::the ${channel} channel runs from main; dispatch it on main, or pick dev for ${GITHUB_REF_NAME}"
+                exit 1
+              fi ;;
+            dev) ;;
+            *) echo "::error::unknown channel '${channel}'"; exit 1 ;;
+          esac
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+          # semantic-release EVALUATES the `branches` input as JavaScript, so
+          # the branch name reaches it as a JSON string literal, never raw.
+          echo "branches=$(jq -cn --arg b "$GITHUB_REF_NAME" '[$b]')" >> "$GITHUB_OUTPUT"
+          echo "### Channel: ${channel} (${GITHUB_REF_NAME} @ ${GITHUB_SHA::12})" >> "$GITHUB_STEP_SUMMARY"
+
+      # Nothing new since the last nightly (or release): no nightly. A nightly
+      # per quiet night would only be a copy of the one before it.
+      - name: Nightly — anything new since the last one?
+        id: fresh
+        if: steps.channel.outputs.channel == 'nightly'
+        run: |
+          set -euo pipefail
+          held="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\..+)?$' || true)"
+          if [ -n "$held" ]; then
+            echo "HEAD already carries ${held//$'\n'/, }; no nightly." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -46,9 +127,10 @@ jobs:
           # semantic-release runs from npx; nothing here wants a cache.
           package-manager-cache: false
 
-      - name: Semantic Release
-        id: semantic
-        uses: cycjimmy/semantic-release-action@v6
+      - name: Semantic Release (release channel)
+        id: stable
+        if: steps.channel.outputs.channel == 'release'
+        uses: cycjimmy/semantic-release-action@v8
         with:
           extra_plugins: |
             conventional-changelog-conventionalcommits@8
@@ -58,97 +140,65 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Job 1b: Release parity audit ────────────────────────────────────────────
-  # Lives HERE, not in a workflow_run workflow of its own, and that is the
-  # whole point. A separate workflow_run audit has to check out the released
-  # commit and then EXECUTE it (`go run ./tools/uictl`) in the privileged
-  # default-branch context, which CodeQL flags as
-  # actions/cache-poisoning/poisonable-step and which is a real shape rather
-  # than a false positive. As a job here it runs in the ordinary push context
-  # on a commit that is already on main, so there is no untrusted checkout to
-  # reason about at all.
-  #
-  # It also gates better: `needs: release` reads semantic-release's OWN
-  # new_release_published output instead of re-deriving whether a release
-  # happened by hunting for a `v*` tag pointing at HEAD.
-  #
-  # What it audits: the same two commands ci-web.yml runs on every PR, re-run
-  # against what was actually shipped. On a PR they gate the diff; a release is
-  # cut from main, and main can carry a merge result that no single PR ever
-  # validated.
-  audit:
-    name: Release parity audit
-    needs: release
-    if: needs.release.outputs.new_release_published == 'true'
-    runs-on: ubuntu-latest
-    # Narrower than the workflow default (contents/packages/issues/pull-requests
-    # write): this job only reads the tree.
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
+      # The same analysis, as a dry run on the dispatched ref: it publishes
+      # nothing and reports the version a release would cut, and its notes.
+      - name: Semantic Release dry run (pre-release channels)
+        id: next
+        if: steps.channel.outputs.channel == 'dev' || steps.fresh.outputs.fresh == 'true'
+        uses: cycjimmy/semantic-release-action@v8
         with:
-          fetch-depth: 0
-          submodules: recursive # apps/elitea-ui is the pinned parity baseline
-          persist-credentials: false
+          dry_run: true
+          branches: ${{ steps.channel.outputs.branches }}
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@8
+            @semantic-release/commit-analyzer
+            @semantic-release/release-notes-generator
+            @semantic-release/github
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.work
-          # uictl has no external dependencies and no go.sum, so the cache
-          # would hold the toolchain and little else for two commands that run
-          # once per release.
-          cache: false
-
-      - name: Route + manifest parity (release-blocking)
+      - name: Create the pre-release tag and GitHub pre-release
+        id: pre
+        if: steps.next.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          NEXT: ${{ steps.next.outputs.new_release_version }}
+          LAST: ${{ steps.next.outputs.last_release_version }}
+          NOTES: ${{ steps.next.outputs.new_release_notes }}
+          RUN: ${{ github.run_number }}
         run: |
-          echo "### Release audit — ${{ needs.release.outputs.new_release_git_tag }}" >> "$GITHUB_STEP_SUMMARY"
-          go run ./tools/uictl parity-routes --baseline apps/elitea-ui
-          go run ./tools/uictl parity-manifest --validate
-
-      # `--require-must` REPORTS, it does not block. This is a decision, not
-      # an omission — issue #309 asked for the choice to be made explicitly
-      # and named, not left as a silent default:
-      #
-      #   DECISION: stay advisory. Measured on this branch, `uictl
-      #   parity-manifest --require-must` exits 1 with "694 priority:must
-      #   item(s) not verified". Blocking on that count would red every
-      #   release on a known, tracked migration backlog, a signal nobody can
-      #   act on at release time — that is how a gate turns into noise
-      #   everyone learns to ignore, not a safer release.
-      #
-      #   OWNER: Platform Engineering, the same owner
-      #   `implementation-readiness.mdx` (elitea-docs) already names for this
-      #   gap register — this step reports the identical priority:must count
-      #   that document tracks, so it inherits that document's owner rather
-      #   than getting an invented one.
-      #
-      #   REVIEW BY: 2026-11-30. Re-run this decision then: if the backlog is
-      #   near zero, make this step block a release; if not, move this date.
-      #   An advisory with no review date is how gate 3's stale coverage
-      #   exclusion (this same issue) went unnoticed for ten consumers.
-      #
-      # `cutover/*` in ci-web.yml already blocks on this same check and is
-      # unaffected by the above — that arm is where the audit is meant to
-      # bite before release policy changes.
-      #
-      # The step still FAILS if the audit emits no recognisable verdict at all
-      # — "ran, found nothing" and "did not really run" are otherwise the same
-      # log line, which is the entire subject of the gate-dormancy work.
-      - name: Require-must parity (advisory — reports, does not block; owner Platform Engineering, review by 2026-11-30)
-        run: |
-          set -uo pipefail
-          OUT="$(go run ./tools/uictl parity-manifest --require-must 2>&1)" && STATUS=0 || STATUS=$?
-          echo "$OUT"
-          if ! printf '%s' "$OUT" | grep -qE 'priority:must item|all priority:must items'; then
-            echo "::error::parity-manifest --require-must produced no verdict line (exit $STATUS)"
-            exit 1
+          set -euo pipefail
+          base="$NEXT"
+          if [ -z "$base" ]; then
+            # Nothing releasable since the last stable tag: preview its patch.
+            last="${LAST:-0.0.0}"
+            IFS=. read -r major minor patch <<< "${last%%-*}"
+            base="${major}.${minor}.$((patch + 1))"
           fi
+          case "$CHANNEL" in
+            nightly) version="${base}-nightly.$(date -u +%Y%m%d).${RUN}" ;;
+            dev)     version="${base}-dev.${RUN}" ;;
+          esac
+          tag="v${version}"
+
           {
-            printf '%s\n' "$OUT" | grep -E 'priority:must item|all priority:must items'
-            echo ""
-            echo "_Advisory, not release-blocking (issue #309). Owner: Platform Engineering. Review by: 2026-11-30._"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "${CHANNEL} pre-release of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}."
+            echo
+            if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else echo "No releasable commits since v${LAST:-0.0.0}."; fi
+          } > "$RUNNER_TEMP/notes.md"
+
+          # --target creates the tag on GitHub at this commit; the later jobs
+          # check it out by name.
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+
+          {
+            echo "published=true"
+            echo "version=${version}"
+            echo "git_tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Pre-release **${tag}**" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Job 2: Build each image on its native runner ────────────────────────────
   #
@@ -156,30 +206,30 @@ jobs:
   #
   #   The images below are scanned TWICE, by two gates with different subjects.
   #
-  #   1. .github/workflows/ci-image-scan.yml scans a REBUILD of every image on
-  #      every pull request, on every push to main that touches an image input,
-  #      and daily at 05:17 UTC. That gate guards the merge.
+  #   1. .github/workflows/nightly-image-scan.yml scans what each image's
+  #      `latest` tag resolves to, by digest, every night at 05:17 UTC, and
+  #      keeps one issue per vulnerable image. It reports a CVE published
+  #      against an image that is already out. (Until 2026-10-20 this was
+  #      ci-image-scan.yml, a rebuild-and-scan on every pull request.)
   #
   #   2. The `publish-image` job below scans the image THIS RELEASE PUSHED,
   #      before the manifest step in that same job creates the `latest` tag.
   #      That gate guards the release.
   #
-  #   WHY BOTH. A release is cut from main, so gate 1 measured the release code
-  #   at most 24 hours earlier. A CVE published inside that window used to ship,
-  #   and the daily run reported it after the fact — the release did not stop.
-  #   Issue #501 held that gap; gate 2 closes it.
+  #   WHY BOTH. Gate 2 is the only one that STOPS anything: a release whose
+  #   image fails it never gets `latest`. Gate 1 watches what already shipped,
+  #   against tomorrow's vulnerability DB. Issue #501 held the gap gate 2 closes.
   #
   #   WHICH IMAGE GATE 2 READS. It pulls the tag this workflow pushed, so it
   #   reads the artefact the release publishes and not a rebuild of it. The
   #   alternative — build every image a second time to scan it — costs a second
   #   build of every image and still scans a different artefact.
   #
-  #   The image list below is not free-form. ci-image-scan.yml reads it and
-  #   fails when it ships an image that no scan covers, so a new entry
-  #   cannot arrive unscanned in silence. It also compares its own scan matrix
-  #   with the `publish-image` matrix below, entry by entry, so the release
-  #   gate cannot quietly exempt an image or expect a target type the merge gate
-  #   does not.
+  #   The image list below is not free-form. scripts/ci/image-matrix.sh
+  #   (image-matrix.yml, on every pull request that touches it) holds every
+  #   matrix here to docker-bake.hcl, so a new entry cannot arrive unscanned in
+  #   silence, and nightly-image-scan.yml READS the `scan` matrix rather than
+  #   carrying a copy of its own.
   #
   # Meanwhile compose declares this service mandatory for agent execution —
   # "without this service an admitted run streams nothing and ends in a
@@ -197,7 +247,7 @@ jobs:
           - name: elitea-main
             context: .
             dockerfile: ./services/elitea-main/Containerfile
-            # The Containerfile is multi-target (hybrid / e2e / final). Name the
+            # The Containerfile is multi-target (e2e / final). Name the
             # shipping one instead of relying on "last stage wins", so adding a
             # stage can never silently change what is released.
             target: final
@@ -215,9 +265,6 @@ jobs:
             context: .
             dockerfile: ./services/elitea-egress-proxy/Containerfile
             target: final
-          - name: elitea-ui
-            context: .
-            dockerfile: ./deploy/docker/Containerfile.elitea-ui
           # New UI (spec §7.3, issue #244): mirrors the elitea-web bake target
           # in docker-bake.hcl so the image bake produces actually reaches
           # ghcr.io instead of only ever being built locally/in CI.
@@ -249,19 +296,27 @@ jobs:
           - name: elitea-worker-rust
             context: .
             dockerfile: ./services/elitea-worker-rust/Containerfile
+          # The cloud executor's sandbox supervisor (ADR-0034): the
+          # `supervisor` stage of the worker Containerfile, built with
+          # `--features sandbox-supervisor`. The chart pins it by digest
+          # (sandboxKubernetes.supervisor.image), so it must be pullable.
+          - name: elitea-sandbox-supervisor
+            context: .
+            dockerfile: ./services/elitea-worker-rust/Containerfile
+            target: supervisor
           # The Rust-native Inventory engine (ADR-0027): the only Inventory
           # engine sidecar. It replaced the Python elitea-inventory image,
           # which is no longer published. Repo ROOT context: the
-          # Containerfile COPYs services/elitea-inventory-engine and the
-          # shared libs/rust crates from there.
+          # Containerfile COPYs services/elitea-inventory-engine, libs/proto and
+          # the shared libs/rust crates from there.
           - name: elitea-inventory-engine
             context: .
             dockerfile: ./services/elitea-inventory-engine/Containerfile
           # The Rust-native DeepWiki engine (ADR-0026 phase 7): the only
           # engine sidecar the chart runs. It replaced the Python
           # elitea-deepwiki image, which is no longer published. Repo ROOT
-          # context: the Containerfile COPYs services/elitea-deepwiki-engine
-          # from there. No `target:` — the shipping stage is the last one.
+          # context: the Containerfile COPYs services/elitea-deepwiki-engine,
+          # libs/proto and libs/rust from there. No `target:` — the shipping stage is the last one.
           - name: elitea-deepwiki-engine-native
             context: .
             dockerfile: ./services/elitea-deepwiki-engine/Containerfile
@@ -302,7 +357,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.release.outputs.new_release_git_tag }}
-          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -337,8 +391,19 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.release.outputs.new_release_version }}
           platforms: ${{ matrix.platform.arch }}
-          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }},ignore-error=true
+          # The registry layer cache (the public ghcr.io/elitea-ng/ci-cache-<image>
+          # package), not `type=gha`: the Actions cache is capped at 10 GB and
+          # a mode=max export of twenty platform builds is what kept it at the
+          # cap. `release-<platform>` is this job's own ref, written by a run
+          # from main only (a dev pre-release of a branch reads it; mode=max
+          # because the builder stages are most of each build). The second read is ci-web-e2e.yml's
+          # build-once cache of the same Containerfile (amd64), so a release
+          # starts from main's latest CI layers. The cache is a cache: nothing
+          # a release ships is a ci-* image (scripts/ci/check-ci-image-references.mjs).
+          cache-from: |
+            type=registry,ref=ghcr.io/elitea-ng/ci-cache-${{ matrix.image.name }}:release-${{ matrix.platform.suffix }}
+            type=registry,ref=ghcr.io/elitea-ng/ci-cache-${{ matrix.image.name }}:${{ matrix.platform.suffix }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=registry,ref=ghcr.io/elitea-ng/ci-cache-{0}:release-{1},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', matrix.image.name, matrix.platform.suffix) || '' }}
 
   # ── Job 3: Scan, manifest and sign each image this release pushed ────────────
   #
@@ -385,22 +450,22 @@ jobs:
   #
   # ONE PLATFORM. The report reads Go build metadata and OS package databases,
   # and neither depends on the architecture; the two platform tags come from one
-  # source tree. ci-image-scan.yml states the same rule for the same reason.
+  # source tree. nightly-image-scan.yml scans linux/amd64 for the same reason.
   #
   # THE RULE LIVES IN ONE SCRIPT. scripts/ci/image-scan-gate.sh decides which
-  # report blocks, and ci-image-scan.yml runs that same file. It has three
+  # report blocks, and nightly-image-scan.yml runs that same file. It has three
   # failures: no report, a report that never reached the application content,
   # and any HIGH or CRITICAL finding. The first two block for EVERY image, the
   # exempt ones included — a dead scan must not look like a clean scan.
   # scripts/ci/image-scan-gate-test.sh drives every one of those arms with
   # synthetic reports, so this gate is proved red rather than asserted.
   #
-  # THE MATRIX IS NOT FREE-FORM. ci-image-scan.yml compares it with its own,
-  # entry by entry, and fails when they differ. So the release gate cannot
-  # exempt an image the merge gate blocks, and cannot expect a target type the
-  # merge gate does not. scripts/ci/image-matrix.sh --verify holds the NAMES in
-  # this matrix, the build matrix, the IMAGES cleanup array, ci-image-scan.yml's
-  # matrix and docker-bake.hcl together.
+  # THE MATRIX IS NOT FREE-FORM, AND IT IS THE ONLY COPY. nightly-image-scan.yml
+  # reads its name, expect_type and blocking fields, so the nightly scan cannot
+  # disagree with the release about an image. scripts/ci/image-matrix.sh --verify
+  # holds the NAMES in this matrix, the build matrix, the IMAGES cleanup array
+  # and docker-bake.hcl together, and holds `blocking: false` here to
+  # .github/image-scan-exempt.txt.
 
   scan:
     name: Scan ${{ matrix.image.name }} (${{ matrix.image.blocking && 'blocking' || 'exempt, reports only' }})
@@ -425,7 +490,7 @@ jobs:
           # `expect_type` is the trivy Result.Type the report MUST hold. Each
           # value names the APPLICATION content, so a scan that reads the base
           # layers and stops short fails instead of reading as clean. The values
-          # are MEASURED, and ci-image-scan.yml carries the same ones.
+          # are MEASURED, and nightly-image-scan.yml reads them from here.
           #
           # `blocking: false` reports the finding count and does not stop the
           # release. It never relaxes the threshold and never relaxes the
@@ -443,9 +508,6 @@ jobs:
           - name: elitea-egress-proxy
             expect_type: gobinary
             blocking: true
-          - name: elitea-ui
-            expect_type: alpine
-            blocking: true
           - name: elitea-web
             expect_type: alpine
             blocking: true
@@ -462,6 +524,12 @@ jobs:
           # itself reports zero. There is nothing here to exempt, so it is held
           # to the same threshold as the Go images.
           - name: elitea-worker-rust
+            expect_type: rustbinary
+            blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
             expect_type: rustbinary
             blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
@@ -592,7 +660,7 @@ jobs:
           # `expect_type` is the trivy Result.Type the report MUST hold. Each
           # value names the APPLICATION content, so a scan that reads the base
           # layers and stops short fails instead of reading as clean. The values
-          # are MEASURED, and ci-image-scan.yml carries the same ones.
+          # are MEASURED, and nightly-image-scan.yml reads them from here.
           #
           # `blocking: false` reports the finding count and does not stop the
           # release. It never relaxes the threshold and never relaxes the
@@ -610,9 +678,6 @@ jobs:
           - name: elitea-egress-proxy
             expect_type: gobinary
             blocking: true
-          - name: elitea-ui
-            expect_type: alpine
-            blocking: true
           - name: elitea-web
             expect_type: alpine
             blocking: true
@@ -629,6 +694,12 @@ jobs:
           # itself reports zero. There is nothing here to exempt, so it is held
           # to the same threshold as the Go images.
           - name: elitea-worker-rust
+            expect_type: rustbinary
+            blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
             expect_type: rustbinary
             blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
@@ -733,7 +804,7 @@ jobs:
 
   # ── Job 4: Package and push the Helm charts to the GHCR OCI registry ────────
   # The images are only half of a release. Until this job existed, a consumer
-  # could `docker pull ghcr.io/eliteaai/elitea-main:1.2.3` but had no way to
+  # could `docker pull ghcr.io/elitea-ng/elitea-main:1.2.3` but had no way to
   # obtain the chart that deploys it other than cloning this repository at the
   # matching tag — which is not a distribution channel, it is a workaround.
   #
@@ -757,7 +828,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ONE chart for the platform. It ships every first-party image, so no
+          # ONE chart for the platform, NATS JetStream and Qdrant included (the
+          # upstream nats and qdrant charts are Chart.lock dependencies, built
+          # before packaging and carried in the package). It ships every first-party image, so no
           # single `image:` names it — `platformImageTag` below stamps the one
           # top-level `image.tag` every component resolves from instead. Without
           # that a chart published at a release number would install `latest`
@@ -765,12 +838,11 @@ jobs:
           - chart: elitea
             image: ""
             platformImageTag: true
-          # NATS stays separate: commodity infrastructure the platform chart
-          # points at rather than owns, and it vendors an upstream subchart, so
-          # packaging needs `helm dependency build` and network access.
-          - chart: nats
-            image: ""
-          - chart: nats-bootstrap
+          # The optional sandbox runtime installer (ADR-0034): a node-level
+          # chart kept apart from `elitea`, which never touches nodes. Its
+          # image is a pinned third-party Debian 13 digest, so nothing is
+          # stamped.
+          - chart: elitea-sandbox-runtime
             image: ""
 
     steps:
@@ -782,7 +854,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2
@@ -920,20 +992,16 @@ jobs:
 
           yq '{"version": .version, "appVersion": .appVersion}' "$CHART"
 
-      - name: Build chart dependencies
+      # The elitea chart's dependencies (the upstream nats and qdrant charts
+      # and our elitea-sandbox-runtime) are not committed: build them from
+      # Chart.lock, then prove every one resolved (`ok` only; an unknown status fails too,
+      # scripts/ci/check-chart-deps.mjs). `helm package` puts them in the
+      # published chart, so an OCI install needs nothing built.
+      - name: Build the chart dependencies
         run: |
           CHART_DIR="deploy/helm/${{ matrix.chart }}"
-          if [ "$(yq -r '.dependencies // [] | length' "${CHART_DIR}/Chart.yaml")" -gt 0 ]; then
-            # dependency build refuses an http(s) repository it has no
-            # definition for, so register each one the chart names first.
-            yq -r '.dependencies[].repository // ""' "${CHART_DIR}/Chart.yaml" \
-              | grep -E '^https?://' | sort -u | while read -r repo; do
-                  helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update
-                done
-            helm dependency build "$CHART_DIR"
-          else
-            echo "no dependencies declared"
-          fi
+          if [ -f "${CHART_DIR}/build-deps.sh" ]; then bash "${CHART_DIR}/build-deps.sh"; fi
+          node scripts/ci/check-chart-deps.mjs "$CHART_DIR"
 
       - name: Package chart
         run: |
@@ -948,7 +1016,8 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           TGZ="/tmp/charts/${{ matrix.chart }}-${VERSION}.tgz"
 
-          # `helm push` prints the pushed digest on stderr. Capture it here
+          # `helm push` prints the pushed digest ("Digest: sha256:..."; Helm 3
+          # on stderr, Helm 4 on stdout, so both streams). Capture it here
           # rather than re-resolving the tag afterwards, so the signature is
           # bound to the artifact this job pushed and not to whatever the tag
           # points at by the time the next step runs.
@@ -976,7 +1045,227 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           helm show chart "oci://${REGISTRY}/charts/${{ matrix.chart }}" --version "$VERSION"
 
-  # ── Job 5: Rollback — delete release, tag, and images on failure ────────────
+  # ── Job 5: Desktop — the signed, notarised macOS app (Apple silicon) ────────
+  #
+  # Every channel ships it, attached to the GitHub release the `release` job
+  # created: `Elitea_<version>_aarch64.dmg` and the `.app` as a zip. A job here
+  # and not a tag-triggered workflow: a tag created with GITHUB_TOKEN starts no
+  # workflow, and no workflow here may start on a push at all.
+  #
+  # THE VERSION IS STAMPED, NOT COMMITTED, as the chart's is. Cargo.toml takes
+  # the full version, so `X-Client-Version` (CARGO_PKG_VERSION; the
+  # deployment's 426 gate, SemVer with pre-release) says exactly which build
+  # this is. tauri.conf.json takes the numeric `X.Y.Z`, because it becomes
+  # CFBundleShortVersionString, which macOS reads as three integers;
+  # CFBundleVersion is the run number, which only ever grows.
+  #
+  # NOT IN ROLLBACK'S `needs`. The images and charts are the release; a failed
+  # notarisation (Apple's service, an expired certificate) must not delete
+  # them. Re-run this job alone: the upload uses --clobber.
+  #
+  # Signing never degrades in silence: with any signing secret missing the job
+  # fails, and an unsigned app is never attached to a release.
+  desktop:
+    name: Desktop (macOS arm64)
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.new_release_git_tag }}
+          persist-credentials: false
+
+      - name: Signing secrets are all present
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_API_PRIVATE_KEY; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::repository secrets not set: ${missing[*]} (apps/elitea-desktop/README.md, Release signing)"
+            exit 1
+          fi
+          [ "$(uname -m)" = "arm64" ] || { echo "::error::runner is $(uname -m), the release is Apple silicon only"; exit 1; }
+
+      - name: Stamp the release version into the app
+        env:
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+          BUILD: ${{ github.run_number }}
+        working-directory: apps/elitea-desktop
+        run: |
+          set -euo pipefail
+          base="${VERSION%%-*}"
+          node -e '
+            const fs = require("fs");
+            const f = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(f, "utf8"));
+            c.version = process.argv[1];
+            c.bundle.macOS.bundleVersion = process.argv[2];
+            fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n");
+          ' "$base" "$BUILD"
+          # The [package] version is the first `version =` line of Cargo.toml.
+          sed -i '' -E "1,/^version = /s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+
+          got_conf="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          got_cargo="$(sed -nE 's/^version = "(.*)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          if [ "$got_conf" != "$base" ] || [ "$got_cargo" != "$VERSION" ]; then
+            echo "::error::stamped tauri.conf.json ${got_conf} (want ${base}) and Cargo.toml ${got_cargo} (want ${VERSION})"
+            exit 1
+          fi
+          echo "stamped: Cargo.toml ${VERSION}, tauri.conf.json ${base} (build ${BUILD})"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      # `tauri build` runs the web desktop build first (beforeBuildCommand).
+      - name: Install web and desktop (locked)
+        run: |
+          npm ci --prefix apps/elitea-web
+          npm ci --prefix apps/elitea-desktop
+
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      # Restore only: a release run's target directory is not one a pull
+      # request reads (ci-desktop.yml's nightly run is that writer).
+      - name: Restore the cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          workspaces: apps/elitea-desktop/src-tauri
+
+      - name: Prepare the notarisation key
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" | base64 --decode > "$key"
+          chmod 600 "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      # The Tauri CLI imports the certificate into a temporary keychain, signs
+      # with the hardened runtime, notarises and staples the app.
+      - name: Build, sign and notarise
+        working-directory: apps/elitea-desktop
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+
+      # Proven, not assumed: Gatekeeper accepts the app and the ticket is stapled.
+      - name: The app is signed, notarised and stapled
+        working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 macos/Elitea.app
+          spctl --assess --type execute --verbose=4 macos/Elitea.app
+          xcrun stapler validate macos/Elitea.app
+
+      - name: Attach the app to the release
+        working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.new_release_git_tag }}
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          zip_name="Elitea_${VERSION}_aarch64.app.zip"
+          dmg_name="Elitea_${VERSION}_aarch64.dmg"
+          # ditto keeps the code signature and the stapled ticket; zip(1) does not.
+          ditto -c -k --keepParent macos/Elitea.app "$RUNNER_TEMP/$zip_name"
+          dmg="$(ls dmg/*.dmg)"
+          cp "$dmg" "$RUNNER_TEMP/$dmg_name"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$RUNNER_TEMP/$dmg_name" "$RUNNER_TEMP/$zip_name"
+          echo "Attached ${dmg_name} and ${zip_name} to ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the notarisation key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  # ── Job 6: Docs — deploy the docs site for a stable release ─────────────────
+  #
+  # A merge no longer deploys the docs (docs-pages.yml has no push arm), so the
+  # site moves with the stable release, built from its tag. Not in rollback's
+  # `needs`: a failed docs deploy leaves a release that is otherwise complete,
+  # and docs-pages.yml can be re-dispatched on its own.
+  docs:
+    name: Docs
+    needs: [release, chart]
+    if: needs.release.outputs.new_release_published == 'true' && needs.release.outputs.channel == 'release'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs-pages.yml
+    with:
+      ref: ${{ needs.release.outputs.new_release_git_tag }}
+
+  # ── Job 7: Prune — keep the newest PRERELEASE_KEEP pre-releases per channel ──
+  #
+  # Runs after a pre-release published, so the one just cut is counted among
+  # the kept. Deletes each older pre-release with its tag, its images (the
+  # manifest and both platform tags) and its charts; the desktop app goes with
+  # the GitHub release it is attached to:
+  # scripts/ci/prune-prereleases.mjs, unit-tested in no-binaries.yml.
+  prune:
+    name: Prune old pre-releases
+    needs: [release, chart]
+    if: needs.release.outputs.new_release_published == 'true' && needs.release.outputs.channel != 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Pinned to the v9.0.0 commit, as ci-image-cleanup.yml pins it: this
+      # step holds packages: write.
+      - name: Prune
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CHANNEL: ${{ needs.release.outputs.channel }}
+          ORG: ${{ github.repository_owner }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-prereleases.mjs`);
+            const code = await main({
+              github,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              org: process.env.ORG,
+              channel: process.env.CHANNEL,
+              keep: Number(process.env.PRERELEASE_KEEP),
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/prune-prereleases.mjs exited ${code}`);
+
+  # ── Job 8: Rollback — delete release, tag, and images on failure ────────────
   rollback:
     name: Rollback
     # `publish-image` is on this list so a refused image is rolled back, not left
@@ -1030,7 +1319,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 
@@ -1073,7 +1362,7 @@ jobs:
           # `elitea` chart, so a rollback warned about six charts that no longer
           # exist and left the one chart this release actually published in
           # place — pointing at images the step above had just deleted.
-          CHARTS=("elitea" "nats" "nats-bootstrap")
+          CHARTS=("elitea" "elitea-sandbox-runtime")
           ORG="${{ github.repository_owner }}"
 
           # Report what could not be deleted. Every call here used to end in

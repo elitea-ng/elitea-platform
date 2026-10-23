@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // fixture reads one of the frozen SPI fixtures under conformance/provider.
@@ -132,7 +132,7 @@ func TestSettingsAreStrictAndPrefixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.MaxParallelWorkers != 3 || !s.JobsEnabled || !s.TerminatesMTLS() || !s.MTLSRequired() || s.InvocationRetentionSeconds != 3600 {
+	if s.MaxParallelWorkers != 3 || !s.JobsEnabled || !s.TerminatesMTLS() || s.InvocationRetentionSeconds != 3600 {
 		t.Fatalf("settings %+v", s)
 	}
 	for name, pairs := range map[string]map[string]string{
@@ -152,7 +152,7 @@ func TestSettingsAreStrictAndPrefixed(t *testing.T) {
 }
 
 // The callback hop's trust is its own setting once the hop goes through
-// platform-edge (ADR-0027): the runtime CA there, the provider CA on the
+// the platform listener (#1359): the runtime CA there, the provider CA on the
 // listener. Unset, it stays the listener's CA, as before the split.
 func TestTheCallbackCAIsItsOwnSettingWithTheOldFallback(t *testing.T) {
 	mtls := map[string]string{
@@ -172,6 +172,29 @@ func TestTheCallbackCAIsItsOwnSettingWithTheOldFallback(t *testing.T) {
 	}
 	if got := s.CallbackCA(); got != "/runtime-ca" || s.TLSCAFile != "/provider-ca" {
 		t.Fatalf("callback CA = %q, listener CA = %q", got, s.TLSCAFile)
+	}
+}
+
+// The callback hop's client certificate (#1359): elitea-main's platform
+// listener requires one. Both halves or neither.
+func TestTheCallbackClientCertificateIsAPair(t *testing.T) {
+	s, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(map[string]string{
+		"ELITEA_DEEPWIKI_CALLBACK_CA_FILE":     "/runtime-ca",
+		"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE":   "/callback.crt",
+		"ELITEA_DEEPWIKI_CALLBACK_KEY_FILE":    "/callback.key",
+		"ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL": "https://elitea-main:9446",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Callback(); got.CAFile != "/runtime-ca" || got.CertFile != "/callback.crt" || got.KeyFile != "/callback.key" ||
+		got.Target != "https://elitea-main:9446" || got.TargetEnv != "ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL" {
+		t.Fatalf("Callback = %+v", got)
+	}
+	if _, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(map[string]string{
+		"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE": "/callback.crt",
+	})); err == nil {
+		t.Fatal("a callback certificate without its key was accepted")
 	}
 }
 
@@ -229,5 +252,28 @@ func TestEgressPolicyRulesAreTheSharedOnes(t *testing.T) {
 	}
 	if spi.HostOf("https://github.com/acme/x.git") != "github.com" || spi.HostOf("git@gitlab.com:acme/x.git") != "gitlab.com" || spi.HostOf("Bitbucket.org") != "bitbucket.org" {
 		t.Error("HostOf")
+	}
+}
+
+// <PREFIX>DATABASE_MAX_CONNS sizes the store's pool: unset keeps the pgx
+// default (zero here), 1..64 is taken, and anything else refuses to start.
+func TestTheDatabaseMaxConnsSetting(t *testing.T) {
+	read := func(value string) (spi.Settings, error) {
+		pairs := map[string]string{}
+		if value != "" {
+			pairs["ELITEA_DEEPWIKI_DATABASE_MAX_CONNS"] = value
+		}
+		return spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(pairs))
+	}
+	if s, err := read(""); err != nil || s.DatabaseMaxConns != 0 {
+		t.Fatalf("unset: %d, %v", s.DatabaseMaxConns, err)
+	}
+	if s, err := read("6"); err != nil || s.DatabaseMaxConns != 6 {
+		t.Fatalf("6: %d, %v", s.DatabaseMaxConns, err)
+	}
+	for _, bad := range []string{"0", "65", "-2", "six"} {
+		if _, err := read(bad); !errors.Is(err, spi.ErrConfig) {
+			t.Errorf("%q: err = %v, want ErrConfig", bad, err)
+		}
 	}
 }

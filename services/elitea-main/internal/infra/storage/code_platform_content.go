@@ -11,7 +11,7 @@ import (
 	"io"
 	"strconv"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
 )
 
 // CodePlatformContentKeys belongs to Main's configured key owner.

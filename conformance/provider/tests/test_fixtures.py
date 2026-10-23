@@ -5,8 +5,7 @@ they read the committed JSON and assert the invariants a P1 replay will lean
 on.  If one of these fails, the fixture set is internally inconsistent and no
 parity claim built on it is trustworthy.
 
-Re-recording the fixtures from the legacy plugin is a separate step
-(``tools/record_*.py --check``); see README.md.
+The fixtures are frozen; README.md says how they are maintained.
 """
 
 from __future__ import annotations
@@ -272,7 +271,7 @@ def test_rankings_are_ordered(path: Path):
 def test_fused_scores_are_reproducible_from_the_component_rankings(path: Path):
     """The RRF formula, recomputed — this is the gate for the PostgreSQL port.
 
-    A pgvector/tsvector implementation is free to differ in how it produces the
+    A tsvector/dense-store implementation is free to differ in how it produces the
     FTS and dense lists, but once it has them the fusion must be exactly this.
     """
     payload = json.loads(path.read_text(encoding="utf-8"))

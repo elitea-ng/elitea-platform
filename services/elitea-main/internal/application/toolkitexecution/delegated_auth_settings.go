@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 var ErrInvalidDelegatedAuthToolkitSettings = errors.New("invalid delegated authorization toolkit settings request")
@@ -15,6 +15,11 @@ var ErrInvalidDelegatedAuthToolkitSettings = errors.New("invalid delegated autho
 type DelegatedAuthToolkitSettings struct {
 	ToolkitType string
 	Settings    map[string]any
+	// ProjectOwnedSettings is the same toolkit resolved WITHOUT the admin-vault
+	// fallback (#1286): only literals and the owning project's vault. A value
+	// that differs from Settings drew on a global secret. nil means provenance
+	// is unavailable, and a consumer must then treat every secret as foreign.
+	ProjectOwnedSettings map[string]any
 }
 
 // CurrentDelegatedAuthToolkitSettings resolves one actor-visible toolkit
@@ -24,6 +29,21 @@ type DelegatedAuthToolkitSettings struct {
 type CurrentDelegatedAuthToolkitSettings struct {
 	toolkits CurrentMCPToolkitReader
 	settings CurrentToolkitSettingsResolver
+	// projectOwned resolves the provenance twin. nil leaves
+	// ProjectOwnedSettings nil. See WithProjectOwnedToolkitSettings.
+	projectOwned CurrentToolkitSettingsResolver
+}
+
+// WithProjectOwnedToolkitSettings supplies the resolver whose unsecreter never
+// falls back to the admin vault, so the OAuth proxy can tell a project secret
+// from a global one (#1286).
+func (s *CurrentDelegatedAuthToolkitSettings) WithProjectOwnedToolkitSettings(
+	resolver CurrentToolkitSettingsResolver,
+) *CurrentDelegatedAuthToolkitSettings {
+	if s != nil {
+		s.projectOwned = resolver
+	}
+	return s
 }
 
 func NewCurrentDelegatedAuthToolkitSettings(
@@ -62,18 +82,33 @@ func (s *CurrentDelegatedAuthToolkitSettings) ResolveDelegatedAuthToolkitSetting
 		return DelegatedAuthToolkitSettings{}, false, ErrInvalidDelegatedAuthToolkitSettings
 	}
 
-	resolved, err := s.settings.Resolve(ctx, configurationapp.CurrentToolkitSettingsRequest{
+	request := configurationapp.CurrentToolkitSettingsRequest{
 		ToolkitType: toolkit.Type,
 		Settings:    toolkit.Settings,
 		ProjectID:   projectID,
 		UserID:      actorID,
 		Mode:        configurationapp.CurrentToolkitSettingsClaimMode,
-	})
+	}
+	resolved, err := s.settings.Resolve(ctx, request)
 	if err != nil {
 		return DelegatedAuthToolkitSettings{}, false, err
 	}
 	if resolved == nil {
 		return DelegatedAuthToolkitSettings{}, false, ErrInvalidDelegatedAuthToolkitSettings
 	}
-	return DelegatedAuthToolkitSettings{ToolkitType: toolkit.Type, Settings: resolved}, true, nil
+	result := DelegatedAuthToolkitSettings{ToolkitType: toolkit.Type, Settings: resolved}
+	if s.projectOwned != nil {
+		// The SAME stored row, so the two answers differ only in where a
+		// secret was redeemed from. A failure here fails the request: a
+		// provenance that could not be computed must not read as "owned".
+		owned, err := s.projectOwned.Resolve(ctx, request)
+		if err != nil {
+			return DelegatedAuthToolkitSettings{}, false, err
+		}
+		if owned == nil {
+			return DelegatedAuthToolkitSettings{}, false, ErrInvalidDelegatedAuthToolkitSettings
+		}
+		result.ProjectOwnedSettings = owned
+	}
+	return result, true, nil
 }

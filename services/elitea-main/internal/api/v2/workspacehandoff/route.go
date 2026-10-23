@@ -21,12 +21,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
-	handoffapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
+	handoffapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // The route patterns (contract §2).
@@ -730,6 +730,11 @@ func (h *handler) policy(writer http.ResponseWriter, request *http.Request) {
 	if policy.EnvAllow != nil {
 		envAllow = *policy.EnvAllow
 	}
+	// null while enabled; one of handoffapp.Disabled* while not.
+	var disabledReason any
+	if !policy.Enabled && policy.DisabledReason != "" {
+		disabledReason = policy.DisabledReason
+	}
 	nonNil := func(values []string) []string {
 		if values == nil {
 			return []string{}
@@ -738,6 +743,7 @@ func (h *handler) policy(writer http.ResponseWriter, request *http.Request) {
 	}
 	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
 		"enabled": policy.Enabled, "shell": policy.Shell, "network": policy.Network,
+		"disabled_reason":     disabledReason,
 		"history_modes":       modes,
 		"exclusions":          nonNil(policy.Exclusions),
 		"exclusions_platform": nonNil(policy.ExclusionsPlatform),
@@ -802,6 +808,12 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 		desktopwire.WriteError(writer, http.StatusNotFound, "handoff_not_found",
 			"No handoff of this thread for this caller.")
 	case errors.Is(err, handoffapp.ErrDisabled):
+		var off *handoffapp.DisabledError
+		if errors.As(err, &off) && off.Reason != "" {
+			desktopwire.WriteErrorDetails(writer, http.StatusForbidden, "cloud_handoff_disabled",
+				"Send to cloud is turned off for this project or deployment.", map[string]any{"reason": off.Reason})
+			return
+		}
 		desktopwire.WriteError(writer, http.StatusForbidden, "cloud_handoff_disabled",
 			"Send to cloud is turned off for this project or deployment.")
 	case errors.Is(err, handoffapp.ErrExecutorIsCloud):

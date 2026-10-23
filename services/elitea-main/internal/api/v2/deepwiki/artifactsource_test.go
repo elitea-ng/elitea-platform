@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 )
 
 // forwarded is the toolkit-level configuration the provider would receive.
@@ -40,7 +40,7 @@ func TestAFolderSourceReachesTheProviderWithoutOpeningTheVault(t *testing.T) {
 		`"llm_model":"gpt-4o","active_branch":"v3"}},` +
 		`"parameters":{"query":"Document the handbook"}}`
 
-	built, err := deepwiki.NewInvokeRewriter(resolver, nil, minter, "https://elitea.test/", time.Hour)
+	built, err := deepwiki.NewInvokeRewriter(resolver, nil, minter, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestAFolderSourceOpensNoConfigurationRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	built, err := deepwiki.NewInvokeRewriter(
-		resolver, nil, &recordingMinter{}, "https://elitea.test/", time.Hour)
+		resolver, nil, &recordingMinter{}, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

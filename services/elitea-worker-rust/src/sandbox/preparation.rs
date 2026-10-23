@@ -214,7 +214,10 @@ impl PreparationJob {
                     && self.language == b.record.language
                     && (self.language != Language::Rust
                         || b.record.payload["profile"]["preparation_image"].as_str()
-                            == Some(self.preparer_image_digest.as_str()))
+                            == Some(self.preparer_image_digest.as_str())
+                            && b.record.payload["profile"]["rust_revision"]
+                                .as_str()
+                                .is_some_and(super::cargo_dependency_bundle::current_rust_revision))
                     && self
                         .fingerprint()
                         .is_ok_and(|v| hex(&v) == b.record.preparation_sha256)
@@ -622,6 +625,14 @@ pub(crate) mod frozen_lookup_tests {
     use super::*;
 
     pub(crate) fn fixture() -> (PreparationJob, DependencyBundle) {
+        let (request, bytes, root) = fixture_with(|_| {});
+        (request, DependencyBundle::parse(&bytes, &root).unwrap())
+    }
+
+    /// The fixture's request and digest-bound native metadata after `change`.
+    fn fixture_with(
+        change: impl FnOnce(&mut serde_json::Value),
+    ) -> (PreparationJob, Vec<u8>, String) {
         let request = PreparationJob::new_native(
             Language::Rust,
             "[dependencies]\nitoa = \"=1.0.18\"\n".into(),
@@ -645,12 +656,41 @@ pub(crate) mod frozen_lookup_tests {
         native["payload"]["preparation_sha256"] = fingerprint.into();
         native["source_sha256"] = declaration.clone().into();
         native["payload"]["declaration_sha256"] = declaration.into();
+        change(&mut native);
         native.as_object_mut().unwrap().remove("digest");
         let content = super::super::native_bundle::canonical(&native).unwrap();
         let root = hex(digest::digest(&digest::SHA256, &content).as_ref());
         native["digest"] = root.clone().into();
         let bytes = super::super::native_bundle::canonical(&native).unwrap();
-        (request, DependencyBundle::parse(&bytes, &root).unwrap())
+        (request, bytes, root)
+    }
+
+    #[test]
+    fn bundle_from_another_toolchain_is_a_stale_miss_not_invalid() {
+        // Older (a bundle stored before the pin moved) and newer (a rolling
+        // deploy's fresh bundle seen by an older worker) releases alike.
+        for release in ["1.97.1", "1.100.0"] {
+            let (request, bytes, root) = fixture_with(|native| {
+                native["payload"]["profile"]["rust_revision"] = release.into();
+            });
+            // Well formed and digest-bound, so the lookup is no integrity error...
+            let stale = DependencyBundle::parse(&bytes, &root).unwrap();
+            // ...and it does not match, so the lookup misses and prepares again.
+            assert!(!request.matches_bundle(&stale), "{release}");
+        }
+        for release in ["", "1.99", "1.99.1-nightly", "01.99.1", "latest"] {
+            let (_, bytes, root) = fixture_with(|native| {
+                native["payload"]["profile"]["rust_revision"] = release.into();
+            });
+            assert!(DependencyBundle::parse(&bytes, &root).is_err(), "{release}");
+        }
+        // The digest still covers the release: changing it alone is tampering.
+        let (_, bytes, root) = fixture_with(|_| {});
+        let older = "1.97.1";
+        let tampered = String::from_utf8(bytes)
+            .unwrap()
+            .replace("\"1.99.1\"", &format!("\"{older}\""));
+        assert!(DependencyBundle::parse(tampered.as_bytes(), &root).is_err());
     }
 
     #[test]

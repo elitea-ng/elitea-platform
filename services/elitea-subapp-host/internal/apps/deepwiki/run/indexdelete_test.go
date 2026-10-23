@@ -22,16 +22,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/engine"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 // engineIndex stands in for the engine's delete_wiki_index.
 type engineIndex struct {
 	mu     sync.Mutex
 	wikis  []string
+	bearer []any // llm_settings.api_key of each call
 	result map[string]any
 	err    error
 }
@@ -40,6 +42,8 @@ func (e *engineIndex) tool(_ context.Context, arguments map[string]any, _ *spi.C
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.wikis = append(e.wikis, arguments["wiki_id"].(string))
+	settings, _ := arguments["llm_settings"].(map[string]any)
+	e.bearer = append(e.bearer, settings["api_key"])
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -74,6 +78,11 @@ func TestDeleteWikiReportsTheArtifactsAndTheIndex(t *testing.T) {
 	}
 	if calls := engine.calls(); len(calls) != 1 || calls[0] != "acme--gone--main" {
 		t.Fatalf("the engine was asked to delete %v", calls)
+	}
+	// The invocation's callback token goes along: the engine deletes the
+	// wiki's vectors from elitea-vector with it (#1359).
+	if len(engine.bearer) != 1 || engine.bearer[0] != llmSettings["api_key"] {
+		t.Fatalf("the engine got the bearers %v", engine.bearer)
 	}
 	// The index is deleted AFTER the artifacts: by then the bucket is empty.
 	if len(store.objects) != 0 {
@@ -263,7 +272,7 @@ func TestDeleteWikiReportsTheEnginesActualCounts(t *testing.T) {
 	}
 }
 
-func platformServer(t *testing.T, sidecar *fakeSidecar) *spi.Server {
+func platformServer(t *testing.T, sidecar *fakeSidecar) http.Handler {
 	t.Helper()
 	settings, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", func(key string) (string, bool) {
 		switch key {
@@ -281,12 +290,14 @@ func platformServer(t *testing.T, sidecar *fakeSidecar) *spi.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(t.Context())
+	if err := server.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
-	return server
+	return spitest.Handler(t, server)
 }
 
-func invokeSigned(t *testing.T, server *spi.Server, identity spi.Identity, tool string) map[string]any {
+func invokeSigned(t *testing.T, server http.Handler, identity spi.Identity, tool string) map[string]any {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "/tools/wiki_query/"+tool+"/invoke",
 		bytes.NewReader([]byte(`{"parameters": {}}`)))
@@ -299,7 +310,7 @@ func invokeSigned(t *testing.T, server *spi.Server, identity spi.Identity, tool 
 	if id == "" {
 		t.Fatalf("not accepted: %d %s", recorder.Code, recorder.Body.String())
 	}
-	return pollUntilTerminal(t, server, "/tools/wiki_query/"+tool+"/invocations/"+id)
+	return pollUntilTerminal(t, server, identity, "/tools/wiki_query/"+tool+"/invocations/"+id)
 }
 
 // ---------------------------------------------------------------------------
@@ -434,10 +445,9 @@ func (r *deleteRig) generate(t *testing.T, organization string) *spi.Invocation 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		found := false
-		r.manager.StopMatching(t.Context(), func(running spi.RunningInvocation) bool {
+		for _, running := range r.manager.LocalRunning() {
 			found = found || (running.ID == invocation.ID && running.Labels["project"] == organization && running.Labels["wiki"] != "")
-			return false
-		}, 0)
+		}
 		if found && r.entered.Load() > before {
 			return invocation
 		}

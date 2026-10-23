@@ -9,8 +9,8 @@ package secrets
 // addresses the global vault while every method on this Handler is the project
 // handler keyed by `dbKey(projectID)`. That reasoning was CORRECT, and the
 // evidence is unambiguous — unlike `/admin/users/{mode}/{projectID}`, where the
-// equivalent 501 turned out to be a hole (pylon maps both modes of that resource
-// to the same body, and the project id is in the path).
+// equivalent 501 turned out to be a hole (the legacy runtime maps both modes of
+// that resource to the same body, and the project id is in the path).
 //
 // Here the two modes are two different stores AND two different contracts:
 //
@@ -49,9 +49,9 @@ package secrets
 // stricter than the project handler in three places (see `adminVault`,
 // `AdminCreate` and `validSecretName`).
 //
-// ## Deliberate divergences from the pylon original
+// ## Deliberate divergences from the legacy original
 //
-//  1. **An unreadable existing vault is never overwritten.** Pylon's vault
+//  1. **An unreadable existing vault is never overwritten.** The legacy vault
 //     client, and this handler's own project path until the guarantee was
 //     hoisted, fall back to writing a fresh empty vault whenever the read fails
 //     — including when the rows exist but fail to decrypt or unmarshal. That is
@@ -59,17 +59,17 @@ package secrets
 //     project-wide there. `readVaultByID` (handler.go) distinguishes "no rows"
 //     from "rows I could not open" and only the first may be written over; both
 //     vaults now go through it.
-//  2. **Create does not silently overwrite.** Pylon's admin POST assigns into
-//     the dict unconditionally, so creating a name that already exists destroys
-//     the current value with a 200 and no warning. This returns 400.
+//  2. **Create does not silently overwrite.** The legacy admin POST assigns
+//     into the dict unconditionally, so creating a name that already exists
+//     destroys the current value with a 200 and no warning. This returns 400.
 //  3. **Names are validated.** `{{secret.<name>}}` interpolation matches
 //     `[A-Za-z0-9_]+` (`EngineBase._secret_pattern`), so a name outside that
-//     class can be stored but never resolved. Pylon accepts it and creates a
-//     secret nothing can read; this returns 400.
+//     class can be stored but never resolved. The legacy runtime accepted it
+//     and creates a secret nothing can read; this returns 400.
 //
 // ## Authorisation
 //
-// Every route is gated on the permission its pylon counterpart declares,
+// Every route is gated on the permission its legacy counterpart declares,
 // resolved from `auth_core__user_role` in `administration` mode on each request.
 // The admin SPA's `window.admin_ui_config.permissions` is presentation state and
 // is never consulted here.
@@ -77,7 +77,7 @@ package secrets
 // Note the grant table this reproduces is uneven, and deliberately so: on the
 // reference deployment the administration-mode `editor` role holds `.list`,
 // `.create`, `.edit`, `.delete` and `.unsecret` but NOT `.view` — so an editor
-// may write global secrets and may not read them. That is pylon's behaviour
+// may write global secrets and may not read them. That is the legacy behaviour
 // (both of its admin READ methods declare `.view`), and the page surfaces the
 // server's refusal rather than pretending otherwise.
 
@@ -92,14 +92,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // adminVaultKey is the `centry.secrets_key` / `centry.secrets_data` row id of
 // the global vault. See this file's header for the three independent sources.
 const adminVaultKey = "admin"
 
-// The permissions pylon's `AdminAPI` methods declare, one per operation.
+// The permissions the legacy `AdminAPI` methods declare, one per operation.
 const (
 	permSecretView   = "configuration.secrets.secret.view"
 	permSecretCreate = "configuration.secrets.secret.create"
@@ -111,7 +111,7 @@ const (
 // `{{secret.<name>}}` interpolation can actually resolve.
 var validSecretName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
-/* ── wire shapes (pylon's, exactly) ───────────────────────────────────────── */
+/* ── wire shapes (the legacy ones, exactly) ───────────────────────────────── */
 
 // adminSecretListItem is one row of `GET …/secrets/administration/{projectID}`.
 // The value is always the literal mask — the listing never carries plaintext,
@@ -121,12 +121,13 @@ type adminSecretListItem struct {
 	Secret string `json:"secret"`
 }
 
-// adminSecretMask is what pylon puts in every listing row's `secret` field.
+// adminSecretMask is what the legacy runtime puts in every listing row's
+// `secret` field.
 const adminSecretMask = "******"
 
-// adminSecretUpdateBody is the NESTED body pylon's admin PUT takes. `OldName`
-// selects the entry to replace; the new name comes from the URL, which is what
-// makes a rename expressible.
+// adminSecretUpdateBody is the NESTED body the legacy admin PUT takes.
+// `OldName` selects the entry to replace; the new name comes from the URL,
+// which is what makes a rename expressible.
 type adminSecretUpdateBody struct {
 	Secret struct {
 		OldName string `json:"old_name"`
@@ -157,7 +158,8 @@ func (h *Handler) adminGate(permission string, next http.HandlerFunc) http.Handl
 /* ── handler methods ──────────────────────────────────────────────────────── */
 
 // AdminList answers `GET /secrets/secrets/administration/{projectID}` with every
-// global secret NAME, each masked. Pylon returns `[]` shaped exactly this way.
+// global secret NAME, each masked. The legacy runtime returns `[]` shaped
+// exactly this way.
 //
 // A vault that does not exist yet is an empty list, not an error: the deployment
 // simply has no global secrets, and 500ing would make a fresh install look
@@ -182,11 +184,11 @@ func (h *Handler) AdminList(w http.ResponseWriter, r *http.Request) {
 
 // AdminGet answers `GET /secrets/secret/administration/{projectID}/{name}` with
 // `{"secret": "<value>"}`, or `{"secret": null}` when the name is unknown —
-// pylon's `secrets.get(secret)`, 200 either way.
+// the legacy `secrets.get(secret)`, 200 either way.
 //
-// Hidden secrets are NOT consulted, matching pylon (its admin GET has the
-// hidden-secret lookup commented out, and its hide endpoint refuses outright —
-// the global vault has no hidden section in practice).
+// Hidden secrets are NOT consulted, matching the legacy runtime (its admin GET
+// has the hidden-secret lookup commented out, and its hide endpoint refuses
+// outright — the global vault has no hidden section in practice).
 func (h *Handler) AdminGet(w http.ResponseWriter, r *http.Request) {
 	name, ok := adminSecretNameParam(w, r)
 	if !ok {
@@ -211,8 +213,8 @@ func (h *Handler) AdminGet(w http.ResponseWriter, r *http.Request) {
 // AdminCreate answers `POST /secrets/secret/administration/{projectID}/{name}`
 // with body `{"secret": "<value>"}`.
 //
-// Unlike pylon it refuses to overwrite an existing name — see divergence 2 in
-// this file's header.
+// Unlike the legacy runtime it refuses to overwrite an existing name — see
+// divergence 2 in this file's header.
 func (h *Handler) AdminCreate(w http.ResponseWriter, r *http.Request) {
 	name, ok := adminSecretNameParam(w, r)
 	if !ok {
@@ -260,7 +262,8 @@ func (h *Handler) AdminCreate(w http.ResponseWriter, r *http.Request) {
 //
 // `old_name` names the entry being replaced and `{name}` is what it becomes, so
 // a rename is `old_name != name` and a plain value change is `old_name == name`
-// (which is all admin_ui sends). Pylon 404s when `old_name` is unknown.
+// (which is all admin_ui sends). The legacy runtime 404s when `old_name` is
+// unknown.
 func (h *Handler) AdminUpdate(w http.ResponseWriter, r *http.Request) {
 	name, ok := adminSecretNameParam(w, r)
 	if !ok {
@@ -317,7 +320,8 @@ func (h *Handler) AdminUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // AdminDelete answers `DELETE /secrets/secret/administration/{projectID}/{name}`
-// with 204. Deleting an unknown name is a no-op success, as in pylon.
+// with 204. Deleting an unknown name is a no-op success, as in the legacy
+// runtime.
 func (h *Handler) AdminDelete(w http.ResponseWriter, r *http.Request) {
 	name, ok := adminSecretNameParam(w, r)
 	if !ok {
@@ -346,10 +350,10 @@ func (h *Handler) AdminDelete(w http.ResponseWriter, r *http.Request) {
 
 // AdminHide answers `POST /secrets/hide/administration/{projectID}/{name}`.
 //
-// Pylon refuses it with 401 and that sentence — the global vault has no hidden
-// section — so the route exists to say so rather than 404ing as an unknown path.
-// The admin page renders no hide control at all; this is the contract, kept
-// complete because elitea-sdk and qa/ speak to the same surface.
+// The legacy runtime refuses it with 401 and that sentence — the global vault
+// has no hidden section — so the route exists to say so rather than 404ing as
+// an unknown path. The admin page renders no hide control at all; this is the
+// contract, kept complete because elitea-sdk and qa/ speak to the same surface.
 func (h *Handler) AdminHide(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusUnauthorized, map[string]string{
 		"message": "There are no hidden secrets in administration mode",
@@ -360,8 +364,8 @@ func (h *Handler) AdminHide(w http.ResponseWriter, _ *http.Request) {
 
 // adminSecretNameParam reads `{name}` and rejects an empty one.
 //
-// No unescaping is applied. Pylon calls `unquote()` here because its route
-// accepts any string; this surface only ever stores names matching
+// No unescaping is applied. The legacy runtime calls `unquote()` here because
+// its route accepts any string; this surface only ever stores names matching
 // `[A-Za-z0-9_]+` (see validSecretName), which are their own percent-encoding,
 // so a second decode could only turn a legitimate literal into something else.
 func adminSecretNameParam(w http.ResponseWriter, r *http.Request) (string, bool) {

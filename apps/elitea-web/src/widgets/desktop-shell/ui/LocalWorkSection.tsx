@@ -29,14 +29,22 @@ import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
 import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
-import { readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceThread } from '@/features/workspace';
+import { readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { activityGlyph, activityTitleBold } from '@/shared/lib/conversationActivity';
+import { ActivityGroupSummary, ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 
 import type { ShellAction } from '../lib/shellActions';
+import { conversationLink, copyText } from '../lib/conversationLink';
+import { folderContextActions } from '../lib/folderMenu';
+import { useAppIpc } from '../model/appIpcContext';
+import { useLocalNeedsYouCount, useLocalThreadActivity, useLocalThreadUnreadTracking } from '../model/localThreadActivity';
+import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
+import { ProjectPickerSheet } from './ProjectPickerSheet';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
 import { ThreadCloudBadge } from './ThreadCloudBadge';
 import { modKey } from './shortcutLabel';
@@ -52,6 +60,9 @@ interface SectionProps {
 const threadsQuery = (workspaceId: string) => ({ queryKey: threadsQueryKey(workspaceId), queryFn: () => readThreads(workspaceId) });
 
 /** The threads a folder shows: all of them, or the first few. */
+/** One remembered thread of a folder. */
+type WorkspaceThread = ReturnType<typeof readThreads>[number];
+
 const shownThreads = (list: readonly WorkspaceThread[], all: boolean): readonly WorkspaceThread[] => (all ? list : list.slice(0, THREADS_SHOWN));
 
 interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
@@ -60,6 +71,45 @@ interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
   onToggleAll: () => void;
   /** The batch's statuses, by UUID. */
   statuses: Readonly<Record<string, HandoffStatus>>;
+}
+
+/** A thread's native context menu: open it, open it in the web chat, copy its link. */
+function threadActions(workspace: Workspace, thread: WorkspaceThread, run: SectionProps['run']): ContextAction[] {
+  const link = conversationLink(thread.id);
+  return [
+    { id: 'open', label: t('desktop.menu.open', 'Open'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id }) },
+    { id: 'chat', label: t('workspace.openInChat', 'Open in chat'), run: () => run({ type: 'go', to: `/chat/${thread.id}` }) },
+    { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
+  ];
+}
+
+interface ThreadRowProps {
+  readonly workspace: Workspace;
+  readonly thread: WorkspaceThread;
+  readonly uuid: string | undefined;
+  readonly selected: boolean;
+  readonly run: SectionProps['run'];
+  readonly status: HandoffStatus | undefined;
+}
+
+/** One thread: its title (bold while unread), its activity glyph, and its cloud badge. */
+function ThreadRow({ workspace, thread, uuid, selected, run, status }: ThreadRowProps): React.JSX.Element {
+  const showMenu = useContextMenu();
+  const activity = useLocalThreadActivity(thread.id, uuid);
+  const glyph = <ConversationActivityGlyph kind={activityGlyph(activity)} />;
+  return (
+    <ShellRow
+      testId="shell-thread"
+      onContextMenu={(event) => showMenu(event, threadActions(workspace, thread, run))}
+      indent={CHILD_INDENT}
+      label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
+      selected={selected}
+      bold={!selected && activityTitleBold(activity)}
+      status={glyph}
+      onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
+      trailing={uuid === undefined ? undefined : <ThreadCloudBadge status={status} />}
+    />
+  );
 }
 
 function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }: FolderThreadsProps): React.JSX.Element {
@@ -73,13 +123,13 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
     <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }} aria-label={t('desktop.shell.threadsOf', 'Threads in {{name}}', { name: workspace.name })}>
       {shown.map((thread) => (
         <li key={thread.id}>
-          <ShellRow
-            testId="shell-thread"
-            indent={CHILD_INDENT}
-            label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
+          <ThreadRow
+            workspace={workspace}
+            thread={thread}
+            uuid={uuids[thread.id]}
             selected={here && location.conversationId === thread.id}
-            onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
-            trailing={uuids[thread.id] === undefined ? undefined : <ThreadCloudBadge status={statuses[uuids[thread.id] as string]} />}
+            run={run}
+            status={uuids[thread.id] === undefined ? undefined : statuses[uuids[thread.id] as string]}
           />
         </li>
       ))}
@@ -108,13 +158,19 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
   );
 }
 
-function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omit<SectionProps, 'location'>): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+/** Binding a folder to a project and removing it from the sidebar: the ⋯ menu's and the context menu's shared actions. */
+function useFolderMutations(workspace: Workspace) {
   const ipc = useWorkspaceIpc();
   const queryClient = useQueryClient();
   const refresh = (): Promise<void> => queryClient.invalidateQueries({ queryKey: WORKSPACE_LIST_KEY });
   const bind = useMutation({ mutationFn: (projectId: number) => ipc?.bindProject(workspace.id, projectId) ?? Promise.resolve(), onSettled: refresh });
   const remove = useMutation({ mutationFn: () => ipc?.remove(workspace.id) ?? Promise.resolve(), onSettled: refresh });
+  return { bind, remove };
+}
+
+function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omit<SectionProps, 'location'>): React.JSX.Element {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const { bind, remove } = useFolderMutations(workspace);
   const close = (): void => setAnchor(null);
   return (
     <>
@@ -168,6 +224,55 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
   );
 }
 
+interface FolderRowProps extends Omit<SectionProps, 'location'> {
+  workspace: Workspace;
+  open: boolean;
+  selected: boolean;
+  project: string;
+  onToggle: () => void;
+}
+
+/** A folder's row, with its hover actions and its native context menu. */
+function FolderRow({ workspace, projects, run, open, selected, project, onToggle }: FolderRowProps): React.JSX.Element {
+  const showMenu = useContextMenu();
+  // Client contract 1.12 (desktop state): how many of the folder's threads need the person, from the
+  // activity feed, the frames and the marks. A closed folder reads no thread list; an open one shares
+  // the list its thread rows read (the same query).
+  const threads = useQuery({ ...threadsQuery(workspace.id), enabled: open }).data ?? [];
+  const needsYou = useLocalNeedsYouCount(workspace.id, readThreadUuids(workspace.id), threads);
+  const appIpc = useAppIpc();
+  const { bind, remove } = useFolderMutations(workspace);
+  const [picking, setPicking] = useState(false);
+  const actions = (): ContextAction[] =>
+    folderContextActions({
+      workspace,
+      projects,
+      appIpc,
+      primary: { label: t('desktop.shell.newThread', 'New thread'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id }) },
+      bind: (projectId) => bind.mutate(projectId),
+      remove: () => remove.mutate(),
+      choosePicker: () => setPicking(true),
+    });
+  return (
+    <>
+    <ShellRow
+      label={workspace.name}
+      meta={project}
+      title={`${workspace.path}\n${t('desktop.shell.folderProject', 'Project: {{name}}', { name: project })}`}
+      icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+      ariaExpanded={open}
+      selected={selected}
+      status={<ActivityGroupSummary needsYou={needsYou} count={threads.length > 0 ? threads.length : undefined} />}
+      onClick={onToggle}
+      onContextMenu={(event) => showMenu(event, actions())}
+      trailingOnHover
+      trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
+    />
+    <ProjectPickerSheet open={picking} projects={projects} currentId={workspace.project_id} onPick={(projectId) => bind.mutate(projectId)} onClose={() => setPicking(false)} />
+    </>
+  );
+}
+
 /** One project's live handoff changes, for the sidebar's badges (renders nothing). */
 function HandoffLiveEvents({ projectId }: { readonly projectId: number }): null {
   useHandoffLiveEvents(projectId);
@@ -203,6 +308,8 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
   const projectName = (id: number | null): string =>
     id === null ? t('desktop.shell.noProject', 'No project') : (projects.find((p) => p.id === id)?.name ?? '');
   const openFolder = (): void => run({ type: 'open_folder' });
+  // A thread whose turn finishes off screen is unread until it is opened.
+  useLocalThreadUnreadTracking(location.workspaceId === undefined ? '' : location.conversationId);
 
   return (
     <Box component="nav" aria-label={t('desktop.shell.localWork', 'Local work')}>
@@ -227,16 +334,14 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
           const toggle = (): void => toggleIn(setCollapsed, workspace.id);
           return (
             <li key={workspace.id} data-testid="shell-folder">
-              <ShellRow
-                label={workspace.name}
-                meta={project}
-                title={`${workspace.path}\n${t('desktop.shell.folderProject', 'Project: {{name}}', { name: project })}`}
-                icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-                ariaExpanded={open}
+              <FolderRow
+                workspace={workspace}
+                projects={projects}
+                run={run}
+                open={open}
                 selected={location.workspaceId === workspace.id && !open}
-                onClick={toggle}
-                trailingOnHover
-                trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
+                project={project}
+                onToggle={toggle}
               />
               {open && (
                 <FolderThreads

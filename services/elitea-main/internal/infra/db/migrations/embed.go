@@ -1,7 +1,7 @@
 // Package migrations owns the legacy schema this platform was built on top of.
 //
 // 001_initial.sql is NOT part of the numbered, checksum-immutable histories in
-// services/elitea-main/migrations — it is the pylon-era schema those histories
+// services/elitea-main/migrations — it is the legacy-era schema those histories
 // assume already exists. shared/0030 declares a foreign key to centry.project,
 // and most of the centry tables are created here rather than by the Go chain,
 // so an empty database cannot be migrated until this has been applied.
@@ -19,7 +19,7 @@ package migrations
 
 import _ "embed"
 
-// Initial is the pylon-era schema, applied once to a database that does not
+// Initial is the legacy-era schema, applied once to a database that does not
 // already carry it. Exported as a string rather than an fs.FS because there is
 // exactly one file and its contents are applied whole.
 //

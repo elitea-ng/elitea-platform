@@ -10,14 +10,15 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // CurrentIndexMetaScheduleRepository owns only the second current DELETE
-// transaction in p_<project_id>. PgVector deletion is deliberately outside
-// this repository and commits before this method is called.
+// transaction in p_<project_id>. The index itself is deliberately outside
+// this repository: indexregistry.Service.Delete tombstones the registry row
+// (and attempts the elitea-vector deletion) before this method is called.
 type CurrentIndexMetaScheduleRepository struct {
 	projects projectStore
 }

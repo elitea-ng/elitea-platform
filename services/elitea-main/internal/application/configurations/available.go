@@ -8,7 +8,7 @@ import (
 	"errors"
 	"io"
 
-	configurationdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/configurations"
+	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 )
 
 const (

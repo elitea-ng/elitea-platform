@@ -26,7 +26,7 @@
 --
 -- WHY THE ROLE IS SEEDED CENTRALLY AND NOT AS PER-PROJECT ROWS. Per-project
 -- rows for the `system` role would work on a Go-native database and would
--- REGRESS a pylon-backed one. There, the central default-mode `system` role
+-- REGRESS a legacy-backed one. There, the central default-mode `system` role
 -- already exists with the full legacy matrix, so the fallback already answers.
 -- Writing per-project rows would suppress that fallback for the system
 -- identity and cut it down to the list below. A central role with
@@ -70,7 +70,7 @@ IF to_regclass('public.auth_core__role') IS NULL
 END IF;
 
 -- The role. `id` is not given: 001_initial.sql pins 1 to 6 and then advances
--- the sequence, so the serial supplies a free one. A pylon-backed database
+-- the sequence, so the serial supplies a free one. A legacy-backed database
 -- already holds this row, and keeps its own id.
 INSERT INTO public.auth_core__role (name, mode)
 SELECT 'system', 'default'

@@ -1,6 +1,6 @@
 //! The production `RemoteCodeRuntime::execute_recovery_attempt`, driven end to end
 //! through the real Code node and recovery journal with trusted doubles for the
-//! three peers it talks to: Main's claim-bound content routes (an HTTP fixture),
+//! three peers it talks to: Main's claim-bound content service (a gRPC fixture),
 //! Main's control service and the sandbox supervisor (real tonic servers on
 //! loopback), plus a disposable `PostgreSQL` for the dispatch journal. No mTLS, no
 //! container runtime. These tests exist so that reverting the dispatch proof, the
@@ -22,9 +22,8 @@ use crate::sandbox::{
     platform_client_binding::PlatformClientPolicy,
 };
 use crate::state::postgres_session_tests::IsolatedPostgres;
-use crate::transport::input_content::{InputContentRpc, InputContentTransportError};
+use crate::transport::input_content::content_fake::{ContentFake, claim_of};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use http_body_util::BodyExt as _;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tonic::{Request, Response, Status};
@@ -55,6 +54,10 @@ struct MainCalls {
     effects_body: Option<serde_json::Value>,
     /// `submission_pending` of the dispatch row when the intent route is called.
     pending_at_intent: Vec<Option<bool>>,
+    /// The node attempt of every original visit Main admitted, in order.
+    visit_attempts: Vec<u64>,
+    /// The dispatch activation of every intent Main signed, in order.
+    intent_dispatches: Vec<String>,
 }
 struct FakeMain {
     script: MainScript,
@@ -62,40 +65,90 @@ struct FakeMain {
     calls: Arc<StdMutex<MainCalls>>,
     pool: sqlx::PgPool,
 }
-fn json_response(
-    status: http::StatusCode,
-    value: &serde_json::Value,
-) -> http::Response<tonic::body::Body> {
-    let raw = serde_json::to_vec(value).unwrap();
-    http::Response::builder()
-        .status(status)
-        .version(http::Version::HTTP_2)
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .header(http::header::CONTENT_LENGTH, raw.len())
-        .body(tonic::body::Body::new(http_body_util::Full::new(
-            bytes::Bytes::from(raw),
-        )))
-        .unwrap()
+/// One served answer: the document, or Main's refusal of the claim.
+fn json_response(refused: bool, value: &serde_json::Value) -> Result<Vec<u8>, Status> {
+    if refused {
+        return Err(Status::permission_denied("refused"));
+    }
+    Ok(serde_json::to_vec(value).unwrap())
 }
-#[async_trait]
-impl InputContentRpc for FakeMain {
-    async fn get(
+/// The call's claim, scope and JSON document.
+fn unpack<T>(
+    request: Request<T>,
+    parts: impl FnOnce(T) -> (Option<pb::RuntimeContentScopeV1>, Vec<u8>),
+) -> (String, u64, serde_json::Value) {
+    let (claim, fence) = claim_of(&request);
+    assert_ne!(claim, "");
+    assert_eq!(fence.len(), 32);
+    let (scope, body) = parts(request.into_inner());
+    let scope = scope.unwrap();
+    (
+        scope.execution_id,
+        scope.generation,
+        serde_json::from_slice(&body).unwrap(),
+    )
+}
+#[tonic::async_trait]
+impl ContentFake for FakeMain {
+    async fn register_code_visit(
         &self,
-        request: http::Request<tonic::body::Body>,
-    ) -> Result<http::Response<tonic::body::Body>, InputContentTransportError> {
-        let path = request.uri().path().to_owned();
-        let segments: Vec<_> = path.split('/').collect();
-        let execution = segments[2].to_owned();
-        let generation: u64 = segments[4].parse().unwrap();
-        let body = request.into_body().collect().await.unwrap().to_bytes();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let ok = http::StatusCode::OK;
-        if path.ends_with("/code-sandbox/visits") {
+        request: Request<pb::RegisterCodeVisitRequestV1>,
+    ) -> Result<Response<pb::RegisterCodeVisitResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.visit_json));
+        let visit_json = self.answer("visits", execution, generation, body).await?;
+        Ok(Response::new(pb::RegisterCodeVisitResponseV1 {
+            visit_json,
+        }))
+    }
+    async fn register_code_intent(
+        &self,
+        request: Request<pb::RegisterCodeIntentRequestV1>,
+    ) -> Result<Response<pb::RegisterCodeIntentResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.intent_json));
+        let response_json = self.answer("intents", execution, generation, body).await?;
+        Ok(Response::new(pb::RegisterCodeIntentResponseV1 {
+            response_json,
+        }))
+    }
+    async fn step_code_platform(
+        &self,
+        request: Request<pb::StepCodePlatformRequestV1>,
+    ) -> Result<Response<pb::StepCodePlatformResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.request_json));
+        let response_json = self.answer("step", execution, generation, body).await?;
+        Ok(Response::new(pb::StepCodePlatformResponseV1 {
+            response_json,
+        }))
+    }
+    async fn read_code_platform_effects(
+        &self,
+        request: Request<pb::ReadCodePlatformEffectsRequestV1>,
+    ) -> Result<Response<pb::ReadCodePlatformEffectsResponseV1>, Status> {
+        let (execution, generation, body) =
+            unpack(request, |request| (request.scope, request.request_json));
+        let response_json = self.answer("effects", execution, generation, body).await?;
+        Ok(Response::new(pb::ReadCodePlatformEffectsResponseV1 {
+            response_json,
+        }))
+    }
+}
+impl FakeMain {
+    async fn answer(
+        &self,
+        path: &str,
+        execution: String,
+        generation: u64,
+        body: serde_json::Value,
+    ) -> Result<Vec<u8>, Status> {
+        if path == "visits" {
+            if let Some(attempt) = body["attempt"].as_u64() {
+                self.calls.lock().unwrap().visit_attempts.push(attempt);
+            }
             if self.script.refuse_visit {
-                return Ok(json_response(
-                    http::StatusCode::FORBIDDEN,
-                    &serde_json::json!({}),
-                ));
+                return json_response(true, &serde_json::json!({}));
             }
             let pre = URL_SAFE_NO_PAD
                 .decode(
@@ -104,8 +157,8 @@ impl InputContentRpc for FakeMain {
                         .unwrap(),
                 )
                 .unwrap();
-            return Ok(json_response(
-                ok,
+            return json_response(
+                false,
                 &serde_json::json!({
                     "schema":"elitea.sandbox.original-code-visit-response.v1",
                     "original_visit":{"visit_id":"1".repeat(64),"revision":1,"digest_sha256":"2".repeat(64)},
@@ -114,18 +167,24 @@ impl InputContentRpc for FakeMain {
                     "node_digest":body["node_digest"],
                     "pre_workspace_prepared_sha256":crate::sandbox::code_recovery::sha256(&pre),
                 }),
-            ));
+            );
         }
-        if path.ends_with("/code-sandbox/intents") {
+        if path == "intents" {
             let pending: Option<bool> = sqlx::query_scalar(
                 "SELECT submission_pending FROM elitea_runtime.sandbox_dispatches LIMIT 1",
             )
             .fetch_optional(&self.pool)
             .await
             .unwrap();
-            self.calls.lock().unwrap().pending_at_intent.push(pending);
-            return Ok(json_response(
-                ok,
+            {
+                let mut calls = self.calls.lock().unwrap();
+                calls.pending_at_intent.push(pending);
+                if let Some(dispatch) = body["dispatch_activation"].as_str() {
+                    calls.intent_dispatches.push(dispatch.to_owned());
+                }
+            }
+            return json_response(
+                false,
                 &serde_json::json!({
                     "schema":"elitea.sandbox.original-code-intent-response.v1",
                     "intent":{
@@ -135,9 +194,9 @@ impl InputContentRpc for FakeMain {
                         "signature_base64url":URL_SAFE_NO_PAD.encode([0_u8; 64]),
                     },
                 }),
-            ));
+            );
         }
-        if path.ends_with("/code-platform/step") {
+        if path == "step" {
             let first = {
                 let mut calls = self.calls.lock().unwrap();
                 calls.steps += 1;
@@ -146,31 +205,29 @@ impl InputContentRpc for FakeMain {
             if first && let Some(delay) = self.script.first_step_delay {
                 tokio::time::sleep(delay).await;
             }
-            return Ok(json_response(
-                ok,
+            return json_response(
+                false,
                 &serde_json::json!({"schema":"elitea.runtime.code-platform-step-response.v1","revision":1,"disposition":"idle","effect_id":null}),
-            ));
+            );
         }
-        if path.ends_with("/code-platform/effects") {
+        if path == "effects" {
             {
                 let mut calls = self.calls.lock().unwrap();
                 calls.effects += 1;
                 calls.effects_body = Some(body);
             }
             let answer = *self.effects.lock().unwrap();
-            return Ok(match answer {
-                Effects::Refused => {
-                    json_response(http::StatusCode::FORBIDDEN, &serde_json::json!({}))
-                }
+            return match answer {
+                Effects::Refused => json_response(true, &serde_json::json!({})),
                 Effects::None => json_response(
-                    ok,
+                    false,
                     &serde_json::json!({"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none"}),
                 ),
                 Effects::Possible => json_response(
-                    ok,
+                    false,
                     &serde_json::json!({"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"possible"}),
                 ),
-            });
+            };
         }
         panic!("the fixture serves no route {path}");
     }
@@ -278,6 +335,9 @@ struct SupervisorCalls {
 struct FakeSupervisor {
     /// The terminal Failed receipt arrives after this delay.
     fail_after: Duration,
+    /// Scripted terminal answers, one per submission; when empty, the runtime
+    /// fails the way a thrown error does.
+    answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
     calls: Arc<StdMutex<SupervisorCalls>>,
     pool: sqlx::PgPool,
 }
@@ -299,6 +359,9 @@ impl SandboxSupervisorService for FakeSupervisor {
             calls.pending_at_submit.push(pending);
         }
         tokio::time::sleep(self.fail_after).await;
+        if let Some(answer) = self.answers.lock().unwrap().pop_front() {
+            return Ok(Response::new(answer));
+        }
         Ok(Response::new(pb::SubmitSandboxJobResponseV1 {
             status: pb::SandboxJobStatusV1::Failed.into(),
             result_json: Vec::new(),
@@ -372,6 +435,46 @@ impl SandboxSupervisorService for FakeSupervisor {
             "not part of the Code attempt fixture",
         ))
     }
+    async fn code_owner_recovery_read(
+        &self,
+        _: Request<pb::CodeOwnerRecoveryReadRequestV1>,
+    ) -> Result<Response<pb::CodeOwnerRecoveryReadResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_owner_recovery_seal_no_effect(
+        &self,
+        _: Request<pb::CodeOwnerRecoverySealNoEffectRequestV1>,
+    ) -> Result<Response<pb::CodeOwnerRecoverySealNoEffectResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_platform_owner_read_retained_runtime(
+        &self,
+        _: Request<pb::CodePlatformOwnerReadRetainedRuntimeRequestV1>,
+    ) -> Result<Response<pb::CodePlatformOwnerReadRetainedRuntimeResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_platform_owner_read_pending_call(
+        &self,
+        _: Request<pb::CodePlatformOwnerReadPendingCallRequestV1>,
+    ) -> Result<Response<pb::CodePlatformOwnerReadPendingCallResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
+    async fn code_platform_owner_publish_reply(
+        &self,
+        _: Request<pb::CodePlatformOwnerPublishReplyRequestV1>,
+    ) -> Result<Response<pb::CodePlatformOwnerPublishReplyResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
 }
 
 // ------------------------------------------------------------------- harness
@@ -397,6 +500,7 @@ struct Harness {
     effects: Arc<StdMutex<Effects>>,
     main: Arc<StdMutex<MainCalls>>,
     supervisor: Arc<StdMutex<SupervisorCalls>>,
+    answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
 }
 
 #[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
@@ -426,6 +530,7 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     let main = Arc::new(StdMutex::new(MainCalls::default()));
     let supervisor = Arc::new(StdMutex::new(SupervisorCalls::default()));
     let effects = Arc::new(StdMutex::new(script.effects));
+    let answers = Arc::new(StdMutex::new(std::collections::VecDeque::new()));
     let content = Arc::new(
         crate::transport::InputContentClient::with_original_code_visit_fixture_rpc_deadline(
             FakeMain {
@@ -452,6 +557,7 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
         tonic::transport::Server::builder()
             .add_service(SandboxSupervisorServiceServer::new(FakeSupervisor {
                 fail_after,
+                answers: answers.clone(),
                 calls: supervisor.clone(),
                 pool: database.pool.clone(),
             }))
@@ -508,6 +614,7 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
         scope,
         main,
         supervisor,
+        answers,
     }
 }
 
@@ -837,7 +944,7 @@ async fn takeover_with_an_unresolved_journal_call_reconciles() {
             effect_id: run.dispatch_activation
         }
     );
-    assert!(run.events().await.is_empty());
+    assert_eq!(run.events().await, [] as [String; 0]);
     assert_eq!(h.main.lock().unwrap().effects, 1);
 }
 
@@ -992,4 +1099,254 @@ async fn raw_path_hydration_failure_releases_the_hydrated_job() {
         "the dispatch row is resolved"
     );
     assert_eq!(h.supervisor.lock().unwrap().submits, 0);
+}
+
+// ------------------------------------- FU-214: a lost runtime versus user code
+
+fn terminal(code: &str) -> pb::SubmitSandboxJobResponseV1 {
+    pb::SubmitSandboxJobResponseV1 {
+        status: pb::SandboxJobStatusV1::Failed.into(),
+        result_json: Vec::new(),
+        failure_code: code.into(),
+        cleanup_pending: false,
+    }
+}
+fn completed() -> pb::SubmitSandboxJobResponseV1 {
+    pb::SubmitSandboxJobResponseV1 {
+        status: pb::SandboxJobStatusV1::Completed.into(),
+        result_json: br#"{"revision":1,"status":"completed","exit_code":0,"stdout":"{\"revision\":1,\"result\":41}","stderr":""}"#.to_vec(),
+        failure_code: String::new(),
+        cleanup_pending: false,
+    }
+}
+
+/// A default-policy Code node, wrapped the way the production compiler wraps
+/// a node without a `recovery` block.
+struct DefaultRun {
+    node: RecoverableNode,
+    context: NodeContext,
+    factory: Arc<Factory>,
+    receiver: crate::agents::graph::node_events::PipelineNodeEventReceiver,
+    activation: NodeAttemptActivation,
+}
+fn default_run(h: &Harness, yaml: &str) -> DefaultRun {
+    let pipeline = crate::agents::graph::compiler::PipelineDefinition::from_yaml(yaml).unwrap();
+    let definition = pipeline.original_code_definition_fixture("code").unwrap();
+    let digest = definition.validated_digest();
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let body = Arc::new(
+        CodeNode::new(definition, types(), h.runtime.clone())
+            .unwrap()
+            .with_events(Some(sender)),
+    );
+    let factory = factory();
+    let context = ctx();
+    let activation = NodeAttemptActivation::from_context("code", digest, &context).unwrap();
+    let mut node = RecoverableNode::new(
+        body,
+        digest,
+        NodeRecoveryPolicy::default(),
+        factory.clone(),
+        None,
+    )
+    .with_legacy_first_attempt();
+    node.clock = Arc::new(Clock(AtomicU64::new(200)));
+    DefaultRun {
+        node,
+        context,
+        factory,
+        receiver,
+        activation,
+    }
+}
+impl DefaultRun {
+    async fn ledger(&self) -> crate::agents::graph::node_recovery::NodeAttemptLedger {
+        self.factory
+            .open(&self.activation, &NodeRecoveryPolicy::default())
+            .await
+            .unwrap()
+            .load()
+            .await
+            .unwrap()
+            .ledger
+    }
+    async fn dispatch(&self, attempt: u16) -> String {
+        let journal = self
+            .factory
+            .open(&self.activation, &NodeRecoveryPolicy::default())
+            .await
+            .unwrap();
+        crate::sandbox::code_recovery::hex(
+            &NodeAttemptAuthority::committed(
+                &self.activation,
+                journal.activation_id,
+                attempt,
+                false,
+            )
+            .dispatch_activation(),
+        )
+    }
+    async fn events(&self) -> Vec<String> {
+        let mut drain = self.receiver.drain("inv", "agent", "root").await.unwrap();
+        let mut codes = Vec::new();
+        while let Some(item) = drain.try_recv() {
+            if let Err(error) = item {
+                codes.push(error.code.to_string());
+            }
+        }
+        codes
+    }
+}
+fn distinct(values: &[String]) -> Vec<String> {
+    let mut seen = Vec::new();
+    for value in values {
+        if !seen.contains(value) {
+            seen.push(value.clone());
+        }
+    }
+    seen
+}
+
+/// The goal of FU-214: the supervisor proves the runtime lost, so effect-free
+/// Code is re-run as a new attempt with its own identity and completes once.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_lost_runtime_is_rerun_with_a_new_identity_and_completes_once() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend([terminal("sandbox.runtime_lost"), completed()]);
+    let run = default_run(&h, PURE_YAML);
+    let output = run.node.execute(&run.context).await.unwrap();
+    assert_eq!(output.updates["count"], serde_json::json!(41));
+    assert!(output.interrupt.is_none());
+    assert!(run.events().await.is_empty(), "no failure was published");
+    assert_eq!(h.supervisor.lock().unwrap().submits, 2);
+    let (visits, dispatches) = {
+        let main = h.main.lock().unwrap();
+        (
+            main.visit_attempts.clone(),
+            distinct(&main.intent_dispatches),
+        )
+    };
+    assert_eq!(visits, [1, 2]);
+    assert_eq!(dispatches.len(), 2, "one identity per attempt");
+    // The re-run uses the ordinal identity Main derives for attempt 2.
+    assert_eq!(dispatches[1], run.dispatch(2).await);
+    let ledger = run.ledger().await;
+    assert_eq!(ledger.history().len(), 2);
+    assert!(matches!(
+        ledger.phase(),
+        crate::agents::graph::node_recovery::NodeAttemptPhase::Completed { .. }
+    ));
+    // Both dispatch rows are resolved: nothing is left for a Stop to cancel.
+    assert!(h.dispatch.pending(&h.scope).await.unwrap().is_empty());
+    // A replay projects the durable result and submits nothing.
+    assert_eq!(
+        run.node.execute(&run.context).await.unwrap().updates,
+        output.updates
+    );
+    assert_eq!(h.supervisor.lock().unwrap().submits, 2);
+}
+
+/// A user-code failure is the result of the code: typed, never re-run.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_user_code_failure_settles_typed_and_is_never_rerun() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .push_back(terminal("sandbox.code_failed"));
+    let run = default_run(&h, PURE_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(run.events().await, ["pipeline.code_failed"]);
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
+    assert_eq!(h.main.lock().unwrap().visit_attempts, [1]);
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.class, NodeFailureClass::InvalidResult);
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+}
+
+/// The allowance is bounded: once it is spent the node settles typed.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn lost_runtimes_past_the_allowance_settle_typed() {
+    use crate::agents::graph::node_recovery::MAX_RUNTIME_LOST_RETRIES;
+    let h = harness(QUIET, Duration::ZERO).await;
+    let attempts = usize::from(MAX_RUNTIME_LOST_RETRIES) + 1;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend((0..attempts).map(|_| terminal("sandbox.runtime_lost")));
+    let run = default_run(&h, PURE_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(run.events().await, ["pipeline.code_failed"]);
+    assert_eq!(h.supervisor.lock().unwrap().submits, attempts);
+    assert_eq!(
+        h.main.lock().unwrap().visit_attempts,
+        (1..=u64::try_from(attempts).unwrap()).collect::<Vec<_>>()
+    );
+    let ledger = run.ledger().await;
+    assert_eq!(ledger.history().len(), attempts);
+    assert_eq!(
+        ledger.phase(),
+        crate::agents::graph::node_recovery::NodeAttemptPhase::Failed(
+            crate::agents::graph::node_recovery::RecoveryDecision::Stop(
+                crate::agents::graph::node_recovery::StopReason::RetryDisabled
+            )
+        )
+    );
+}
+
+/// A lost runtime of a platform-client node re-runs only when Main's journal
+/// proves no call unresolved; otherwise it reconciles and nothing re-runs.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_lost_runtime_with_a_possible_platform_effect_reconciles_and_never_reruns() {
+    let h = harness(
+        MainScript {
+            effects: Effects::Possible,
+            ..QUIET
+        },
+        Duration::ZERO,
+    )
+    .await;
+    h.answers
+        .lock()
+        .unwrap()
+        .push_back(terminal("sandbox.runtime_lost"));
+    let run = default_run(&h, PLATFORM_YAML);
+    let output = run.node.execute(&run.context).await.unwrap();
+    assert!(output.interrupt.is_some(), "an operator card, not a re-run");
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.class, NodeFailureClass::InvalidResult);
+    assert!(matches!(
+        failure.replay,
+        ReplaySafety::UnknownExternalEffect { .. }
+    ));
+}
+
+/// A clean journal is not enough for a platform-client node: "nothing
+/// unresolved" also covers calls that committed, which a re-run would repeat.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_lost_platform_client_runtime_with_a_clean_journal_settles_typed_and_never_reruns() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend([terminal("sandbox.runtime_lost"), completed()]);
+    let run = default_run(&h, PLATFORM_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(run.events().await, ["pipeline.code_failed"]);
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.class, NodeFailureClass::InvalidResult);
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
 }

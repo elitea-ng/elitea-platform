@@ -2,7 +2,7 @@
  * The admin CROSS-PROJECT bulk membership invite (issue 247).
  *
  * `POST /admin/invites_bulk/administration` — every listed account into every
- * listed project with one role. It replaces two pylon console pages,
+ * listed project with one role. It replaces two legacy console pages,
  * `invites_bulkusers.py` ("every user into one project") and
  * `invites_bulkprojects.py` ("one user into many projects"), which are the same
  * cross product with one side pinned.
@@ -35,7 +35,7 @@ import { adminProjectsKeys } from './adminProjectsApi';
  * The eight outcomes the server reports per pair
  * (`internal/api/v2/admin/invites_bulk.go`). Each is a different thing for an
  * operator to do next, which is why the server does not collapse them into one
- * "error" the way pylon's log blob did.
+ * "error" the way the legacy log blob did.
  */
 export type BulkInviteOutcome =
   | 'added'

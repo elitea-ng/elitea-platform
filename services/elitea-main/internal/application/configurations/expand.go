@@ -251,15 +251,11 @@ func (w *currentExpansionWalker) expandReference(
 			return err
 		}
 	}
-	if !found {
+	// A row of a retired type (retired.go) is never expanded: it is kept in
+	// the table but no runtime path reads it, so a reference to it resolves
+	// to nothing, exactly as a missing row does.
+	if !found || IsRetiredConfigurationType(configuration.Type) {
 		return newCurrentExpansionError(CurrentExpansionNotFoundCode)
-	}
-
-	if configuration.Type == "pgvector" &&
-		configuration.ProjectID != publicProjectID &&
-		private &&
-		w.request.CurrentProjectID != configuration.ProjectID {
-		return newCurrentExpansionError(CurrentExpansionForbiddenCode)
 	}
 
 	data, err := w.cloneObject(configuration.Data, depth)

@@ -2,13 +2,15 @@
 // audio session that the gateway gates, meters and bills exactly like every
 // other /llm route (issue #323 follow-up).
 //
-// WHY THIS FILE EXISTS. pylon-indexer's realtime ASR relay
-// (indexer_asr_realtime.py) opens a WebSocket to `/v1/realtime?model=…&intent=
-// transcription` and pumps PCM16 audio at it. The retired LiteLLM proxy answered
-// that path. Nothing replaced it, so that image keeps a LiteLLM process of its
-// own — a second LLM data plane that applies no budget and bills nothing. The
-// unary audio routes (audio.go) removed two thirds of that reason; this route
-// removes the last third.
+// WHY THIS FILE EXISTS. The route's original caller was the legacy indexer's
+// realtime ASR relay (indexer_asr_realtime.py), which opened a WebSocket to
+// `/v1/realtime?model=…&intent=transcription` and pumped PCM16 audio at it. The
+// retired LiteLLM proxy answered that path, and until this route existed that
+// image kept a LiteLLM process of its own — a second LLM data plane that applied
+// no budget and billed nothing. That relay was deleted with the indexer (#339).
+// Today the route serves the realtime sessions elitea-main's /llm edge proxy
+// forwards over the GatewayService Realtime stream (proxy_realtime.go there);
+// elitea-web does not open one yet.
 //
 // WHY IT IS NOT "audio.go WITH A SOCKET". Every other route on this gateway is
 // a request that ENDS, so one admission check bounds it. A realtime session does
@@ -71,7 +73,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
 )
 
 // The operator numbers this route ships with. The config package holds the same
@@ -419,7 +421,7 @@ func realtimeForwardedQuery(in url.Values) url.Values {
 	return out
 }
 
-// Realtime handles GET (and POST) /llm/v1/realtime.
+// Realtime handles GET /llm/v1/realtime.
 //
 // The whole admission sequence runs while an http.ResponseWriter still exists,
 // because after websocket.Accept there is no way left to write a status line or
@@ -539,9 +541,13 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 	}
 	tracked = true
 
-	client, aerr := websocket.Accept(w, r, &websocket.AcceptOptions{
+	// The accept is pluggable: over HTTP it is websocket.Accept on a hijacked
+	// connection; over the GatewayService Realtime RPC (internal/grpcapi) the
+	// caller's WebSocket ends at elitea-main and the messages ride the gRPC
+	// stream. Both apply the SAME handshake and Origin checks.
+	clientSock, clientSubprotocol, aerr := RealtimeAcceptorFrom(r.Context())(w, r, RealtimeAcceptOptions{
 		// The caller may ask for a subprotocol or for none. RFC 6455 always
-		// allows the empty one, which is what the pylon relay uses. The
+		// allows the empty one, which is what the legacy relay used. The
 		// provider's own subprotocol is not known yet — the dial happens after
 		// this — so the gateway offers the ONE subprotocol this surface uses.
 		Subprotocols: realtimeSubprotocols(realtimeSubprotocol),
@@ -551,19 +557,18 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 		// same-origin default, NOT "allow everything" — and InsecureSkipVerify
 		// is deliberately never set. See config.RealtimeAllowedOrigins.
 		//
-		// This check runs INSIDE Accept, which is the second reason the dial
-		// moved below it: a refused cross-site handshake must not have opened a
-		// provider socket first.
+		// This check runs INSIDE the accept, which is the second reason the
+		// dial moved below it: a refused cross-site handshake must not have
+		// opened a provider socket first.
 		OriginPatterns: h.realtimeOrigins,
+		ReadLimit:      realtimeReadLimit,
 	})
 	if aerr != nil {
-		// Accept has already written its own HTTP error response.
+		// The acceptor has already written its own HTTP error response.
 		h.logger.WarnContext(ctx, "realtime: the client upgrade was refused",
 			"project_id", projectID, "origin", r.Header.Get("Origin"), "err", aerr)
 		return
 	}
-	client.SetReadLimit(realtimeReadLimit)
-	clientSock := &wsSocket{conn: client}
 
 	// The dialer applies realtimeDialTimeout itself: the handshake deadline
 	// belongs to the dial, and the session context must outlive it. Only the
@@ -588,7 +593,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 	// fact an operator has to be able to see.
 	h.logger.InfoContext(ctx, "realtime: session opened",
 		"project_id", projectID, "provider", provider, "model", model,
-		"client_subprotocol", client.Subprotocol(), "provider_subprotocol", up.Subprotocol,
+		"client_subprotocol", clientSubprotocol, "provider_subprotocol", up.Subprotocol,
 		"metric", MetricRealtimeSessionsOpened)
 
 	admitted := realtimeModel{provider: string(provider), model: model, pricing: pricing}
@@ -615,7 +620,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 
 // realtimeSubprotocol is the ONE WebSocket subprotocol this surface uses.
 // OpenAI and Azure both negotiate "realtime"; RFC 6455 always allows the empty
-// one, which is what the pylon relay asks for. It is a constant rather than a
+// one, which is what the legacy relay asked for. It is a constant rather than a
 // value read from the provider because the client socket is now accepted BEFORE
 // the provider is dialled, so the provider's answer is not known yet. A
 // provider that negotiates something else still works — the two sides of a
@@ -1691,7 +1696,7 @@ func (s *realtimeSession) billTurn(raw []byte, ev *schemas.BifrostRealtimeEvent)
 	//
 	// THE TURN IS NOT BILLED WHEN THEY DO, and that is the whole point. Only the
 	// seconds and character arms refuse a rate the catalogue did not supply; the
-	// TOKEN arm falls back to the pylon default table like every other route. So
+	// TOKEN arm falls back to the legacy default table like every other route. So
 	// a model admitted on a per-second rate alone, reporting tokens, used to
 	// reach tokenCost and bill the invented 1.0/3.0 USD-per-1M fallback. H2
 	// exists because a socket the tenant holds open has no natural bound, and

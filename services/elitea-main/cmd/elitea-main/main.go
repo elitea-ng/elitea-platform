@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/brandpackage"
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
+	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/brandpackage"
+	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,77 +21,81 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/observability"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/gateway"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
-	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
-	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
-	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
-	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
-	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
-	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
-	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
-	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
-	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
-	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
-	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
-	v2memories "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
-	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
-	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
-	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
-	projectinfoapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
-	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
-	promptcontextreadsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
-	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	socialapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	v2support "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
-	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
-	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
-	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
-	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/libs/go/observability"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/gateway"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/health"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	agentexecutionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
+	applicationskillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
+	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	indextypesapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	v2inventory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2mcp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
+	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
+	notificationsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/notifications"
+	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
+	predictapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	projectinfoapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
+	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
+	promptcontextreadsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	socialapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	v2support "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/supportassistant"
+	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	v2toolkits "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webedge"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	identityapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
+	socialapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
+	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	providerproxy "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
-		endpoint, err := healthcheckURL(os.LookupEnv)
+		endpoint, err := healthcheckURL(os.LookupEnv, os.Args[2:]...)
 		if err != nil {
 			os.Exit(1)
 		}
@@ -102,6 +106,15 @@ func main() {
 		}
 		_ = resp.Body.Close()
 		os.Exit(0)
+	}
+
+	// A one-shot operator command in the same image (legacy_pgvector_orphans.go):
+	// it runs and exits, and never starts the service.
+	if len(os.Args) > 1 && os.Args[1] == legacyOrphansCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runLegacyPgvectorOrphans(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -153,7 +166,7 @@ func developmentFlagsFromEnv(getenv func(string) string) (bootstrapLegacySchema 
 		for _, configured := range []string{"APPLICATION_SECRET_KEY", "OIDC_ISSUER_URL", "ELITEA_AUTH_CONFIG_FILE"} {
 			if getenv(configured) != "" {
 				return false, fmt.Errorf("ELITEA_DEV_BOOTSTRAP_LEGACY_SCHEMA is a local-development flag and must not be set when %s is configured. "+
-					"To build a schema on a deployment, run elitea-migrate: it applies the pylon-era schema to an empty database itself, "+
+					"To build a schema on a deployment, run elitea-migrate: it applies the legacy-era schema to an empty database itself, "+
 					"then the shared and tenant histories. Remove this variable", configured)
 			}
 		}
@@ -254,6 +267,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			runErr = fmt.Errorf("shut down observability: %w", err)
 		}
 	}()
+
+	// Read before anything starts: a bad value refuses the boot instead of
+	// surfacing at the first SIGTERM.
+	shutdownTimeout, err := shutdownTimeoutFromEnv(os.LookupEnv)
+	if err != nil {
+		return err
+	}
 
 	// Database
 	dbDSN := envOr("DATABASE_URL", "postgres://localhost:5432/elitea?sslmode=disable")
@@ -437,7 +457,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
 	var principalValidator apimw.PrincipalValidator
-	var forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
+	// formSessions reads the Form plane's session cookie for every route's
+	// apimw.Auth. It replaced the forwarded-identity verifier the X-Auth-*
+	// edge projection needed (#1359), and is assigned exactly where that was:
+	// only inside the authEnabled block below.
+	var formSessions apimw.FormSessionAuthenticator
 	// firstLoginPolicy travels OUT of the authEnabled block below, because the
 	// plane that consumes it is composed further down. `initial_global_admins`
 	// used to reach only the browserauth plane, and internal/api/
@@ -452,7 +476,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The local username/password sign-in. OFF unless explicitly enabled:
 	// a deployment signs people in through OIDC or SAML (and provisions them
 	// through SCIM). The authentication document is still read either way —
-	// the gateway edge, PAT validation and the runtime depend on it.
+	// PAT validation and the runtime depend on it.
 	formSignInEnabled, err := formSignInEnabledFromEnv(os.LookupEnv)
 	if err != nil {
 		return err
@@ -553,28 +577,34 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			InitialGlobalAdmins: authConfig.Identity.InitialGlobalAdmins,
 		}
 		formGraph, err = authcomposition.NewFormGraph(ctx, authConfig, authcomposition.FormGraphDependencies{
-			PostgreSQL:           pool,
-			MainRoutePublicRules: api.CurrentMainRoutePublicRules(),
-			Brand:                brandingResolver,
-			FormSignInEnabled:    formSignInEnabled,
-			NativeTokens:         native.graphTokens(),
+			PostgreSQL:        pool,
+			Brand:             brandingResolver,
+			FormSignInEnabled: formSignInEnabled,
 		})
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
 		}
 		if formGraph.FormSignInEnabled() {
 			logFormUserConfiguration(logger, formGraph.FormUsers())
-			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
+			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes())
+			if err != nil {
+				return fmt.Errorf("mount production Form authentication: %w", err)
+			}
 		} else {
 			logFormSignInDisabled(logger, formGraph.FormUsers())
-			productionAuth, err = api.NewEdgeOnlyProductionAuthRoutes(formGraph.MainEdgeAuth())
-		}
-		if err != nil {
-			return fmt.Errorf("mount production Form authentication: %w", err)
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
-		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
+		formSessions = formGraph.FormSessions()
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
+	}
+
+	// The caller-address resolver every plane keys its limiters on: the SCIM
+	// token endpoint, the native endpoints and the single-sign-on attempt
+	// limiter below. Built here, before the single-sign-on block, because
+	// that block attaches it.
+	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
+	if err != nil {
+		return fmt.Errorf("load SCIM caller-address settings: %w", err)
 	}
 
 	// Wire OIDC browser-session authentication when OIDC_ISSUER_URL is set.
@@ -702,6 +732,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if storedSAMLProvider {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
+
+		// The begin/callback attempt limiter for both planes (#1078).
+		if err := composeSingleSignOnAttempts(
+			pool, appSecretKey, scimClientAddresses, oidcOIDCHandler, oidcSAMLHandler, logger,
+		); err != nil {
+			return err
+		}
 	}
 
 	// A deployment where nobody can sign in through a browser is legal (an
@@ -730,14 +767,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// It is built here, immediately after both browser-authentication planes
 	// are final, because every field it reads is final at this point:
-	// formGraph, principalValidator and forwardedIdentityVerifier are assigned
+	// formGraph, principalValidator and formSessions are assigned
 	// only inside the `authEnabled` block above, and oidcSessionHandler only
 	// inside the single-sign-on block above. Nothing between there and here
 	// assigns any of them.
 	//
 	// Under production Form authentication the set is the graph's token
-	// validator, the forwarded-identity verifier and the browser session
-	// secret; under OIDC-only it is the session cookie plus the LocalValidator
+	// validator, the Form session reader and the browser session secret; under OIDC-only it is the session cookie plus the LocalValidator
 	// for the tokens APPLICATION_SECRET_KEY signs — which is also how a
 	// provider's callback bearer, minted by the same key, is read back on its
 	// upload. See apiGroupAuthConfig for both shapes and why each carries a
@@ -768,7 +804,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	apiGroupAuth := withNativeTokens(apiGroupAuthConfig(
 		formGraph,
 		principalValidator,
-		forwardedIdentityVerifier,
+		formSessions,
 		authsvc.NewPrincipalValidator(pool),
 		sessionTokens,
 		os.Getenv("APPLICATION_SECRET_KEY"),
@@ -837,7 +873,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// Both answered `401 missing authorization header` to a browser holding a
 	// valid session: their AuthConfig carried the forwarded-identity verifier
-	// and no SessionSecret, and deploy/traefik/dynamic.yml strips every
+	// and no SessionSecret, and the browser edge strips every
 	// inbound X-Auth-* header and runs no edgeAuth, so forwarded identity
 	// never arrives and cannot be made to. The avatar route is what renders
 	// the user menu, so the failure was visible on every page.
@@ -887,7 +923,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load current project-info settings: %w", err)
 	}
 	if currentProjectInfoSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
+		(formGraph == nil || principalValidator == nil || formSessions == nil) {
 		return errors.New("ELITEA_PROJECT_INFO_ENABLED requires production authentication")
 	}
 	var currentProjectInfo *projectinfoapi.CurrentProjectInfoRoute
@@ -1027,23 +1063,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// no vault — and the facade then mounts without source expansion rather
 	// than failing to boot.
 	var inventorySourceSettings *configurationapp.CurrentToolkitSettingsResolver
-	// The project vector-store collaborator the project-create route provisions
-	// with (#371). It is composed from the Configurations runtime, so it exists
-	// only where that runtime does; without it a created project cannot index.
-	//
-	// DECLARED AS THE INTERFACE, never as the concrete pointer (#377). A nil
-	// `*runtimecomposition.ProjectVectorStore` assigned into an interface field
-	// is a TYPED NIL: `cfg.ProjectVectorStore != nil` in internal/api/router.go
-	// is then true, the provisioner takes the collaborator, and every step of
-	// the create pipeline runs until `project_pgvector` answers "project vector
-	// store is not configured" — so a deployment that composes no Configurations
-	// runtime could not create a project at all. It answered 500 and rolled the
-	// whole tenant back. Measured on the end-to-end stack by J31g.
-	//
-	// Same rule as toolkitSettingsValidator below: the concrete value is
-	// assigned inside the branch that composes it, and the variable is a nil
-	// INTERFACE everywhere else.
-	var projectVectorStore projectprovisioning.ProjectVectorStore
 	// The platform default model (#6826). Declared as the interface the router
 	// takes and assigned only from a non-nil service, so no typed nil reaches
 	// the router's nil checks.
@@ -1094,39 +1113,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose current Configurations services: %w", err)
 		}
 		defer currentConfigurationsRoot.Destroy()
-		// The vault material goes through the secrets handler, which holds the
-		// one master key a deployment sets (SECRETS_MASTER_KEY). That handler
-		// is also the one vault creator, through the project_secrets
-		// provisioning step, so the creator and the material writer now share a
-		// key source (#399). The Configurations runtime's own vault writer is
-		// deliberately NOT used here: it keys off ELITEA_VAULT_MASTER_KEY_FILE,
-		// which no file under deploy/ sets, so it could not open the vault the
-		// handler had just created.
-		//
-		// NOT UNDER THE RUST INDEXING RUNTIME (ADR-0031 decision 5). A
-		// deployment that indexes natively keeps index metadata in the
-		// registry and vectors in elitea-vector; a created project needs no
-		// pgvector role, database or `pgvector_configuration`, and requiring
-		// a pgvector bootstrap would keep alive the per-project database the
-		// runtime retires. The provisioner then takes no vector store and
-		// skips its project_pgvector step.
-		if runtimeConfig.ProjectVectorStoreProvisioned() {
-			vectorStore, err := currentConfigurationsRoot.NewProjectVectorStore(
-				pool,
-				v2secrets.NewHandler(pool),
-				logger,
-			)
-			if err != nil {
-				return fmt.Errorf("compose project vector-store provisioning: %w", err)
-			}
-			// Through the concrete value, and only when there IS one. See the
-			// declaration above for what a typed nil costs here.
-			if vectorStore != nil {
-				projectVectorStore = vectorStore
-			}
-		} else {
-			logger.Info("project vector store not provisioned: the Rust indexing runtime needs no per-project pgvector database (ADR-0031 decision 5)")
-		}
 		toolkitSettingsResolver, err := currentConfigurationsRoot.NewToolkitSettingsValidator(pool)
 		if err != nil {
 			return fmt.Errorf("compose toolkit settings validation: %w", err)
@@ -1134,9 +1120,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Assigned through the concrete value, never a typed nil: the handler's
 		// only fallback is a nil-interface check.
 		toolkitSettingsValidator = toolkitSettingsResolver
+		// The provenance twin (#1286): the same graph without the admin-vault
+		// fallback, so the OAuth proxy can tell a global secret from a
+		// project one before it binds an editor-written token endpoint.
+		projectOwnedToolkitSettings, err := currentConfigurationsRoot.NewProjectOwnedToolkitSettingsResolver(pool)
+		if err != nil {
+			return fmt.Errorf("compose project-owned toolkit settings: %w", err)
+		}
 		delegatedAuthToolkitSettings, err = runtimecomposition.NewCurrentDelegatedAuthToolkitSettings(
 			pool,
 			toolkitSettingsResolver,
+			projectOwnedToolkitSettings,
 		)
 		if err != nil {
 			return fmt.Errorf("compose delegated authorization toolkit settings: %w", err)
@@ -1382,7 +1376,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose ungated project-context reader: %w", readerErr)
 		}
 		// apiGroupAuth, not a fresh composition from formGraph/
-		// principalValidator/forwardedIdentityVerifier: those are the SAME
+		// principalValidator/formSessions: those are the SAME
 		// inputs apiGroupAuth was already built from above, and the gate on
 		// this block (formGraph != nil || oidcSessionHandler != nil) makes
 		// the two compositions identical in both branches. See
@@ -1403,7 +1397,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	// runtimeConfig was read above, before the Configurations runtime, so the
 	// project vector-store decision could use it.
-	if runtimeConfig.Enabled && (principalValidator == nil || forwardedIdentityVerifier == nil) {
+	if runtimeConfig.Enabled && (principalValidator == nil || formSessions == nil) {
 		return errors.New("ELITEA_RUNTIME_ENABLED requires production authentication")
 	}
 	if err := validateRuntimeComposition(currentConfigurationsConfig, runtimeConfig); err != nil {
@@ -1424,6 +1418,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if liveNATSBus != nil {
 		workspaceBus = liveNATSBus
 	}
+	// Conversation activity frames (client contract 1.12) on the same
+	// live-update plane: the runtime plane publishes the turn transitions,
+	// the read route the read markers. nil without the plane.
+	conversationActivity := newConversationActivity(workspaceBus, pool, logger)
 	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
 		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), logger)
 	if err != nil {
@@ -1462,16 +1460,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("read Inventory facade configuration: %w", err)
 	}
 	if inventoryConfig.Enabled {
+		// One hop to the provider, shared by the registrar and the route:
+		// one connection and one certificate reloader, not two.
+		inventoryHop, hopErr := providerproxy.New(inventoryConfig, v2inventory.EnvNames.Target, logger)
+		if hopErr != nil {
+			return fmt.Errorf("build the Inventory facade: %w", hopErr)
+		}
 		// The registrar starts FIRST: it is what learns the provider's own
 		// name, and the gate the route carries reads that name per request.
 		inventoryConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"inventory", inventoryConfig, v2inventory.EnvNames.BaseURL))
-		// The source expander (ADR-0023 H4c I2). Built only where BOTH halves
-		// exist: the Configurations graph that can claim a credential, and a
-		// callback origin the provider can reach back on. Where either is
-		// absent the facade mounts WITHOUT expansion — the eight tools that
+				"inventory", inventoryConfig, v2inventory.EnvNames.Target, inventoryHop.Client()))
+		// The source expander (ADR-0023 H4c I2). Built only where the
+		// Configurations graph that can claim a credential exists (the engine
+		// calls back over the platform gRPC listener, at no configured origin,
+		// since #1359 U5). Where it is absent the facade mounts WITHOUT expansion — the eight tools that
 		// read the graph still work — rather than failing to boot, which is
 		// what a stack with no vault (the E2E one) needs. What is NOT
 		// tolerated is a half-wired expander: NewSources refuses that.
@@ -1480,12 +1484,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if sourcesErr != nil {
 			return fmt.Errorf("read Inventory source configuration: %w", sourcesErr)
 		}
-		switch {
-		case inventorySourceSettings == nil || inventorySourcesConfig.CallbackBaseURL == "":
+		if inventorySourceSettings == nil {
 			logger.Warn("Inventory mounts without source expansion",
-				"settings_resolver", inventorySourceSettings != nil,
-				"callback_base_url", v2inventory.CallbackBaseURLEnv)
-		default:
+				"settings_resolver", false)
+		} else {
 			inventoryToolkits, toolkitsErr := dbrepos.NewCurrentToolkitsRepository(pool)
 			if toolkitsErr != nil {
 				return fmt.Errorf("compose Inventory toolkit reader: %w", toolkitsErr)
@@ -1502,12 +1504,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if minterErr != nil {
 				return fmt.Errorf("compose Inventory callback token minter: %w", minterErr)
 			}
+			inventoryGrants := dbrepos.NewCallbackTokenGrants(pool)
+			// Every Inventory bearer carries a recorded invocation grant
+			// (shared/0159) naming the provider, for elitea-vector's token
+			// introspection (ADR-0031); investigate's source-tool grant
+			// upgrades it in place.
+			inventoryMinter, grantingErr := material.GrantingMinter(
+				material.NewCallbackMinter(inventoryTokens), inventoryGrants, "inventory")
+			if grantingErr != nil {
+				return fmt.Errorf("compose Inventory callback token minter: %w", grantingErr)
+			}
 			inventorySources, err = v2inventory.NewSources(
 				inventoryToolkits, inventorySourceSettings,
-				material.NewCallbackMinter(inventoryTokens),
+				inventoryMinter,
 				// What investigate's bearer was minted for: the record the
 				// test_tool source-tool gate reads (shared/0159).
-				dbrepos.NewCallbackTokenGrants(pool), inventorySourcesConfig)
+				inventoryGrants, inventorySourcesConfig)
 			if err != nil {
 				return fmt.Errorf("compose Inventory source expander: %w", err)
 			}
@@ -1519,6 +1531,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			legacyrbac.NewPostgresResolver(pool),
 			inventorySources,
 			logger,
+			providerproxy.WithHop(inventoryHop),
 		)
 		if err != nil {
 			return fmt.Errorf("build the Inventory facade: %w", err)
@@ -1582,23 +1595,29 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if minterErr != nil {
 			return fmt.Errorf("compose DeepWiki callback token minter: %w", minterErr)
 		}
+		// Every DeepWiki bearer carries a recorded grant (shared/0159) naming
+		// the provider: elitea-vector's token introspection (ADR-0031) admits
+		// the engine's vector writes and reads only with one.
+		deepwikiMinter, minterErr := material.GrantingMinter(
+			v2deepwiki.NewAuthCallbackMinter(deepwikiTokens),
+			dbrepos.NewCallbackTokenGrants(pool), "deepwiki")
+		if minterErr != nil {
+			return fmt.Errorf("compose DeepWiki callback token minter: %w", minterErr)
+		}
 
 		// Registered before the route is built, for the reason the Inventory
 		// facade gives above: the gate needs the provider's own name, and
 		// only the registrar ever learns it.
+		// One hop to the provider, shared by the registrar and the route, as
+		// for Inventory above.
+		deepwikiHop, hopErr := providerproxy.New(deepwikiConfig.HopConfig(), v2deepwiki.TargetEnv, logger)
+		if hopErr != nil {
+			return fmt.Errorf("compose DeepWiki facade: %w", hopErr)
+		}
 		deepwikiConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"deepwiki", facade.Config{
-					Enabled:        true,
-					BaseURL:        deepwikiConfig.BaseURL,
-					ClientCertFile: deepwikiConfig.ClientCertFile,
-					ClientKeyFile:  deepwikiConfig.ClientKeyFile,
-					CAFile:         deepwikiConfig.CAFile,
-					ServerName:     deepwikiConfig.ServerName,
-					IdentitySecret: deepwikiConfig.IdentitySecret,
-					Timeout:        deepwikiConfig.Timeout,
-				}, v2deepwiki.BaseURLEnv))
+				"deepwiki", deepwikiConfig.HopConfig(), v2deepwiki.TargetEnv, deepwikiHop.Client()))
 
 		// The application-toolkit reader, for the `wikis_query` rewrite: a
 		// query toolkit names a Wikis toolkit, and its OWN code toolkit is
@@ -1646,10 +1665,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			legacyrbac.NewPostgresResolver(pool),
 			deepwikiCredentials,
 			deepwikiToolkitReader,
-			v2deepwiki.NewAuthCallbackMinter(deepwikiTokens),
+			deepwikiMinter,
 			slog.Default(),
 			v2deepwiki.WithHistory(
 				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
+			v2deepwiki.WithHop(deepwikiHop),
 		)
 		if err != nil {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
@@ -1697,12 +1717,35 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// replica without index ingest dispatch only drains. No replica closes a
 	// recorded step on its own configuration: only the operator's abandon
 	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
-	// refused beside a client.
-	vectorStepRecorded := runtimeConfig.RustIndexing()
+	// refused beside a client. A replica that runs Inventory records it only
+	// beside a client (projectVectorStepRecorded).
+	vectorStepRecorded := projectVectorStepRecorded(
+		runtimeConfig.RustIndexing(), api.HoldsInventory(applicationData), vectorClient != nil)
 	vectorCleanupAbandoned, err := vectorCleanupAbandonSwitch(logger, os.LookupEnv, vectorClient != nil)
 	if err != nil {
 		return err
 	}
+	// A deleted project's legacy PgVector database (#1359): dropped through
+	// the old store's admin URL, or closed under the operator's retired switch
+	// (legacy_pgvector_config.go). Through a nil INTERFACE without a URL.
+	legacyPgvectorDropper, legacyPgvectorRetired, err := composeLegacyPgvector(logger, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("compose legacy PgVector cleanup: %w", err)
+	}
+	var legacyVectorDatabases projectprovisioning.LegacyVectorDatabases
+	if legacyPgvectorDropper != nil {
+		legacyVectorDatabases = legacyPgvectorDropper
+	}
+	// A deleted Inventory toolkit's graph vectors (#1359): the toolkit cleanup
+	// journal deletes the graph's namespace in elitea-vector after the engine
+	// deleted its rows (api.WithInventoryGraphVectors). A nil INTERFACE without
+	// a client, never a typed nil, and then the Inventory client is left as it
+	// is: there is no vector leg to wait for.
+	var inventoryGraphVectors api.InventoryGraphVectors
+	if vectorClient != nil {
+		inventoryGraphVectors = vectorClient
+	}
+	applicationData = api.WithInventoryGraphVectors(applicationData, inventoryGraphVectors)
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -1765,6 +1808,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
 	// under the same guard so an absent agent plane leaves a NIL interface.
 	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// Bound by the router to the MCP server it builds: a platform MCP tool of a
+	// local turn runs through the same dispatch a cloud turn's does, and the
+	// resolved definition names each platform server's tools from the same
+	// listing (issue 1231).
+	platformMCPTools := desktopopsapi.NewPlatformToolBridge()
+	// The upload-time attachment extraction warm-up (issue 1062), assigned
+	// only under the same guard so an absent reader leaves a NIL interface.
+	var attachmentExtractionWarmer v2convs.AttachmentExtractionWarmer
 	// The remote toolkit call's authorizer: the SAME service, under the same
 	// guard, so an absent agent plane leaves a NIL interface and the route
 	// answers 501.
@@ -1834,6 +1885,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if egressErr != nil {
 			return fmt.Errorf("compose the workspace egress proxy: %w", egressErr)
 		}
+		// formGraph is a *FormGraph that stays nil on an OIDC-only
+		// deployment. Boxed straight into the three interfaces below it
+		// would make each of them non-nil around a nil pointer, so the
+		// composition's nil checks would pass and the first token call
+		// would panic. Hand over real nils instead.
+		var (
+			runtimeActorTokens   storage.ActorTokenIssuer
+			runtimeProjectTokens storage.ProjectTokenValidator
+			runtimeSystemTokens  runtimecomposition.ProjectSystemTokenSource
+		)
+		if formGraph != nil {
+			runtimeActorTokens, runtimeProjectTokens, runtimeSystemTokens = formGraph, formGraph, formGraph
+		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
 			ControlPool:                      runtimePools.Control,
@@ -1850,9 +1914,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CodeDebugStatePool:               codeConsumers.debugStatePool,
 			CurrentConfigurations:            currentConfigurationsRoot,
 			ConfigurationLifecycleReconciler: configurationLifecycleReconciler,
-			ActorTokenIssuer:                 formGraph,
-			ProjectTokenValidator:            formGraph,
-			ProjectSystemTokenSource:         formGraph,
+			ActorTokenIssuer:                 runtimeActorTokens,
+			ProjectTokenValidator:            runtimeProjectTokens,
+			ProjectSystemTokenSource:         runtimeSystemTokens,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
@@ -1878,7 +1942,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			AuditRecorder: auditRecorder,
 			// ...and their per-turn summaries live in the database, so every
 			// Main replica merges the same rows and one writes the event.
-			EgressAuditStore: dbrepos.NewEgressRunSummaries(pool),
+			EgressAuditStore:     dbrepos.NewEgressRunSummaries(pool),
+			ConversationActivity: conversationActivity,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1909,7 +1974,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			publicRoutes.Validation,
 			publicRoutes.ExecutionEvents,
 			principalValidator,
-			forwardedIdentityVerifier,
 			// The GROUP's own credential set, handed over whole. A browser's
 			// EventSource sends a cookie and nothing else (#93), and an SDK or
 			// a server-side client follows the run it started with the SAME
@@ -1953,8 +2017,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitDiscovery = publicRoutes.ToolkitDiscovery
 		toolkitToolRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.ClientApplicationVersions != nil {
+			publicRoutes.ClientApplicationVersions.WithPlatformTools(platformMCPTools)
 			clientApplicationVersions = publicRoutes.ClientApplicationVersions
 			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
+		}
+		if publicRoutes.AttachmentExtraction != nil {
+			attachmentExtractionWarmer = publicRoutes.AttachmentExtraction
 		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
@@ -2191,19 +2259,34 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 	}
 
-	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
-	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
-	// the gateway service is reachable.
-	var gatewayProxy http.Handler
-	var gatewayProjectResolver apimw.PersonalProjectResolver
+	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
+	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
+	// surface, the configuration checks, predict_llm and the governance status —
+	// shares it, so an operator configures the gateway hop once. It is nil when
+	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
+	var llmGateway *llmproxy.GatewayClient
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
-		gw, gwErr := llmproxy.New(llmproxy.Config{
-			TargetURL:      gwURL,
+		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
+			Target:         gwURL,
 			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
 			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
 			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
 			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
-			Logger:         logger,
+		})
+		if clientErr != nil {
+			return fmt.Errorf("compose llm gateway client: %w", clientErr)
+		}
+		defer func() { _ = client.Close() }()
+		llmGateway = client
+	}
+
+	// BF0.9c: the browser /llm surface over that client.
+	var gatewayProxy http.Handler
+	var gatewayProjectResolver apimw.PersonalProjectResolver
+	if llmGateway != nil {
+		gw, gwErr := llmproxy.New(llmproxy.Config{
+			Gateway: llmGateway,
+			Logger:  logger,
 			// The analytics reads decide active users and run spend from
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
@@ -2214,24 +2297,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		gatewayProxy = gw
 		gatewayProjectResolver = apimw.NewDBPersonalProjectResolver(pool)
-		slog.Info("llm gateway proxy enabled", "target", gwURL)
+		slog.Info("llm gateway proxy enabled", "target", os.Getenv("LLM_GATEWAY_URL"))
 	}
 
 	// #319: /configurations/check_connection(s) needs a real, minimal round
 	// trip to the provider, which the gateway performs (it owns the SSRF-safe
-	// egress allowlist for a tenant-authored api_base — issue #13). Reuse the
-	// same gateway connection settings as the /llm proxy above so an operator
-	// configures the gateway hop once, not twice.
+	// egress allowlist for a tenant-authored api_base — issue #13). It uses the
+	// shared gateway client above.
 	var configConnectionChecker configurationapi.ConnectionChecker
-	if checker, checkerErr := configurationapi.NewGatewayConnectionCheckerFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-		os.Getenv("GATEWAY_IDENTITY_SECRET"),
-	); checkerErr != nil {
-		return fmt.Errorf("compose configurations check-connection client: %w", checkerErr)
-	} else if checker != nil {
+	if llmGateway != nil {
+		checker := configurationapi.NewGatewayConnectionChecker(llmGateway)
 		// Assigned only when non-nil: boxing a nil *GatewayConnectionChecker
 		// into the ConnectionChecker interface would make
 		// `h.connectionChecker == nil` false (a non-nil interface holding a
@@ -2242,22 +2317,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// #194: POST /elitea_core/predict_llm/prompt_lib/{projectID} runs one
-	// stateless LLM turn through the same gateway hop, configured from the
-	// same four variables. A nil completer is a supported state — the route is
-	// still registered and answers 503 naming LLM_GATEWAY_URL — but it must be
+	// stateless LLM turn through the shared gateway client. A nil completer is
+	// a supported state — the route is still registered and answers 503 naming
+	// LLM_GATEWAY_URL — but it must be
 	// left as a nil INTERFACE, not a boxed nil pointer, or the handler's
 	// `completer == nil` check is false and it calls a method on a nil
 	// receiver instead of reporting "not configured".
 	var predictCompleter predictapi.Completer
-	if completer, completerErr := predictapi.NewGatewayCompleterFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-		os.Getenv("GATEWAY_IDENTITY_SECRET"),
-	); completerErr != nil {
-		return fmt.Errorf("compose predict_llm completion client: %w", completerErr)
-	} else if completer != nil {
+	if llmGateway != nil {
+		completer := predictapi.NewGatewayCompleter(llmGateway)
 		predictCompleter = completer
 		if currentConfigurationsRoot != nil {
 			predictCompleter, err = predictapi.WithDefaultModel(
@@ -2307,18 +2375,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
-	// Same four settings again, for the third and last consumer of the hop, so
-	// an operator configures the gateway once. No identity secret: the gateway
-	// verifies no HMAC on that route.
+	// It uses the shared gateway client; the GovernanceStatus call carries no
+	// identity, because the gateway verifies none on it.
 	var gatewayStatus gateway.StatusReader
-	if statusClient, statusErr := gateway.NewGatewayStatusClientFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-	); statusErr != nil {
-		return fmt.Errorf("compose gateway status client: %w", statusErr)
-	} else if statusClient != nil {
+	if llmGateway != nil {
+		statusClient := gateway.NewGatewayStatusClient(llmGateway)
 		// Assigned only when non-nil, for the reason spelled out above
 		// configConnectionChecker: a nil pointer boxed into this interface is
 		// not nil, and the handler's "not configured" branch would never run.
@@ -2383,13 +2444,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// admin list. The console then shows a rank-and-file user
 			// controls that the server refuses with 403 on each click.
 			Resolver: legacyrbac.NewPostgresResolver(pool),
-			// The runtime deployment authenticates the browser at
-			// /auth/login, which sets `elitea_browser_auth` and projects
-			// the principal as X-Auth-*. Without this verifier the handler has
-			// no way to read that identity, injects an empty permission list,
-			// and the SPA renders a sidebar with no items — see adminui's
-			// ServeSPA. A nil verifier (no form graph) still degrades closed.
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
+			// A Form deployment authenticates the browser at /auth/login,
+			// which sets `elitea_browser_auth`. Without this reader the
+			// handler has no way to read that identity, injects an empty
+			// permission list, and the SPA renders a sidebar with no items —
+			// see adminui's ServeSPA. A nil reader (no form graph) still
+			// degrades closed.
+			FormSessions: formSessions,
 			// The OIDC path's credential after shared migration 0117. The
 			// cookie carries an opaque identifier and no claims, so without
 			// this the HMAC reader below finds nothing and the sidebar is
@@ -2416,6 +2477,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		defer presenceStore.Close()
 		canvasPresence = v2canvaspresence.Backend{Store: presenceStore, Bus: liveNATSBus}
 	}
+
+	// The platform MCP replay store (issue 1231): a JetStream KV bucket on the
+	// same server, which every replica claims a platform call's
+	// Idempotency-Key in before running it. It is optional: without the
+	// live-update NATS, or with the bucket missing or misconfigured (logged as
+	// an error naming the nats-bootstrap Job), elitea-main starts without it
+	// and the remote toolkit route answers 501 for platform MCP tools rather
+	// than dedupe them per replica.
+	platformMCPReplays := composePlatformMCPReplays(ctx, eventsNATS, logger)
 
 	// The toolkit TYPE catalogue (GET /elitea_core/toolkits/prompt_lib/
 	// {projectID}) serves each tool's argument schema from the digest-pinned SDK
@@ -2458,11 +2528,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		patSigner = formGraph
 	}
 
-	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
-	if err != nil {
-		return fmt.Errorf("load SCIM caller-address settings: %w", err)
-	}
-
 	// One native policy reader for the router (discovery, token responses,
 	// the 426 gate, the admin save's invalidation) AND the local turn start,
 	// so a save that turns local work off is seen by both at once.
@@ -2478,7 +2543,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose resolved version route: %w", err)
 	}
 	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
-		nativePolicy, auditRecorder, apiGroupAuth, logger)
+		nativePolicy, auditRecorder, platformMCPTools, platformMCPReplays, apiGroupAuth, logger)
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
@@ -2512,7 +2577,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
 	}
 
+	// The browser edge (#1359 P2, P3): /app and /docs relayed to the web
+	// container, `/` redirected to /app/. Compose sets it, and the chart sets
+	// it to the elitea-web Service whenever it renders one.
+	webUpstream, err := webedge.ParseUpstream(os.Getenv(webedge.UpstreamEnv))
+	if err != nil {
+		return fmt.Errorf("configure web edge: %w", err)
+	}
+	if webUpstream != nil {
+		logger.Info("browser edge enabled", "web_upstream", webUpstream.String())
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,
 		ProjectCleanupContext:         ctx,
@@ -2523,6 +2600,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		MemoryDataRecorded:            runtimeConfig.RustIndexing(),
 		ProjectVectorDataRecorded:     vectorStepRecorded,
 		ProjectVectorCleanupAbandoned: vectorCleanupAbandoned,
+		LegacyVectorDatabases:         legacyVectorDatabases,
+		LegacyVectorDatabasesRetired:  legacyPgvectorRetired,
 		AdminUI:                       adminUICfg,
 		Pool:                          pool,
 		Branding:                      brandingResolver,
@@ -2556,7 +2635,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SessionSecret:      apiGroupAuth.SessionSecret,
 		PATSigner:          patSigner,
 		Auth: api.AuthDeps{
-			ForwardedIdentityVerifier:  apiGroupAuth.ForwardedIdentityVerifier,
+			FormSessions:               apiGroupAuth.FormSessions,
 			SessionStore:               apiGroupAuth.SessionStore,
 			RejectLegacySessionCookies: apiGroupAuth.RejectLegacySessionCookies,
 			SessionHandler:             oidcSessionHandler,
@@ -2568,6 +2647,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentProjectInfo:            currentProjectInfo,
 		CurrentIndexTypes:             currentIndexTypes,
 		AttachmentExtensions:          attachmentExtensions,
+		AttachmentExtractionWarmer:    attachmentExtractionWarmer,
 		CurrentApplicationSkills:      currentApplicationSkills,
 		CurrentPromptContextReads:     currentPromptContextReads,
 		CurrentProjectList:            currentProjectList,
@@ -2603,6 +2683,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CloudExecutorStorageEncryption: workspaceHandoff.Encryption,
 		CurrentResolvedVersion:         currentResolvedVersion,
 		CurrentRemoteToolkit:           currentRemoteToolkit,
+		PlatformMCPTools:               platformMCPTools,
 		CurrentNodeRecovery:            currentNodeRecovery,
 		CurrentExecutionInterrupts:     currentExecutionInterrupts,
 		CurrentApplicationTask:         currentApplicationTask,
@@ -2625,7 +2706,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ConfigProviderAdmission:        configProviderAdmission,
 		ConfigStoredResolver:           configStoredResolver,
 		ObjectStore:                    objectStore,
-		ProjectVectorStore:             projectVectorStore,
 		PlatformModelDefaults:          platformModelDefaults,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*
@@ -2676,6 +2756,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Redis arm is deleted; #152 is the record of that two-arm fallback
 		// shipping with both arms nil.
 		EventSource: eventSource,
+		// Client contract 1.12: the read frame of markConversationRead.
+		ConversationActivity: conversationActivity,
 		// Cross-replica canvas presence: roster store + live-update bus.
 		// The zero value keeps the in-process roster and publishes nothing.
 		CanvasPresence: canvasPresence,
@@ -2703,7 +2785,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Redis RPC transport this change retires, so it could not have been
 	// mounted after the deletion either. The chat-dispatch migration it was a
 	// placeholder for is #93; the web client's own socket.io still points at
-	// pylon and is unaffected.
+	// the legacy runtime and is unaffected.
 	// NOT wrapped in otelhttp here: internal/api/router.go already installs
 	// apimw.OtelMiddleware (r.Use at router.go:396) as chi middleware, which
 	// creates a span per request via otel.Tracer("elitea-main") — the same
@@ -2715,13 +2797,45 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// internal/api/v2/notifications/events.go, and by artifact upload/
 	// download deadlines) would stop reaching the real ResponseWriter.
 	srv := newHTTPServer(publicAddress, r)
+	// The internal platform gRPC listener (#1359 D1), when the runtime
+	// configuration opens one.
+	platformSrv, err := newPlatformServer(runtimeConfig, func() ([]runtimegrpc.PlatformService, error) {
+		services, err := platformServices(r, platformClientsFromEnv(os.Getenv), logger)
+		if err != nil {
+			return nil, err
+		}
+		// elitea-vector's token introspection (ADR-0031), behind
+		// ELITEA_VECTOR_INTROSPECTION_CLIENTS, runtime on or off. The PAT
+		// validator is the one that reads back what this deployment's
+		// callback minters sign (patSigner's rule): the form graph when there
+		// is one, else the APPLICATION_SECRET_KEY validator (sessionTokens),
+		// which is how a deployment without ELITEA_AUTH_CONFIG_FILE (the dev
+		// compose, OIDC-only) signs its DeepWiki and Inventory bearers. Both
+		// assigned through a nil INTERFACE, so a deployment with neither is
+		// refused at boot rather than panicking on the first call.
+		introspectionValidator := introspectionTokenValidator(formGraph, sessionTokens)
+		return withVectorIntrospection(services, runtimeConfig, runtimeRoot,
+			runtimecomposition.PlatformVectorIntrospection{
+				Validator:     introspectionValidator,
+				CallbackFacts: dbrepos.NewCallbackTokenGrants(pool),
+				Logger:        logger,
+			})
+	})
+	if err != nil {
+		return fmt.Errorf("configure platform listener: %w", err)
+	}
 
 	slog.Info("starting server", "addr", srv.Addr, "runtime_enabled", runtimeRoot != nil)
+	servers := applicationServers{public: srv}
+	if platformSrv != nil {
+		slog.Info("starting platform gRPC listener", "addr", platformSrv.Addr())
+		servers.platform = platformSrv
+	}
 	var runtimeLifecycleRoot runtimeLifecycle
 	if runtimeRoot != nil {
 		runtimeLifecycleRoot = runtimeRoot
 	}
-	if err := serveApplication(ctx, srv, runtimeLifecycleRoot, 15*time.Second); err != nil {
+	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, shutdownTimeout); err != nil {
 		return err
 	}
 	slog.Info("server stopped")
@@ -3210,5 +3324,20 @@ func startPipelineScheduleRunner(
 			logger.Error("the pipeline schedule runner stopped", "err", err)
 		}
 	}()
+	return nil
+}
+
+// introspectionTokenValidator is the PAT validator of elitea-vector's token
+// introspection on the platform listener: the form graph when there is one,
+// else the APPLICATION_SECRET_KEY validator, the pair that reads back what
+// the callback minters sign (patSigner's rule). A nil INTERFACE when neither
+// exists, never a typed nil, so the composition refuses it at boot.
+func introspectionTokenValidator(formGraph *authcomposition.FormGraph, sessionTokens apimw.TokenValidator) vectorintrospection.TokenValidator {
+	if formGraph != nil {
+		return formGraph
+	}
+	if sessionTokens != nil {
+		return sessionTokens
+	}
 	return nil
 }

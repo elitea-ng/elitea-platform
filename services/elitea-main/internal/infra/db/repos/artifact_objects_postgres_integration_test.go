@@ -342,3 +342,49 @@ func TestArtifactDeleteObjectRowsRemovesByID(t *testing.T) {
 		t.Fatalf("DeleteObjectRows(empty) err = %v, want nil", err)
 	}
 }
+
+// #1059: concurrent reservations of one key — exactly one wins, and a
+// reservation never overwrites a stored object's row.
+func TestArtifactObjectsRepositoryReserveObjectKeyHasOneWinner(t *testing.T) {
+	buckets, objects, _ := newArtifactObjectsTestRepo(t)
+	ctx := context.Background()
+	bucket := mustCreateArtifactBucket(t, buckets, 9110, "reserve-bucket")
+
+	const callers = 16
+	type outcome struct {
+		reserved bool
+		err      error
+	}
+	results := make(chan outcome, callers)
+	for range callers {
+		go func() {
+			reserved, err := objects.ReserveObjectKey(ctx, bucket.ID, "conv/photo.jpg", "image/jpeg", nil)
+			results <- outcome{reserved, err}
+		}()
+	}
+	winners := 0
+	for range callers {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("ReserveObjectKey: %v", result.err)
+		}
+		if result.reserved {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("reservations won = %d, want exactly 1", winners)
+	}
+
+	if _, err := objects.UpsertObject(ctx, NewObjectInput{BucketID: bucket.ID, Key: "conv/photo.jpg", ByteLength: 42, MediaType: "image/jpeg"}); err != nil {
+		t.Fatalf("UpsertObject over the placeholder: %v", err)
+	}
+	again, err := objects.ReserveObjectKey(ctx, bucket.ID, "conv/photo.jpg", "image/jpeg", nil)
+	if err != nil || again {
+		t.Fatalf("ReserveObjectKey over a stored object = %v, %v; want false, nil", again, err)
+	}
+	rows, err := objects.ListObjects(ctx, bucket.ID, "conv/photo.jpg")
+	if err != nil || len(rows) != 1 || rows[0].ByteLength != 42 {
+		t.Fatalf("stored row after a refused reservation = %+v, %v; want byte_length 42", rows, err)
+	}
+}

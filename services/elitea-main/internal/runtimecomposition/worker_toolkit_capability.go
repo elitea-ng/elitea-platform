@@ -8,8 +8,8 @@ import (
 	"io"
 	"sort"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 const (

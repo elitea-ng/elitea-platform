@@ -30,7 +30,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
 /* ── the fake ──────────────────────────────────────────────────────────── */

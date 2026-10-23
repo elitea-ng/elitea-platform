@@ -103,7 +103,7 @@ function resolveConversationItemDefaults(props: ConversationItemProps): Resolved
  *    reproduced, rather than carried over as dead weight.
  */
 export const ConversationItem = memo(function ConversationItem(props: ConversationItemProps): ReactNode {
-  const { conversation, onSelectConversation, onDelete, onExport, onEdit, onPlayback, onPin, onDuplicate, onCreateConversation, onCancelCreate, onChangeActiveConversationName, onItemHover, projectId, currentUserId, personalProjectId, publicProjectId, onShareLinkCopied } = props;
+  const { conversation, onSelectConversation, onDelete, onExport, onEdit, onPlayback, onPin, onDuplicate, onArchive, onFork, onCreateConversation, onCancelCreate, onChangeActiveConversationName, onItemHover, projectId, currentUserId, personalProjectId, publicProjectId, onShareLinkCopied } = props;
   const { name, chatHistory } = conversation;
   const { isActive, moveToFoldersMenuItems, isEditingCanvas, enableDragAndDrop, isDragDisabled, isNextItemHovered, basename, isPlayback, isPinned, isNamingPending, isNew } = resolveConversationItemDefaults(props);
 
@@ -112,6 +112,7 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
 
   const hasFolderCreatePermission = useHasPermission(projectId, PERMISSIONS.chat.folders.create);
   const hasFolderUpdatePermission = useHasPermission(projectId, PERMISSIONS.chat.folders.update);
+  const hasArchivePermission = useHasPermission(projectId, PERMISSIONS.chat.archive);
 
   const [isHovering, setIsHovering] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -174,6 +175,16 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
     onDuplicate(conversation);
   }, [conversation, onDuplicate]);
 
+  // Archive and Fork: optional entries, one memo so `menuItemsHandlers` stays under the §3.5 `hook-deps` budget.
+  // Without the archive right the server answers 403, so Archive is not offered at all.
+  const listHandlers = useMemo(
+    () => ({
+      onArchive: onArchive === undefined || !hasArchivePermission ? undefined : () => onArchive(conversation),
+      onFork: onFork === undefined ? undefined : () => onFork(conversation),
+    }),
+    [conversation, onArchive, onFork, hasArchivePermission],
+  );
+
   const handleShareConversation = useCallback(async () => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
     const destinationUrl = `${baseUrl}${basename}/${String(projectId)}/chat/${conversation.id}?${SearchParams.Name}=${conversation.name.replaceAll(' ', '+')}&${SearchParams.SharedChat}=1`;
@@ -223,8 +234,9 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
       onPlayback: handlePlayback,
       onPin: handlePin,
       onDuplicate: handleDuplicate,
+      ...listHandlers,
     }),
-    [handleDelete, handleEdit, onExport, menuItemsVisibilityHandlers, handlePlayback, handlePin, handleDuplicate],
+    [handleDelete, handleEdit, onExport, menuItemsVisibilityHandlers, handlePlayback, handlePin, handleDuplicate, listHandlers],
   );
 
   const menuItems = useMemo<ControlsDropdownItem[]>(() => {
@@ -284,6 +296,7 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
   const row = (
     <ConversationItemRow
       conversationId={conversation.id}
+      activityRow={conversation}
       name={name}
       firstMessagePreview={firstMessagePreview(chatHistory)}
       isPlayback={isPlayback}

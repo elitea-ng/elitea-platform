@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 type Repository interface {
@@ -521,7 +521,7 @@ func (h *Handler) parseParams(r *http.Request) (analytics.QueryParams, error) {
 	// NORMALISED before dateWindow, not passed through raw. These routes have
 	// always accepted `start_date`/`end_date` as well as the `date_from`/
 	// `date_to` the web client sends, and dateWindow — which is
-	// /analytics_costs' transcription of the pylon reference — reads only the
+	// /analytics_costs' transcription of the legacy reference — reads only the
 	// second pair. Handing it the raw query would silently give a caller using
 	// the first pair the DEFAULT window instead of the one they asked for: a
 	// plausible wrong answer rather than an error, over a range nobody

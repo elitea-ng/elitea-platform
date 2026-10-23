@@ -194,14 +194,14 @@ transition: END
         node.input_mapping().get("messages"),
         Some(LlmInputMapping::Variable(value)) if value == "messages"
     ));
-    assert!(node.tool_selections().is_empty());
+    assert_eq!(node.tool_selections(), []);
     assert_eq!(node.input_keys(), ["messages"]);
 
     let empty_ui_selection = LlmNodeDefinition::from_yaml(
         "id: answer\ntype: llm\ntool_names:\n  jira: []\ntransition: END\n",
     )
     .expect("empty UI toolkit selection");
-    assert!(empty_ui_selection.tool_selections().is_empty());
+    assert_eq!(empty_ui_selection.tool_selections(), []);
 }
 
 #[derive(Default)]

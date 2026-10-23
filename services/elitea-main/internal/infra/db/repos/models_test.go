@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -62,17 +62,6 @@ func TestCurrentModelsRepositoryPreservesSectionShapesAndPublicSharedFilter(t *t
 		assert     func(*testing.T, configurationapp.CurrentModelCatalogItem)
 	}{
 		{
-			name:    "vector storage uses title without parsing unrelated data",
-			section: configurationapp.CurrentModelSectionVectorStorage,
-			row:     currentModelRow(1, 7, configurationapp.CurrentModelSectionVectorStorage, "", false, `[]`),
-			assert: func(t *testing.T, item configurationapp.CurrentModelCatalogItem) {
-				t.Helper()
-				if item.Name != "title-1" || item.DisplayName != nil {
-					t.Fatalf("vector storage item=%#v", item)
-				}
-			},
-		},
-		{
 			name:       "public shared model remains marked shared",
 			section:    configurationapp.CurrentModelSectionTTS,
 			row:        currentModelRow(2, 1, configurationapp.CurrentModelSectionTTS, "Voice", true, `{"name":"voice-one"}`),
@@ -99,6 +88,22 @@ func TestCurrentModelsRepositoryPreservesSectionShapesAndPublicSharedFilter(t *t
 				t.Fatalf("shared-only query=%#v", queries.params)
 			}
 		})
+	}
+}
+
+// The vector storage section held only rows of the retired pgvector type: a
+// stored row is never offered, so the section is empty and nothing is read.
+func TestCurrentModelsRepositoryOffersNoVectorStorage(t *testing.T) {
+	queries := &currentModelQueriesStub{rows: []sqlcgen.ListCurrentModelConfigurationsRow{
+		currentModelRow(1, 7, configurationapp.CurrentModelSectionVectorStorage, "", false, `{}`),
+	}}
+	repository := newCurrentModelsRepositoryForTest(t, &currentModelProjectStore{}, queries)
+	items, err := repository.List(context.Background(), 7, configurationapp.CurrentModelSectionVectorStorage, false)
+	if err != nil || items == nil || len(items) != 0 {
+		t.Fatalf("items=%#v err=%v, want an empty non-nil list", items, err)
+	}
+	if queries.params.Section != "" {
+		t.Fatalf("the retired section was queried: %#v", queries.params)
 	}
 }
 

@@ -6,17 +6,24 @@
  *
  * Workspace pages draw their own header (folder, project, agent) and the
  * changes panel; every other page (the Elitea features, Settings) gets a slim
- * title row with the way back to the folders.
+ * title row: the window's drag region, the name of what is open
+ * (`PageTitle.tsx`: `Chats ▸ folder ▸ conversation`, or the page's name) and
+ * the sidebar and inspector toggles. The sidebar is the way to everything, so
+ * the row has no "back" button. A page with an inspector (the chat's
+ * participants, Local work's changes, approvals and index) contributes tabs
+ * to the frame's ONE full-height right panel through
+ * `shared/desktop/inspectorSlot` (`InspectorPane.tsx`).
+ *
+ * The chat page shows no conversation list of its own in the frame: the
+ * sidebar's Chats rows are the one list (a hidden sidebar shows none, as in
+ * Mail). Both the sidebar and the title read ONE chat rail
+ * (`model/chatRail.tsx`), while the Chats row is there.
  */
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
-import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
-import Snackbar from '@mui/material/Snackbar';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 
@@ -25,8 +32,10 @@ import { t } from '@/shared/i18n';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
 import { eliteaItems } from '../lib/eliteaSections';
+import { ChatRailProvider } from '../model/chatRail';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { useAppIpc } from '../model/appIpcContext';
+import { useActivityFeedSources } from '../model/useActivityFeedSources';
 import { useHostIntegration } from '../model/useHostIntegration';
 import { useNativeWindowTheme } from '../model/useNativeWindowTheme';
 import { useRouteLogging } from '../model/useRouteLogging';
@@ -34,7 +43,10 @@ import { useShellActions } from '../model/useShellActions';
 import { useShellLocation } from '../model/useShellLocation';
 import { CommandPalette } from './CommandPalette';
 import { DesktopSidebar } from './DesktopSidebar';
+import { InspectorPane, InspectorSlotScope, InspectorToggle, InspectorWindows, useInspectorHost, useInspectorView } from './InspectorPane';
 import { NativeLook } from './NativeLook';
+import { BannerStack, NoticeBanner } from './NoticeBanner';
+import { PageTitle } from './PageTitle';
 import { ReclaimRequestToast } from './ReclaimRequestToast';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
@@ -60,17 +72,24 @@ export function ShowSidebarButton(): React.JSX.Element | null {
   );
 }
 
-function ShellNotice(): React.JSX.Element {
+function ShellNotice(): React.JSX.Element | null {
   const notice = useDesktopLayout((state) => state.notice);
   const close = (): void => useDesktopLayout.getState().setNotice(null);
+  // Fades itself after a while, like a status message.
+  useEffect(() => {
+    if (notice === null) return undefined;
+    const timer = window.setTimeout(close, NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  if (notice === null) return null;
   return (
-    <Snackbar open={notice !== null} onClose={close} autoHideDuration={8000} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
-      <Alert severity="warning" onClose={close} variant="filled">
-        {notice ?? ''}
-      </Alert>
-    </Snackbar>
+    <NoticeBanner tone="warning" testId="shell-notice" onClose={close}>
+      {notice}
+    </NoticeBanner>
   );
 }
+
+const NOTICE_MS = 8000;
 
 export function DesktopFrame({ children, permissions, projects, selectedProjectId, onSelectProject }: DesktopFrameProps): React.JSX.Element {
   const run = useShellActions();
@@ -78,51 +97,66 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
   useHostIntegration(run, ipc);
   useNativeWindowTheme(ipc);
   useRouteLogging();
+  useActivityFeedSources();
   const location = useShellLocation();
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   const items = useMemo(() => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)), [permissions, selectedProjectId]);
+  const inspector = useInspectorHost(ipc);
+  const inspectorOpen = useDesktopLayout((state) => state.changesOpen);
+  const maximized = useDesktopLayout((state) => state.inspectorMaximized);
+  // A maximized inspector takes the main column's place while it is on screen; the page stays mounted under it.
+  const inspectorGroups = useInspectorView(inspector);
+  const inspectorShown = inspectorOpen && inspectorGroups.length > 0;
+  const mainHidden = maximized && inspectorShown;
 
   return (
     <NativeLook>
-      {/* `clip`, not `hidden`: a hidden box can still be scrolled by code (a pane's scrollIntoView), which shifted the whole window. */}
-      <Box data-testid="desktop-frame" sx={{ display: 'flex', height: '100vh', overflow: 'clip' }}>
-        {sidebarOpen && (
-          <DesktopSidebar
-            location={location}
-            run={run}
-            permissions={permissions}
-            projects={projects}
-            selectedProjectId={selectedProjectId}
-            onSelectProject={onSelectProject}
-          />
-        )}
-        <Box
-          component="main"
-          sx={(theme: Theme) => ({
-            flex: 1,
-            minWidth: 0,
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            background: theme.vars.palette.background.default,
-          })}
-        >
-          {!location.inFolders && (
-            <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-              <TitleBarSpacer leading={!sidebarOpen} logo={false}>
-                <ShowSidebarButton />
-                <Button size="small" startIcon={<ArrowBackIcon />} onClick={() => run({ type: 'folders' })}>
-                  {t('desktop.shell.backToLocalWork', 'Local work')}
-                </Button>
-              </TitleBarSpacer>
+      <ChatRailProvider projectId={selectedProjectId} enabled={items.some((item) => item.value === 'chat')}>
+        <InspectorSlotScope host={inspector}>
+          {/* `clip`, not `hidden`: a hidden box can still be scrolled by code (a pane's scrollIntoView), which shifted the whole window. */}
+          <Box data-testid="desktop-frame" sx={{ display: 'flex', height: '100vh', overflow: 'clip' }}>
+            {sidebarOpen && (
+              <DesktopSidebar
+                location={location}
+                run={run}
+                permissions={permissions}
+                projects={projects}
+                selectedProjectId={selectedProjectId}
+                onSelectProject={onSelectProject}
+              />
+            )}
+            <Box
+              component="main"
+              sx={(theme: Theme) => ({
+                flex: 1,
+                minWidth: 0,
+                height: '100vh',
+                display: mainHidden ? 'none' : 'flex',
+                flexDirection: 'column',
+                background: theme.vars.palette.background.default,
+                position: 'relative',
+              })}
+            >
+              {!location.inFolders && (
+                <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
+                  <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
+                    <ShowSidebarButton />
+                    <PageTitle pathname={location.pathname} items={items} projectId={selectedProjectId} />
+                  </TitleBarSpacer>
+                </Box>
+              )}
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
+              <BannerStack>
+                <ShellNotice />
+                <ReclaimRequestToast run={run} />
+              </BannerStack>
             </Box>
-          )}
-          <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
-        </Box>
-        <CommandPalette items={items} run={run} />
-        <ShellNotice />
-        <ReclaimRequestToast run={run} />
-      </Box>
+            <InspectorPane host={inspector} />
+            <InspectorWindows host={inspector} />
+            <CommandPalette items={items} run={run} />
+          </Box>
+        </InspectorSlotScope>
+      </ChatRailProvider>
     </NativeLook>
   );
 }

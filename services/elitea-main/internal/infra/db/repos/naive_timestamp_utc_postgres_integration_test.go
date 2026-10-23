@@ -1,11 +1,12 @@
 package repos
 
 // The tenant chat tables keep `created_at`/`updated_at` as `timestamp`
-// WITHOUT time zone, and their meaning is the UTC wall clock: pylon wrote them
-// with server_default now() in UTC containers, and the web client appends `Z`
-// to a naive timestamp before it parses one. Postgres converts a timestamptz
-// (now(), clock_timestamp(), a DEFAULT now()) into such a column through the
-// SESSION time zone, so a writer is right only if it says AT TIME ZONE 'UTC'.
+// WITHOUT time zone, and their meaning is the UTC wall clock: the legacy
+// runtime wrote them with server_default now() in UTC containers, and the web
+// client appends `Z` to a naive timestamp before it parses one. Postgres
+// converts a timestamptz (now(), clock_timestamp(), a DEFAULT now()) into such
+// a column through the SESSION time zone, so a writer is right only if it says
+// AT TIME ZONE 'UTC'.
 //
 // Every test connection in this module runs in a non-UTC session
 // (internal/testpg). The tests here pin that, and pin that
@@ -24,14 +25,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 )
 
 // naiveUTCSkew bounds how far a stored stamp may sit from the UTC clock read

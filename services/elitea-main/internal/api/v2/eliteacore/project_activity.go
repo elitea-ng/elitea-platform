@@ -24,23 +24,24 @@ package eliteacore
 //
 // ## One deliberate divergence
 //
-// pylon groups by `(user_id, user_email)`. `user_email` is denormalised onto
-// every audit row at write time, so a user whose address changed — or whose
-// events were written by two code paths that spell it differently — occupies
-// TWO rows there, both keyed to the same `user_id`. The client indexes its
-// activity map by `user_id` (`activityMap.set(row.user_id, row.event_count)`),
-// so the second row silently overwrites the first and the square shows a
-// PARTIAL count. This groups by `user_id` alone and reports the address from
-// the most recent event, so each user appears exactly once with their whole
-// count. It is the same row-multiplication shape as the admin user listing's
-// LEFT JOIN, one aggregation level up.
+// The legacy runtime groups by `(user_id, user_email)`. `user_email` is
+// denormalised onto every audit row at write time, so a user whose address
+// changed — or whose events were written by two code paths that spell it
+// differently — occupies TWO rows there, both keyed to the same `user_id`. The
+// client indexes its activity map by `user_id` (`activityMap.set(row.user_id,
+// row.event_count)`), so the second row silently overwrites the first and the
+// square shows a PARTIAL count. This groups by `user_id` alone and reports the
+// address from the most recent event, so each user appears exactly once with
+// their whole count. It is the same row-multiplication shape as the admin user
+// listing's LEFT JOIN, one aggregation level up.
 //
 // ## Authorisation
 //
-// Gated in internal/api/router.go on the permission the pylon original declares
-// (`models.admin.audit_trail.view`), resolved from auth_core__user_role per
-// request — the same gate the audit reads carry, because this is the same data
-// counted differently. No event content is written to a log line.
+// Gated in internal/api/router.go on the permission the legacy original
+// declares (`models.admin.audit_trail.view`), resolved from
+// auth_core__user_role per request — the same gate the audit reads carry,
+// because this is the same data counted differently. No event content is
+// written to a log line.
 
 import (
 	"context"
@@ -49,7 +50,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // projectUserActivityRow is one member's event count. `user_email` is nullable

@@ -14,8 +14,13 @@
  *      had named the missing prerequisite in a sentence written for a human,
  *      and the client threw it away.
  *   2. The screen therefore looked like an empty-but-healthy feature while it
- *      was in fact unusable until a vector store exists.
+ *      was in fact unusable.
  *   3. Nothing anywhere connected the two facts.
+ *
+ * (That particular prerequisite is gone: indexes are kept in the platform
+ * vector store, elitea-vector, and need no PgVector configuration. The rule
+ * it exposed — a failed read is a failure, not an empty list — is what §2
+ * keeps proving, with another sentence the same handler writes.)
  *
  * `toolkits.lifecycle.spec.ts`'s J17.5 beside this folder already proves the
  * HAPPY read: the tab is offered, the container mounts, `index_meta` answers
@@ -26,8 +31,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE SERVER STATES ARE INJECTED, AND WHY THAT IS NOT A WEAKER TEST
  * ─────────────────────────────────────────────────────────────────────────────
- * Both failures are properties of a stack that is MISCONFIGURED — a project
- * with no PgVector configuration, a worker that cannot import a toolkit class.
+ * Both failures are properties of a stack that is MISCONFIGURED — an
+ * index-meta read the server refuses, a worker that cannot import a toolkit
+ * class.
  * The E2E stack is configured correctly, on purpose, and breaking it for one
  * spec would break every other spec sharing it (only one standalone stack can
  * be up per host — see `scripts/index-stream-e2e.sh`).
@@ -37,8 +43,8 @@
  * stream to prove the terminal state is not invented client-side. What is
  * under test here is entirely on the client: whether a real browser, running
  * the real bundle, on the real route, renders a reason. The bodies injected
- * are not invented either — §2's is the byte-for-byte response the parity walk
- * recorded, and §3's is the shape `type_catalogue.go:232-240` writes.
+ * are not invented either — §2's is a sentence `index_meta.go` really writes,
+ * and §3's is the shape `type_catalogue.go:232-240` writes.
  *
  * §1 is the control, and it is what stops §2 and §3 being vacuous: the SAME
  * toolkit, with nothing intercepted, must still show the working tab. A change
@@ -141,20 +147,20 @@ test('the working tab still works: a healthy read shows the empty state, not an 
   await checkA11y(page);
 });
 
-/* ── §2. THE MEASURED FAILED READ ────────────────────────────────────────── */
+/* ── §2. A FAILED READ ──────────────────────────────────────────────────── */
 
-test('a failed index_meta read names the prerequisite instead of claiming the project is empty', async ({ page }) => {
+test('a failed index_meta read shows the server’s reason instead of claiming the project is empty', async ({ page }) => {
   await skipWhenIndexTypesAbsent(page.request);
   const toolkit = await createIndexCapableToolkit(page);
 
-  // The exact response the parity walk recorded, injected on the rail's own
+  // A 400 the index-meta handler really writes, injected on the rail's own
   // request. Everything else on the page — the toolkit, the type catalogue,
   // the form — comes from the real stack.
   await page.route(INDEX_META_RE, (route) =>
     route.fulfill({
       status: 400,
       contentType: 'application/json',
-      body: JSON.stringify({ error: 'PGVector configuration is missing for toolkit 1' }),
+      body: JSON.stringify({ error: 'Toolkit id is missing for toolkit 1' }),
     }),
   );
 
@@ -166,11 +172,9 @@ test('a failed index_meta read names the prerequisite instead of claiming the pr
   // The server's own sentence, verbatim. A generic "could not load" line would
   // keep the failure visible and still throw away the diagnosis, which is the
   // half that makes it actionable.
-  await expect(failure).toContainText('PGVector configuration is missing for toolkit 1');
+  await expect(failure).toContainText('Toolkit id is missing for toolkit 1');
   // The status, so a 502 is not read as a rejection.
   await expect(failure).toContainText('400');
-  // And the route out, which the sentence alone does not give.
-  await expect(failure).toContainText(/Create a PgVector configuration in Settings/);
 
   // THE REGRESSION ITSELF. This is the line that fails against the shipped
   // build the parity walk measured.
@@ -180,7 +184,7 @@ test('a failed index_meta read names the prerequisite instead of claiming the pr
   ).toHaveCount(0);
 
   // The user is not trapped: the create affordance stays reachable, so a
-  // prerequisite fixed in another tab can be used without a reload.
+  // retry is one click away without a reload.
   await expect(panel.getByRole('button', { name: 'Add index' })).toBeVisible();
 });
 

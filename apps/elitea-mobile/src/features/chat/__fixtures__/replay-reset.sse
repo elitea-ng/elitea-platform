@@ -1,0 +1,14 @@
+: fixture replay-reset.sse: frames before the resume cursor were pruned; the client refills from REST
+
+id: 1
+event: execution.replay_reset
+data: {"reason":"progress_retention_window_elapsed"}
+
+id: 2
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:01Z","content":"tail"}
+
+id: 3
+event: execution.node_event
+data: {"type":"agent_response","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:02Z","content":"whole tail","response_metadata":{"finish_reason":"stop"}}
+

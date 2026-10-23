@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -155,12 +155,12 @@ func (s claimControllerStub) VerifyActive(_ context.Context, fence runtimedomain
 	return nil
 }
 
-func (s claimControllerStub) ObserveDesiredState(_ context.Context, fence runtimedomain.Fence) (runtimedomain.DesiredState, error) {
+func (s claimControllerStub) ObserveDesiredState(_ context.Context, fence runtimedomain.Fence) (runtimedomain.ObservedExecution, error) {
 	*s.calls = append(*s.calls, "observe-desired-state")
 	if fence != s.lease.Fence {
-		return "", runtimedomain.ErrStaleFence
+		return runtimedomain.ObservedExecution{}, runtimedomain.ErrStaleFence
 	}
-	return s.lease.DesiredState, nil
+	return runtimedomain.ObservedExecution{DesiredState: s.lease.DesiredState, CapabilityID: s.lease.CapabilityID}, nil
 }
 
 type settlementControllerStub struct {
@@ -1424,9 +1424,13 @@ func TestExpectedInputRolesRefusesAToolRunWithOneEntryForBoth(t *testing.T) {
 type wrapUpStub struct {
 	pending map[string]bool
 	err     error
+	calls   *int
 }
 
 func (s wrapUpStub) WrapUpRequested(_ context.Context, executionID string) (bool, error) {
+	if s.calls != nil {
+		*s.calls++
+	}
 	return s.pending[executionID], s.err
 }
 
@@ -1437,6 +1441,7 @@ func (s wrapUpStub) WrapUpRequested(_ context.Context, executionID string) (bool
 func TestLeasePollCarriesTheWorkspaceWrapUpSignal(t *testing.T) {
 	calls := []string{}
 	lease := validLease()
+	lease.CapabilityID = executiondomain.AgentApplicationCapability
 	newServer := func(lease runtimedomain.ActiveLease, wrapUps WorkspaceWrapUps) *Server {
 		server, err := NewServer(testControlServerConfig(), workloadAuthorizerStub{calls: &calls},
 			verifierSpy{calls: &calls, verifier: newTestVerifier(t)}, claimControllerStub{calls: &calls, lease: lease},
@@ -1484,5 +1489,38 @@ func TestLeasePollCarriesTheWorkspaceWrapUpSignal(t *testing.T) {
 	if response := renew(newServer(cancelled, pending)); response.GetWorkspaceWrapUp() ||
 		response.GetDesiredState() != runtimev1.DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_CANCELLED {
 		t.Fatalf("a cancelled turn = %v", response)
+	}
+	adhoc := lease
+	adhoc.CapabilityID = executiondomain.AgentAdhocCapability
+	if !renew(newServer(adhoc, pending)).GetWorkspaceWrapUp() {
+		t.Fatal("an ad-hoc agent turn was not told to wrap up")
+	}
+
+	// #1311: the poll is hot, so a kind that can never be a cloud turn does
+	// not ask the store at all, on either poll.
+	for _, capabilityID := range []string{
+		executiondomain.IndexIngestCapability,
+		executiondomain.ToolkitCallToolCapability,
+		executiondomain.ToolkitExecuteReadCapability,
+		executiondomain.ConfigurationValidationCapability,
+		"",
+	} {
+		other := lease
+		other.CapabilityID = capabilityID
+		lookups := 0
+		counting := wrapUpStub{pending: map[string]bool{lease.Fence.ExecutionID: true}, calls: &lookups}
+		if renew(newServer(other, counting)).GetWorkspaceWrapUp() || observe(newServer(other, counting)).GetWorkspaceWrapUp() {
+			t.Fatalf("capability %q was told to wrap up", capabilityID)
+		}
+		if lookups != 0 {
+			t.Fatalf("capability %q: %d take-back lookups, want 0", capabilityID, lookups)
+		}
+	}
+	lookups := 0
+	counting := wrapUpStub{calls: &lookups}
+	renew(newServer(lease, counting))
+	observe(newServer(lease, counting))
+	if lookups != 2 {
+		t.Fatalf("agent turn: %d take-back lookups, want one per poll", lookups)
 	}
 }

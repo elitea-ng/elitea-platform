@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func newGrantTestRouter(h *artifacts.Handler) chi.Router {
@@ -77,8 +78,10 @@ func TestArtifactGrantCreatePresignedPutReturnsRealPresignedURL(t *testing.T) {
 	if !strings.HasPrefix(resp.URL, "https://presigned.example.test/put/") {
 		t.Fatalf("url = %q, want a real presigned PUT URL", resp.URL)
 	}
-	if !strings.HasSuffix(resp.URL, resp.GrantID) {
-		t.Fatalf("url = %q, want it to end with grant_id %q (the server-derived key)", resp.URL, resp.GrantID)
+	// The URL addresses the grant's STAGING key, never grant_id itself: the
+	// committed object lives at grant_id, out of the URL's reach.
+	if !strings.HasSuffix(resp.URL, "/"+resp.GrantID+".upload") {
+		t.Fatalf("url = %q, want it to end with the staging key %q", resp.URL, resp.GrantID+".upload")
 	}
 	if resp.Method != "PUT" || resp.ContentType != "image/png" || resp.MaxBytes != 1024 {
 		t.Fatalf("resp = %+v", resp)
@@ -284,6 +287,287 @@ func TestArtifactGrantCommitProducesListableObjectAndConsumesGrant(t *testing.T)
 	r.ServeHTTP(rr2, httptest.NewRequest(http.MethodPost, "/grants/1/"+grantID+":commit", nil))
 	if rr2.Code != http.StatusConflict {
 		t.Fatalf("second commit: status = %d, want 409; body=%s", rr2.Code, rr2.Body.String())
+	}
+}
+
+// presignedGrantKey is the key a presigned grant URL addresses (fakeStore's
+// PresignPut puts it after "/put/").
+func presignedGrantKey(t *testing.T, url string) string {
+	t.Helper()
+	_, key, ok := strings.Cut(url, "https://presigned.example.test/put/")
+	if !ok || key == "" {
+		t.Fatalf("url = %q is not a fake presigned PUT URL", url)
+	}
+	return key
+}
+
+func downloadGrantObject(t *testing.T, h *artifacts.Handler, key string) []byte {
+	t.Helper()
+	r := chi.NewRouter()
+	r.Get("/objects/{projectID}/{bucket}/*", h.DownloadObject)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/objects/1/reports/"+key, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("download %q: status = %d; body=%s", key, rr.Code, rr.Body.String())
+	}
+	return rr.Body.Bytes()
+}
+
+// A presigned PUT URL cannot be revoked and outlives the commit. It used to
+// address the committed object itself, so a PUT after the commit replaced
+// verified bytes with unverified ones, past the digest, size and quota checks
+// (follow-up to #1290). The URL now addresses a staging key: the commit
+// copies it to grant_id and verifies the copy, and a later PUT changes
+// nothing the artifact serves.
+func TestArtifactGrantPresignedPutAfterCommitDoesNotChangeTheServedObject(t *testing.T) {
+	h, repo, store := newObjectTestHandler(t)
+	store.presign = true
+	r := newGrantTestRouter(h)
+
+	content := []byte("verified bytes")
+	digest := sha256.Sum256(content)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, newGrantRequest(t, "/grants/1/reports", `{"method":"PUT","content_type":"text/plain","max_bytes":64,"digest_alg":"sha256","digest":"`+hex.EncodeToString(digest[:])+`"}`))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create grant: status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	grant := decodeGrantResponse(t, rr.Body)
+	urlKey := presignedGrantKey(t, grant.URL)
+	if urlKey == grant.GrantID {
+		t.Fatalf("the grant URL addresses the committed key %q", urlKey)
+	}
+	simulateGrantUpload(t, store, urlKey, "text/plain", content)
+
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant.GrantID+":commit", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("commit: status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	var committed struct {
+		Key       string `json:"key"`
+		SizeBytes int64  `json:"size_bytes"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &committed); err != nil {
+		t.Fatal(err)
+	}
+	if committed.Key != grant.GrantID || committed.SizeBytes != int64(len(content)) {
+		t.Fatalf("commit response = %+v, want key %q", committed, grant.GrantID)
+	}
+	if store.objectCount() != 1 {
+		t.Fatalf("objects after commit = %d, want 1: the staging object was not deleted", store.objectCount())
+	}
+
+	// The out-of-band rewrite through the still-valid URL.
+	simulateGrantUpload(t, store, urlKey, "text/plain", []byte("unverified, much longer replacement bytes"))
+
+	if got := downloadGrantObject(t, h, grant.GrantID); !bytes.Equal(got, content) {
+		t.Fatalf("served %q after a post-commit PUT, want %q", got, content)
+	}
+	bucket, err := repo.GetBucket(t.Context(), 1, "reports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := repo.objects[fakeObjectKey(bucket.ID, grant.GrantID)]; record.byteLength != int64(len(content)) {
+		t.Fatalf("byte_length = %d, want %d", record.byteLength, len(content))
+	}
+}
+
+// copyingStore is a fakeStore with a server-side copy (storage.ObjectCopier),
+// as S3, GCS and Azure have.
+type copyingStore struct {
+	*fakeStore
+	copies []string
+}
+
+func (s *copyingStore) Copy(_ context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, ok := s.objects[src.StorageKey("")]
+	if !ok {
+		return storage.ObjectInfo{}, storage.ErrNotFound
+	}
+	info.Key = dst.Key()
+	s.objects[dst.StorageKey("")] = info
+	s.data[dst.StorageKey("")] = append([]byte(nil), s.data[src.StorageKey("")]...)
+	s.copies = append(s.copies, src.Key()+"->"+dst.Key())
+	return info, nil
+}
+
+// A backend with a server-side copy commits through it: the bytes do not
+// pass through Main a second time.
+func TestArtifactGrantStagedCommitUsesTheServerSideCopy(t *testing.T) {
+	_, repo, fake := newObjectTestHandler(t)
+	fake.presign = true
+	store := &copyingStore{fakeStore: fake}
+	h := artifacts.NewHandler(repo, store)
+	r := newGrantTestRouter(h)
+
+	grant := createTestGrant(t, r, `{"method":"PUT","content_type":"text/plain","max_bytes":64}`)
+	simulateGrantUpload(t, fake, grant+".upload", "text/plain", []byte("copied"))
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("commit: status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if len(store.copies) != 1 || store.copies[0] != grant+".upload->"+grant {
+		t.Fatalf("copies = %v", store.copies)
+	}
+	if got := downloadGrantObject(t, h, grant); string(got) != "copied" {
+		t.Fatalf("served %q", got)
+	}
+}
+
+// pausingCopyStore holds its FIRST server-side copy until release is closed,
+// so a test can run a second commit while the first one is mid-copy.
+type pausingCopyStore struct {
+	*copyingStore
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *pausingCopyStore) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	first := false
+	s.once.Do(func() { first = true })
+	if first {
+		close(s.entered)
+		<-s.release
+	}
+	return s.copyingStore.Copy(ctx, src, dst)
+}
+
+// Two concurrent commits on one staged grant: exactly one wins, and the
+// object the winner reported is the one served. Without a claim before the
+// copy, both passed the consumed_at read; the later copy then replaced the
+// winner's verified, registered object with whatever the still-valid URL
+// held by then.
+func TestArtifactGrantConcurrentStagedCommitsHaveOneWinnerAndKeepItsObject(t *testing.T) {
+	_, repo, fake := newObjectTestHandler(t)
+	fake.presign = true
+	store := &pausingCopyStore{
+		copyingStore: &copyingStore{fakeStore: fake},
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	h := artifacts.NewHandler(repo, store)
+	r := newGrantTestRouter(h)
+
+	grant := createTestGrant(t, r, `{"method":"PUT","content_type":"text/plain","max_bytes":64}`)
+	simulateGrantUpload(t, fake, grant+".upload", "text/plain", []byte("first"))
+
+	commit := func() *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+		return rr
+	}
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { firstDone <- commit() }()
+	<-store.entered
+
+	second := commit()
+	// The still-valid URL is rewritten while the first commit is mid-copy.
+	simulateGrantUpload(t, fake, grant+".upload", "text/plain", []byte("second, longer bytes"))
+	close(store.release)
+	first := <-firstDone
+
+	var winner *httptest.ResponseRecorder
+	for _, rr := range []*httptest.ResponseRecorder{first, second} {
+		switch rr.Code {
+		case http.StatusOK:
+			if winner != nil {
+				t.Fatalf("both commits succeeded")
+			}
+			winner = rr
+		case http.StatusConflict:
+		default:
+			t.Fatalf("commit: status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+	if winner == nil {
+		t.Fatalf("no commit succeeded: first=%d %s second=%d %s", first.Code, first.Body.String(), second.Code, second.Body.String())
+	}
+	var committed struct {
+		SizeBytes int64 `json:"size_bytes"`
+	}
+	if err := json.Unmarshal(winner.Body.Bytes(), &committed); err != nil {
+		t.Fatal(err)
+	}
+	served := downloadGrantObject(t, h, grant)
+	if int64(len(served)) != committed.SizeBytes {
+		t.Fatalf("served %q (%d bytes), but the winning commit registered %d bytes", served, len(served), committed.SizeBytes)
+	}
+	bucket, err := repo.GetBucket(t.Context(), 1, "reports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := repo.objects[fakeObjectKey(bucket.ID, grant)]; record.byteLength != committed.SizeBytes {
+		t.Fatalf("byte_length = %d, want %d", record.byteLength, committed.SizeBytes)
+	}
+}
+
+// A commit that fails verification hands its claim back: the caller can fix
+// the upload and commit the same grant again.
+func TestArtifactGrantStagedCommitCanBeRetriedAfterARejection(t *testing.T) {
+	h, _, store := newObjectTestHandler(t)
+	store.presign = true
+	r := newGrantTestRouter(h)
+
+	content := []byte("expected")
+	declared := sha256.Sum256(content)
+	grant := createTestGrant(t, r, `{"method":"PUT","content_type":"text/plain","max_bytes":64,"digest_alg":"sha256","digest":"`+hex.EncodeToString(declared[:])+`"}`)
+	simulateGrantUpload(t, store, grant+".upload", "text/plain", []byte("something else"))
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("first commit: status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+
+	simulateGrantUpload(t, store, grant+".upload", "text/plain", content)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("retried commit: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := downloadGrantObject(t, h, grant); !bytes.Equal(got, content) {
+		t.Fatalf("served %q", got)
+	}
+}
+
+// The copy is what commit verifies, so a staged upload that fails a check
+// leaves neither the copy nor a metadata row behind, and the grant stays
+// uncommitted.
+func TestArtifactGrantStagedCommitWithMismatchedDigestDeletesTheCopy(t *testing.T) {
+	h, repo, store := newObjectTestHandler(t)
+	store.presign = true
+	r := newGrantTestRouter(h)
+
+	declared := sha256.Sum256([]byte("expected"))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, newGrantRequest(t, "/grants/1/reports", `{"method":"PUT","content_type":"text/plain","max_bytes":64,"digest_alg":"sha256","digest":"`+hex.EncodeToString(declared[:])+`"}`))
+	grant := decodeGrantResponse(t, rr.Body)
+	urlKey := presignedGrantKey(t, grant.URL)
+	simulateGrantUpload(t, store, urlKey, "text/plain", []byte("something else"))
+
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant.GrantID+":commit", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("commit: status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	ref, err := storage.NewObjectRef("1", "reports", grant.GrantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stat(t.Context(), ref); err == nil {
+		t.Fatal("the rejected copy is still at the final key")
+	}
+	bucket, err := repo.GetBucket(t.Context(), 1, "reports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := repo.objects[fakeObjectKey(bucket.ID, grant.GrantID)]; ok {
+		t.Fatal("a rejected staged commit recorded metadata")
 	}
 }
 

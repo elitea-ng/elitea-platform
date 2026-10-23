@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type currentProjectInfoReaderStub struct {
@@ -131,13 +132,12 @@ func TestCurrentProjectInfoRouteAuthenticatesAndAuthorizesBeforeRead(t *testing.
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:          "untrusted forwarded identity",
-			method:        http.MethodGet,
-			path:          "/api/v2/elitea_core/project_info/prompt_lib/7/project-info",
-			remoteAddr:    "192.0.2.9:443",
-			authenticated: true,
-			allowed:       true,
-			wantStatus:    http.StatusUnauthorized,
+			name:       "forged X-Auth-* identity without a session",
+			method:     http.MethodGet,
+			path:       "/api/v2/elitea_core/project_info/prompt_lib/7/project-info",
+			remoteAddr: "192.0.2.9:443",
+			allowed:    true,
+			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:          "suspended principal",
@@ -296,7 +296,6 @@ func TestCurrentProjectInfoRouteRejectsIncompleteComposition(t *testing.T) {
 	principal := currentProjectInfoPrincipalValidatorFunc(
 		func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },
 	)
-	peer := currentProjectInfoPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentProjectInfoPermissionResolverFunc(
 		func(
 			context.Context,
@@ -308,8 +307,8 @@ func TestCurrentProjectInfoRouteRejectsIncompleteComposition(t *testing.T) {
 		},
 	)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}
 
 	for name, test := range map[string]struct {
@@ -318,7 +317,7 @@ func TestCurrentProjectInfoRouteRejectsIncompleteComposition(t *testing.T) {
 		permissions auth.PermissionResolver
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing peer proof":  {reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
@@ -381,14 +380,7 @@ func newCurrentProjectInfoRoute(
 		reader,
 		apimw.AuthConfig{
 			PrincipalValidator: principal,
-			ForwardedIdentityVerifier: currentProjectInfoPeerVerifierFunc(
-				func(request *http.Request) error {
-					if request.RemoteAddr != "10.0.0.8:43120" {
-						return errors.New("untrusted peer")
-					}
-					return nil
-				},
-			),
+			FormSessions:       authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -408,8 +400,11 @@ func currentProjectInfoRequest(
 	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = remoteAddr
 	if authenticated {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", userID)
+		authtest.SignIn(request, userID)
+	} else {
+		// No credential, but the forged X-Auth-* identity the retired edge
+		// projection used: it must authenticate nobody (#1359).
+		authtest.ForgeXAuth(request, userID)
 	}
 	return request
 }
@@ -440,12 +435,4 @@ func (function currentProjectInfoPrincipalValidatorFunc) ValidatePrincipal(
 	user auth.User,
 ) (auth.User, error) {
 	return function(ctx, user)
-}
-
-type currentProjectInfoPeerVerifierFunc func(*http.Request) error
-
-func (function currentProjectInfoPeerVerifierFunc) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	return function(request)
 }

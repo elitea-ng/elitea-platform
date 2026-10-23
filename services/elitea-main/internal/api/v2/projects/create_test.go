@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,9 +21,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // stubProvisioner records what the handler passed down. Each hook defaults to a
@@ -190,8 +189,8 @@ func TestCreateProjectIsGated(t *testing.T) {
 }
 
 // TestCreateProjectAnswersOnlyTheAdministrationMode reproduces the reference's
-// route table: pylon registers create on AdminAPI alone, and ProjectAPI has no
-// `post`, so `POST /projects/project/default` is a 404 there.
+// route table: the legacy runtime registers create on AdminAPI alone, and
+// ProjectAPI has no `post`, so `POST /projects/project/default` is a 404 there.
 func TestCreateProjectAnswersOnlyTheAdministrationMode(t *testing.T) {
 	unreachable := unreachableProvisioner(t)
 	router := createRouter(t,
@@ -468,20 +467,19 @@ func TestDeleteProjectAnswersNotFoundToTheLoserOfTwoDeletes(t *testing.T) {
 	}
 }
 
-// The project is gone but its vector database is not: 202 Accepted naming the
-// database, listing the pending step and carrying the per-step detail; the
-// cleanup journal retries the drop.
-func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
+// The project is gone but its vectors are not: 202 Accepted listing the
+// pending step and carrying the per-step detail; the cleanup journal retries
+// it.
+func TestDeleteProjectListsTheVectorStepItCouldNotFinish(t *testing.T) {
 	failed := false
 	result := projectprovisioning.Result{
-		ProjectID:      42,
-		VectorDatabase: "project_42",
-		Pending:        []string{projectprovisioning.StepProjectPgvectorDrop},
+		ProjectID: 42,
+		Pending:   []string{projectprovisioning.StepVectorData},
 		RollbackSteps: []projectprovisioning.StepStatus{
-			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "step project_pgvector_drop did not complete"},
+			{Step: projectprovisioning.StepVectorData, Initialized: true, OK: &failed, Msg: "step vector_data did not complete"},
 		},
 	}
-	err := fmt.Errorf("%w: database \"project_42\" remains", projectprovisioning.ErrVectorStoreNotDropped)
+	err := errors.New("vector_data: elitea-vector unavailable")
 
 	recorder := deleteWith(t, result, err)
 
@@ -489,22 +487,18 @@ func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", recorder.Code, recorder.Body.String())
 	}
 	var body struct {
-		Steps    []projectprovisioning.StepStatus `json:"steps"`
-		Pending  []string                         `json:"pending"`
-		Message  string                           `json:"message"`
-		Database string                           `json:"database"`
+		Steps   []projectprovisioning.StepStatus `json:"steps"`
+		Pending []string                         `json:"pending"`
+		Message string                           `json:"message"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
 	}
-	if body.Database != "project_42" {
-		t.Errorf("database = %q, want project_42", body.Database)
-	}
-	if len(body.Steps) != 1 || body.Steps[0].Step != projectprovisioning.StepProjectPgvectorDrop {
+	if len(body.Steps) != 1 || body.Steps[0].Step != projectprovisioning.StepVectorData {
 		t.Errorf("steps = %+v", body.Steps)
 	}
-	if len(body.Pending) != 1 || body.Pending[0] != projectprovisioning.StepProjectPgvectorDrop {
-		t.Errorf("pending = %v, want the drop", body.Pending)
+	if len(body.Pending) != 1 || body.Pending[0] != projectprovisioning.StepVectorData {
+		t.Errorf("pending = %v, want the vector step", body.Pending)
 	}
 	if !strings.Contains(body.Message, "continues in the background") {
 		t.Errorf("message does not say the cleanup continues: %q", body.Message)
@@ -516,23 +510,21 @@ func TestDeleteProjectNamesTheVectorDatabaseItCouldNotDrop(t *testing.T) {
 func TestDeleteProjectListsEveryPendingStepWithoutLeakingErrors(t *testing.T) {
 	failed := false
 	result := projectprovisioning.Result{
-		ProjectID:      42,
-		VectorDatabase: "project_42",
+		ProjectID: 42,
 		Pending: []string{
 			projectprovisioning.StepArtifactBuckets, projectprovisioning.StepProjectSchema,
-			projectprovisioning.StepProjectPgvectorDrop,
+			projectprovisioning.StepVectorData,
 		},
 		RollbackSteps: []projectprovisioning.StepStatus{
 			{Step: projectprovisioning.StepArtifactBuckets, Initialized: true, OK: &failed, Msg: "x"},
 			{Step: projectprovisioning.StepProjectSchema, Initialized: true, OK: &failed, Msg: "z"},
-			{Step: projectprovisioning.StepProjectPgvectorDrop, Initialized: true, OK: &failed, Msg: "y"},
+			{Step: projectprovisioning.StepVectorData, Initialized: true, OK: &failed, Msg: "y"},
 		},
 	}
 	err := errors.Join(
 		projectprovisioning.ErrTenantSchemaNotRemoved,
 		projectprovisioning.ErrArtifactsNotRemoved,
-		fmt.Errorf("%w: database \"project_42\" remains, the cleanup journal retries it: dial tcp 10.0.0.9:5432: secret-detail",
-			projectprovisioning.ErrVectorStoreNotDropped),
+		errors.New("vector_data: dial tcp 10.0.0.9:9443: secret-detail"),
 	)
 
 	recorder := deleteWith(t, result, err)
@@ -541,9 +533,8 @@ func TestDeleteProjectListsEveryPendingStepWithoutLeakingErrors(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", recorder.Code, recorder.Body.String())
 	}
 	var body struct {
-		Steps    []projectprovisioning.StepStatus `json:"steps"`
-		Pending  []string                         `json:"pending"`
-		Database string                           `json:"database"`
+		Steps   []projectprovisioning.StepStatus `json:"steps"`
+		Pending []string                         `json:"pending"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, recorder.Body.String())
@@ -556,8 +547,8 @@ func TestDeleteProjectListsEveryPendingStepWithoutLeakingErrors(t *testing.T) {
 			t.Errorf("the body leaks the underlying error (%s): %s", leak, recorder.Body.String())
 		}
 	}
-	if body.Database != "project_42" || len(body.Steps) != 3 {
-		t.Errorf("database=%q steps=%d, want project_42 and the 3 steps", body.Database, len(body.Steps))
+	if len(body.Steps) != 3 {
+		t.Errorf("steps=%d, want the 3 steps", len(body.Steps))
 	}
 }
 

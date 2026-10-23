@@ -16,9 +16,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 type bindingResolver struct {
@@ -36,7 +36,9 @@ func (r *bindingResolver) ResolveDelegatedAuthToolkitSettings(
 	for key, value := range r.settings {
 		copied[key] = value
 	}
-	return toolkitexecutionapp.DelegatedAuthToolkitSettings{ToolkitType: r.toolType, Settings: copied}, true, nil
+	return toolkitexecutionapp.DelegatedAuthToolkitSettings{
+		ToolkitType: r.toolType, Settings: copied, ProjectOwnedSettings: copied,
+	}, true, nil
 }
 
 func (r *bindingResolver) setURL(value string) {

@@ -8,7 +8,7 @@
 //!   recording of the Python run, for the parity gate;
 //! * the PRODUCTION one runs against the `PostgreSQL` build space (ADR-0026
 //!   decision 5: `deepwiki_build.wiki_nodes` with its folded `tsvector`,
-//!   `deepwiki_build.wiki_node_embeddings` with pgvector). ADR-0026 accepts
+//!   and the build's own vectors in memory). ADR-0026 accepts
 //!   that its lexical ranking is not FTS5's `bm25()`; the difference is
 //!   measured, not hidden.
 //!
@@ -177,8 +177,8 @@ pub trait TopologyStore {
     /// `search_vec(embedding, k=…, path_prefix=…)`: the nearest stored
     /// vectors by L2 distance, nearest first, each with `vec_distance`.
     /// sqlite-vec took the `k` nearest of ALL vectors and then dropped
-    /// those outside the prefix (so fewer than `k` could come back);
-    /// pgvector filters first. That is part of the measured difference.
+    /// those outside the prefix (so fewer than `k` could come back); the
+    /// production store keeps that order, by the owner's decision.
     ///
     /// # Errors
     ///

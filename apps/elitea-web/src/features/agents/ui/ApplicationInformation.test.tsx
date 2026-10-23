@@ -115,7 +115,7 @@ describe('ApplicationInformation', () => {
   });
 
   /**
-   * #899: the pylon trigger route these rows used to read is gone. The panel
+   * #899: the legacy trigger route these rows used to read is gone. The panel
    * now derives the type from the two Go facilities, and `timezone` /
    * `webhook type` are no longer rows at all — nothing stores them.
    */

@@ -31,7 +31,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 func TestListQueryCarriesEveryParameterTheClientSends(t *testing.T) {
@@ -114,8 +114,23 @@ func TestListFilterBindsTypeAndSearch(t *testing.T) {
 
 func TestListFilterIsEmptyWithoutParameters(t *testing.T) {
 	clause, args := configurationRowFilter(parseConfigurationListQuery(url.Values{}), 1)
-	if clause != "" || len(args) != 0 {
-		t.Fatalf("clause = %q args = %v, want no filter at all", clause, args)
+	if clause != retiredConfigurationTypeFilter || len(args) != 0 {
+		t.Fatalf("clause = %q args = %v, want only the retired-type exclusion", clause, args)
+	}
+}
+
+// A row of the retired `pgvector` type is kept in the table but never listed,
+// whatever the caller filters on: the exclusion is a constant, not an argument.
+func TestListFilterAlwaysExcludesTheRetiredPgvectorType(t *testing.T) {
+	for _, values := range []url.Values{
+		{},
+		{"section": {"vectorstorage"}},
+		{"type": {"pgvector"}},
+	} {
+		clause, _ := configurationRowFilter(parseConfigurationListQuery(values), 1)
+		if !strings.Contains(clause, retiredConfigurationTypeFilter) {
+			t.Fatalf("query %v: clause = %q, want the retired type excluded", values, clause)
+		}
 	}
 }
 

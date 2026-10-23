@@ -216,7 +216,10 @@ async fn the_selected_tools_rule_follows_the_artifact_family() {
         ["translate_presentation"]
     );
     // Names only the SDK's other catalogue knows select nothing.
-    assert!(names(&tools_for(&host, Some(json!(["index_data"]))).await).is_empty());
+    assert_eq!(
+        names(&tools_for(&host, Some(json!(["index_data"]))).await),
+        [] as [String; 0]
+    );
 }
 
 #[test]

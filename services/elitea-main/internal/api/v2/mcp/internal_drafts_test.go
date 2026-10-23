@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	draftsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
-	predictapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
-	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	draftsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
+	predictapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 

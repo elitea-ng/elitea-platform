@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 )
 
 // scrape performs GET on url and returns the status and the body.
@@ -168,7 +168,7 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	gw := exec.CommandContext(ctx, bin)
-	gw.Env = append(os.Environ(),
+	gw.Env = append(append(os.Environ(), grpcListenerTestEnv(t)...),
 		"GATEWAY_HTTP_ADDR="+addr,
 		// Required once a database pool exists (issue #11). The pool is lazy,
 		// so no database has to answer for the process to start and serve.

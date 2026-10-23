@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -71,7 +71,7 @@ func NewStartHandlerWithToolRuns(useCase StartUseCase, toolRuns toolkitrun.UseCa
 }
 
 // Start serves two branches of one path, selected by `await_response` exactly
-// as pylon selects them:
+// as the legacy runtime selects them:
 //
 //	await_response=false  the asynchronous index_data admission (task id only)
 //	anything else         one synchronous tool run, answered with its result

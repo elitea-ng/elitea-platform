@@ -11,6 +11,18 @@
 # covers the script itself as well as the charts it reads. A gate outside the
 # path that starts it is the same false green in another costume (#409, #429).
 set -euo pipefail
+# Every `helm template` here starts from the pre-S10 feature switches
+# (fixtures/features-off.yaml: runtime, worker, vector, Qdrant, DeepWiki and
+# Inventory off), prepended so that any values file or --set a render names
+# wins; each render turns on what it tests. render-default-on.sh covers the
+# shipped defaults.
+FEATURES_OFF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/features-off.yaml"
+_helm_bin="${HELM:-helm}"
+helm() {
+  if [ "${1:-}" = template ]; then shift; command "$_helm_bin" template -f "$FEATURES_OFF" "$@"
+  else command "$_helm_bin" "$@"; fi
+}
+HELM=helm
 
 # The single chart contains the LLM gateway, which REFUSES to render until an
 # operator states its two postures. Every render below therefore supplies them:
@@ -69,34 +81,38 @@ ok()   { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 
 echo "== NATS profile values (design §8.1.1) =="
-# scale-1: single node, replicas=1, HA waived, file storage, NATS 2.12.0+
-python3 - "$DIR/helm/nats/values-scale1.yaml" <<'PY' && ok "scale-1: cluster disabled, replicas=1, file store, image 2.12.0" || bad "scale-1 profile shape"
+# scale-1 (the chart's own nats block): single node, HA waived, file storage, NATS 2.12.0+
+python3 - "$DIR/helm/elitea/values.yaml" <<'PY' && ok "scale-1: bundled by default, cluster disabled, file store, image 2.12.0" || bad "scale-1 profile shape"
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))["nats"]
+v = yaml.safe_load(open(sys.argv[1]))
+d = v["nats"]
+assert d["enabled"] is True, "NATS is bundled by default"
 assert d["config"]["cluster"]["enabled"] is False, "cluster must be disabled at scale-1"
-assert d["statefulSet"]["replicas"] == 1, "scale-1 must be a single node"
 assert d["config"]["jetstream"]["fileStore"]["enabled"] is True, "file storage required"
 assert d["config"]["jetstream"]["memoryStore"]["enabled"] is False, "memory store must be off"
 assert d["container"]["image"]["tag"].startswith("2.12"), "NATS Server must be 2.12.0+ (Nats-Incr)"
+assert v["natsBootstrap"]["replicas"] == 1, "scale-1 assets are created at replicas=1"
 PY
-# HA: 3 nodes, replicas>=3 (RAFT quorum)
-python3 - "$DIR/helm/nats/values-ha.yaml" <<'PY' && ok "HA: cluster enabled, replicas>=3, spread constraints" || bad "HA profile shape"
+# HA: 3 nodes, replicas>=3 (RAFT quorum), and the bootstrap at the same count
+python3 - "$DIR/helm/elitea/values-nats-ha.yaml" <<'PY' && ok "HA: cluster enabled, replicas>=3, spread constraints, bootstrap replicas match" || bad "HA profile shape"
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))["nats"]
+v = yaml.safe_load(open(sys.argv[1]))
+d = v["nats"]
 assert d["config"]["cluster"]["enabled"] is True, "HA must enable clustering"
 assert d["config"]["cluster"]["replicas"] >= 3, "HA needs replicas>=3 for quorum"
-assert d["statefulSet"]["replicas"] >= 3, "HA needs >=3 nodes"
 assert d["container"]["image"]["tag"].startswith("2.12"), "NATS Server must be 2.12.0+"
 assert "topologySpreadConstraints" in d["podTemplate"], "HA must spread the quorum across nodes"
+assert v["natsBootstrap"]["replicas"] == d["config"]["cluster"]["replicas"], "assets must be created at the cluster's replica count"
 PY
 
 echo "== KV/stream bootstrap owns every asset (design §8.6, §9.5; #1076) =="
-BS="$DIR/helm/nats-bootstrap/files/bootstrap.sh"
+BS="$DIR/helm/elitea/files/nats-bootstrap.sh"
 grep -q  'ensure_stream GATEWAY_BUDGET file'        "$BS" && ok "creates the GATEWAY_BUDGET counter stream"     || bad "GATEWAY_BUDGET stream"
 grep -q  'ensure_stream GATEWAY_RATELIMIT file'     "$BS" && ok "creates the GATEWAY_RATELIMIT counter stream"  || bad "GATEWAY_RATELIMIT stream"
 grep -q  'ensure_stream GATEWAY_BUDGET_DELTAS file' "$BS" && ok "creates the GATEWAY_BUDGET_DELTAS stream"       || bad "GATEWAY_BUDGET_DELTAS stream"
 grep -q  'ensure_kv GATEWAY_ALERT_COOLDOWN'         "$BS" && ok "creates the GATEWAY_ALERT_COOLDOWN KV"         || bad "GATEWAY_ALERT_COOLDOWN KV"
 grep -q  'ensure_kv ELITEA_CANVAS_PRESENCE'         "$BS" && ok "creates the ELITEA_CANVAS_PRESENCE KV"         || bad "ELITEA_CANVAS_PRESENCE KV"
+grep -q  'ensure_kv ELITEA_PLATFORM_MCP_REPLAY'     "$BS" && ok "creates the ELITEA_PLATFORM_MCP_REPLAY KV"     || bad "ELITEA_PLATFORM_MCP_REPLAY KV"
 [ "$(grep -cE -- '^ +--allow-counter \\$' "$BS")" -eq 2 ]       && ok "both counter streams are AllowMsgCounter"      || bad "counter streams must set --allow-counter"
 grep -q  'gateway.budget.delta'             "$BS" && ok "stream subject gateway.budget.delta" || bad "stream subject"
 grep -q  -- '--dupe-window "${DELTAS_DUPE_WINDOW}"' "$BS" && ok "sets the deltas duplicate_window" || bad "duplicate_window"
@@ -110,25 +126,47 @@ if grep -qE 'kv add +GATEWAY_CUTOVER' "$BS"; then bad "must NOT create GATEWAY_C
 # The dead GATEWAY_BUDGET KV (stream KV_GATEWAY_BUDGET) nothing read.
 if grep -qE '(ensure_kv|kv add) +GATEWAY_BUDGET( |$)' "$BS"; then bad "must NOT create the dead GATEWAY_BUDGET KV bucket"; else ok "no GATEWAY_BUDGET KV bucket"; fi
 
-echo "== gateway Service: mTLS-only ClusterIP, port 8083 (design §9.1) =="
+echo "== gateway Services: infra ClusterIP:8083 + headless gRPC:8443 (#1359) =="
 "$HELM" template gw "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" > "$TMP/gw.yaml"
-python3 - "$TMP/gw.yaml" <<'PY' && ok "elitea-llm-gateway-svc ClusterIP:8083; server+client certs" || bad "gateway service/certs render"
+python3 - "$TMP/gw.yaml" <<'PY' && ok "elitea-llm-gateway-svc ClusterIP:8083 (infra); elitea-llm-gateway-grpc headless:8443; server+client certs" || bad "gateway service/certs render"
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
-svc  = [d for d in docs if d["kind"] == "Service"]
-assert svc, "Service missing"
-s = svc[0]
-assert s["metadata"]["name"] == "elitea-llm-gateway-svc", "service name must be elitea-llm-gateway-svc"
-assert s["spec"]["type"] == "ClusterIP", "must be ClusterIP (mTLS-only, not public)"
-assert s["spec"]["ports"][0]["port"] == 8083, "gateway port must be 8083"
-certs = [d for d in docs if d["kind"] == "Certificate"]
+svc  = {d["metadata"]["name"]: d for d in docs if d["kind"] == "Service"}
+# The plaintext listener serves /healthz, /readyz and /metrics only.
+s = svc.get("elitea-llm-gateway-svc")
+assert s, "Service elitea-llm-gateway-svc missing"
+assert s["spec"]["type"] == "ClusterIP", "must be ClusterIP (not public)"
+assert [p["port"] for p in s["spec"]["ports"]] == [8083], "infra Service must expose 8083 only"
+# /llm is the GatewayService gRPC listener. Headless, so elitea-main balances
+# round_robin across replicas instead of pinning one HTTP/2 connection.
+g = svc.get("elitea-llm-gateway-grpc")
+assert g, "headless gRPC Service elitea-llm-gateway-grpc missing"
+assert g["spec"].get("clusterIP") == "None", "gRPC Service must be headless"
+ports = g["spec"]["ports"]
+assert [(p["name"], p["port"], p.get("appProtocol")) for p in ports] == [("grpc", 8443, "grpc")], ports
+dep = [d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-llm-gateway"]
+assert dep, "gateway Deployment missing"
+c = dep[0]["spec"]["template"]["spec"]["containers"][0]
+cports = {p["name"]: p["containerPort"] for p in c["ports"]}
+assert cports == {"http": 8083, "grpc": 8443}, cports
+env = {e["name"]: e.get("value") for e in c.get("env", [])}
+assert env.get("GATEWAY_GRPC_ADDR", ":8443") == ":8443", env.get("GATEWAY_GRPC_ADDR")
+assert c["readinessProbe"]["httpGet"]["port"] == "http", "probes use the plaintext infra listener"
+certs = [d for d in docs if d["kind"] == "Certificate" and d["spec"].get("usages")]
 usages = {u for c in certs for u in c["spec"]["usages"]}
 assert "server auth" in usages and "client auth" in usages, "need both server + client mTLS certs"
+server = [c for c in certs if "server auth" in c["spec"]["usages"]]
+assert any("elitea-llm-gateway-grpc" in c["spec"].get("dnsNames", []) for c in server), "server cert must name the gRPC Service"
+client = [c for c in certs if "client auth" in c["spec"]["usages"] and "server auth" not in c["spec"]["usages"]]
+assert any("elitea-main" in c["spec"].get("dnsNames", []) for c in client), "client cert must carry the elitea-main SAN the gateway allowlist admits"
 PY
 
 echo "== gateway HPA: custom /llm SSE metric (design §9.5) =="
+# The Pods metric renders only where custom.metrics.k8s.io is served (S11);
+# clusterInstalled states it for a render with no cluster to ask. Without a
+# source the HPA falls back to CPU (render-scaling.sh covers that).
 "$HELM" template gw "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" \
-  --set llmGateway.autoscaling.enabled=true > "$TMP/gw-hpa.yaml"
+  --set llmGateway.autoscaling.enabled=true --set scaling.customMetrics.clusterInstalled=true > "$TMP/gw-hpa.yaml"
 python3 - "$TMP/gw-hpa.yaml" <<'PY' && ok "HPA scales on gateway_llm_sse_active_connections Pods metric" || bad "HPA custom metric"
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
@@ -143,14 +181,18 @@ assert m["type"] == "Pods", "SSE metric must be a Pods metric, not Resource/CPU"
 assert m["pods"]["metric"]["name"] == "gateway_llm_sse_active_connections", "wrong SSE metric name"
 PY
 
-echo "== nats-bootstrap Job is idempotent Helm hook =="
-"$HELM" template nb "$DIR/helm/nats-bootstrap" > "$TMP/nb.yaml"
-python3 - "$TMP/nb.yaml" <<'PY' && ok "post-install/upgrade hook Job mounts bootstrap.sh" || bad "bootstrap Job hook"
+echo "== nats-bootstrap Job: a Helm post hook, an Argo CD Sync hook in the NATS wave =="
+"$HELM" template nb "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" > "$TMP/nb.yaml"
+python3 - "$TMP/nb.yaml" <<'PY' && ok "post-install/upgrade hook Job mounts bootstrap.sh; Argo CD Sync hook in wave -10" || bad "bootstrap Job hook"
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
-job = [d for d in docs if d["kind"] == "Job"][0]
+job = [d for d in docs if d["kind"] == "Job" and d["metadata"]["name"] == "elitea-nats-bootstrap"][0]
 ann = job["metadata"]["annotations"]
 assert "post-install" in ann["helm.sh/hook"] and "post-upgrade" in ann["helm.sh/hook"], "Job must be a post-install/upgrade hook"
+# Argo CD would map post-install to PostSync, which waits for healthy
+# workloads that wait for these streams.
+assert ann.get("argocd.argoproj.io/hook") == "Sync", "Argo CD must run it as a Sync hook, not PostSync"
+assert ann.get("argocd.argoproj.io/sync-wave") == "-10", "the bootstrap runs in the NATS wave, ahead of the workloads"
 c = job["spec"]["template"]["spec"]["containers"][0]
 assert "bootstrap.sh" in " ".join(c["command"]), "Job must run bootstrap.sh"
 PY
@@ -159,17 +201,13 @@ PY
 # the applications/ directory with the app-of-apps layout (#265), and this
 # assertion went on reading the old path. It raised FileNotFoundError, and no
 # caller ran it, so nothing printed the failure anywhere (#485).
-echo "== ArgoCD apps ordered by sync-wave =="
-python3 - "$DIR/argocd/applications" <<'PY' && ok "nats(-2) < nats-bootstrap(-1) < elitea(0)" || bad "argocd sync-wave ordering"
-import sys, yaml, pathlib
+echo "== ArgoCD: one Application, NATS inside it =="
+python3 - "$DIR/argocd/applications" <<'PY' && ok "elitea is the only child Application (NATS and its bootstrap are bundled)" || bad "argocd application layout"
+import sys, pathlib
 d = pathlib.Path(sys.argv[1])
-def wave(f):
-    path = d / f
-    assert path.is_file(), f"{path} does not exist; the ArgoCD layout moved and this assertion stopped measuring"
-    a = yaml.safe_load(open(path))
-    return int(a["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"])
-# The platform is one Application now; the gateway is a component of it.
-assert wave("nats.yaml") < wave("nats-bootstrap.yaml") < wave("elitea.yaml"), "waves out of order"
+assert d.is_dir(), f"{d} does not exist; the ArgoCD layout moved and this assertion stopped measuring"
+names = sorted(f.name for f in d.glob("*.yaml"))
+assert names == ["elitea.yaml"], names
 PY
 
 # Issue #475. The Application used to name "the values file this Application
@@ -215,6 +253,9 @@ app_file, chart, helm_bin = sys.argv[1], sys.argv[2], sys.argv[3]
 src = yaml.safe_load(open(app_file))["spec"]["source"]
 helm = src.get("helm") or {}
 params = {p["name"]: p.get("value", "") for p in helm.get("parameters", [])}
+# Argo CD passes a parameter with --set unless it says forceString: true, so a
+# "false" here is the boolean false, as the switches below rely on.
+forced = {p["name"] for p in helm.get("parameters", []) if p.get("forceString")}
 
 # The values an OPERATOR supplies, and only those. Both are empty in git on
 # purpose, so this stands in for the operator. `.invalid` is reserved by
@@ -239,7 +280,7 @@ argv = [helm_bin, "template", "elitea", chart]
 for vf in helm.get("valueFiles", []):
     argv += ["-f", f"{chart}/{vf}"]
 for name, value in params.items():
-    argv += ["--set-string", f"{name}={operator.get(name, value)}"]
+    argv += ["--set-string" if name in forced else "--set", f"{name}={operator.get(name, value)}"]
 
 done = subprocess.run(argv, capture_output=True, text=True)
 assert done.returncode == 0, (

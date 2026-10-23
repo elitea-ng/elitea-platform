@@ -1,8 +1,8 @@
 package storage
 
 import (
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"strings"
 	"testing"
 )

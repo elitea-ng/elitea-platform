@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 )
 
 // Completer is the blocking LLM turn the judge and the agent turn both make.

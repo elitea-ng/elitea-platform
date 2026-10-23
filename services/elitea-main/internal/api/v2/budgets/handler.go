@@ -29,7 +29,7 @@
 //
 // # The dimensional views, and when they are absent
 //
-// The pylon original assembled its numbers from LiteLLM, which kept a
+// The legacy original assembled its numbers from LiteLLM, which kept a
 // per-model, per-day, per-token ledger. Until issue #320 nothing in this
 // platform kept one, so the token counts, the per-model table and the per-day
 // series were absent from every response. gateway.llm_usage_events supplies
@@ -66,12 +66,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // Permissions the routes are gated on in internal/api/router.go, transcribed
-// from the `check_api` declarations of the pylon handlers this ports.
+// from the `check_api` declarations of the legacy handlers this ports.
 const (
 	// AdminViewPermission gates every administration-mode read
 	// (project_budget.py, project_budgets.py, user_budget.py, user_budgets.py).
@@ -80,7 +80,7 @@ const (
 	// (project_budget.py PUT, user_budget.py PUT).
 	AdminEditPermission = "models.admin.project_budgets.edit"
 	// ProjectViewPermission gates the project-scoped (prompt_lib) reads, in
-	// DEFAULT mode, exactly as the pylon `PromptLibAPI` handlers declare.
+	// DEFAULT mode, exactly as the legacy `PromptLibAPI` handlers declare.
 	ProjectViewPermission = "models.project_context.view"
 )
 
@@ -107,8 +107,8 @@ const budgetScopeUser = "user"
 const defaultCurrency = "USD"
 
 // Limit sources reported as `limit_source`, narrowed from the reference's three
-// to two. pylon's "default" meant a platform-wide LiteLLM fallback limit; this
-// platform has no such fallback — gateway.project_budget is the only limit
+// to two. The legacy "default" meant a platform-wide LiteLLM fallback limit;
+// this platform has no such fallback — gateway.project_budget is the only limit
 // there is — so a project either has an explicit one or is unlimited.
 const (
 	limitSourceExplicit  = "explicit"

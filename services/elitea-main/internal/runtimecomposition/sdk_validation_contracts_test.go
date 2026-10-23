@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 func TestCurrentSDKValidationContractCatalogJoinsAllCurrentSDKTypes(t *testing.T) {
@@ -41,8 +41,8 @@ func TestCurrentSDKValidationContractCatalogJoinsAllCurrentSDKTypes(t *testing.T
 		}
 		resolved++
 	}
-	if resolved != 32 {
-		t.Fatalf("resolved = %d, want 32", resolved)
+	if resolved != 31 {
+		t.Fatalf("resolved = %d, want 31", resolved)
 	}
 }
 

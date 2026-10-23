@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 func TestPipelineHITLContinuationBindsNewResponseOnlyForDirectReview(t *testing.T) {
@@ -29,8 +29,7 @@ func TestPipelineHITLContinuationBindsNewResponseOnlyForDirectReview(t *testing.
 			admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
 				ExecutionID: "execution-review", CommandID: "command-review", Created: true,
 			}}
-			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
-				&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+			service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
 			if err != nil {
 				t.Fatal(err)
 			}

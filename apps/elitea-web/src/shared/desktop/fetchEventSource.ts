@@ -26,9 +26,9 @@
  * a bearer token cannot be forwarded to a host the user did not choose, and a
  * URL off the deployment origin never gets the token at all.
  */
-import type { EventSourceLike, NativeTransport } from '@/shared/api/nativeTransport';
+import { EventStreamParser } from '@elitea/client-core/stream';
 
-import { EventStreamParser } from './sseParser';
+import type { EventSourceLike, NativeTransport } from '@/shared/api/nativeTransport';
 
 const CONNECTING = 0;
 const OPEN = 1;

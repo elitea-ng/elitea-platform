@@ -10,8 +10,8 @@ import (
 	"math"
 	"strconv"
 
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -234,11 +234,14 @@ func currentScheduleEffectiveUser(
 	requestedUserID, actorUserID int64,
 	registry bool,
 ) (int64, error) {
+	// The registry runtime never reads the retired pgvector_configuration
+	// (application/configurations/retired.go), not even the `private` flag a
+	// toolkit saved before its retirement may still carry.
+	if registry {
+		return requestedUserID, nil
+	}
 	pgvector, ok := settings["pgvector_configuration"].(map[string]any)
 	if !ok || pgvector == nil {
-		if registry {
-			return requestedUserID, nil
-		}
 		return 0, indexscheduleapp.ErrInvalidToolkit
 	}
 	private, ok := pgvector["private"].(bool)

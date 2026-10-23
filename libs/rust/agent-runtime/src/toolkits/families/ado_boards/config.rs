@@ -4,8 +4,8 @@ use crate::toolkits::families::ado::config::{AdoConfigError, AdoToolkitConfig};
 
 /// `ado_boards` settings (`tools/ado/work_item/__init__.py::get_toolkit`):
 /// `ado_configuration`, `project`, `limit` (default 5) and `selected_tools`.
-/// The pgvector and embedding settings only feed the index tools, which this
-/// runtime does not serve.
+/// The embedding setting only feeds the index tools, which this runtime does
+/// not serve (the SDK's `pgvector_configuration` is retired and never sent).
 pub(crate) struct AdoBoardsToolkitConfig {
     inner: AdoToolkitConfig,
 }

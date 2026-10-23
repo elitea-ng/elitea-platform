@@ -29,7 +29,6 @@ use elitea_connectors::ado::plans_source::{AdoPlansIndexParams, AdoPlansSource};
 use elitea_connectors::ado::repos::AdoReposToolkitConfig;
 use elitea_connectors::ado::source::AdoReposSource;
 use elitea_connectors::ado::wiki_source::{AdoWikiIndexParams, AdoWikiSource};
-use elitea_connectors::artifact::client::ArtifactPlatform;
 use elitea_connectors::artifact::source::ArtifactSource;
 use elitea_connectors::bitbucket::config::BitbucketToolkitConfig;
 use elitea_connectors::bitbucket::source::BitbucketSource;
@@ -64,10 +63,12 @@ use elitea_connectors::zephyr::scale::{
 };
 use elitea_content_source::supported::has_supported_extension;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
+use elitea_platform_rpc::artifacts::ArtifactClient;
 use serde_json::Value;
 
 use super::IndexRunLimits;
 use super::inputs::{IndexParameters, ToolkitConfiguration};
+use crate::transport::artifact_objects::ProjectObjects;
 
 /// The families this worker indexes (ADR-0030 I1, I2 and I3); the Go
 /// `indexcatalog.Families` and agent-runtime `INDEX_FAMILIES` list the same
@@ -134,10 +135,12 @@ pub(crate) enum IndexSource {
     Fixture(Vec<Document>, PathFilter),
 }
 
-/// What the artifact connector needs of the platform: the object API's
-/// base, the claim's bearer and the project.
+/// What the artifact connector needs of the platform: its artifact store
+/// (`ArtifactObjectService` on elitea-main's platform listener, never the
+/// connectors' transport to third-party hosts), the claim's bearer and the
+/// project.
 pub(crate) struct PlatformAccess<'a> {
-    pub(crate) origin: &'a str,
+    pub(crate) artifacts: &'a ArtifactClient,
     pub(crate) bearer: &'a str,
     pub(crate) project_id: &'a str,
 }
@@ -213,14 +216,19 @@ impl IndexSource {
                     Some(Value::String(bucket)) if !bucket.trim().is_empty() => bucket.trim(),
                     _ => return Err(refused(&"the settings name no `bucket`")),
                 };
-                let api =
-                    ArtifactPlatform::new(platform.origin, platform.bearer, platform.project_id)
-                        .map_err(|e| refused(&e))?;
+                let objects = ProjectObjects::new(
+                    platform.artifacts.clone(),
+                    platform.bearer,
+                    platform.project_id,
+                )
+                .ok_or_else(|| refused(&"the run has no usable credential or project"))?;
                 // The SDK's `folder`: list under that prefix only. Parsed
                 // once, with the filter.
                 let folder = filter.artifact_folder();
-                let source =
-                    ArtifactSource::new(api, bucket, folder, transport).map_err(|e| refused(&e))?;
+                // The platform's own artifact store, never the connectors'
+                // transport.
+                let source = ArtifactSource::new(Arc::new(objects), bucket, folder)
+                    .map_err(|e| refused(&e))?;
                 Self::Artifact(source.with_limits(source_limits), folder.to_owned())
             }
             "confluence" => {
@@ -822,6 +830,20 @@ fn fixture_batch(spec: &Value) -> PictureBatch {
 mod tests {
     use super::*;
 
+    /// An artifact client nothing answers, for the tests that only build a
+    /// source (its channel needs a runtime to exist; none is driven).
+    fn unreachable_artifacts() -> (tokio::runtime::Runtime, ArtifactClient) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let channel = {
+            let _entered = runtime.enter();
+            tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy()
+        };
+        (runtime, ArtifactClient::new(channel))
+    }
+
     /// The served families have one source of truth, shared with the Go
     /// `indexcatalog` and the agent-runtime tests (review round 1).
     #[test]
@@ -875,8 +897,15 @@ mod tests {
             blacklist: Vec::new(),
             arguments: serde_json::Map::new(),
         };
+        let transport: Arc<dyn Transport> = Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        );
+        let (_runtime, artifacts) = unreachable_artifacts();
         let platform = PlatformAccess {
-            origin: "https://platform",
+            artifacts: &artifacts,
             bearer: "pat",
             project_id: "1",
         };
@@ -886,12 +915,7 @@ mod tests {
             &PathFilter::for_run(&configuration.toolkit_type, &parameters).expect("a valid filter"),
             &platform,
             &HostAllowlist::parse(Some("*")),
-            Arc::new(
-                elitea_connectors::reqwest012::ReqwestTransport::hardened(
-                    &elitea_connectors::github::client::CLIENT_POLICY,
-                )
-                .expect("client"),
-            ),
+            Arc::clone(&transport),
             IndexRunLimits::default(),
         )
         .err()
@@ -907,17 +931,18 @@ mod tests {
     /// toolkit type and the connector's data-free reason.
     #[test]
     fn the_atlassian_families_are_built_or_refused_with_a_reason() {
-        let platform = PlatformAccess {
-            origin: "https://platform",
-            bearer: "pat",
-            project_id: "1",
-        };
         let transport: Arc<dyn Transport> = Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(
                 &elitea_connectors::github::client::CLIENT_POLICY,
             )
             .expect("client"),
         );
+        let (_runtime, artifacts) = unreachable_artifacts();
+        let platform = PlatformAccess {
+            artifacts: &artifacts,
+            bearer: "pat",
+            project_id: "1",
+        };
         let build = |kind: &str, settings: Value, arguments: Value| {
             let configuration = ToolkitConfiguration {
                 toolkit_type: kind.to_owned(),
@@ -1007,17 +1032,18 @@ mod tests {
     /// is not a string, or not a valid key, is refused.
     #[test]
     fn the_artifact_connector_is_scoped_to_the_folder_argument() {
-        let platform = PlatformAccess {
-            origin: "https://platform.internal",
-            bearer: "pat",
-            project_id: "1",
-        };
         let transport: Arc<dyn Transport> = Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(
                 &elitea_connectors::github::client::CLIENT_POLICY,
             )
             .expect("client"),
         );
+        let (_runtime, artifacts) = unreachable_artifacts();
+        let platform = PlatformAccess {
+            artifacts: &artifacts,
+            bearer: "pat",
+            project_id: "1",
+        };
         let build = |arguments: Value| {
             let configuration = ToolkitConfiguration {
                 toolkit_type: "artifact".to_owned(),
@@ -1072,17 +1098,18 @@ mod tests {
     /// with the connector's data-free reason.
     #[test]
     fn figma_is_built_or_refused_with_a_reason() {
-        let platform = PlatformAccess {
-            origin: "https://platform",
-            bearer: "pat",
-            project_id: "1",
-        };
         let transport: Arc<dyn Transport> = Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(
                 &elitea_connectors::github::client::CLIENT_POLICY,
             )
             .expect("client"),
         );
+        let (_runtime, artifacts) = unreachable_artifacts();
+        let platform = PlatformAccess {
+            artifacts: &artifacts,
+            bearer: "pat",
+            project_id: "1",
+        };
         let build = |settings: Value, arguments: Value, allowlist: &str| {
             let configuration = ToolkitConfiguration {
                 toolkit_type: "figma".to_owned(),
@@ -1135,12 +1162,15 @@ mod tests {
         assert!(!error.0.contains("figd_fixture"));
     }
 
-    /// Live defect: the artifact source is the platform's own object API
-    /// and must be reached with the shipped (public-SaaS-only) allowlist,
-    /// on exactly the configured platform origin and nowhere else.
+    /// Live defect: the artifact source is the platform's own artifact
+    /// store and must be reached with the shipped (public-SaaS-only)
+    /// allowlist, through the platform listener's `ArtifactObjectService`
+    /// only and never the connectors' transport (#1359 U5).
     #[tokio::test]
     async fn the_artifact_source_reaches_the_platform_under_the_default_allowlist() {
         use std::sync::Mutex;
+
+        use elitea_platform_rpc::testing::{FakeArtifactStore, serve};
 
         struct Recording(Mutex<Vec<String>>);
         #[async_trait::async_trait]
@@ -1153,11 +1183,7 @@ mod tests {
                 elitea_connectors::transport::TransportError,
             > {
                 self.0.lock().expect("lock").push(request.url().to_string());
-                Ok(elitea_connectors::transport::Response::from_bytes(
-                    elitea_connectors::transport::StatusCode::OK,
-                    elitea_connectors::transport::HeaderMap::new(),
-                    bytes::Bytes::from_static(br#"{"objects": []}"#),
-                ))
+                Err(elitea_connectors::transport::TransportError::other())
             }
         }
 
@@ -1183,9 +1209,13 @@ mod tests {
             arguments: serde_json::Map::new(),
         };
         let filter = PathFilter::for_run("artifact", &parameters).expect("a valid filter");
-        let transport = Arc::new(Recording(Mutex::new(Vec::new())));
+        let store = FakeArtifactStore::new()
+            .grant("pat", 7)
+            .with_object(7, "docs", "a.md", b"alpha");
+        let artifacts = ArtifactClient::new(serve(Some(store.clone()), None));
+        let connectors_transport = Arc::new(Recording(Mutex::new(Vec::new())));
         let platform = PlatformAccess {
-            origin: "https://elitea-platform-edge",
+            artifacts: &artifacts,
             bearer: "pat",
             project_id: "7",
         };
@@ -1195,14 +1225,21 @@ mod tests {
             &filter,
             &platform,
             &default_allowlist,
-            transport.clone(),
+            connectors_transport.clone(),
             IndexRunLimits::default(),
         )
         .unwrap_or_else(|error| panic!("built: {error}"));
-        source.list().await.expect("listed through the platform");
-        assert_eq!(
-            transport.0.lock().expect("lock").as_slice(),
-            ["https://elitea-platform-edge/api/v2/artifacts/objects/7/docs"]
+        let listed = source.list().await.expect("listed through the platform");
+        assert_eq!(listed.len(), 1);
+        let calls = store.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].op, "ListObjects");
+        assert_eq!(calls[0].bucket, "docs");
+        assert_eq!(calls[0].project_id, 7);
+        assert_eq!(calls[0].bearer.as_deref(), Some("pat"));
+        assert!(
+            connectors_transport.0.lock().expect("lock").is_empty(),
+            "the connectors' transport carried a platform call"
         );
     }
 }

@@ -17,11 +17,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * `GET /elitea_core/version/…` is the agent editor's reload. `PATCH` on the
  * SAME path is the SDK's `get_app_version_details` — a body-less read that
- * carries the header, which pylon shaped that way and this service kept
- * (`internal/api/v2/applications/handler.go`, `GetVersionExpanded`). The two
- * are built by different code over the same row and they answer DIFFERENTLY on
- * purpose: the editor is shown a credential REFERENCE, the runtime is given the
- * credential. So every case below asserts on both, and the pair is the
+ * carries the header, which the legacy API shaped that way and this service
+ * kept (`internal/api/v2/applications/handler.go`, `GetVersionExpanded`). The
+ * two are built by different code over the same row and they answer DIFFERENTLY
+ * on purpose: the editor is shown a credential REFERENCE, the runtime is given
+ * the credential. So every case below asserts on both, and the pair is the
  * assertion — a handler that expanded nothing would satisfy either read alone.
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ test('the expanded read names the project each sub-agent tool lives in', async (
     // is: every project has its own schema and its own id sequence, so a
     // runtime handed `application_id` and nothing else cannot open the child.
     // `project_id` is the key that makes the reference resolvable, and it was
-    // served only on the pylon-era row shape — a table no schema this service
+    // served only on the legacy-era row shape — a table no schema this service
     // builds has — so it reached no caller at all.
     const subAgentTool = tools.find((tool) => tool['type'] === 'application');
     expect(

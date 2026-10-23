@@ -138,6 +138,14 @@ function BrandingForm({ state }: { readonly state: AdminBrandingPageState }) {
         </Alert>
       ) : null}
       <BrandingIdentityFields {...group} />
+      {state.clearsSchemeTokens ? (
+        <Alert severity="warning" data-testid="branding-scheme-tokens-notice">
+          {t(
+            'pages.admin.branding.schemeTokens.cleared',
+            'This brand has colour schemes from an imported package. Saving a new brand colour replaces them with schemes derived from it, as the preview shows. The package stays in the kept versions if you want them back.',
+          )}
+        </Alert>
+      ) : null}
       <BrandingStyleFields {...group} />
       <BrandingAssetFields
         {...group}

@@ -2,9 +2,8 @@ package social_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,13 +11,14 @@ import (
 	"testing"
 	"time"
 
-	platformapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	platformapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	socialapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -39,9 +39,7 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 		service,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: currentAuthorsIntegrationPeerVerifier{
-				trustedRemote: "10.0.0.8:43120",
-			},
+			FormSessions:       authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -94,6 +92,7 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 		userID        string
 		remote        string
 		withoutHeader bool
+		forged        bool
 		wantStatus    int
 	}{
 		{
@@ -104,10 +103,13 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 			wantStatus:    http.StatusUnauthorized,
 		},
 		{
-			name:       "untrusted forwarded identity",
+			// #1359: no header projects an identity any more. A forged
+			// X-Auth-*/X-Elitea-* identity naming the project's admin, with
+			// no credential, is an unauthenticated request.
+			name:       "forged X-Auth identity without a session",
 			target:     "/api/v2/social/authors/7",
-			userID:     "11",
 			remote:     "192.0.2.9:443",
+			forged:     true,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -142,8 +144,10 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			request := currentAuthorsIntegrationRequest(test.target, test.userID, test.remote)
 			if test.withoutHeader {
-				request.Header.Del("X-Auth-Type")
-				request.Header.Del("X-Auth-ID")
+				request.Header.Del("Cookie")
+			}
+			if test.forged {
+				authtest.ForgeXAuth(request, "11")
 			}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
@@ -197,19 +201,6 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 	})
 }
 
-type currentAuthorsIntegrationPeerVerifier struct {
-	trustedRemote string
-}
-
-func (verifier currentAuthorsIntegrationPeerVerifier) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	if request.RemoteAddr != verifier.trustedRemote {
-		return errors.New("untrusted peer")
-	}
-	return nil
-}
-
 func currentAuthorsIntegrationRequest(
 	target string,
 	userID string,
@@ -218,8 +209,7 @@ func currentAuthorsIntegrationRequest(
 	request := httptest.NewRequest(http.MethodGet, target, nil)
 	request.RemoteAddr = remote
 	if userID != "" {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", userID)
+		authtest.SignIn(request, userID)
 	}
 	return request
 }

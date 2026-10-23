@@ -184,8 +184,8 @@ func assertStatus(t *testing.T, err error, want int) {
 	}
 }
 
-// A DELETE still accepts `developer`, so the roles pylon left in that mode can
-// be removed. Create and rename refuse it (the test above).
+// A DELETE still accepts `developer`, so the roles the legacy runtime left in
+// that mode can be removed. Create and rename refuse it (the test above).
 func TestResolveRoleTargetAcceptsTheDeveloperModeForADeleteOnly(t *testing.T) {
 	handler := NewHandler(nil)
 

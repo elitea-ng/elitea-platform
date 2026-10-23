@@ -8,7 +8,7 @@
 | Current administrative task stop | Main `api/v2/admin/background_jobs.go` and `infra/db/repos/admin_background_jobs.go` | Request durable cancellation of an active toolkit job. |
 | Worker task cancellation | Rust `execution/toolkit_delivery_processor.rs` and claim lease monitor | Stop work after observing cancellation and publish a cancelled terminal result. |
 
-Core paths are relative to `projects/centry/pylon_main/plugins/elitea_core`.
+Core paths are relative to `legacy/centry/<main runtime>/plugins/elitea_core`.
 Main and Rust paths are relative to their service `internal` and `src` directories.
 
 ## Deployed proof: 2026-09-11

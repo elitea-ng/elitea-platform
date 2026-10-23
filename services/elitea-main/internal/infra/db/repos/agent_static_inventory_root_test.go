@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 func TestStaticInventoryFullMessageRootKinds(t *testing.T) {

@@ -4,16 +4,17 @@ package providerhub_test
 //
 // The one rule worth a suite of its own is the dual spelling. The published
 // JSON Schema names `_description`, `_type` and `_required`; every descriptor
-// on the wire spells them without the underscore, because pylon generates its
-// model with `remove_special_field_name_prefix=True`. A reader that honoured
-// only one spelling would silently drop a parameter's TYPE, and the create form
-// would render every field of such a provider as a plain object.
+// on the wire spells them without the underscore, because the legacy runtime
+// generates its model with `remove_special_field_name_prefix=True`. A reader
+// that honoured only one spelling would silently drop a parameter's TYPE, and
+// the create form would render every field of such a provider as a plain
+// object.
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhub"
 )
 
 func TestParseDescriptorReadsTheWireSpelling(t *testing.T) {

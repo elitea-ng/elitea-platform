@@ -72,6 +72,9 @@ impl NodeRecoveryRequiredReceipt {
                     | NodeFailureClass::SensitiveRejected
                     | NodeFailureClass::Cancelled
                     | NodeFailureClass::LeaseLost
+                    // Platform-owned and effect-free by construction: it never
+                    // asks an operator, and Main's receipt contract omits it.
+                    | NodeFailureClass::RuntimeLost
             )
         {
             return false;

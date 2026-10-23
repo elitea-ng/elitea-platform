@@ -24,15 +24,15 @@ package eliteacore
 // the listing possible: the GET lists the bucket filtered on that prefix, so a
 // project's skill gallery never shows its agent icons and vice versa.
 //
-// WHAT THIS PORT DOES NOT DO. Pylon decodes the upload through Pillow, rejects
-// an image smaller than the requested box, and re-encodes every icon to PNG at
-// at most 64x64. There is no image codec in this service and adding one is not
-// in this change's scope, so the bytes are stored as uploaded and the declared
-// `size` is the clamped box the client asked for. The consequence is honest and
-// bounded: an icon may be served at its original pixel size, and the 512 KB cap
-// below is the only size limit. It is NOT the pylon behaviour, and this comment
-// is the disclosure — see the extension allowlist for the part that IS a
-// security boundary and is enforced.
+// WHAT THIS PORT DOES NOT DO. The legacy runtime decodes the upload through
+// Pillow, rejects an image smaller than the requested box, and re-encodes every
+// icon to PNG at at most 64x64. There is no image codec in this service and
+// adding one is not in this change's scope, so the bytes are stored as uploaded
+// and the declared `size` is the clamped box the client asked for. The
+// consequence is honest and bounded: an icon may be served at its original
+// pixel size, and the 512 KB cap below is the only size limit. It is NOT the
+// legacy behaviour, and this comment is the disclosure — see the extension
+// allowlist for the part that IS a security boundary and is enforced.
 
 import (
 	"encoding/json"
@@ -48,8 +48,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // quotedTenantSchema is tenantSchema's non-HTTP twin: the helpers below are
@@ -69,13 +69,13 @@ func quotedTenantSchema(projectID string) (string, error) {
 // file header for why the download route forbids the latter.
 const skillIconPrefix = "skill_"
 
-// maxSkillIconBytes is pylon's MAX_FILE_SIZE_KB (512), in bytes.
+// maxSkillIconBytes is the legacy MAX_FILE_SIZE_KB (512), in bytes.
 const maxSkillIconBytes = 512 * 1024
 
-// maxSkillIconDimension is pylon's MAX_ICON_DIMENSION.
+// maxSkillIconDimension is the legacy MAX_ICON_DIMENSION.
 const maxSkillIconDimension = 64
 
-// defaultSkillIconPageSize is pylon's `limit` default for the listing.
+// defaultSkillIconPageSize is the legacy `limit` default for the listing.
 const defaultSkillIconPageSize = 200
 
 // skillIconListPageSize is the page size used to walk the object store. The
@@ -87,7 +87,7 @@ const skillIconListPageSize = 1000
 
 const maxSkillIconListPages = 20
 
-// safeIntOr is pylon's _safe_int: a client-supplied query or form value that
+// safeIntOr is the legacy _safe_int: a client-supplied query or form value that
 // is missing or non-numeric yields the default instead of a 500.
 func safeIntOr(value string, fallback int) int {
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
@@ -97,7 +97,7 @@ func safeIntOr(value string, fallback int) int {
 	return parsed
 }
 
-// clampIconDimension mirrors pylon's min(max(v, 1), 64): a zero or negative
+// clampIconDimension mirrors the legacy min(max(v, 1), 64): a zero or negative
 // value would bypass the minimum-dimension guard, an oversized one inflates
 // the thumbnail box.
 func clampIconDimension(value int) int {
@@ -240,7 +240,7 @@ func (h *Handler) listSkillIconNames(r *http.Request, projectID string) ([]strin
 // two-call shape (upload then PUT) stays available and is what the picker uses
 // for an already-uploaded icon.
 //
-// It returns the icon_meta object itself, as pylon's `return result['data']`
+// It returns the icon_meta object itself, as the legacy `return result['data']`
 // does. The response is the payload the client PUTs back later, unchanged.
 func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
@@ -255,8 +255,8 @@ func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		// Pylon's own 400 for a request that names no file. Unlike the agent
-		// route's "no file is a no-op", this family has a real listing to
+		// The legacy runtime's own 400 for a request that names no file. Unlike the
+		// agent route's "no file is a no-op", this family has a real listing to
 		// keep honest: answering 200 for an upload that stored nothing is
 		// exactly the success-without-persistence shape this port refuses.
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "No file in request.files"})
@@ -320,9 +320,9 @@ func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 		"resulting_file_size": sizeofFmt(info.Size),
 	}
 
-	// The optional trailing path segment. Pylon binds the icon to the version
-	// in the same request when it is present, and the picker's "upload then
-	// use" flow depends on it: without the bind the icon is stored but no
+	// The optional trailing path segment. The legacy runtime binds the icon to the
+	// version in the same request when it is present, and the picker's "upload
+	// then use" flow depends on it: without the bind the icon is stored but no
 	// skill wears it.
 	if versionID := chi.URLParam(r, "versionId"); versionID != "" {
 		bound, err := h.bindSkillIcon(r, projectID, versionID, iconMeta)
@@ -347,9 +347,9 @@ func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 // an already-uploaded icon to a skill version, or resets the version to the
 // default icon when the payload's name and url are empty.
 //
-// It returns `{"updated": true}`, as pylon does, and 404 when the version does
-// not exist. The 404 is the load-bearing half: a blind UPDATE that matched no
-// row would answer "saved" for a skill that still has no icon.
+// It returns `{"updated": true}`, as the legacy runtime does, and 404 when the
+// version does not exist. The 404 is the load-bearing half: a blind UPDATE that
+// matched no row would answer "saved" for a skill that still has no icon.
 func (h *Handler) UpdateSkillIcon(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	versionID := chi.URLParam(r, "versionId")
@@ -359,9 +359,9 @@ func (h *Handler) UpdateSkillIcon(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
-	// pylon parses the body through UpdateIcon, whose `name` and `url` are
-	// REQUIRED strings; a payload missing either is a 400 there, so it is one
-	// here rather than an icon_meta the read path cannot render.
+	// The legacy runtime parses the body through UpdateIcon, whose `name` and
+	// `url` are REQUIRED strings; a payload missing either is a 400 there, so it
+	// is one here rather than an icon_meta the read path cannot render.
 	if _, ok := iconMeta["name"].(string); !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Validation error on item: name is required"})
 		return
@@ -446,10 +446,10 @@ var (
 )
 
 // bindSkillIcon writes icon_meta onto one skill version's meta, and reports
-// whether a row was actually updated. The boolean is the whole point: pylon
-// looks the version up and 404s when it is absent, and a caller that cannot be
-// told the difference between "saved" and "matched nothing" is the
-// success-without-persistence failure this family has already shipped once.
+// whether a row was actually updated. The boolean is the whole point: the
+// legacy runtime looks the version up and 404s when it is absent, and a caller
+// that cannot be told the difference between "saved" and "matched nothing" is
+// the success-without-persistence failure this family has already shipped once.
 func (h *Handler) bindSkillIcon(r *http.Request, projectID, versionID string, iconMeta map[string]any) (bool, error) {
 	if h.pool == nil {
 		return false, errNoTenantPool

@@ -197,7 +197,7 @@ func (s *Store) ListForProject(ctx context.Context, projectID int64) ([]Server, 
 		if len(inputSchema) > 0 {
 			if err := json.Unmarshal(inputSchema, &tool.InputSchema); err != nil {
 				// A schema that no longer parses must not remove the whole
-				// listing. An open object is what pylon emits when its own
+				// listing. An open object is what the legacy runtime emits when its own
 				// lookup misses.
 				tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
 			}

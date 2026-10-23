@@ -35,7 +35,6 @@ fn settings(selected: &[&str]) -> Map<String, Value> {
         "repository": "team/project/",
         "branch": "main",
         "selected_tools": selected,
-        "pgvector_configuration": null,
         "embedding_model": null
     })
     .as_object()
@@ -97,7 +96,7 @@ fn catalog_follows_the_sdk_order_without_index_tools() {
 #[test]
 fn configuration_is_strict_and_never_leaks_the_token() {
     let parsed = config();
-    assert!(parsed.selected_tools().is_empty());
+    assert_eq!(parsed.selected_tools(), []);
 
     let mut http = settings(&[]);
     http["gitlab_configuration"]["url"] = json!("http://gitlab.example.test");

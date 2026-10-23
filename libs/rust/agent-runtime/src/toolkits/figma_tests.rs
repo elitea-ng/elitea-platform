@@ -142,7 +142,7 @@ fn file_fixture() -> Value {
 #[test]
 fn configuration_requires_a_token_and_a_compiling_global_regexp() {
     let parsed = config();
-    assert!(parsed.selected_tools().is_empty());
+    assert_eq!(parsed.selected_tools(), []);
     let rendered = format!(
         "{:?}",
         FigmaToolkitConfig::parse(&settings(&json!({}))).err()

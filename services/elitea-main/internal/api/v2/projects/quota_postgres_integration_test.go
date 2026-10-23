@@ -21,7 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,8 +32,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
-	dbschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/schema"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
+	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 )
 
 const quotaProjectID = 31
@@ -476,8 +476,8 @@ FROM elitea_storage.buckets WHERE project_id = $1`, quotaProjectID); err != nil 
 	if got := fmt.Sprint(entry("data_retention_limit")["quota"]); got != "30" {
 		t.Fatalf("data_retention_limit quota = %s, want 30", got)
 	}
-	// tasks_count is deliberately absent: its RPC has no provider in pylon
-	// either, and nothing in this platform counts tasks.
+	// tasks_count is deliberately absent: its RPC has no provider in the legacy
+	// runtime either, and nothing in this platform counts tasks.
 	if _, present := stats["tasks_count"]; present {
 		t.Fatal("tasks_count is reported; nothing in this platform counts tasks")
 	}

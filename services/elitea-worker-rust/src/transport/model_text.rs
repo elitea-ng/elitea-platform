@@ -57,7 +57,7 @@ impl ModelCallBudget {
     /// Takes one completion; `false` once none is left.
     pub(crate) fn try_take(&self) -> bool {
         self.remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
                 left.checked_sub(1)
             })
             .is_ok()
@@ -67,7 +67,7 @@ impl ModelCallBudget {
     pub(crate) fn refund(&self) {
         let _ = self
             .remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
                 left.checked_add(1)
             });
     }

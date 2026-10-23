@@ -10,10 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 type currentStartUseCaseStub struct {
@@ -72,12 +73,6 @@ func (function currentStartPrincipalValidatorFunc) ValidatePrincipal(
 	user auth.User,
 ) (auth.User, error) {
 	return function(ctx, user)
-}
-
-type currentStartPeerVerifierFunc func(*http.Request) error
-
-func (function currentStartPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return function(request)
 }
 
 type currentStartPermissionResolverFunc func(
@@ -687,12 +682,8 @@ func newCurrentStartRoute(
 				}
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: currentStartPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
+			Validator:    authtest.Tokens{},
 		},
 		permissions,
 	)
@@ -720,8 +711,7 @@ func currentStartRequest(body string) *http.Request {
 		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
@@ -733,8 +723,7 @@ func currentAdhocStartRequest(body string) *http.Request {
 		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
@@ -746,8 +735,7 @@ func currentRegenerationRequest(body string) *http.Request {
 		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
@@ -759,8 +747,7 @@ func currentContinuationRequest(body string) *http.Request {
 		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
@@ -772,8 +759,7 @@ func currentAuthorizationContinuationRequest(body string) *http.Request {
 		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
@@ -785,8 +771,7 @@ func currentOutputContinuationRequest(body string) *http.Request {
 		strings.NewReader(body),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

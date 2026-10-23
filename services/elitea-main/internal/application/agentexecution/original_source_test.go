@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 // Offline owner fixture. Production reference mint/read remains Main's sole
@@ -84,7 +84,7 @@ func rootSourceTarget() CurrentApplicationTarget {
 func sourceService(t *testing.T, resolver *currentApplicationResolverStub, owner OriginalRootSourceOwner, freezer CurrentApplicationVersionFreezer) (*CurrentApplicationStartService, *currentApplicationAdmissionStub) {
 	t.Helper()
 	admissions := &currentApplicationAdmissionStub{}
-	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{}, freezer, admissions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestOriginalSourceStartCapturesAdmittedRawBeforeFreezeAndRuntimeAdditions(t
 	}
 	// Real input projection adds memories/context after source capture, retaining ref.
 	target.OriginalSource = &ref
-	projected, err := currentApplicationInput(validCurrentApplicationStartRequest(), target, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, "memory runtime text", "project runtime text")
+	projected, err := currentApplicationInput(validCurrentApplicationStartRequest(), target, json.RawMessage(`{}`), nil, "memory runtime text", "project runtime text")
 	if err != nil {
 		t.Fatal(err)
 	}

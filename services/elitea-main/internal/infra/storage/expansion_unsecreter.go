@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 )
 
 const (
@@ -32,6 +32,9 @@ var (
 // never enumerates vault contents.
 type CurrentVaultUnsecreter struct {
 	vaults SecretVaultLoader
+	// projectOnly disables the admin-vault fallback. See
+	// NewCurrentProjectVaultUnsecreter.
+	projectOnly bool
 }
 
 func NewCurrentVaultUnsecreter(vaults SecretVaultLoader) (*CurrentVaultUnsecreter, error) {
@@ -39,6 +42,23 @@ func NewCurrentVaultUnsecreter(vaults SecretVaultLoader) (*CurrentVaultUnsecrete
 		return nil, errors.New("current secret vault loader is required")
 	}
 	return &CurrentVaultUnsecreter{vaults: vaults}, nil
+}
+
+// NewCurrentProjectVaultUnsecreter is NewCurrentVaultUnsecreter without the
+// admin-vault fallback: a name the configuration owner's vault does not hold
+// stays its placeholder.
+//
+// It exists for PROVENANCE, not for execution (#1286). Main's OAuth proxy
+// resolves a toolkit twice, once with each unsecreter, and a value that
+// differs between the two was assembled from a global (admin) secret. Such a
+// value must not follow a token endpoint the toolkit's editor chose.
+func NewCurrentProjectVaultUnsecreter(vaults SecretVaultLoader) (*CurrentVaultUnsecreter, error) {
+	unsecreter, err := NewCurrentVaultUnsecreter(vaults)
+	if err != nil {
+		return nil, err
+	}
+	unsecreter.projectOnly = true
+	return unsecreter, nil
 }
 
 // Unsecret returns an owned copy. Project regular values override project
@@ -61,10 +81,11 @@ func (u *CurrentVaultUnsecreter) Unsecret(
 	}
 
 	walker := currentUnsecretWalker{
-		ctx:       ctx,
-		vaults:    u.vaults,
-		projectID: int64(configurationProjectID),
-		resolved:  make(map[string]currentSecretResolution),
+		ctx:         ctx,
+		vaults:      u.vaults,
+		projectOnly: u.projectOnly,
+		projectID:   int64(configurationProjectID),
+		resolved:    make(map[string]currentSecretResolution),
 	}
 	value, err := walker.clone(data, 0)
 	if err != nil {
@@ -91,6 +112,7 @@ type currentSecretResolution struct {
 type currentUnsecretWalker struct {
 	ctx           context.Context
 	vaults        SecretVaultLoader
+	projectOnly   bool
 	projectID     int64
 	projectVault  SecretVault
 	projectLoaded bool
@@ -262,6 +284,11 @@ func (w *currentUnsecretWalker) resolve(name string) (currentSecretResolution, e
 	}
 	if !errors.Is(err, centrysecrets.ErrSecretNotFound) {
 		return currentSecretResolution{}, currentUnsecretDependencyError(w.ctx, err)
+	}
+	if w.projectOnly {
+		resolution := currentSecretResolution{}
+		w.resolved[name] = resolution
+		return resolution, nil
 	}
 
 	adminVault, err := w.loadAdminVault()

@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/spi"
 )
 
 // ErrInvalidProxy is returned for a configuration the hop cannot be built from.
@@ -24,15 +24,16 @@ type Proxy struct {
 	hop *proxy.Proxy
 }
 
-// NewProxy builds the hop from the facade's configuration.
-func NewProxy(cfg Config, logger *slog.Logger) (*Proxy, error) {
+// NewProxy builds the hop from the facade's configuration, or takes the one
+// proxy.WithHop hands it (the composition root's, shared with the registrar).
+func NewProxy(cfg Config, logger *slog.Logger, options ...proxy.RouteOption) (*Proxy, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("%w: not enabled", ErrInvalidProxy)
 	}
-	hop, err := proxy.New(cfg.hop(), BaseURLEnv, logger)
+	hop, err := proxy.ForRoute(cfg.hop(), TargetEnv, logger, options...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidProxy, err)
 	}
@@ -54,12 +55,16 @@ func (p *Proxy) Forward(
 	p.hop.Forward(w, r, providerPath, projectID, userID)
 }
 
+// HopConfig is the shared facade configuration this one carries, for the
+// composition root that builds the hop (and the provider registrar) itself.
+func (c Config) HopConfig() facade.Config { return c.hop() }
+
 // hop is the shared facade configuration this one carries; the DeepWiki
 // extras (callback base, token lifetime, git egress) stay on the facade.
 func (c Config) hop() facade.Config {
 	return facade.Config{
 		Enabled:        c.Enabled,
-		BaseURL:        c.BaseURL,
+		Target:         c.Target,
 		ClientCertFile: c.ClientCertFile,
 		ClientKeyFile:  c.ClientKeyFile,
 		CAFile:         c.CAFile,

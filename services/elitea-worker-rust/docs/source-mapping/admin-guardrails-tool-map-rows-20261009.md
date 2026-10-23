@@ -10,7 +10,7 @@ no row, so neither policy could be extended from the page. The backend was
 correct: `PUT /api/v2/admin/plugin_config_values/administration/guardrails`
 stored and returned `sensitive_tools = {mcp: ["echo"]}`.
 
-Behaviour kept from the current platform (Pylon `admin_ui` Guardrails form): an
+Behaviour kept from the current platform (the legacy runtime's `admin_ui` Guardrails form): an
 operator adds a toolkit row, names the toolkit, lists its tools, and saves the
 `{toolkit type: [tool names]}` map. A blank, unsaved row is not stored.
 

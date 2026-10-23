@@ -13,7 +13,7 @@ value is re-encrypted. That is what makes the conversion safe to repeat and
 cheap to verify.
 
 WHEN YOU NEED IT. A deployment that ran elitea-main without SECRETS_MASTER_KEY
-has unwrapped rows. So does one that ran pylon-indexer without it, before #339
+has unwrapped rows. So does one that ran the legacy indexer without it, before #339
 deleted that service. Supplying the key to the stack makes
 those rows unreadable until they are wrapped. Rotating an exposed key has the
 same shape, with --from-key set to the old value.

@@ -7,9 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type productionRuntimePrincipalValidatorFunc func(context.Context, auth.User) (auth.User, error)
@@ -18,36 +19,26 @@ func (function productionRuntimePrincipalValidatorFunc) ValidatePrincipal(ctx co
 	return function(ctx, user)
 }
 
-type productionRuntimePeerVerifierFunc func(*http.Request) error
-
-func (function productionRuntimePeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return function(request)
-}
-
 func TestProductionRuntimeRoutesRejectIncompleteSecurityComposition(t *testing.T) {
 	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	principal := productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := productionRuntimePeerVerifierFunc(func(*http.Request) error { return nil })
 
 	for name, test := range map[string]struct {
 		validation      http.Handler
 		executionEvents http.Handler
 		principal       apimw.PrincipalValidator
-		peer            apimw.ForwardedIdentityPeerVerifier
 	}{
-		"missing validation":       {executionEvents: handler, principal: principal, peer: peer},
-		"missing execution events": {validation: handler, principal: principal, peer: peer},
-		"missing principal":        {validation: handler, executionEvents: handler, peer: peer},
-		"missing peer proof":       {validation: handler, executionEvents: handler, principal: principal},
+		"missing validation":       {executionEvents: handler, principal: principal},
+		"missing execution events": {validation: handler, principal: principal},
+		"missing principal":        {validation: handler, executionEvents: handler},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NewProductionRuntimeRoutes(
 				test.validation,
 				test.executionEvents,
 				test.principal,
-				test.peer,
 				apimw.AuthConfig{},
 			)
 			if !errors.Is(err, ErrInvalidProductionRuntimeRoutes) {
@@ -57,7 +48,10 @@ func TestProductionRuntimeRoutesRejectIncompleteSecurityComposition(t *testing.T
 	}
 }
 
-func TestProductionRuntimeRoutesAcceptOnlyVerifiedForwardedPrincipal(t *testing.T) {
+// The Form session cookie authenticates both runtime routes in-process. It
+// replaced the X-Auth-* projection an authenticating edge used to add (#1359),
+// and the headers alone authenticate nothing.
+func TestProductionRuntimeRoutesAcceptAFormSessionPrincipal(t *testing.T) {
 	handlerCalls := 0
 	principalCalls := 0
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -67,34 +61,30 @@ func TestProductionRuntimeRoutesAcceptOnlyVerifiedForwardedPrincipal(t *testing.
 			t.Fatalf("runtime principal = %+v, present=%v", principal, ok)
 		}
 		source, ok := auth.AuthenticationSourceFromContext(request.Context())
-		if !ok || source != auth.AuthenticationSourceForwarded {
+		if !ok || source != auth.AuthenticationSourceSession {
 			t.Fatalf("authentication source = %d, present=%v", source, ok)
 		}
 		writer.WriteHeader(http.StatusNoContent)
 	})
 	principal := productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		principalCalls++
-		if user.ID != "7" || user.UserID != "7" || user.AuthType != "user" {
+		if user.ID != "7" || user.UserID != "7" || user.AuthType != "session" {
 			t.Fatalf("unverified principal shape = %+v", user)
 		}
 		user.Email = "active@example.test"
 		return user, nil
 	})
-	peer := productionRuntimePeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted proxy peer")
-		}
-		return nil
+	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, apimw.AuthConfig{
+		FormSessions: authtest.FormSessions{},
 	})
-	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	router := NewRouter(RouterConfig{ProductionRuntime: routes})
 
 	for _, request := range []*http.Request{
-		forwardedRuntimeRequest(http.MethodPost, "/api/v2/configurations/validation/42/revision-1", "10.0.0.8:43120"),
-		forwardedRuntimeRequest(http.MethodGet, "/api/v2/executions/42/execution-1/events", "10.0.0.8:43120"),
+		formSessionRuntimeRequest(http.MethodPost, "/api/v2/configurations/validation/42/revision-1", "10.0.0.8:43120"),
+		formSessionRuntimeRequest(http.MethodGet, "/api/v2/executions/42/execution-1/events", "10.0.0.8:43120"),
 	} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
@@ -107,14 +97,20 @@ func TestProductionRuntimeRoutesAcceptOnlyVerifiedForwardedPrincipal(t *testing.
 	}
 
 	for name, request := range map[string]*http.Request{
-		"forged forwarded headers": forwardedRuntimeRequest(
-			http.MethodPost,
-			"/api/v2/configurations/validation/42/revision-1",
-			"192.0.2.9:443",
-		),
+		"X-Auth-* headers without a session": func() *http.Request {
+			request := httptest.NewRequest(http.MethodPost, "/api/v2/configurations/validation/42/revision-1", nil)
+			request.Header.Set("X-Auth-Type", "user")
+			request.Header.Set("X-Auth-ID", "7")
+			return request
+		}(),
+		"rejected Form session": func() *http.Request {
+			request := httptest.NewRequest(http.MethodGet, "/api/v2/executions/42/execution-1/events", nil)
+			authtest.SignIn(request, "not-a-session")
+			return request
+		}(),
 		"alternate bearer": func() *http.Request {
 			request := httptest.NewRequest(http.MethodGet, "/api/v2/executions/42/execution-1/events", nil)
-			request.Header.Set("Authorization", "Bearer not-a-forwarded-principal")
+			request.Header.Set("Authorization", "Bearer not-a-known-token")
 			return request
 		}(),
 	} {
@@ -140,8 +136,7 @@ func TestProductionRuntimeRoutesRejectPrincipalValidationFailure(t *testing.T) {
 		productionRuntimePrincipalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
 			return auth.User{}, auth.ErrPrincipalInactive
 		}),
-		productionRuntimePeerVerifierFunc(func(*http.Request) error { return nil }),
-		apimw.AuthConfig{},
+		apimw.AuthConfig{FormSessions: authtest.FormSessions{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +145,7 @@ func TestProductionRuntimeRoutesRejectPrincipalValidationFailure(t *testing.T) {
 	response := httptest.NewRecorder()
 	NewRouter(RouterConfig{ProductionRuntime: routes}).ServeHTTP(
 		response,
-		forwardedRuntimeRequest(http.MethodPost, "/api/v2/configurations/validation/42/revision-1", "10.0.0.8:43120"),
+		formSessionRuntimeRequest(http.MethodPost, "/api/v2/configurations/validation/42/revision-1", "10.0.0.8:43120"),
 	)
 	if response.Code != http.StatusUnauthorized || handlerCalls != 0 {
 		t.Fatalf("status=%d handler calls=%d body=%s", response.Code, handlerCalls, response.Body.String())
@@ -176,7 +171,6 @@ func TestProductionRuntimeRoutesRejectDevelopmentFallback(t *testing.T) {
 		productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			return user, nil
 		}),
-		productionRuntimePeerVerifierFunc(func(*http.Request) error { return nil }),
 		apimw.AuthConfig{},
 	)
 	if err != nil {
@@ -202,7 +196,6 @@ func TestProductionRuntimeRoutesKeepIndexStartUnmountedWithoutCompleteDataPlane(
 		productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			return user, nil
 		}),
-		productionRuntimePeerVerifierFunc(func(*http.Request) error { return nil }),
 		apimw.AuthConfig{},
 	)
 	if err != nil {
@@ -212,7 +205,7 @@ func TestProductionRuntimeRoutesKeepIndexStartUnmountedWithoutCompleteDataPlane(
 	// Dispatch and output validation can run safely before worker credential
 	// redemption and artifact upload exist. The public start route cannot: it
 	// would admit work that has no authorized path to completion.
-	request := forwardedRuntimeRequest(
+	request := formSessionRuntimeRequest(
 		http.MethodPost,
 		"/api/v2/elitea_core/test_toolkit_tool/prompt_lib/7?await_response=false",
 		"10.0.0.8:43120",
@@ -224,11 +217,10 @@ func TestProductionRuntimeRoutesKeepIndexStartUnmountedWithoutCompleteDataPlane(
 	}
 }
 
-func forwardedRuntimeRequest(method, target, remoteAddress string) *http.Request {
+func formSessionRuntimeRequest(method, target, remoteAddress string) *http.Request {
 	request := httptest.NewRequest(method, target, nil)
 	request.RemoteAddr = remoteAddress
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "7")
+	authtest.SignIn(request, "7")
 	return request
 }
 
@@ -267,8 +259,7 @@ func TestProductionRuntimeRoutesAcceptAPersonalAccessToken(t *testing.T) {
 	principal := productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
-	peer := productionRuntimePeerVerifierFunc(func(*http.Request) error { return errors.New("no edge here") })
-	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{
+	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, apimw.AuthConfig{
 		Validator:          validator,
 		PrincipalValidator: principal,
 	})

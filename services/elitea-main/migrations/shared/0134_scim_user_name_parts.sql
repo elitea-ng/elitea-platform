@@ -19,7 +19,7 @@
 -- client sent, so the client converges instead of re-sending forever.
 --
 -- WHERE. On the SCIM side table 0096 created, keyed by user id, for the reason
--- 0096's header gives: `auth_core__user` is pylon-owned and is read and
+-- 0096's header gives: `auth_core__user` is legacy-owned and is read and
 -- updated, never reshaped. The display name stays `auth_core__user.name`.
 --
 -- WHAT THEY DO NOT DO. The parts never overwrite a stored display name; they

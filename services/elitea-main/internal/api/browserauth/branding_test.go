@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
+	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 )
 
 type brandSourceStub struct{ pack *v2branding.Pack }

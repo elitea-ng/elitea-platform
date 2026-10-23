@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-index-models"
+description = "Enables the index_models command without any pre-configured scope."
+commands.allow = ["index_models"]
+
+[[permission]]
+identifier = "deny-index-models"
+description = "Denies the index_models command without any pre-configured scope."
+commands.deny = ["index_models"]

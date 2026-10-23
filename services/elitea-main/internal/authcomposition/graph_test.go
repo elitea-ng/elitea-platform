@@ -14,12 +14,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
+	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 )
 
-func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
+func TestNewFormGraphComposesTheFormPlane(t *testing.T) {
 	config := writeMaterialFixture(t)
 	pool := newUnconnectedPool(t)
 	var temporaryPAT []byte
@@ -29,20 +29,14 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 		FormGraphDependencies{
 			PostgreSQL:        pool,
 			FormSignInEnabled: true,
-			MainRoutePublicRules: []forwardapp.PublicRule{{
-				Name: "route.health",
-				Conditions: []forwardapp.RuleCondition{{
-					Field: forwardapp.SourceURI, Pattern: `/health`,
-				}},
-			}},
 		},
 		func(material *materializedFiles) { temporaryPAT = material.patSigningKey },
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if graph.Routes() == nil || graph.BrowserRoutes() == nil || graph.MainEdgeAuth() == nil ||
-		graph.ForwardedIdentityVerifier() == nil || !allZero(temporaryPAT) {
+	if graph.Routes() == nil || graph.BrowserRoutes() == nil || graph.FormSessions() == nil ||
+		!allZero(temporaryPAT) {
 		t.Fatalf("graph=%+v temporary PAT cleared=%v", graph, allZero(temporaryPAT))
 	}
 	if _, err := graph.ValidateToken(context.Background(), "not-a-token"); err == nil || errors.Is(err, ErrInvalidGraph) {
@@ -52,56 +46,38 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 		t.Fatalf("runtime PAT bridge did not reuse the composed issuer: %v", err)
 	}
 
-	for _, uri := range []string{"/auth/login", "/health"} {
-		decision, err := graph.AuthorizeMain(context.Background(), publicMainRequest(uri))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if decision.Kind != forwardapp.DecisionAllow ||
-			decision.Authentication.Type != forwardapp.AuthenticationPublic {
-			t.Fatalf("Main decision for %s = %+v", uri, decision)
-		}
-	}
-
-	request := httptest.NewRequest(http.MethodGet, "http://auth-internal/check", nil)
+	// The Form router serves the sign-in (it reaches the unconnected store, so
+	// it answers 503 rather than 404). The forward-auth check it used to carry,
+	// and the /internal/auth/main edge handler, are gone (#1359).
+	request := httptest.NewRequest(http.MethodGet, "http://elitea.example"+browserapi.LoginPath+"?target_to=%2Fafter", nil)
 	request.RemoteAddr = "10.1.2.3:1234"
 	request.Header.Set("X-Forwarded-For", "203.0.113.7")
-	request.Header.Set("X-Forwarded-Method", http.MethodGet)
-	request.Header.Set("X-Forwarded-Proto", "https")
-	request.Header.Set("X-Forwarded-Host", "elitea.example")
-	request.Header.Set("X-Forwarded-Uri", "/auth/login")
 	response := httptest.NewRecorder()
 	graph.Routes().ServeHTTP(response, request)
-	if response.Code != http.StatusFound ||
-		response.Header().Get("Location") != "/auth/login?target_to=%2Fauth%2Flogin" {
-		t.Fatalf("Direct response = %d location=%q body=%q", response.Code, response.Header().Get("Location"), response.Body.String())
+	if response.Code == http.StatusNotFound {
+		t.Fatalf("login response = %d location=%q body=%q", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	for _, path := range []string{"/check", "/internal/auth/main"} {
+		gone := httptest.NewRecorder()
+		graph.Routes().ServeHTTP(gone, httptest.NewRequest(http.MethodGet, "http://elitea.example"+path, nil))
+		if gone.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", path, gone.Code)
+		}
 	}
 
-	mainRequest := httptest.NewRequest(http.MethodGet, "http://auth-internal/internal/auth/main", nil)
-	mainRequest.RemoteAddr = "10.1.2.3:1234"
-	mainRequest.Header.Set("X-Forwarded-For", "203.0.113.7")
-	mainRequest.Header.Set("X-Forwarded-Method", http.MethodGet)
-	mainRequest.Header.Set("X-Forwarded-Proto", "https")
-	mainRequest.Header.Set("X-Forwarded-Host", "elitea.example")
-	mainRequest.Header.Set("X-Forwarded-Uri", "/health")
-	mainResponse := httptest.NewRecorder()
-	graph.MainEdgeAuth().ServeHTTP(mainResponse, mainRequest)
-	if mainResponse.Code != http.StatusOK || mainResponse.Header().Get("X-Auth-Type") != "public" ||
-		mainResponse.Header().Get("X-Auth-ID") != "-" || mainResponse.Header().Get("X-Auth-User-ID") != "-" ||
-		mainResponse.Header().Get("X-Auth-Reference") != "-" ||
-		mainResponse.Header().Get(browserapi.MainAvatarStateHeader) != "none" ||
-		mainResponse.Header().Get(browserapi.MainAvatarHeader) != "-" {
-		t.Fatalf("Main response = %d headers=%v body=%q", mainResponse.Code, mainResponse.Header(), mainResponse.Body.String())
+	// No Form cookie is no Form session, and the reader says so without
+	// touching the (unreachable) store.
+	if _, err := graph.FormSessions().AuthenticateFormSession(
+		httptest.NewRequest(http.MethodGet, "/api/v2/private", nil),
+	); !errors.Is(err, apimw.ErrFormSessionAbsent) {
+		t.Fatalf("no cookie = %v, want ErrFormSessionAbsent", err)
 	}
 }
 
 func TestNewFormGraphRejectsIncompleteDependenciesAndWipesMaterialOnFailure(t *testing.T) {
 	config := writeMaterialFixture(t)
 	pool := newUnconnectedPool(t)
-	validDependencies := FormGraphDependencies{
-		PostgreSQL:           pool,
-		MainRoutePublicRules: []forwardapp.PublicRule{},
-	}
+	validDependencies := FormGraphDependencies{PostgreSQL: pool}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	for name, test := range map[string]struct {
@@ -113,11 +89,8 @@ func TestNewFormGraphRejectsIncompleteDependenciesAndWipesMaterialOnFailure(t *t
 		"canceled context": {ctx: canceled, dependencies: validDependencies, want: context.Canceled},
 		"nil PostgreSQL": {
 			ctx:          context.Background(),
-			dependencies: FormGraphDependencies{MainRoutePublicRules: []forwardapp.PublicRule{}},
+			dependencies: FormGraphDependencies{},
 			want:         ErrInvalidGraph,
-		},
-		"implicit route rules": {
-			ctx: context.Background(), dependencies: FormGraphDependencies{PostgreSQL: pool}, want: ErrInvalidGraph,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -126,25 +99,6 @@ func TestNewFormGraphRejectsIncompleteDependenciesAndWipesMaterialOnFailure(t *t
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
 		})
-	}
-
-	var temporaryPAT []byte
-	invalidRules := validDependencies
-	invalidRules.MainRoutePublicRules = []forwardapp.PublicRule{{
-		Name:       "config.edge_auth",
-		Conditions: []forwardapp.RuleCondition{{Field: forwardapp.SourceURI, Pattern: `/duplicate`}},
-	}}
-	_, err := newFormGraph(
-		context.Background(),
-		config,
-		invalidRules,
-		func(material *materializedFiles) { temporaryPAT = material.patSigningKey },
-	)
-	if !errors.Is(err, ErrInvalidGraph) {
-		t.Fatalf("invalid Main rules error = %v", err)
-	}
-	if len(temporaryPAT) == 0 || !allZero(temporaryPAT) {
-		t.Fatalf("a failed composition left the PAT key in memory: cleared=%v", allZero(temporaryPAT))
 	}
 }
 
@@ -172,11 +126,6 @@ func TestDerivedPoliciesPreserveTypedBaselineAndSecurityCorrections(t *testing.T
 		attempts.FormBegin.MaxAttempts != 20 || attempts.FormCredentialClient.MaxAttempts != 5 ||
 		attempts.FormCredentialLogin.MaxAttempts != 25 {
 		t.Fatalf("unexpected compiled attempt policy: %+v", attempts)
-	}
-
-	headers := credentialHeaders([]CredentialHeaderConfig{{Name: "X-Token", Type: "bearer"}})
-	if len(headers) != 1 || headers[0].Name != "X-Token" || headers[0].Type != "bearer" {
-		t.Fatalf("credential headers = %+v", headers)
 	}
 }
 
@@ -216,11 +165,8 @@ func TestCookiePolicyIsHostOnlySecureAndSeparateFromMainSession(t *testing.T) {
 
 func TestNilFormGraphMethodsFailSafely(t *testing.T) {
 	var graph *FormGraph
-	if graph.Routes() != nil || graph.BrowserRoutes() != nil || graph.MainEdgeAuth() != nil {
+	if graph.Routes() != nil || graph.BrowserRoutes() != nil || graph.FormSessions() != nil {
 		t.Fatal("nil graph did not fail safely")
-	}
-	if _, err := graph.AuthorizeMain(context.Background(), publicMainRequest("/health")); !errors.Is(err, ErrInvalidGraph) {
-		t.Fatalf("AuthorizeMain error = %v", err)
 	}
 	if _, err := graph.ValidateToken(context.Background(), "token"); !errors.Is(err, ErrInvalidGraph) {
 		t.Fatalf("ValidateToken error = %v", err)
@@ -246,16 +192,6 @@ func newUnconnectedPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func publicMainRequest(uri string) forwardapp.Request {
-	return forwardapp.Request{Source: forwardapp.Source{
-		Method: http.MethodGet,
-		Proto:  "https",
-		Host:   "elitea.example",
-		URI:    uri,
-		IP:     "203.0.113.7",
-	}}
-}
-
 func unusedObserver(*materializedFiles) {
 	panic("material read for invalid dependencies")
 }
@@ -273,7 +209,7 @@ func TestNewFormGraphReportsFormUsersWithoutEmail(t *testing.T) {
 	graph, err := newFormGraph(
 		context.Background(),
 		config,
-		FormGraphDependencies{PostgreSQL: newUnconnectedPool(t), MainRoutePublicRules: []forwardapp.PublicRule{}},
+		FormGraphDependencies{PostgreSQL: newUnconnectedPool(t)},
 		nil,
 	)
 	if err != nil {
@@ -286,18 +222,18 @@ func TestNewFormGraphReportsFormUsersWithoutEmail(t *testing.T) {
 }
 
 // Form sign-in is OFF unless the composition root says otherwise: the zero
-// value of FormGraphDependencies is the safe one. With it off the graph still composes everything the edge and
-// the runtime need, exposes NO browser routes, and its Form handler holds an
-// empty user list, so even a caller that mounted Routes() could not sign in
-// with a configured password.
+// value of FormGraphDependencies is the safe one. With it off the graph still
+// composes the PAT plane and the Form session reader (which then refuses every
+// Form session), exposes NO browser routes, and its Form handler holds an empty
+// user list, so even a caller that mounted Routes() could not sign in with a
+// configured password.
 func TestNewFormGraphWithFormSignInDisabledAcceptsNoPassword(t *testing.T) {
 	config := writeMaterialFixture(t)
 	graph, err := newFormGraph(
 		context.Background(),
 		config,
 		FormGraphDependencies{
-			PostgreSQL:           newUnconnectedPool(t),
-			MainRoutePublicRules: []forwardapp.PublicRule{},
+			PostgreSQL: newUnconnectedPool(t),
 		},
 		nil,
 	)
@@ -307,8 +243,8 @@ func TestNewFormGraphWithFormSignInDisabledAcceptsNoPassword(t *testing.T) {
 	if graph.BrowserRoutes() != nil {
 		t.Fatal("Form sign-in is disabled, yet the graph exposes browser routes")
 	}
-	if graph.MainEdgeAuth() == nil || graph.ForwardedIdentityVerifier() == nil || graph.Routes() == nil {
-		t.Fatal("disabling Form sign-in removed the edge composition the runtime depends on")
+	if graph.FormSessions() == nil || graph.Routes() == nil {
+		t.Fatal("disabling Form sign-in removed the Form session reader apimw.Auth depends on")
 	}
 	if graph.FormSignInEnabled() {
 		t.Fatal("the graph does not report that Form sign-in is disabled")

@@ -14,7 +14,7 @@ package eliteacore_test
 //     1234567 as "1.234567e+06" and a missing id as "<nil>" — both refused by
 //     Postgres, both surfacing as 500s (the typed body makes those inputs
 //     either work or answer 400);
-//   - a pylon-migrated tenant holds the same reference in the legacy
+//   - a legacy-migrated tenant holds the same reference in the legacy
 //     `application_tools` table, which the duplicate check and the detach
 //     must both see (the union read).
 //
@@ -34,7 +34,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 )
 
 type relationFixture struct {
@@ -252,7 +252,7 @@ func TestApplicationRelationSeesAndClearsTheLegacyTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// The pylon table, in the live legacy shape (see
+	// The legacy runtime's table, in the live legacy shape (see
 	// embed_skill_copy_postgres_integration_test.go's createLegacyApplicationTools),
 	// holding the same reference under the legacy settings key `version_id`.
 	if _, err := pool.Exec(ctx, `
@@ -310,8 +310,8 @@ VALUES ($1, 'relation child', 'application', $2)`, fixture.parentVersionID, lega
 }
 
 // TestApplicationRelationAttachAcceptsNumericStringIDs pins the legacy body
-// form. The contract and pylon accept "42" as well as 42 for both ids; the
-// typed *int64 body refused the string form with 400.
+// form. The contract and the legacy runtime accept "42" as well as 42 for both
+// ids; the typed *int64 body refused the string form with 400.
 func TestApplicationRelationAttachAcceptsNumericStringIDs(t *testing.T) {
 	pool := newPublishCopyPool(t)
 	fixture := seedRelationFixture(t, pool)

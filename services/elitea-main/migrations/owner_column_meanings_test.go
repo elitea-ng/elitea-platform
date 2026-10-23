@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	migrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // bootstrapSchemaPath is the dev bootstrap, whose tenant template declares most

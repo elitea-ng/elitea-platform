@@ -29,7 +29,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
 
 func TestToolkitReadPathsServeTheStoredRows(t *testing.T) {

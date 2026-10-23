@@ -5,6 +5,9 @@ on:
     paths:
       - "deploy/helm/**"
       - "deploy/argocd/**"
+      - "deploy/scripts/drain-workers.sh"
+      - "deploy/tests/**"
+      - "scripts/ci/check-chart-deps.mjs"
       - ".github/workflows/helm-lint.yml"
       # The capability gate below reads the required runtime names straight out
       # of runtimecomposition/config.go. Without this path a pull request that
@@ -17,6 +20,7 @@ on:
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
       - "deploy/runtime/install-material.sh"
+      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
       # The derived-document gate below renders the validate worker's runtime
       # document from the agent worker's; an edit to either, or to the
       # renderer, must run it.
@@ -40,35 +44,10 @@ on:
       - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
       - "services/elitea-llm-gateway/internal/infra/nats/**"
       - "services/elitea-scheduler/internal/budgetwriteback/**"
-  push:
-    branches:
-      - main
-    paths:
-      - "deploy/helm/**"
-      - "deploy/argocd/**"
-      - "services/elitea-main/internal/runtimecomposition/**"
-      - "deploy/docker-compose.standalone-full.yml"
-      - "deploy/docker-compose.code-consumers.yml"
-      - "deploy/runtime/install-material.sh"
-      - "deploy/runtime/worker-runtime.rust.json"
-      - "deploy/runtime/worker-runtime.rust-validate.json"
-      - "deploy/scripts/render-validate-worker-runtime.py"
-      - "scripts/runtime/*code*"
-      - "services/elitea-code-runner/Containerfile.code-platform"
-      - ".github/workflows/publish.yml"
-      - "libs/go/natsconn/**"
-      - "services/elitea-main/cmd/elitea-main/event_stream_nats*.go"
-      - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
-      - "services/elitea-llm-gateway/internal/infra/nats/**"
-      - "services/elitea-scheduler/internal/budgetwriteback/**"
-      # This workflow's own file. The pull_request arm above names it and this
-      # arm did not, so a push that edited only the gate could not start the
-      # gate it edited (#518).
-      - ".github/workflows/helm-lint.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
@@ -94,7 +73,13 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
+
+      # The elitea chart's dependencies (the upstream nats and qdrant charts
+      # and our elitea-sandbox-runtime) are not committed: build them from
+      # Chart.lock before anything lints, renders or packages the chart.
+      - name: Build the chart dependencies
+        run: bash deploy/helm/elitea/build-deps.sh
 
       # A bare loop takes the status of its LAST iteration, so a broken early
       # chart read as a pass. `bash -e` hides that today by stopping the step on
@@ -172,6 +157,20 @@ jobs:
       - name: The chart edge publishes /healthz with no authenticating filter
         run: bash deploy/helm/tests/render-edge-healthz.sh
 
+      # One edge route (#1359 P3): the Ingress / HTTPRoute is a single `/` rule
+      # to elitea-main, with no RegularExpression and nothing naming elitea-web;
+      # ELITEA_WEB_UPSTREAM names the web Service; the startup and readiness
+      # probes are the loopback -healthcheck the edge needs.
+      - name: The chart edge is one route to elitea-main
+        run: bash deploy/helm/tests/render-edge-route.sh
+
+      # The GKE Ingress companions (main.ingress.gke): NEG + BackendConfig
+      # (stream-safe timeout, /healthz check, optional Cloud Armor) on the
+      # Service, FrontendConfig (HTTPS redirect, optional SSL policy) on the
+      # Ingress, cert-manager annotations; on and off.
+      - name: The GKE Ingress renders its BackendConfig and FrontendConfig
+        run: bash deploy/helm/tests/render-gke-ingress.sh
+
       # The worker templates were rendered by NOTHING before this step: every
       # other render script here, and the template matrix below, set
       # `worker.enabled=false`, and `helm lint` does not enter a body its
@@ -227,6 +226,16 @@ jobs:
       - name: The worker's autoscaling refuses when it cannot work
         run: bash deploy/helm/tests/render-worker-autoscaling.sh
 
+      # Scale-out readiness (S11): every autoscaler renders only with its
+      # controller AND its metric source (worker, DeepWiki, Inventory, the
+      # gateway), the bundled KEDA's first-install hook and its adoption, the
+      # bundled prometheus-adapter's rules naming exactly the gateway metric,
+      # SkipDryRunOnMissingResource on every KEDA object, no `replicas:` under
+      # an autoscaler, spread and PDBs, grace >= preStop + drain, the budget
+      # naming every component, and the gateway's derived expected replicas.
+      - name: Scaling renders only what can scale
+        run: bash deploy/helm/tests/render-scaling.sh
+
       # The shared provider shape (templates/_provider.tpl). Every invariant
       # here is one several templates have to agree on, and every disagreement
       # is silent: a migration Job pointed at a different database migrates it
@@ -239,6 +248,11 @@ jobs:
 
       - name: The DeepWiki component renders, and its guards refuse
         run: bash deploy/helm/tests/render-deepwiki.sh
+
+      # Keyless platform credentials: the gateway's GKE metadata egress opens
+      # only with llmGateway.workloadIdentity.enabled, and the env has one source.
+      - name: Gateway workload identity renders from one value
+        run: bash deploy/helm/tests/render-gateway-workload-identity.sh
 
       # The SECOND provider, and its own suite rather than a case added to
       # DeepWiki's: what has to be asserted is mostly what is DIFFERENT — no
@@ -256,6 +270,17 @@ jobs:
       - name: The elitea-vector component renders, and its guards refuse
         run: bash deploy/helm/tests/render-vector.sh
 
+      # S10: the runtime plane, the worker, elitea-vector with the bundled
+      # Qdrant, DeepWiki and Inventory are ON by default. The shipped defaults
+      # plus only the operator's values render all of it with elitea-main's
+      # wiring derived; each feature is one switch; and the defaults alone are
+      # refused with ONE message listing every value only the operator has.
+      - name: The shipped defaults are on, one switch per feature
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-default-on.sh
+
       # ADR-0034 decision 9: elitea-egress-proxy. Off by default; on, the
       # Deployment, its key Secret and its NetworkPolicy must agree, and the
       # half-configured shapes are refused.
@@ -265,6 +290,37 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-egress-proxy.sh
 
+      # Four suites that passed and that no job ran (the deploy/ audit of the
+      # one-chart PR found them): the default-deny NetworkPolicies, the
+      # elitea-main platform listener, the sandbox image references, and the
+      # worker drain script (a kubectl stub; no cluster).
+      - name: NetworkPolicies, platform listener, sandbox images, worker drain
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-network-policies.sh
+          bash deploy/helm/tests/render-platform-listener.sh
+          bash deploy/helm/tests/render-sandbox-images.sh
+          bash deploy/tests/drain-workers-test.sh
+
+      # externalSecrets: one ExternalSecret per Secret the pods read. The test
+      # derives the read set from the RENDERED workloads, so a template that
+      # starts reading a new Secret fails here until the inventory learns it,
+      # instead of installing and waiting on a Secret nothing fills.
+      - name: ExternalSecrets match every Secret the workloads read
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-external-secrets.sh
+
+      # values-gke.yaml: renders, keyless GCS is guarded, and the steady-state
+      # requests fit the 4 vCPU / 10 GiB the file header promises.
+      - name: The GKE example values render inside their budget
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-gke-budget.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \
@@ -273,6 +329,17 @@ jobs:
           bash deploy/helm/tests/render-worker-sandbox.sh
           bash deploy/helm/tests/render-sandbox-kubernetes.sh
           bash deploy/helm/tests/render-workspace-egress.sh
+          bash deploy/helm/tests/render-cloud-executor.sh
+
+      # The sandbox runtime installer chart (ADR-0034): the DaemonSet, its
+      # RuntimeClass and guards, then the installer script itself against a
+      # fake host (one restart per change, rollback, checksum refusals).
+      - name: The sandbox runtime installer renders and installs idempotently
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-sandbox-runtime.sh
+          bash deploy/helm/tests/sandbox-runtime-installer-test.sh
 
       # ADR-0030 I1: the document extraction sidecar in the worker pod. The
       # socket path the worker dials and the directory the sidecar binds in
@@ -319,21 +386,18 @@ jobs:
           bash deploy/helm/tests/render-bf0-2b.sh
 
       # The NATS security posture (#1076), on the rendered output of the three
-      # charts that must agree about it: every client certificate the platform
-      # and the bootstrap issue names a user in the NATS chart's permission
+      # parts of the elitea chart that must agree about it (the bundled server,
+      # its bootstrap, the clients): every client certificate the platform
+      # and the bootstrap issue names a user in the server's permission
       # table and comes from the NATS CA Issuer, every client pod is
       # one the NATS NetworkPolicy admits, every rendered URL is tls:// with no
       # credential, and each refusal (TLS off, verify_and_map off,
       # no_auth_user, plaintext routes, nats:// or credential URLs, plaintext
-      # without the acknowledgement) still fires. It vendors the upstream nats
-      # subchart with `helm dependency build`, which needs network access the
-      # template matrix below does not take. Whether each grant is RIGHT is the
-      # secured permission tests' job (ci-go.yml, ci-gateway.yml).
+      # without the acknowledgement) still fires. Whether each grant is RIGHT
+      # is the secured permission tests' job (ci-go.yml, ci-gateway.yml).
       #
-      # It also runs kubeconform on the nats (scale-1, HA, HA with
-      # approver-policy) and nats-bootstrap renders: the template matrix below
-      # excludes those two charts because templating them needs the vendored
-      # subchart, and this step is where their renders exist.
+      # It also runs kubeconform on the scale-1, HA and HA-with-approver-policy
+      # renders, the HA ones being shapes the template matrix does not render.
       # NATS_REQUIRE_KUBECONFORM makes a missing binary a failure, not a skip.
       - name: Install kubeconform (for the NATS renders)
         run: |
@@ -342,7 +406,7 @@ jobs:
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
-      - name: NATS security — the charts agree on identities, issuer and policy
+      - name: NATS security — server, bootstrap and clients agree on identities, issuer and policy
         env:
           KUBECONFORM: kubeconform
           NATS_REQUIRE_KUBECONFORM: "1"
@@ -350,6 +414,17 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-nats-security.sh
+
+      # NATS bundled (owner decision): the elitea chart with nats.enabled on
+      # (the default) and off (bring your own NATS), Chart.lock agreeing with
+      # Chart.yaml and every dependency resolving, and the chart rendering
+      # from its packaged .tgz — the published OCI artifact — exactly as from
+      # the directory.
+      - name: NATS bundled — on, off, locked, and from the packaged chart
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-nats-bundled.sh
 
       # The budget write-back alerts FIRE (fourth review of #1296): promtool
       # unit tests over the rule the elitea chart renders. The drop alert must
@@ -382,12 +457,10 @@ jobs:
       # why it cannot be templated.
       - name: Every chart is templated or excluded on purpose
         run: |
-          # Charts `helm template` cannot cover on this runner, with the reason:
-          # nats/ vendors an upstream subchart, so templating it needs
-          # `helm dependency build` and network access to the upstream repo,
-          # and nats-bootstrap/ is its companion hook chart. Both ARE rendered
-          # and schema-checked (kubeconform) by the NATS security step above.
-          excluded="nats nats-bootstrap"
+          # Charts `helm template` cannot cover on this runner, with the reason.
+          # Empty today: NATS and its bootstrap are part of elitea now, and
+          # every remaining chart is in the matrix.
+          excluded=""
           matrix="$(grep -oE '^ +- chart: [a-z0-9-]+' .github/workflows/helm-lint.yml \
                       | awk '{print $3}' | tr '\n' ' ')"
           if [ -z "$matrix" ]; then
@@ -427,7 +500,7 @@ jobs:
       - name: Every chart is published or excluded on purpose
         run: |
           # Charts deliberately not pushed to the OCI registry, with the
-          # reason. Empty today: all three charts are published.
+          # reason. Empty today: every chart is published.
           excluded=""
           published="$(grep -oE '^ +- chart: [a-z0-9-]+' .github/workflows/publish.yml \
                         | awk '{print $3}' | tr '\n' ' ')"
@@ -552,11 +625,12 @@ jobs:
             # and the one whose absence this chart exists to stop shipping
             # silently. Also the non-default branches the pass above skips.
             toggles: -f deploy/helm/elitea/values-standalone.yaml --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' --set-string 'llmGateway.egressPosture=allowlist' --set-string 'llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=ci-render-only.example.invalid:8000' --set main.autoscaling.enabled=false --set main.podDisruptionBudget.enabled=false --set web.autoscaling.enabled=true --set otelCollector.enabled=false
-          # nats/ and nats-bootstrap/ are excluded on purpose: nats vendors an
-          # upstream subchart, so templating it needs `helm dependency build`
-          # and network access to the upstream repo. `helm lint` above still
-          # covers them. The "Every chart is templated or excluded on purpose"
-          # step in the lint job holds this list and the matrix together, so a
+          # The optional sandbox runtime installer (ADR-0034), both modes.
+          - chart: elitea-sandbox-runtime
+            values: ""
+            toggles: --set mode=containerd --set-string runtimeClass.overhead.cpu=100m
+          # The "Every chart is templated or excluded on purpose" step in the
+          # lint job holds this list and the chart directories together, so a
           # new chart cannot quietly join neither.
     steps:
       - uses: actions/checkout@v7
@@ -564,7 +638,18 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
+
+      # The Helm 4 binary, for the Helm 3 parity steps at the end of this job
+      # (their setup-helm puts Helm 3 first on PATH).
+      - name: Remember the Helm 4 binary
+        run: echo "HELM4=$(command -v helm)" >> "$GITHUB_ENV"
+
+      # The elitea chart's dependencies (the upstream nats and qdrant charts
+      # and our elitea-sandbox-runtime) are not committed: build them from
+      # Chart.lock before anything lints, renders or packages the chart.
+      - name: Build the chart dependencies
+        run: bash deploy/helm/elitea/build-deps.sh
 
       - name: Install kubeconform
         run: |
@@ -573,22 +658,11 @@ jobs:
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
-      # `helm template` on a chart with unvendored dependencies fails with
-      # "found in Chart.yaml, but missing in charts/ directory" — it does not
-      # resolve them itself. The umbrella's dependencies are all file:// paths
-      # in this repository, so this needs no network; charts that declare none
-      # skip it, exactly as the publish workflow's equivalent step does.
-      # Keyed on the tracked Chart.lock rather than parsing Chart.yaml, so this
-      # step needs no yq — which this job, unlike the publish workflow, does not
-      # install.
-      - name: Build chart dependencies
-        run: |
-          CHART_DIR="deploy/helm/${{ matrix.chart }}"
-          if [ -f "${CHART_DIR}/Chart.lock" ]; then
-            helm dependency build "$CHART_DIR"
-          else
-            echo "no dependencies declared"
-          fi
+      # Every dependency resolved as Chart.lock pins it: every row's STATUS
+      # must be `ok`, and an unknown status fails too
+      # (scripts/ci/check-chart-deps.mjs, tested in no-binaries.yml).
+      - name: Chart dependencies resolve as Chart.lock pins them
+        run: node scripts/ci/check-chart-deps.mjs "deploy/helm/${{ matrix.chart }}"
 
       - name: helm template (default values)
         run: |
@@ -613,14 +687,14 @@ jobs:
             -schema-location "$CRD_SCHEMAS" \
             "/tmp/${{ matrix.chart }}.yaml"
 
-      # The pylon-free capability set (#382). It renders objects no other pass
+      # The standalone capability set (#382). It renders objects no other pass
       # produces — the runtime material volume and the three runtime listener
       # ports on both the Deployment and the Service — so a schema error in
       # them is invisible everywhere else.
       #
-      # vector.enabled adds elitea-vector's introspection pool (8 connections
-      # per Main replica), so the profile's own guidance applies: 3 replicas
-      # fit postgresql.maxConnections 200, 4 do not (values-standalone.yaml).
+      # elitea-vector (on by default) adds its introspection pool to every
+      # Main replica, so the profile's own guidance applies: 3 replicas fit
+      # postgresql.maxConnections 200, 4 do not (values-standalone.yaml).
       # The egress-proxy fixture renders the proxy objects (ADR-0034), which
       # no other pass renders, because egressProxy is off by default.
       - name: helm template + kubeconform (standalone capability values)
@@ -630,8 +704,6 @@ jobs:
             -f deploy/helm/elitea/values-standalone.yaml \
             --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' \
             --set-string 'llmGateway.egressPosture=public-unrestricted' \
-            --set vector.enabled=true \
-            --set-string vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
             --set main.autoscaling.maxReplicas=3 \
             -f deploy/helm/tests/fixtures/egress-proxy-values.yaml \
             > /tmp/elitea-main-standalone.yaml
@@ -671,11 +743,50 @@ jobs:
       # This reads the file names out of THIS workflow, so adding a
       # values-*.yaml beside the chart fails here until somebody either renders
       # it or writes down why it cannot be rendered.
+      # The GKE example (GKE Ingress, BackendConfig, FrontendConfig and the
+      # ExternalSecrets) and the NATS HA profile over staging. The pinned CRD
+      # catalog has no external-secrets.io/v1 schema (only v1beta1), so
+      # ExternalSecret is skipped here; render-external-secrets.sh asserts
+      # each one's shape against the Secrets the workloads read.
+      - name: helm template + kubeconform (GKE example, NATS HA)
+        if: matrix.chart == 'elitea'
+        run: |
+          helm template ci-release deploy/helm/elitea \
+            -f deploy/helm/elitea/values-gke.yaml > /tmp/elitea-gke.yaml
+          helm template ci-release deploy/helm/elitea ${{ matrix.values }} \
+            -f deploy/helm/elitea/values-nats-ha.yaml > /tmp/elitea-nats-ha.yaml
+          kubeconform -strict -summary -verbose \
+            -kubernetes-version 1.30.0 \
+            -schema-location default \
+            -schema-location "$CRD_SCHEMAS" \
+            -skip ExternalSecret \
+            /tmp/elitea-gke.yaml /tmp/elitea-nats-ha.yaml
+
+      # The SHIPPED defaults (S10: runtime, worker, elitea-vector with the
+      # bundled upstream Qdrant chart, DeepWiki and Inventory all on) with only
+      # the values an operator must supply, and the same with the Qdrant HA
+      # profile. No other pass renders the qdrant subchart, its certificate
+      # or the callback client Certificates. The subchart's `helm test` Pod
+      # is part of the render and is validated with the rest.
+      - name: helm template + kubeconform (shipped defaults, Qdrant HA)
+        if: matrix.chart == 'elitea'
+        run: |
+          helm template ci-release deploy/helm/elitea \
+            -f deploy/helm/tests/fixtures/operator-values.yaml > /tmp/elitea-defaults.yaml
+          helm template ci-release deploy/helm/elitea \
+            -f deploy/helm/tests/fixtures/operator-values.yaml \
+            -f deploy/helm/elitea/values-qdrant-ha.yaml > /tmp/elitea-qdrant-ha.yaml
+          kubeconform -strict -summary -verbose \
+            -kubernetes-version 1.30.0 \
+            -schema-location default \
+            -schema-location "$CRD_SCHEMAS" \
+            /tmp/elitea-defaults.yaml /tmp/elitea-qdrant-ha.yaml
+
       - name: Every values file is rendered by some pass
         if: matrix.chart == 'elitea'
         run: |
           # values files deliberately not rendered here, with the reason.
-          # Empty today: all three are rendered by a pass in this job.
+          # Empty today: every one is rendered by a pass in this job.
           excluded=""
           rendered="$(grep -oE 'deploy/helm/elitea/values-[a-z0-9-]+\.yaml' \
                         .github/workflows/helm-lint.yml | sort -u | tr '\n' ' ')"
@@ -716,6 +827,30 @@ jobs:
             -schema-location "$CRD_SCHEMAS" \
             "/tmp/${{ matrix.chart }}-toggles.yaml"
 
+      # Helm 3 still renders the chart, and renders the same objects. CI
+      # lints, installs and publishes with Helm 4, but Argo CD renders with
+      # the Helm 3 it bundles, so a template only Helm 4 accepts would break
+      # every Argo CD install with this workflow green. The Helm 3 pin is the
+      # latest 3.x patch (scripts/ci/check-helm-version.mjs holds both pins).
+      # Last in the job: from here on `helm` is Helm 3.
+      - name: Set up Helm 3 (the Argo CD renderer)
+        id: helm3
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.22.1
+
+      - name: Helm 3 lints, and renders what Helm 4 renders
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          helm version --short
+          helm lint "deploy/helm/${{ matrix.chart }}"
+          if [ "${{ matrix.chart }}" = elitea ]; then
+            HELM3="$(command -v helm)" bash deploy/helm/tests/render-helm3-parity.sh
+          else
+            helm template ci-release "deploy/helm/${{ matrix.chart }}" ${{ matrix.values }} ${{ matrix.toggles }} >/dev/null
+          fi
+
   argocd:
     name: ArgoCD Applications
     runs-on: ubuntu-latest
@@ -733,12 +868,18 @@ jobs:
       # CRDs-catalog), with -strict — so a misspelled spec field fails here
       # instead of silently doing nothing in the cluster. See the note in the
       # template job for why this replaces `kubectl apply --dry-run=client`.
+      # The examples under deploy/argocd/examples/ are copied into operators'
+      # own repositories, so their Applications are held to the same schema.
+      # Their bootstrap/ manifests (an ESO ClusterSecretStore, a repository
+      # Secret) are not: the pinned catalog has no external-secrets.io/v1
+      # schema.
       - name: Validate every Application against the Argo CD CRD schema
         run: |
           kubeconform -strict -summary -verbose \
             -schema-location default \
             -schema-location "$CRD_SCHEMAS" \
-            deploy/argocd/app-of-apps.yaml deploy/argocd/applications/*.yaml
+            deploy/argocd/app-of-apps.yaml deploy/argocd/applications/*.yaml \
+            deploy/argocd/examples/*/root.yaml deploy/argocd/examples/*/applications/*.yaml
 
       # Schema validity is not the failure mode that actually bites. These are:
       # a child that the app-of-apps root will never render, and a source.path

@@ -3,7 +3,7 @@ package codeplatform
 import (
 	"testing"
 
-	toolkit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
 // #1292 round 2: a tool the worker refuses is classified on its typed status

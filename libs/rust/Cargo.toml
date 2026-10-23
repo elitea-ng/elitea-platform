@@ -15,7 +15,7 @@
 # service builds against.
 [workspace]
 resolver = "3"
-members = ["adk-gateway", "agent-runtime", "code-parsers", "connectors", "content-source", "conversation", "doc-chunk", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "inventory-core", "llm-wire", "local-index", "local-tools", "model-client", "office-core", "pg-migrate", "repo-ingest", "vector-index", "workspace-runner", "workspace-store"]
+members = ["adk-gateway", "agent-runtime", "code-parsers", "connectors", "content-source", "conversation", "doc-chunk", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "inventory-core", "llm-wire", "local-embed", "local-index", "local-tools", "model-client", "model-rpc", "office-core", "platform-rpc", "pg-migrate", "repo-ingest", "vector-index", "workspace-runner", "workspace-store"]
 # Vendored crates are path dependencies, never members: their own tests,
 # benches and dev-dependencies are not built or resolved (vendor/README.md).
 exclude = ["vendor"]
@@ -23,7 +23,7 @@ exclude = ["vendor"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 
 # The patched adk 2.2.0 crates (vendor/README.md), applied here exactly as in

@@ -58,7 +58,7 @@ package deepwiki
 //
 // This is accepted rather than half-built. Reconciling would mean elitea-main
 // polling the provider on its own — a background worker holding a client the
-// facade does not have (it owns a ReverseProxy, not an API client), a
+// facade does not have (it owns a request-shaped hop, not a poller), a
 // schedule, and a rule for when to give up. That is a feature, not a detail
 // of this one. What this file does instead is make the gap VISIBLE: every
 // recorded question logs at info with its invocation id, so an unanswered
@@ -81,9 +81,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/run"
 )
 
 // The two request headers the drawer sends with an invoke.

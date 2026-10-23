@@ -8,7 +8,7 @@ package repos
 // `internal_tools`, and the panel reads its state back from the details
 // response (apps/elitea-web/src/widgets/chat-box/ui/hooks/
 // useChatBoxInternalTools.ts:56-62, src/pages/chat/useChatPageData.ts:142).
-// Pylon accepted the key on PUT and answered it on GET
+// The legacy runtime accepted the key on PUT and answered it on GET
 // (legacy/plugins/elitea_core/api/v2/conversation.py:123).
 //
 // This repository wrote `'{}'::jsonb` on create and never read or wrote the
@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The tenant the shared template migrates (postgresIntegrationTenant).

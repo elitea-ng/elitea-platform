@@ -1,6 +1,8 @@
 //! Shared by the PostgreSQL storage tests.
 //!
-//! The tests need PostgreSQL with pgvector. They SKIP, loudly, when
+//! The tests need PostgreSQL (plain, no extension: the dense vectors are in
+//! elitea-vector, which the tests replace with the in-process
+//! [`MemoryDense`]). They SKIP, loudly, when
 //! `DEEPWIKI_TEST_DSN` is unset, and FAIL when `DEEPWIKI_REQUIRE_POSTGRES`
 //! is set as well (CI sets it): the Python suite's rule, because a parity
 //! gate that silently passes without a database is the failure this whole
@@ -8,7 +10,7 @@
 //!
 //! ```text
 //! podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki \
-//!     -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/pgvector/pgvector:0.8.5-pg16
+//!     -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/library/postgres:18
 //! export DEEPWIKI_TEST_DSN=postgresql://deepwiki:deepwiki@127.0.0.1:15436/deepwiki
 //! ```
 //!
@@ -17,6 +19,8 @@
 
 #![allow(dead_code)]
 
+use elitea_deepwiki_engine::storage::build::BuildSpace;
+use elitea_deepwiki_engine::storage::dense::{DenseIndex, MemoryDense};
 use elitea_deepwiki_engine::storage::rows::IndexNode;
 use elitea_deepwiki_engine::storage::{ProjectScope, WikiKey, connect_options, migrate};
 use serde_json::Value;
@@ -25,6 +29,24 @@ use std::path::PathBuf;
 
 pub const DSN_ENV: &str = "DEEPWIKI_TEST_DSN";
 pub const REQUIRE_ENV: &str = "DEEPWIKI_REQUIRE_POSTGRES";
+
+/// The embedding model the tests' vectors are "made with".
+pub const TEST_MODEL: &str = "test-embedding-model";
+
+/// A build space whose builds write their vectors to a fresh in-process
+/// dense store, and that store (clones share it).
+pub fn dense_space(pool: &PgPool, owner: &str) -> (BuildSpace, MemoryDense) {
+    let store = MemoryDense::new();
+    let space =
+        BuildSpace::new(pool.clone(), owner).with_dense(Some(DenseIndex::memory(store.clone())));
+    (space, store)
+}
+
+/// The dense index over `store` (an `Option`, as `with_dense` takes it).
+#[allow(clippy::unnecessary_wraps)]
+pub fn dense(store: &MemoryDense) -> Option<DenseIndex> {
+    Some(DenseIndex::memory(store.clone()))
+}
 
 /// The project a single-project test publishes into.
 pub const PROJECT: i32 = 1;
@@ -50,7 +72,7 @@ pub fn dsn() -> Option<String> {
         return Some(value);
     }
     let message = format!(
-        "{DSN_ENV} is not set — the PostgreSQL storage tests did NOT run. Start pgvector and export the DSN (see tests/storage_common/mod.rs)."
+        "{DSN_ENV} is not set — the PostgreSQL storage tests did NOT run. Start PostgreSQL and export the DSN (see tests/storage_common/mod.rs)."
     );
     let required = std::env::var(REQUIRE_ENV)
         .is_ok_and(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"));

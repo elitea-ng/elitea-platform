@@ -346,7 +346,7 @@ async fn sensitive_effectful_pause_leaves_no_started_attempt_and_approval_runs_o
     assert_eq!(data["guardrail_type"], "sensitive_tool");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let (_, snapshot) = journal_for(&factory, &state()).await;
-    assert!(snapshot.ledger.history().is_empty());
+    assert_eq!(snapshot.ledger.history(), []);
 
     let approved = with_decision(state(), &data, "approve", None);
     let output = node.execute(&context(approved.clone())).await.unwrap();
@@ -375,7 +375,7 @@ async fn blocked_sensitive_effectful_tool_stops_the_pipeline_without_a_journal_r
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         let (_, snapshot) = journal_for(&factory, &blocked).await;
-        assert!(snapshot.ledger.history().is_empty());
+        assert_eq!(snapshot.ledger.history(), []);
         assert!(snapshot.updates.is_none());
     }
 }
@@ -405,7 +405,7 @@ async fn effectful_authorization_challenge_pauses_then_skip_stops_without_a_jour
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let (_, snapshot) = journal_for(&factory, &skipped).await;
-    assert!(snapshot.ledger.history().is_empty());
+    assert_eq!(snapshot.ledger.history(), []);
 
     // After authorization the effect runs once, journaled under its own activation.
     authorized.store(true, Ordering::SeqCst);

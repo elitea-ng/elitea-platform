@@ -1,4 +1,4 @@
-module github.com/EliteaAI/elitea-platform/conformance/nativeclient
+module github.com/elitea-ng/elitea-platform/conformance/nativeclient
 
 go 1.26.0
 

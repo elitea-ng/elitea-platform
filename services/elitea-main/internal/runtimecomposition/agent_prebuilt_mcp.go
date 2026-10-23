@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
 type currentPrebuiltMCPStore interface {
@@ -42,23 +42,29 @@ func newCurrentAgentPrebuiltMCP(
 	return &currentAgentPrebuiltMCP{store: store}, nil
 }
 
+// InternalToolOrigin is the origin of every internal MCP builder URL handed
+// to the worker: `https://internal-tools.elitea.invalid/app/{project}/mcp/{scope}`.
+// It is a NAME, not an address (.invalid never resolves): the worker routes an
+// endpoint on it to elitea.runtime.v1.InternalToolService over its platform
+// gRPC channel (#1359 U5), and an HTTP client that tried it would fail to
+// resolve rather than reach anything. It replaced
+// ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL. A catalogue entry whose server_url
+// names this origin with {project_id} is trusted as internal, as one naming
+// that variable's origin was.
+const InternalToolOrigin = "https://internal-tools.elitea.invalid"
+
 func newCurrentAgentRuntimePrebuiltMCP(
 	store currentPrebuiltMCPStore,
-	currentMainBaseURL string,
 	actorTokens currentActorTokenIssuer,
 ) (*currentAgentPrebuiltMCP, error) {
 	resolver, err := newCurrentAgentPrebuiltMCP(store)
 	if err != nil {
 		return nil, err
 	}
-	origin, err := internalMCPOrigin(currentMainBaseURL)
-	if err != nil {
-		return nil, err
-	}
 	if actorTokens == nil {
 		return nil, errors.New("current agent actor token issuer is required")
 	}
-	resolver.internalOrigin = origin
+	resolver.internalOrigin = InternalToolOrigin
 	resolver.actorTokens = actorTokens
 	return resolver, nil
 }
@@ -212,15 +218,6 @@ func (source *currentAgentPrebuiltMCP) ResolveCurrentAgentPrebuiltMCP(
 		}
 	}
 	return resolved, true, nil
-}
-
-func internalMCPOrigin(raw string) (string, error) {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil ||
-		parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return "", errors.New("current Main origin is invalid")
-	}
-	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
 }
 
 func (source *currentAgentPrebuiltMCP) trustedInternalMCP(

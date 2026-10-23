@@ -1,6 +1,7 @@
 // Package vectorintrospection serves elitea.vector.v1.TokenIntrospectionService
-// on elitea-main's private mTLS control listener (ADR-0031 decision 1), and
-// mints the per-claim worker token it verifies.
+// on elitea-main's private mTLS control listener (ADR-0031 decision 1) and on
+// its platform gRPC listener (ELITEA_RUNTIME_PLATFORM_ADDRESS, which needs no
+// runtime plane), and mints the per-claim worker token it verifies.
 //
 // elitea-vector calls it to learn which project a request's token is bound
 // to, and which sources the token may use. It answers only the client
@@ -20,7 +21,12 @@
 //     personal access token with the same name, binding and expiry has no
 //     grant and is inactive here. The grant's provider decides the one source
 //     the token may use (ProviderSource); a provider with no source is
-//     inactive.
+//     inactive. The DeepWiki and Inventory facades record a grant for every
+//     bearer they mint (material.GrantingMinter).
+//
+// A server built with NewCallbackServer verifies callback tokens only: it is
+// what the platform listener serves when the runtime plane is off, and there
+// no worker claim exists to verify, so every claim token is inactive there.
 package vectorintrospection
 
 import (
@@ -31,10 +37,12 @@ import (
 	"strconv"
 	"strings"
 
-	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/workloadauth"
+	vectorv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -66,9 +74,10 @@ var (
 )
 
 // providerSources maps the provider a callback grant records to the one
-// source its tokens may use. DeepWiki records no grant today, so its
-// callback tokens stay inactive until its facade records one; Inventory's
-// source is reserved and refused by elitea-vector (ADR-0031 decision 7).
+// source its tokens may use. Both facades record a grant for every bearer
+// they mint (material.GrantingMinter): DeepWiki's for its build's and its
+// queries' vectors, Inventory's for its own (ADR-0031 decision 7). Inventory
+// `investigate`'s source-tool grant keeps the provider "inventory".
 var providerSources = map[string]vectorv1.Source{
 	"deepwiki":  vectorv1.Source_SOURCE_DEEPWIKI,
 	"inventory": vectorv1.Source_SOURCE_INVENTORY,
@@ -112,7 +121,7 @@ type Server struct {
 	validator   TokenValidator
 	facts       CallbackFacts
 	claimTokens ClaimTokenFacts
-	clients     map[string]struct{}
+	clients     grpcauth.Allowlist
 	logger      *slog.Logger
 }
 
@@ -123,16 +132,9 @@ func NewServer(validator TokenValidator, facts CallbackFacts, claimTokens ClaimT
 	if validator == nil || facts == nil || claimTokens == nil {
 		return nil, errors.New("vector token introspection requires a token validator, callback facts and claim token facts")
 	}
-	allowed := make(map[string]struct{}, len(clients))
-	for _, client := range clients {
-		client = strings.TrimSpace(client)
-		if !strings.HasPrefix(client, "dns:") && !strings.HasPrefix(client, "spiffe://") {
-			return nil, fmt.Errorf("vector introspection client %q is not a dns: or spiffe:// identity", client)
-		}
-		allowed[client] = struct{}{}
-	}
-	if len(allowed) == 0 {
-		return nil, errors.New("vector token introspection requires at least one client identity")
+	allowed, err := grpcauth.NewAllowlist(clients)
+	if err != nil {
+		return nil, fmt.Errorf("vector token introspection clients: %w", err)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -140,14 +142,37 @@ func NewServer(validator TokenValidator, facts CallbackFacts, claimTokens ClaimT
 	return &Server{validator: validator, facts: facts, claimTokens: claimTokens, clients: allowed, logger: logger}, nil
 }
 
+// NewCallbackServer builds a server that verifies provider callback tokens
+// only, for a deployment with no runtime plane: no worker claims anything
+// there, so no claim token can be live, and every one introspects inactive.
+func NewCallbackServer(validator TokenValidator, facts CallbackFacts, clients []string, logger *slog.Logger) (*Server, error) {
+	if validator == nil || facts == nil {
+		return nil, errors.New("vector token introspection requires a token validator and callback facts")
+	}
+	allowed, err := grpcauth.NewAllowlist(clients)
+	if err != nil {
+		return nil, fmt.Errorf("vector token introspection clients: %w", err)
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Server{validator: validator, facts: facts, clients: allowed, logger: logger}, nil
+}
+
+// PlatformService is this server as the platform listener registers it,
+// admitting the SAME client identities it answers itself.
+func (s *Server) PlatformService() runtimegrpc.PlatformService {
+	return runtimegrpc.PlatformService{
+		Name:     vectorv1.TokenIntrospectionService_ServiceDesc.ServiceName,
+		Clients:  s.clients,
+		Register: func(registrar grpc.ServiceRegistrar) { vectorv1.RegisterTokenIntrospectionServiceServer(registrar, s) },
+	}
+}
+
 // IntrospectToken answers whether request.Token is usable for vector access.
 func (s *Server) IntrospectToken(ctx context.Context, request *vectorv1.IntrospectTokenRequest) (*vectorv1.IntrospectTokenResponse, error) {
-	identity, err := workloadauth.VerifiedPeerIdentity(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "A verified client certificate is required.")
-	}
-	if _, ok := s.clients[identity]; !ok {
-		return nil, status.Error(codes.PermissionDenied, "This client may not introspect tokens.")
+	if _, err := s.clients.Authorize(ctx); err != nil {
+		return nil, err
 	}
 	token := request.GetToken()
 	if token == "" || len(token) > maxTokenBytes {
@@ -163,6 +188,10 @@ func (s *Server) IntrospectToken(ctx context.Context, request *vectorv1.Introspe
 
 func (s *Server) introspectClaimToken(ctx context.Context, token string, intent repos.MemoryIntent) (*vectorv1.IntrospectTokenResponse, error) {
 	inactive := &vectorv1.IntrospectTokenResponse{}
+	if s.claimTokens == nil {
+		// NewCallbackServer: no runtime plane, so no live claim.
+		return inactive, nil
+	}
 	hash, ok := HashClaimToken(token)
 	if !ok {
 		return inactive, nil

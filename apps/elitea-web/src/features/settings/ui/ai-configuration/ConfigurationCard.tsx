@@ -54,9 +54,6 @@ const CONFIG_PROVIDER_ICONS: Record<string, { path: string }> = {
   AZURE: {
     path: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10z',
   },
-  PGVECTOR: {
-    path: 'M4 22h16a2 2 0 002-2V2H2v18a2 2 0 002 2zm1-13h12v2H5V9zm0 4h8v2H5v-2zm0-8h12v2H5V5z',
-  },
 };
 
 const resolveIconPath = (iconType: string): string => {

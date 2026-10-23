@@ -5,15 +5,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"net/http"
 	"strings"
 	"time"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/ssewriter"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
+
+// streamKeepalive is the idle bound on a tools/call stream. Between the primed
+// cursor and the result the stream can be silent for up to mcpRunDeadline (90
+// seconds), which is within a second or two of the 100-second idle timeout of a
+// Cloudflare-style proxy. A comment every ssewriter.KeepaliveInterval keeps the
+// connection open; MCP clients parse SSE and drop comments. Tests shorten it.
+var streamKeepalive = ssewriter.KeepaliveInterval
+
+// keepStreamAlive starts the comment ticker on a primed stream. The caller
+// must Stop it before it writes the result.
+func keepStreamAlive(w http.ResponseWriter) *ssewriter.Keepalive {
+	return ssewriter.StartKeepalive(w, streamKeepalive)
+}
 
 func (h *Handler) streamToolCall(w http.ResponseWriter, r *http.Request, schema string, s scope, message rpcMessage) {
 	if len(message.ID) > 1024 {
@@ -43,6 +57,7 @@ func (h *Handler) streamToolCall(w http.ResponseWriter, r *http.Request, schema 
 			if !prime() {
 				return errorResult("the admitted run cannot be observed through this connection")
 			}
+			defer keepStreamAlive(w).Stop()
 			return h.awaitRunResultWithMode(ctx, schema, outcome, tool, true)
 		},
 		func(ctx context.Context, projectID, actorID int64, tool Tool, reference toolkitexecutionapp.ReadToolResultReference, service ToolkitResumeUseCase) map[string]any {
@@ -53,6 +68,7 @@ func (h *Handler) streamToolCall(w http.ResponseWriter, r *http.Request, schema 
 			if !prime() {
 				return errorResult("the admitted run cannot be observed through this connection")
 			}
+			defer keepStreamAlive(w).Stop()
 			return observeToolkitResult(ctx, service, reference, tool.Name)
 		})
 	if !started {
@@ -164,12 +180,16 @@ func (h *Handler) resumeToolStream(w http.ResponseWriter, r *http.Request, schem
 	if startResumeStream(w, r.Header.Get("Last-Event-ID")) != nil {
 		return
 	}
-	var result map[string]any
-	if cursor.ToolkitResult != nil {
-		result = observeToolkitResult(r.Context(), service, *cursor.ToolkitResult, target.Name)
-	} else {
-		result = h.awaitRunResultWithMode(r.Context(), schema, agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: cursor.ExecutionID, ResponseMessageID: cursor.ResponseMessageID}, target, true)
-	}
+	// As in streamToolCall: the keepalive lives exactly as long as the wait,
+	// and the deferred Stop ends it on every way out of the wait (a panic
+	// included) before finishResumeStream writes the result.
+	result := func() map[string]any {
+		defer keepStreamAlive(w).Stop()
+		if cursor.ToolkitResult != nil {
+			return observeToolkitResult(r.Context(), service, *cursor.ToolkitResult, target.Name)
+		}
+		return h.awaitRunResultWithMode(r.Context(), schema, agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: cursor.ExecutionID, ResponseMessageID: cursor.ResponseMessageID}, target, true)
+	}()
 	if r.Context().Err() != nil {
 		return
 	}

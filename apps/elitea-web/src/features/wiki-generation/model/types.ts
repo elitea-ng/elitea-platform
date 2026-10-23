@@ -1,18 +1,20 @@
-/** The generation stream's message types, as the provider emits them. */
+import { FRAME_TYPE } from '@elitea/client-core/stream';
+
+/** The generation stream's message types, as the provider emits them: the subset of `@elitea/client-core`'s `FRAME_TYPE` it branches on. */
 export const GenerationFrameType = {
-  StartTask: 'start_task',
-  Chunk: 'chunk',
-  AIMessageChunk: 'AIMessageChunk',
-  AgentResponse: 'agent_response',
-  AgentToolStart: 'agent_tool_start',
-  AgentToolEnd: 'agent_tool_end',
-  AgentToolError: 'agent_tool_error',
-  AgentLlmChunk: 'agent_llm_chunk',
-  AgentThinkingStep: 'agent_thinking_step',
-  AgentThinkingStepUpdate: 'agent_thinking_step_update',
-  AgentException: 'agent_exception',
-  Error: 'error',
-  LlmError: 'llm_error',
+  StartTask: FRAME_TYPE.StartTask,
+  Chunk: FRAME_TYPE.Chunk,
+  AIMessageChunk: FRAME_TYPE.AIMessageChunk,
+  AgentResponse: FRAME_TYPE.AgentResponse,
+  AgentToolStart: FRAME_TYPE.AgentToolStart,
+  AgentToolEnd: FRAME_TYPE.AgentToolEnd,
+  AgentToolError: FRAME_TYPE.AgentToolError,
+  AgentLlmChunk: FRAME_TYPE.AgentLlmChunk,
+  AgentThinkingStep: FRAME_TYPE.AgentThinkingStep,
+  AgentThinkingStepUpdate: FRAME_TYPE.AgentThinkingStepUpdate,
+  AgentException: FRAME_TYPE.AgentException,
+  Error: FRAME_TYPE.Error,
+  LlmError: FRAME_TYPE.LlmError,
 } as const;
 
 export type GenerationFrameType =

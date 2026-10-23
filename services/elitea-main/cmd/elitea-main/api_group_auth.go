@@ -1,10 +1,10 @@
 package main
 
 import (
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // apiGroupAuthConfig composes the credential set that api.NewRouter applies to
@@ -82,7 +82,7 @@ import (
 func apiGroupAuthConfig(
 	formGraph *authcomposition.FormGraph,
 	principalValidator apimw.PrincipalValidator,
-	forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier,
+	formSessions apimw.FormSessionAuthenticator,
 	sessionPrincipals apimw.PrincipalValidator,
 	sessionTokens apimw.TokenValidator,
 	sessionSecret string,
@@ -104,7 +104,7 @@ func apiGroupAuthConfig(
 		return apimw.AuthConfig{
 			Validator:                  formGraph,
 			PrincipalValidator:         principalValidator,
-			ForwardedIdentityVerifier:  forwardedIdentityVerifier,
+			FormSessions:               formSessions,
 			SessionSecret:              sessionSecret,
 			SessionStore:               sessionStore,
 			RejectLegacySessionCookies: rejectLegacySessionCookies,
@@ -124,7 +124,7 @@ func apiGroupAuthConfig(
 
 // withNativeTokens teaches the composed credential set the native access token
 // (ADR-0025 WP2), in ONE place: the /api/v2 group, the artifact routes and the
-// Traefik /auth edge endpoint all derive their validator from apiGroupAuth, so
+// /auth edge endpoint all derive their validator from apiGroupAuth, so
 // all of them accept an `elnat_` bearer from this one change.
 //
 // The selected validator is wrapped, not replaced: a token with the `elnat_`

@@ -22,7 +22,8 @@ import (
 // order rows differently, so only the id SET matters, not its sequence), and
 // that fetching it is fast enough — p99 latency < M ms.
 //
-// This subcommand runs against the live gateway (:8083) and the legacy endpoint
+// This subcommand runs against elitea-main's public /llm (the gateway serves
+// no HTTP /llm since GatewayService replaced that hop, #1359) and the legacy endpoint
 // during pre-flight (BFF.9c), driven by an operator-seeded projects fixture
 // (>= 5 projects). The two load-bearing decisions — set equivalence and the p99
 // threshold — are pure functions (diffModelSets, percentile) exercised without
@@ -165,7 +166,7 @@ func loadProjectsFixture(path string) ([]parityProject, error) {
 
 // fetchModelIDs GETs /llm/v1/models from baseURL for one project, returning the
 // sorted id set and the observed request latency. The project is identified by a
-// bearer token (apiKey) and the X-Elitea-Project-Id header; the elapsed time
+// bearer token (apiKey) and the X-Project-Id selector; the elapsed time
 // spans the full request including body read (the p99 metric the gate bounds).
 func fetchModelIDs(client *http.Client, baseURL, projectID, apiKey string) ([]string, time.Duration, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
@@ -177,7 +178,9 @@ func fetchModelIDs(client *http.Client, baseURL, projectID, apiKey string) ([]st
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	if projectID != "" {
-		req.Header.Set("X-Elitea-Project-Id", projectID)
+		// The public edge's project selector. X-Elitea-Project-Id is the
+		// signed internal identity header, which the edge strips.
+		req.Header.Set("X-Project-Id", projectID)
 	}
 
 	start := time.Now()
@@ -206,7 +209,7 @@ func cmdModelsParity(args []string) {
 	fs := flag.NewFlagSet("models-parity", flag.ExitOnError)
 	minProjects := fs.Int("min-projects", 5, "minimum number of projects that must be checked")
 	maxP99MS := fs.Int("max-p99-ms", 200, "maximum acceptable p99 gateway /v1/models latency in ms")
-	gatewayURL := fs.String("gateway-url", "http://localhost:8083", "gateway base URL (elitea-main edge or elitea-llm-gateway-svc)")
+	gatewayURL := fs.String("gateway-url", envOr("DEPLOYMENT_URL", defaultBaseURL), "elitea-main public origin serving /llm/v1/models (default $DEPLOYMENT_URL, else "+defaultBaseURL+")")
 	legacyURL := fs.String("legacy-url", envOr("LEGACY_LLM_URL", "http://localhost:4000"), "legacy LiteLLM base URL for the reference model set")
 	projectsFile := fs.String("projects-file", os.Getenv("LLM_PARITY_PROJECTS_FILE"), "path to the seeded projects fixture (JSON array)")
 	samplesPerProject := fs.Int("samples-per-project", 10, "gateway /v1/models fetches per project used to build the p99 latency sample")

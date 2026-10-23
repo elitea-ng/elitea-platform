@@ -29,9 +29,10 @@
 -- WHERE THE SPLIT COMES FROM. testdata/postgres/legacy-rbac-matrix.json holds
 -- `models.chat.messages.create` for `default` / {`admin`, `editor`, `viewer`}.
 -- The name itself comes from testdata/legacy/legacy-rbac-static-catalog.json,
--- machine-generated from the pylon `check_api` declarations. So this file is
--- parity restoration, not a new policy. `system` and `super_admin` are omitted,
--- as everywhere else in this corpus: Go seeds neither role in the default mode.
+-- machine-generated from the legacy runtime `check_api` declarations. So this
+-- file is parity restoration, not a new policy. `system` and `super_admin` are
+-- omitted, as everywhere else in this corpus: Go seeds neither role in the
+-- default mode.
 --
 -- Its sibling `models.applications.tool.patch` arrived with 0068, for the same
 -- authorizer and for the index-ingest capability. The two are read the same
@@ -40,7 +41,7 @@
 -- BLAST RADIUS. `legacyrbac`'s projectPermissions() falls back to the CENTRAL
 -- default-mode grants by role NAME only for a project that carries NO
 -- per-project role_permission rows. That is the fresh-Go-database shape. It is
--- never the shape of a pylon-backed database, of a legacy dump, or of the E2E
+-- never the shape of a legacy-backed database, of a legacy dump, or of the E2E
 -- stack, all of which seed per-project rows and therefore suppress the fallback
 -- entirely. So no existing deployment's members gain anything here. The
 -- fallback is also joined THROUGH the caller's assigned project roles, so a

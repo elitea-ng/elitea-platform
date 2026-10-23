@@ -117,6 +117,13 @@ impl Default for DirectToolkitRuntime {
 }
 
 impl DirectToolkitRuntime {
+    /// A runtime over `mcp_connector` (production's carries the platform
+    /// client identity for the internal MCP builders).
+    #[must_use]
+    pub(crate) fn new(mcp_connector: Arc<dyn McpConnector>) -> Self {
+        Self { mcp_connector }
+    }
+
     /// Materialize and execute exactly one read-only selected operation.
     ///
     /// No retry occurs here. command redelivery may repeat the provider read only

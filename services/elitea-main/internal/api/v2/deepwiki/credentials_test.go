@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 // ---------------------------------------------------------------------------
@@ -362,7 +362,7 @@ func TestTheAllowlistMatchesTheProvidersRules(t *testing.T) {
 func rewriter(t *testing.T, minter deepwiki.CallbackMinter) *deepwiki.InvokeRewriter {
 	t.Helper()
 	built, err := deepwiki.NewInvokeRewriter(
-		testCredentialResolver(t), nil, minter, "https://elitea.test/", time.Hour)
+		testCredentialResolver(t), nil, minter, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestTheRewriteReplacesReferencesWithMaterial(t *testing.T) {
 	}
 	// The engine strips `/llm/v1` off api_base to find the artifact API, so
 	// this exact suffix is load-bearing rather than cosmetic.
-	if settings["api_base"] != "https://elitea.test/llm/v1" {
+	if settings["api_base"] != "https://elitea-platform.invalid/llm/v1" {
 		t.Fatalf("api_base %v", settings["api_base"])
 	}
 	if settings["api_key"] != "bearer-for-"+grant.UUID {
@@ -492,7 +492,7 @@ func TestAToolLevelLLMSettingsIsLiftedNotMerged(t *testing.T) {
 		t.Fatalf("the other tool parameters were lost: %v", out.Parameters)
 	}
 	settings, _ := out.Configuration.Parameters["llm_settings"].(map[string]any)
-	if settings["api_base"] != "https://elitea.test/llm/v1" || settings["api_key"] != "bearer-for-"+grant.UUID {
+	if settings["api_base"] != "https://elitea-platform.invalid/llm/v1" || settings["api_key"] != "bearer-for-"+grant.UUID {
 		t.Fatalf("the facade's transport did not survive: %v", settings)
 	}
 	if settings["max_tokens"] != float64(4096) {
@@ -549,7 +549,7 @@ func TestNoTokenIsMintedForARefusedResolution(t *testing.T) {
 				42: githubToolkit(42, 7, "https://ghe.attacker.example"),
 			}, "github.com")
 			return resolver
-		}(), nil, minter, "https://elitea.test", time.Hour)
+		}(), nil, minter, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestTheProviderReceivesTheRewrittenBody(t *testing.T) {
 func TestARefusedInvocationRevokesItsCallbackToken(t *testing.T) {
 	_, cfg := provider(t)
 	// A port nothing listens on: the hop fails, the proxy answers 503.
-	cfg.BaseURL = "https://127.0.0.1:1"
+	cfg.Target = "127.0.0.1:1"
 	minter := &recordingMinter{}
 	handler := routeWith(t, cfg, testCredentialResolver(t), minter)
 
@@ -756,7 +756,7 @@ func TestTheRewriterRefusesAnOutOfRangeProjectOnItsOwn(t *testing.T) {
 	}, "api.github.com")
 	minter := &recordingMinter{}
 	built, err := deepwiki.NewInvokeRewriter(
-		credentials, nil, minter, "https://elitea.test", time.Hour)
+		credentials, nil, minter, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

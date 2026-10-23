@@ -13,7 +13,7 @@
 //! use it too, so they need neither Python nor a network.
 
 use super::compose::VersionClock;
-use super::context::PylonPlugin;
+use super::context::PluginMount;
 use super::expansion::ExpansionFlags;
 use super::index::{GraphFacts, IndexEdge, IndexNode, PageIndex};
 use super::pages::{PageGenerator, PageSettings};
@@ -175,10 +175,15 @@ impl StubModel {
         let address = listener
             .local_addr()
             .map_err(|e| invalid(format!("address: {e}")))?;
-        let app = Router::new().fallback(handle).with_state(StubState {
-            recorded: Arc::clone(&recorded),
-            mode,
-        });
+        // The model client calls elitea.llm.v1.ModelService; the stub's
+        // handlers answer it through the same bridge the tests use.
+        let app = elitea_model_rpc::testing::with_model_service(
+            Router::new().fallback(handle).with_state(StubState {
+                recorded: Arc::clone(&recorded),
+                mode,
+            }),
+            "/v1",
+        );
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
@@ -374,7 +379,7 @@ pub async fn run_dump(
             repo_root: dump.repo_root.clone(),
             flags: ExpansionFlags::from_env()?,
             budget: CONTEXT_TOKEN_BUDGET,
-            pylon: PylonPlugin::new(dump.repo_root),
+            plugin_mount: PluginMount::new(dump.repo_root),
         },
         chat: stub_chat(&model.base_url)?,
         settings: PageSettings::new(dump.identity.repository.clone()),

@@ -318,7 +318,7 @@ nodes:
         assert_eq!(history[0].state["findings"], json!(["seed"]));
         assert_eq!(history[0].state["count"], json!(0));
         let last = history.last().expect("terminal checkpoint");
-        assert!(last.pending_nodes.is_empty());
+        assert_eq!(last.pending_nodes, [] as [String; 0]);
         assert_eq!(last.state["count"], json!(3));
         assert_eq!(last.state["findings"], visits(3));
     }

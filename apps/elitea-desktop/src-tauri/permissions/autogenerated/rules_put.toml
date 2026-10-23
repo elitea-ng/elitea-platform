@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rules-put"
+description = "Enables the rules_put command without any pre-configured scope."
+commands.allow = ["rules_put"]
+
+[[permission]]
+identifier = "deny-rules-put"
+description = "Denies the rules_put command without any pre-configured scope."
+commands.deny = ["rules_put"]

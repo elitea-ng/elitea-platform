@@ -20,11 +20,11 @@
 -- migrate.Bootstrap(ctx, pool, bootstrapschema.Initial) before the corpus, so a
 -- real deployment gets the wider shape from 001_initial.sql:462-473, :486-487
 -- and :544-549. What is broken is OWNERSHIP. The corpus is what becomes the
--- definition as pylon is dropped, and it declares a `chat_conversations`
--- (tenant/0123:53-66) that is a strict SUBSET of the one every deployment
--- actually runs. `CREATE TABLE IF NOT EXISTS` hides the disagreement on a
--- bootstrapped database — the statement is a no-op there — so the narrower
--- declaration has never once been the table anyone queried.
+-- definition as the legacy runtime is dropped, and it declares a
+-- `chat_conversations` (tenant/0123:53-66) that is a strict SUBSET of the one
+-- every deployment actually runs. `CREATE TABLE IF NOT EXISTS` hides the
+-- disagreement on a bootstrapped database — the statement is a no-op there — so
+-- the narrower declaration has never once been the table anyone queried.
 --
 -- 0123's own header says where its column list came from: it mirrors
 -- internal/db/schema/agent_chat_baseline.sql, the sqlc COMPILER projection,
@@ -32,8 +32,8 @@
 -- generated query names them. A projection of the queries is not a projection
 -- of the schema. This is the same class of defect as 0124 (`elitea_tools`) and
 -- 0125 (`entity_tool_mapping.entity_id`), and the same fix: reconcile the
--- corpus against the deployed pylon shape in a NEW file, because migrations are
--- checksum-immutable and 0123 is already applied and ledgered.
+-- corpus against the deployed legacy runtime shape in a NEW file, because
+-- migrations are checksum-immutable and 0123 is already applied and ledgered.
 --
 -- WHAT ACTUALLY FAILS WHERE THE CORPUS IS THE ONLY SOURCE
 --
@@ -72,8 +72,9 @@
 --
 -- SHAPE, AND WHY EACH CHOICE
 --
--- The authority is pylon, cross-checked against 001_initial.sql so this file
--- cannot disagree with the table every existing deployment already carries:
+-- The authority is the legacy runtime, cross-checked against 001_initial.sql so
+-- this file cannot disagree with the table every existing deployment already
+-- carries:
 --
 --   * `chat_conversation_folders` — legacy/plugins/elitea_core/models/folder.py:12-33
 --     against 001_initial.sql:462-473. Identical: `uuid` is UNIQUE and
@@ -83,12 +84,13 @@
 --     ordering model rather than "missing".
 --
 --   * `chat_conversations.folder_id` — conversation.py:32-35, an FK with NO
---     `ON DELETE` clause. That absence is deliberate and load-bearing: pylon's
---     api/v2/folder.py:846-865 NULLs every member conversation's `folder_id` in
---     application code before deleting the folder. Writing `ON DELETE CASCADE`
---     here would silently destroy conversations when a folder is removed, and
---     `ON DELETE SET NULL` would look harmless while quietly diverging from the
---     constraint every deployed database holds. Neither was taken.
+--     `ON DELETE` clause. That absence is deliberate and load-bearing: the
+--     legacy runtime's api/v2/folder.py:846-865 NULLs every member
+--     conversation's `folder_id` in application code before deleting the
+--     folder. Writing `ON DELETE CASCADE` here would silently destroy
+--     conversations when a folder is removed, and `ON DELETE SET NULL` would
+--     look harmless while quietly diverging from the constraint every deployed
+--     database holds. Neither was taken.
 --
 --   * `chat_conversations.attachment_participant_id` — conversation.py:29-31 and
 --     001_initial.sql:486, nullable, FK to `chat_participants(id)`.
@@ -99,9 +101,9 @@
 --     is a DELETE-then-INSERT rather than an upsert, and adding the unique that
 --     "obviously belongs there" would turn that pair into a constraint
 --     violation the moment two rows raced. `conversation_id` is written NOT NULL
---     to match pylon's `nullable=False`; 001_initial.sql leaves it nullable, and
---     the two cannot conflict because on any database that has the table this
---     statement is a no-op.
+--     to match the legacy runtime's `nullable=False`; 001_initial.sql leaves it
+--     nullable, and the two cannot conflict because on any database that has
+--     the table this statement is a no-op.
 --
 -- WHY EVERY STATEMENT IS GUARDED
 --
@@ -112,17 +114,17 @@
 -- absent this migration must record itself and move on.
 --
 -- The FK additions need a second guard of their own. `ALTER TABLE ... ADD
--- CONSTRAINT` has no IF NOT EXISTS in PostgreSQL, so on a pylon-provisioned or
+-- CONSTRAINT` has no IF NOT EXISTS in PostgreSQL, so on a legacy-provisioned or
 -- bootstrapped database — where the column and its constraint already exist and
 -- `ADD COLUMN IF NOT EXISTS` therefore did nothing — an unconditional ADD
 -- CONSTRAINT would raise 42710 and fail the chain on precisely the databases
 -- this migration is supposed to leave untouched. The existence probe is written
 -- against pg_constraint by (conrelid, contype, referencing column) rather than
--- by constraint NAME, because the bootstrap's inline REFERENCES and pylon's
--- ALTER produce different auto-generated names for the same constraint, and a
--- name match would miss one of them and then collide. pg_catalog is searched
--- implicitly, so the probe works under the tenant-only search_path;
--- information_schema would NOT, which is why it is not used here.
+-- by constraint NAME, because the bootstrap's inline REFERENCES and the legacy
+-- runtime's ALTER produce different auto-generated names for the same
+-- constraint, and a name match would miss one of them and then collide.
+-- pg_catalog is searched implicitly, so the probe works under the tenant-only
+-- search_path; information_schema would NOT, which is why it is not used here.
 --
 -- All table names are UNQUALIFIED. Tenant migrations run with a
 -- transaction-local search_path pinned to the tenant schema
@@ -152,8 +154,8 @@ BEGIN
 
     ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS folder_id integer;
 
-    -- No ON DELETE: pylon nulls folder_id in application code before dropping a
-    -- folder (api/v2/folder.py:846-865). See the header.
+    -- No ON DELETE: the legacy runtime nulls folder_id in application code
+    -- before dropping a folder (api/v2/folder.py:846-865). See the header.
     IF NOT EXISTS (
         SELECT 1
           FROM pg_constraint AS con

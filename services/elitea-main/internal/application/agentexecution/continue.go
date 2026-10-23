@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 const (
@@ -729,11 +729,6 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 	}
 	var input *runtimev1.AgentExecutionInputV1
 	var capabilityID string
-	suggestionPolicy := service.resolveNextInputSuggestionPolicy(
-		ctx,
-		request.ProjectID,
-		request.ActorUserID,
-	)
 	// Resolved once for the whole branch below. A resume and a regenerate are
 	// executions like any other: the sensitive-tool policy governs what the
 	// agent may do WITHOUT asking, and a resumed turn that arrived without one
@@ -789,7 +784,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		// have known") after the model has already partly answered, which
 		// is out of this issue's scope. "" is the same no-recall behavior
 		// this call site had before #870.
-		input, err = currentApplicationInput(start, resolved, suggestionPolicy, toolkitGuardrails, nil, "",
+		input, err = currentApplicationInput(start, resolved, toolkitGuardrails, nil, "",
 			// #946: project context is NOT a per-turn recall like memories —
 			// it is standing project configuration, so a resumed or
 			// regenerated turn in the same project must carry the same
@@ -855,7 +850,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 				return nil, nil, "", err
 			}
 		}
-		input, err = currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's continuation call site
+		input, err = currentAdhocInput(start, resolved, frozen, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's continuation call site
 			// #946: project context is NOT a per-turn recall like memories —
 			// it is standing project configuration, so a resumed or
 			// regenerated turn in the same project must carry the same

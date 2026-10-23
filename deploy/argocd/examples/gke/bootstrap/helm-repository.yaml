@@ -1,0 +1,23 @@
+# EXAMPLE — register the public OCI chart registry with Argo CD, once.
+#
+# The `elitea` Application pulls `ghcr.io/elitea-ng/charts/elitea` as an OCI
+# Helm chart. Argo CD needs a repository entry with enableOCI for that host;
+# the charts are public, so it carries no credential. Apply it into Argo CD's
+# namespace before the first sync:
+#
+#   kubectl apply -f bootstrap/helm-repository.yaml
+#
+# A mirror of your own: put its host/path in `url` and add `username` /
+# `password` (a pull token) through your secret manager, not this file.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-ghcr-elitea-charts
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  name: elitea-charts
+  type: helm
+  url: ghcr.io/elitea-ng/charts
+  enableOCI: "true"

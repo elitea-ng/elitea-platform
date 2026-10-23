@@ -25,7 +25,7 @@ export const PROFILE_INITIAL_VALUES = {
  * (`GetAuthor`) has exactly one settings-carrying column: `personalization`
  * (an arbitrary jsonb blob, `centry.social_users.personalization`). There is
  * no `default_context_management`/`default_summarization` column or response
- * field at all — unlike the old pylon-backed app, which had those as
+ * field at all — unlike the legacy app, which had those as
  * separate top-level keys on both the author response and the
  * `AuthorUpdateRequest` PUT body. `UpdateAuthor` (same file) decodes the PUT
  * body into `map[string]any` and reads only `name`/`description`/`avatar`/
@@ -135,7 +135,7 @@ export function serializeProfileFormData(
  * for why: the Go handler only reads `name`/`description`/`avatar`/
  * `personalization` from the body and silently drops any other top-level
  * key, so a flat `default_context_management`/`default_summarization`
- * payload (the old pylon-app's wire shape) would save nothing for those
+ * payload (the legacy app's wire shape) would save nothing for those
  * fields against this backend.
  */
 export function deserializeProfileFormData(formValues: Record<string, unknown>): Record<string, unknown> {

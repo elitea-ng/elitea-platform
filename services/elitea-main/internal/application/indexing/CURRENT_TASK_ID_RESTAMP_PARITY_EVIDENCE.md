@@ -1,5 +1,16 @@
 # Current index `task_id` restamp parity
 
+> **Superseded (#1359).** The mechanism below is gone. Its consumer went with
+> the per-project PgVector store, and the writer
+> (`persistCurrentIndexMetaTaskRestampIntent` and
+> `NodeEventFrame.CurrentIndexMetaTaskRestampSource`) was removed after it: a
+> NodeEvent no longer records a restamp intent. Index metadata now lives in
+> the index registry (ADR-0030), and the Rust worker sends no
+> `agent_index_data_status` callback. The `index_meta_task_restamp_*` columns of
+> `elitea_runtime.index_ingest_jobs` (migration 0049) are kept, and the index v2
+> cutover preflight still counts `PENDING` rows. This document is kept as the
+> record of what the Python path did.
+
 ## Current baseline evidence
 
 The current behavior spans two repositories:
@@ -7,10 +18,10 @@ The current behavior spans two repositories:
 - `elitea-sdk/elitea_sdk/tools/base_indexer_toolkit.py:index_meta_init`
   resets `task_id` to `None` on reindex and emits `created_at`/`updated_on`
   through the `index_data_status` callback.
-- `centry/pylon_main/plugins/elitea_core/methods/stream.py:
+- `legacy/centry/<main runtime>/plugins/elitea_core/methods/stream.py:
   process_index_data_status_event` invokes the restamp only for
   `agent_index_data_status` with state `in_progress`.
-- `centry/pylon_main/plugins/elitea_core/utils/application_tools.py:
+- `legacy/centry/<main runtime>/plugins/elitea_core/utils/application_tools.py:
   ensure_index_data_has_task_id` loads the index metadata and sets `task_id`
   only when it is missing and the metadata `created_on` equals the callback
   `created_at`.

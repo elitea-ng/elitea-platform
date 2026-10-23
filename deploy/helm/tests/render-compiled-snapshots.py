@@ -30,9 +30,16 @@ def setting(path):
 
 def values():
     return {
-        'postgresql': {'maxConnections': 250},
-        'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS)}},
-        'worker': {'enabled': True, 'implementation': 'rust', 'indexingRuntime': 'python', 'runtime': {'sandboxRuntimes': [
+        # 340: elitea-main's 184 at four replicas plus, at their replica
+        # ceilings, the gateway (8 x 4), the scheduler (4 x 2) and the
+        # worker's AgentState pool (8 x 10): 304, plus 25 reserved.
+        'postgresql': {'maxConnections': 340},
+        # Indexing off: the standalone values turn index dispatch on, and the
+        # Rust indexing runtime (the only one) then needs a vector store these
+        # compiled-snapshot contracts do not exercise.
+        'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS),
+                             'indexIngestDispatch': {'enabled': False, 'commandStream': ''}}},
+        'worker': {'enabled': True, 'implementation': 'rust', 'runtime': {'sandboxRuntimes': [
             dict(language='python', target='python:9446', audience='dns:python', image_digest=IMAGE,
                  policy_revision='python-v1', timeout_seconds=60,
                  preparation=dict(target='python-prep:9448', audience='dns:python-prep',
@@ -197,7 +204,12 @@ class Helm(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='compiled-render-') as directory:
             filename = Path(directory) / 'values.yaml'; filename.write_text(yaml.safe_dump(value))
             result = subprocess.run([
-                'helm', 'template', 'compiled', str(CHART), '-f', str(CHART / 'values-standalone.yaml'),
+                # fixtures/features-off.yaml first: the pre-S10 switches (vector,
+                # Qdrant, DeepWiki, Inventory off), so the connection budget
+                # below is the receipt pool's and not elitea-vector's.
+                'helm', 'template', 'compiled', str(CHART),
+                '-f', str(CHART.parent / 'tests' / 'fixtures' / 'features-off.yaml'),
+                '-f', str(CHART / 'values-standalone.yaml'),
                 '-f', str(filename), '--namespace', 'platform',
                 '--set', 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1',
                 '--set', 'llmGateway.egressPosture=public-unrestricted',
@@ -273,7 +285,9 @@ class Helm(unittest.TestCase):
         self.assertIn('84 PostgreSQL server connections', result.stderr)
         self.assertIn('52 PgBouncer plus 32 independent Code receipt connections across 8 Main replicas', result.stderr)
         self.assertIn('only 75 are available', result.stderr)
-        for maximum, pool_size, accepted in [(109, 48, True), (100, 39, True), (100, 40, False)]:
+        # The rest of the release at its replica ceilings: gateway 8 x 4,
+        # scheduler 4 x 2, worker AgentState 8 x 10 = 120.
+        for maximum, pool_size, accepted in [(229, 48, True), (220, 39, True), (220, 40, False)]:
             with self.subTest(maximum=maximum, pool_size=pool_size):
                 v['postgresql']['maxConnections'] = maximum
                 v['pgbouncer']['poolSize'] = pool_size
@@ -285,7 +299,10 @@ class Helm(unittest.TestCase):
         v['pgbouncer'] = dict(enabled=True, poolSize=48, reservePoolSize=4, maxClientConn=1024,
                               postgresHost='postgres.synthetic', database='compiled_fixture',
                               credentialsSecretName='synthetic-pgbouncer')
-        v['postgresql'] = dict(maxConnections=100, reservedConnections=25)
+        # 220 − 25 = 195 = PgBouncer 52 + gateway 8 × 4 + scheduler 4 × 2
+        # + worker 8 × 10 + 4 receipt connections × 5 replicas (+3 spare):
+        # a sixth replica overflows.
+        v['postgresql'] = dict(maxConnections=220, reservedConnections=25)
         v['main']['autoscaling'] = dict(enabled=False)
         for count, accepted in [(5, True), (6, False)]:
             with self.subTest(count=count):
@@ -298,7 +315,9 @@ class Helm(unittest.TestCase):
         v['pgbouncer'] = dict(enabled=True, poolSize=48, reservePoolSize=4, maxClientConn=1024,
                               postgresHost='postgres.synthetic', database='compiled_fixture',
                               credentialsSecretName='synthetic-pgbouncer')
-        v['postgresql'] = dict(maxConnections=100, reservedConnections=25)
+        # 197 − 25 = 172 = PgBouncer 52 + gateway 8 × 4 + scheduler 4 × 2
+        # + worker 8 × 10, exactly.
+        v['postgresql'] = dict(maxConnections=197, reservedConnections=25)
         v['main']['autoscaling'] = dict(enabled=True, maxReplicas=8)
         del v['main']['runtime']['rustCompiledSnapshots']
         del v['worker']['runtime']['sandboxRuntimes'][1]['compiled_snapshot']
@@ -401,7 +420,10 @@ class Compose(unittest.TestCase):
                              ('elitea-sandbox', '/run/elitea-sandbox/rust/rust-compiled-profiles.json')]:
             mount = next(m for m in new[name]['volumes'] if m['target'] == target)
             self.assertTrue(mount['read_only'])
-            self.assertFalse(mount['bind']['create_host_path'])
+            # Compose v2.40+ exports create_host_path=false by omitting the key
+            # (true, and the short syntax, export it explicitly), so read the
+            # absent key as false; an explicit true still fails.
+            self.assertIs(mount['bind'].get('create_host_path', False), False)
             self.assertEqual(mount['source'].replace('$$', '$'), '/private/synthetic/release$immutable.json')
 
     def test_compose_export_roundtrip_keeps_dollars(self):
@@ -433,8 +455,7 @@ class Installer(unittest.TestCase):
             'command-signing-key.pem auth-attempt-key '
             'auth-pat-signing-key auth-form-users.json vault-master-key '
             'agent-worker-client.crt agent-worker-client.key '
-            'worker-output-spool-key agent-checkpoint-connection '
-            'platform-edge.crt platform-edge.key'
+            'worker-output-spool-key agent-checkpoint-connection'
         ).split()
         for name in names:
             (source / name).write_bytes(b'synthetic-test-material')

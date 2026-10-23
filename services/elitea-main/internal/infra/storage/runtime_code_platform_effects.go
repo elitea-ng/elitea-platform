@@ -3,11 +3,13 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // CodePlatformEffectsBodyLimit equals the step route's bound: the request is
@@ -91,42 +93,41 @@ func (p *CodePlatformPump) Effects(ctx context.Context, claim ContentClaim, disp
 	return possible, nil
 }
 
-// PostCodePlatformEffects serves the read-only journal question. Claim parsing,
-// admission, body bound and status mapping are identical to the step route.
-func (s *ContentServer) PostCodePlatformEffects(w http.ResponseWriter, r *http.Request) {
-	if s == nil || s.codePlatformPump == nil || r.Method != http.MethodPost || r.URL.RawQuery != "" {
-		http.NotFound(w, r)
-		return
+// ReadCodePlatformEffects serves the read-only journal question. Claim
+// parsing, admission, request bound and status mapping are identical to
+// StepCodePlatform.
+func (s *ContentServer) ReadCodePlatformEffects(ctx context.Context, request *runtimev1.ReadCodePlatformEffectsRequestV1) (*runtimev1.ReadCodePlatformEffectsResponseV1, error) {
+	if s == nil || s.codePlatformPump == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		http.Error(w, "Code platform claim denied", http.StatusForbidden)
-		return
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Code platform claim denied")
 	}
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, CodePlatformEffectsBodyLimit))
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, "Invalid Code platform effects request", http.StatusBadRequest)
-		return
+		return nil, err
 	}
-	request, err := ParseCodePlatformEffects(raw)
-	if err != nil {
-		http.Error(w, "Invalid Code platform effects request", http.StatusBadRequest)
-		return
+	defer release()
+	raw := request.GetRequestJson()
+	if len(raw) > CodePlatformEffectsBodyLimit {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "Invalid Code platform effects request")
 	}
-	possible, err := s.codePlatformPump.Effects(r.Context(), claim, request.DispatchActivation, request.PreparedRequestFingerprint)
+	parsed, err := ParseCodePlatformEffects(raw)
 	if err != nil {
-		writeCodePlatformError(w, err, "Invalid Code platform effects request")
-		return
+		return nil, grpcstatus.Error(codes.InvalidArgument, "Invalid Code platform effects request")
+	}
+	possible, err := s.codePlatformPump.Effects(ctx, claim, parsed.DispatchActivation, parsed.PreparedRequestFingerprint)
+	if err != nil {
+		return nil, codePlatformStatus(err, "Invalid Code platform effects request")
 	}
 	response := CodePlatformEffectsResponse{Schema: "elitea.runtime.code-platform-effects-response.v1", Revision: 1, Disposition: CodePlatformEffectsNone}
 	if possible {
 		response.Disposition = CodePlatformEffectsPossible
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(response)
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nil, contentStatus(codes.Unavailable)
+	}
+	return &runtimev1.ReadCodePlatformEffectsResponseV1{ResponseJson: encoded}, nil
 }

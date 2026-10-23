@@ -3,13 +3,15 @@
 //! paths touched, and a before-image of every file a local file tool was
 //! about to change.
 //!
-//! Before-images cover `write_file`, `edit_file` and `apply_patch`. A file a
+//! Before-images cover `write_file`, `edit_file`, `multi_edit` and
+//! `apply_patch`. A file a
 //! shell command changes is in the turn's checkpoint (undo works) but not
 //! in [`Recorder::changes`]: D0 has no checkpoint diff yet.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use elitea_agent_runtime::text::clip_bytes;
 use elitea_local_tools::workspace::{Intent, Workspace};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -38,6 +40,16 @@ const MAX_TOOL_OUTPUT: usize = 64 * 1024;
 /// counted as the keys of `tool_calls` by `CommitLocalTurn` in
 /// `internal/infra/db/repos/local_turns.go`). Keep the two equal.
 pub const MAX_TOOL_CALLS: usize = 512;
+/// The most thinking steps one commit may carry (`localturn.MaxThinkingSteps`
+/// in `services/elitea-main/internal/application/localturn/localturn.go`).
+pub const MAX_THINKING_STEPS: usize = 512;
+/// One model step's reasoning is committed cut at this many bytes (#1228).
+pub const MAX_THINKING_BYTES: usize = 32 * 1024;
+/// All of a turn's committed reasoning, in bytes: the commit body is at most
+/// 8 MiB, and the answer, its tool steps and the report need the rest. Later
+/// steps past it are not committed (they were shown, and the local thread
+/// history keeps them).
+pub const MAX_THINKING_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 /// The `done` status note of a turn stopped at [`MAX_TOOL_CALLS`].
 pub const TOOL_CALL_LIMIT_REACHED: &str = "tool_call_limit_reached";
 
@@ -97,6 +109,13 @@ struct State {
     /// step): the order the commit lists the steps in.
     planned: Vec<String>,
     hitl: Vec<Value>,
+    /// The model steps' reasoning, in call order (the commit's
+    /// `thinking_steps`), and the bytes of it kept.
+    thinking: Vec<Value>,
+    thinking_bytes: usize,
+    /// A step did not fit [`MAX_THINKING_TOTAL_BYTES`]: no later one is
+    /// committed either (the committed reasoning has no gaps).
+    thinking_full: bool,
     commands: Vec<Value>,
     paths: Vec<String>,
     enforcement: Option<String>,
@@ -117,19 +136,18 @@ pub struct Recorder {
     state: Mutex<State>,
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// `text` within `max` bytes: cut at a character boundary, the ellipsis
+/// that marks the cut included.
 fn truncate(text: &str, max: usize) -> String {
+    const MARK: &str = "…";
     if text.len() <= max {
         return text.to_owned();
     }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
+    format!("{}{MARK}", clip_bytes(text, max.saturating_sub(MARK.len())))
 }
 
 impl Recorder {
@@ -205,6 +223,45 @@ impl Recorder {
                 }
             }
         });
+    }
+
+    /// One model step's reasoning (#1228), as the runtime's
+    /// `thinking_steps` entry the cloud worker writes (`type`
+    /// `ChatGeneration`, `thinking`, the step's times, and its model in
+    /// `message.response_metadata.model_name`), bounded by
+    /// [`MAX_THINKING_BYTES`], [`MAX_THINKING_STEPS`] and
+    /// [`MAX_THINKING_TOTAL_BYTES`]: past either of the last two no later
+    /// step is committed.
+    pub fn thinking_step(&self, thinking: &str, model_name: &str, started: &str, finished: &str) {
+        if thinking.is_empty() {
+            return;
+        }
+        let thinking = truncate(thinking, MAX_THINKING_BYTES);
+        self.with(|state| {
+            if state.thinking_full
+                || state.thinking.len() >= MAX_THINKING_STEPS
+                || state.thinking_bytes + thinking.len() > MAX_THINKING_TOTAL_BYTES
+            {
+                state.thinking_full = true;
+                return;
+            }
+            state.thinking_bytes += thinking.len();
+            state.thinking.push(json!({
+                "tool_run_id": uuid::Uuid::new_v4().to_string(),
+                "type": "ChatGeneration",
+                "thinking": thinking,
+                "timestamp_start": started,
+                "timestamp_finish": finished,
+                "message": {"response_metadata": {"model_name": model_name}},
+            }));
+        });
+    }
+
+    /// The commit's `thinking_steps`.
+    #[must_use]
+    pub fn thinking_steps(&self) -> Vec<Value> {
+        self.with(|state| state.thinking.clone())
+            .unwrap_or_default()
     }
 
     pub fn hitl_exchange(&self, exchange: Value) {
@@ -466,6 +523,43 @@ pub(crate) fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileCh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_text_stays_within_its_bound_ellipsis_included() {
+        assert_eq!(truncate("short", 10), "short");
+        let cut = truncate(&"x".repeat(MAX_THINKING_BYTES + 10), MAX_THINKING_BYTES);
+        assert_eq!(cut.len(), MAX_THINKING_BYTES);
+        assert!(cut.ends_with('…'));
+        // Never inside a character: "é" is two bytes.
+        let cut = truncate(&"é".repeat(10), 8);
+        assert!(cut.len() <= 8, "{cut}");
+        assert_eq!(cut, "éé…");
+    }
+
+    #[test]
+    fn thinking_past_the_total_stops_without_gaps() {
+        let recorder = Recorder::default();
+        let step = "t".repeat(MAX_THINKING_BYTES * 2);
+        // A short step, then whole ones until less than a whole one is left.
+        recorder.thinking_step("first", "m", "a", "b");
+        let fit = MAX_THINKING_TOTAL_BYTES / MAX_THINKING_BYTES;
+        for _ in 1..fit {
+            recorder.thinking_step(&step, "m", "a", "b");
+        }
+        assert_eq!(recorder.thinking_steps().len(), fit);
+        // Each step is cut within its bound.
+        assert!(
+            recorder
+                .thinking_steps()
+                .iter()
+                .all(|s| s["thinking"].as_str().unwrap().len() <= MAX_THINKING_BYTES)
+        );
+        // The step that does not fit, and every later one however small,
+        // stay out.
+        recorder.thinking_step(&step, "m", "a", "b");
+        recorder.thinking_step("small", "m", "a", "b");
+        assert_eq!(recorder.thinking_steps().len(), fit);
+    }
 
     #[test]
     fn changes_are_diffed_against_before_images() {

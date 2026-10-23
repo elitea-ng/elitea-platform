@@ -26,7 +26,7 @@ The admin **Projects** page is the deployment-wide project list. Every project â
 
 ## Create or delete a project
 
-Both actions run a multi-step process rather than a single database write: creating a project provisions its record, quota, dedicated schema, permission set, a system user and token, vault secrets, storage buckets, and vector store together; deleting one reverses the same steps, ending in dropping the project's schema. Each step's status is tracked individually, and a failed attempt is compensated rather than left half-applied.
+Both actions run a multi-step process rather than a single database write: creating a project provisions its record, quota, dedicated schema, permission set, a system user and token, vault secrets and storage buckets together (vectors need no per-project store: they live in the platform's vector store, keyed by project); deleting one reverses the same steps, deletes the project's vectors, and ends in dropping the project's schema. Each step's status is tracked individually, and a failed attempt is compensated rather than left half-applied.
 
 <Warning>
 Deleting a project destroys its data irreversibly. There is no undo.

@@ -9,7 +9,10 @@ metadata:
   labels:
     {{- include "elitea-egress-proxy.labels" . | nindent 4 }}
 spec:
+  {{- /* No replicas while the HPA owns the count (templates/egressProxy/hpa.yaml). */}}
+  {{- if not (include "elitea.scaling.autoscaled" $e) }}
   replicas: {{ $e.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "elitea-egress-proxy.selectorLabels" . | nindent 6 }}
@@ -112,13 +115,13 @@ spec:
             - name: ELITEA_EGRESS_PROXY_DENY_CIDRS
               value: {{ include "elitea-egress-proxy.denyCidrs" . | quote }}
             - name: ELITEA_EGRESS_PROXY_MAX_CONNECTIONS
-              value: {{ $l.maxConnections | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.maxConnections" "value" $l.maxConnections "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_MAX_HEADER_BYTES
-              value: {{ $l.maxHeaderBytes | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.maxHeaderBytes" "value" $l.maxHeaderBytes "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_RUN_MAX_CONNECTIONS
-              value: {{ $l.runMaxConnections | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.runMaxConnections" "value" $l.runMaxConnections "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_RUN_MAX_BYTES
-              value: {{ $l.runMaxBytes | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.runMaxBytes" "value" $l.runMaxBytes "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_IDLE_TIMEOUT
               value: {{ $l.idleTimeout | quote }}
             - name: ELITEA_EGRESS_PROXY_MAX_CONNECTION_LIFETIME

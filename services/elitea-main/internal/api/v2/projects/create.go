@@ -1,7 +1,7 @@
 package projects
 
-// Project creation — the route that made a pylon-free deployment able to onboard
-// a tenant (#333). The reference is
+// Project creation — the route that let a deployment without the legacy runtime
+// onboard a tenant (#333). The reference is
 // legacy/plugins/projects/api/v2/project.py's AdminAPI.post.
 
 import (
@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // CreateProjectPermission gates the create route.
@@ -29,9 +29,9 @@ const CreateProjectPermission = "projects.projects.project.create"
 
 // administrationMode is the only `{mode}` this route answers on.
 //
-// pylon registers create on its AdminAPI alone — `mode_handlers` maps
-// `administration` to AdminAPI and `default` to ProjectAPI, and ProjectAPI has
-// no `post`, so `POST /projects/project/default` is a 404 there. Reproduced
+// The legacy runtime registers create on its AdminAPI alone — `mode_handlers`
+// maps `administration` to AdminAPI and `default` to ProjectAPI, and ProjectAPI
+// has no `post`, so `POST /projects/project/default` is a 404 there. Reproduced
 // here rather than left to the permission gate, so that the wrong mode is "no
 // such route" instead of "you may not", which is what a client sees today.
 const administrationMode = "administration"
@@ -111,9 +111,9 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The owner is the authenticated caller, never a body field — pylon reads
-	// `g.auth.id`. The permission middleware has already resolved and rewritten
-	// the user id on the context by the time this runs.
+	// The owner is the authenticated caller, never a body field — the legacy
+	// runtime reads `g.auth.id`. The permission middleware has already resolved
+	// and rewritten the user id on the context by the time this runs.
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
 		apierr.WriteStatus(w, http.StatusUnauthorized, "unauthorized")
@@ -189,16 +189,13 @@ type deleteProjectResponse struct {
 	// and what happens to them. Message also carries the reason of a 500.
 	Pending []string `json:"pending,omitempty"`
 	Message string   `json:"message,omitempty"`
-	// Database names the PgVector database a delete has not dropped yet, when
-	// the project was recorded as having one (#1211).
-	Database string `json:"database,omitempty"`
 }
 
 // DeleteProject serves `DELETE /api/v2/projects/project/{mode}/{projectID}`.
 //
 // Destructive and irreversible: it removes the project row and revokes its
 // credentials in one transaction, then cleans up what is slow or external
-// (artifact bytes, the tenant schema with CASCADE, the PgVector database) from
+// (artifact bytes, the tenant schema with CASCADE, application data) from
 // the cleanup journal. It is gated on the same administration-mode permission
 // the reference declares, and answers 404 for any other `{mode}`.
 //
@@ -260,10 +257,9 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		// journal retries it with backoff. The body names what is pending, never
 		// the underlying error, which can hold SQL or addresses.
 		writeJSON(w, http.StatusAccepted, deleteProjectResponse{
-			Steps:    nonNilSteps(result.RollbackSteps),
-			Pending:  result.Pending,
-			Message:  "the project was deleted and its access revoked; cleanup of the remaining steps continues in the background",
-			Database: result.VectorDatabase,
+			Steps:   nonNilSteps(result.RollbackSteps),
+			Pending: result.Pending,
+			Message: "the project was deleted and its access revoked; cleanup of the remaining steps continues in the background",
 		})
 		return
 	}

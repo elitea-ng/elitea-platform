@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // fakeRepo is an in-memory double for artifacts.Repository — the union of
@@ -346,6 +346,35 @@ func (r *fakeRepo) GetTransferGrantByID(_ context.Context, id string) (repos.Tra
 		return repos.TransferGrantRow{}, storage.ErrNotFound
 	}
 	return row, nil
+}
+
+// ClaimTransferGrant mirrors the real repository's up-front claim: the same
+// single-use stamp as MarkTransferGrantConsumed, returned for the release.
+func (r *fakeRepo) ClaimTransferGrant(_ context.Context, id string) (time.Time, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row, ok := r.grants[id]
+	if !ok || row.ConsumedAt != nil {
+		return time.Time{}, storage.ErrAlreadyExists
+	}
+	now := time.Now()
+	row.ConsumedAt = &now
+	r.grants[id] = row
+	return now, nil
+}
+
+// ReleaseTransferGrantClaim clears the stamp only when it is still the one
+// ClaimTransferGrant returned.
+func (r *fakeRepo) ReleaseTransferGrantClaim(_ context.Context, id string, claimedAt time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row, ok := r.grants[id]
+	if !ok || row.ConsumedAt == nil || !row.ConsumedAt.Equal(claimedAt) {
+		return false, nil
+	}
+	row.ConsumedAt = nil
+	r.grants[id] = row
+	return true, nil
 }
 
 // MarkTransferGrantConsumed mirrors the real repository's single-use

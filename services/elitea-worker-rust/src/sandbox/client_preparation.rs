@@ -180,7 +180,7 @@ fn root_bytes(root: &str) -> Result<[u8; 32], SandboxCallError> {
         return Err(SandboxCallError::Invalid);
     }
     let mut bytes = [0; 32];
-    for (slot, pair) in bytes.iter_mut().zip(root.as_bytes().chunks_exact(2)) {
+    for (slot, pair) in bytes.iter_mut().zip(root.as_bytes().as_chunks::<2>().0) {
         let nibble = |byte| match byte {
             b'0'..=b'9' => Ok(byte - b'0'),
             b'a'..=b'f' => Ok(byte - b'a' + 10),

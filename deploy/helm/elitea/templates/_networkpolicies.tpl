@@ -23,13 +23,9 @@
 {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-main.selectorLabels" .)) -}}
 {{- end }}
 
-{{/* The worker Deployment's pods. The component label is what separates them from the platform edge, which shares name and instance. */}}
+{{/* The worker Deployment's pods, by name, instance and component (the component label is part of the immutable selector; it once separated them from the retired platform edge). */}}
 {{- define "elitea.netpol.workerPeer" -}}
 {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (printf "%s\napp.kubernetes.io/component: worker" (include "elitea-worker.selectorLabels" .))) -}}
-{{- end }}
-
-{{- define "elitea.netpol.edgePeer" -}}
-{{- include "elitea.netpol.peer" (dict "ctx" . "labels" (printf "%s\napp.kubernetes.io/component: platform-edge" (include "elitea-worker.selectorLabels" .))) -}}
 {{- end }}
 
 {{- define "elitea.netpol.providerPeer" -}}
@@ -59,10 +55,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
   elitea.netpol.providerIngress — the ingress NetworkPolicy of a sub-application
   provider (templates/deepwiki/networkpolicy.yaml, templates/inventory/
-  networkpolicy.yaml), which is the same policy for both: the SPI port admits
-  elitea-main (and the probe peers), and, when the platform gRPC service is on,
-  its port admits elitea-main alone. One helper, so the two providers cannot
-  drift apart.
+  networkpolicy.yaml), which is the same policy for both: the one gRPC port
+  admits elitea-main (and the probe peers). One helper, so the two providers
+  cannot drift apart.
 
   Takes a dict:
     ctx            the chart context
@@ -71,9 +66,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     selectorLabels the provider's pod selector block (the Deployment's)
     title          the provider's name in the comment (DeepWiki, Inventory)
     key            the provider's values key (deepwiki, inventory)
-    grpcPort       the platform gRPC port (<key>.platformGrpc.port)
-    platformGrpc   non-empty when the platform gRPC service is on
-                   (elitea-<key>.platformGrpc)
+    grpcPort       the provider's gRPC port (<key>.platformGrpc.port)
+    adminPort      the provider's admin port (<key>.admin.port)
 */}}
 {{- define "elitea.netpol.providerIngress" -}}
 {{- $np := .ctx.Values.networkPolicies }}
@@ -82,12 +76,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 # internal CA, and this policy keeps every other pod from even attempting the
 # handshake.
 #
-#   8080 (http)         the SPI, over mutual TLS: elitea-main's facade.
-{{- if .platformGrpc }}
-#   {{ .grpcPort }} (platform-grpc)  the platform service
-#                       ({{ .key }}.platformGrpc): elitea-main, and only the
-#                       identities in platformGrpc.clients may call it.
-{{- end }}
+#   {{ .grpcPort }} (platform-grpc)  the provider SPI and the platform service,
+#                       gRPC over mutual TLS (#1359): elitea-main, and only
+#                       the identities in {{ .key }}.platformGrpc.clients may
+#                       call it.
+#   {{ .adminPort }} (admin)          /healthz, /readyz and /metrics, plain HTTP:
+#                       networkPolicies.probeFrom and the Prometheus in
+#                       networkPolicies.metricsFrom (the in-flight gauge a KEDA
+#                       prometheus trigger reads).
 #
 # The engine sidecar has no port: it answers on a Unix socket in the pod.
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
@@ -108,18 +104,48 @@ spec:
     - Ingress
   ingress:
     - ports:
-        - port: 8080
+        - port: {{ .grpcPort }}
           protocol: TCP
       from:
         {{- include "elitea.netpol.mainPeer" .ctx | nindent 8 }}
         {{- with $np.probeFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-    {{- if .platformGrpc }}
+    {{- $adminFrom := concat ($np.probeFrom | default list) ($np.metricsFrom | default list) }}
+    {{- with $adminFrom }}
     - ports:
-        - port: {{ .grpcPort }}
+        - port: {{ $.adminPort }}
           protocol: TCP
       from:
-        {{- include "elitea.netpol.mainPeer" .ctx | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
     {{- end }}
 {{- end }}
+
+{{- /*
+The cloud executor's `workspace` supervisor profile JSON (ADR-0034), from
+sandboxKubernetes.workspaceRuns. Paths name files the material Secret
+carries; sandbox/workspace-profile.yaml validates the values first.
+*/ -}}
+{{- define "elitea-sandbox.workspaceProfile" -}}
+{{- $s := .Values.sandboxKubernetes -}}
+{{- $w := $s.workspaceRuns -}}
+{{- $p := $w.profile -}}
+{{- $dir := "/run/elitea-sandbox" -}}
+{{- $backend := dict "kind" "kubernetes" "namespace" $s.executionNamespace "runtime_class" $s.runtimeClass.name "node_selector" $w.nodeSelector -}}
+{{- with $w.tolerations }}{{ $_ := set $backend "tolerations" . }}{{ end -}}
+{{- dict
+  "revision" 1 "purpose" "workspace"
+  "listen_address" (printf "0.0.0.0:%v" $p.port)
+  "owner" $p.owner "audience" $p.audience
+  "ca_path" (printf "%s/%s" $dir $p.material.ca)
+  "certificate_path" (printf "%s/%s" $dir $p.material.certificate)
+  "private_key_path" (printf "%s/%s" $dir $p.material.privateKey)
+  "verification_keyring_path" (printf "%s/%s" $dir $p.material.keyring)
+  "image" $p.image
+  "concurrency" (int64 $p.concurrency)
+  "max_workspace_bytes" (int64 $p.maxWorkspaceBytes)
+  "max_cpu_millis" (int64 $p.maxCpuMillis)
+  "max_memory_bytes" (int64 $p.maxMemoryBytes)
+  "max_wall_seconds" (int64 $p.maxWallSeconds)
+  "backend" $backend | toJson -}}
+{{- end -}}

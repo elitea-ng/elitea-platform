@@ -55,7 +55,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // HostReached is one host a run reached through the proxy.

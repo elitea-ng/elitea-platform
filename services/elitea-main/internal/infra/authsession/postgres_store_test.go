@@ -12,8 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
+	sessionstate "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/session"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authstatetest"
 )
 
 func TestNotFoundErrorUsesStorageNeutralSessionContract(t *testing.T) {

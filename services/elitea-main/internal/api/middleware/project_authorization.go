@@ -9,9 +9,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // projectAccessQuerier is deliberately small so the authorization decision can
@@ -119,7 +119,7 @@ func requireProjectAccess(pool projectAccessQuerier) func(http.Handler) http.Han
 			// with `invalid_schema_name`. The caller reads a 500 for a
 			// condition the server understands.
 			//
-			// centry.project is a pylon-owned table. No migration in
+			// centry.project is a legacy-owned table. No migration in
 			// migrations/shared/ creates it, and
 			// 0071_token_project_binding.sql:42 says so. Two facts make the
 			// read safe. First, migrations/shared/0030_execution_kernel.sql:5

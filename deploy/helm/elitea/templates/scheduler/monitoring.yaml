@@ -27,9 +27,7 @@ spec:
        could never fire. */ -}}
 {{- if and $scraped (dig "prometheusRule" "enabled" true $metrics) }}
 {{- $maxPending := dig "prometheusRule" "maxAckPending" 40000 $metrics }}
-{{- if not (regexMatch "^[1-9][0-9]*$" (toString $maxPending)) }}
-{{- fail (printf "scheduler.metrics.prometheusRule.maxAckPending must be a positive integer, and it is %v" $maxPending) }}
-{{- end }}
+{{- $maxPending = include "elitea.integer" (dict "field" "scheduler.metrics.prometheusRule.maxAckPending" "value" $maxPending "min" 1) }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

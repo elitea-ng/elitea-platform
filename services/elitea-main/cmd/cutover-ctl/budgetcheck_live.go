@@ -3,12 +3,12 @@ package main
 // budgetcheck_live.go — the live plumbing for `cutover-ctl budget-check`
 // (gate BFF.9e, spec §8.5/§8.8 + the §2.6 circular-guard assertion).
 //
-// The gate targets the gateway DIRECTLY (:8083), signing the same v1 identity
-// headers the elitea-main edge injects (X-Elitea-Project-Id / -User-Id /
-// -Tenant-Id / -Identity-Signature over "v1\nproject\nuser\ntenant"). The
+// The gate calls the gateway DIRECTLY, through the same GatewayService client
+// elitea-main uses (llmproxy.GatewayClient: gRPC over mutual TLS with
+// elitea-main's client certificate), signing the fixture identity v1. The
 // signing secret comes from --identity-secret or $GATEWAY_IDENTITY_SECRET; an
-// empty secret is valid when the gateway runs without one (headers are then
-// trusted off the mTLS hop alone).
+// empty secret is valid when the gateway runs without one (the identity is
+// then trusted off the mTLS hop alone).
 //
 // Four live probes populate budgetCheckResult; checkBudgetResult stays the
 // single evaluator (unit-tested against fixtures):
@@ -27,9 +27,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,34 +36,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/nats-io/nats.go"
 )
-
-// Identity header names + scheme, mirroring internal/llmproxy/identity.go
-// (same module, but the package does not export them; the wire contract is
-// stable by spec §6.1).
-const (
-	bcHeaderProject   = "X-Elitea-Project-Id"
-	bcHeaderUser      = "X-Elitea-User-Id"
-	bcHeaderTenant    = "X-Elitea-Tenant-Id"
-	bcHeaderSignature = "X-Elitea-Identity-Signature"
-	bcSigVersion      = "v1"
-)
-
-// signIdentity sets the v1 signed identity headers on req. Empty secret sets
-// the identity headers without a signature (mTLS-trust deployments).
-func signIdentity(req *http.Request, secret []byte, projectID, userID, tenantID string) {
-	req.Header.Set(bcHeaderProject, projectID)
-	req.Header.Set(bcHeaderUser, userID)
-	req.Header.Set(bcHeaderTenant, tenantID)
-	if len(secret) == 0 {
-		return
-	}
-	canonical := bcSigVersion + "\n" + projectID + "\n" + userID + "\n" + tenantID
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(canonical))
-	req.Header.Set(bcHeaderSignature, "sha256="+hex.EncodeToString(mac.Sum(nil)))
-}
 
 // budgetProject is one seeded fixture project.
 type budgetProject struct {
@@ -124,6 +97,9 @@ func chatBody(model string) []byte {
 	return b
 }
 
+// probeTimeout bounds one probe, as the HTTP client timeout did before.
+const probeTimeout = 30 * time.Second
+
 // probeResponse is the decoded outcome of one gateway probe.
 type probeResponse struct {
 	Status  int
@@ -131,17 +107,16 @@ type probeResponse struct {
 	ErrCode string
 }
 
-// sendChatProbe POSTs one signed chat request and decodes the OpenAI error
+// sendChatProbe sends one signed chat request and decodes the OpenAI error
 // envelope (if any).
-func sendChatProbe(client *http.Client, gatewayURL string, secret []byte, p budgetProject) (probeResponse, error) {
-	req, err := http.NewRequest(http.MethodPost, gatewayURL+"/llm/v1/chat/completions", bytes.NewReader(chatBody(p.model())))
-	if err != nil {
-		return probeResponse{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	signIdentity(req, secret, p.ProjectID, p.UserID, p.TenantID)
-
-	resp, err := client.Do(req)
+func sendChatProbe(gateway llmproxy.Gateway, p budgetProject) (probeResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	resp, err := gateway.ChatCompletions(ctx, &llmproxy.Request{
+		Header:   http.Header{"Content-Type": {"application/json"}},
+		Body:     bytes.NewReader(chatBody(p.model())),
+		Identity: llmproxy.Identity{ProjectID: p.ProjectID, UserID: p.UserID, TenantID: p.TenantID},
+	})
 	if err != nil {
 		return probeResponse{}, fmt.Errorf("budget-check: gateway request failed: %w", err)
 	}
@@ -166,10 +141,10 @@ func sendChatProbe(client *http.Client, gatewayURL string, secret []byte, p budg
 // reports whether the gateway flipped to 429 rate_limit_exceeded within the
 // burst (spec §2.6: >= 5 requests within 1 s must open the circuit). The
 // burst sends up to 2× the spec threshold to absorb request latency jitter.
-func probeCircularGuard(client *http.Client, gatewayURL string, secret []byte, p budgetProject) (bool, error) {
+func probeCircularGuard(gateway llmproxy.Gateway, p budgetProject) (bool, error) {
 	const burst = 10
 	for i := 0; i < burst; i++ {
-		resp, err := sendChatProbe(client, gatewayURL, secret, p)
+		resp, err := sendChatProbe(gateway, p)
 		if err != nil {
 			return false, err
 		}
@@ -248,14 +223,12 @@ func (w *natsAlertWaiter) WaitForAlert(projectID string, timeout time.Duration, 
 	}
 }
 
-// liveBudgetCheckConfig carries everything the live gate needs; the HTTP
+// liveBudgetCheckConfig carries everything the live gate needs; the gateway
 // client and waiter are injectable for tests.
 type liveBudgetCheckConfig struct {
-	gatewayURL    string
-	secret        []byte
+	gateway       llmproxy.Gateway
 	fixture       budgetFixture
 	alertLatencyS float64
-	client        *http.Client
 	waiter        alertWaiter
 	logf          func(format string, args ...any)
 }
@@ -267,7 +240,7 @@ func runLiveBudgetCheck(cfg liveBudgetCheckConfig) (budgetCheckResult, error) {
 
 	// 1. Hard block.
 	cfg.logf("budget-check: probing hard block (project %s) ...", cfg.fixture.OverBudget.ProjectID)
-	hb, err := sendChatProbe(cfg.client, cfg.gatewayURL, cfg.secret, cfg.fixture.OverBudget)
+	hb, err := sendChatProbe(cfg.gateway, cfg.fixture.OverBudget)
 	if err != nil {
 		return r, err
 	}
@@ -281,7 +254,7 @@ func runLiveBudgetCheck(cfg liveBudgetCheckConfig) (budgetCheckResult, error) {
 
 	// 2. Under-budget control.
 	cfg.logf("budget-check: probing under-budget control (project %s) ...", cfg.fixture.UnderBudget.ProjectID)
-	ub, err := sendChatProbe(cfg.client, cfg.gatewayURL, cfg.secret, cfg.fixture.UnderBudget)
+	ub, err := sendChatProbe(cfg.gateway, cfg.fixture.UnderBudget)
 	if err != nil {
 		return r, err
 	}
@@ -308,7 +281,7 @@ func runLiveBudgetCheck(cfg liveBudgetCheckConfig) (budgetCheckResult, error) {
 	}()
 	<-readyCh
 	tipAt := time.Now()
-	if _, err := sendChatProbe(cfg.client, cfg.gatewayURL, cfg.secret, cfg.fixture.SoftAlert); err != nil {
+	if _, err := sendChatProbe(cfg.gateway, cfg.fixture.SoftAlert); err != nil {
 		return r, err
 	}
 	wo := <-waitCh
@@ -323,7 +296,7 @@ func runLiveBudgetCheck(cfg liveBudgetCheckConfig) (budgetCheckResult, error) {
 	// 4. Circular-routing guard (spec §2.6): burst the over-budget tuple.
 	cfg.logf("budget-check: bursting (project %s, %s) to assert the loop breaker ...",
 		cfg.fixture.OverBudget.ProjectID, cfg.fixture.OverBudget.model())
-	tripped, err := probeCircularGuard(cfg.client, cfg.gatewayURL, cfg.secret, cfg.fixture.OverBudget)
+	tripped, err := probeCircularGuard(cfg.gateway, cfg.fixture.OverBudget)
 	if err != nil {
 		return r, err
 	}

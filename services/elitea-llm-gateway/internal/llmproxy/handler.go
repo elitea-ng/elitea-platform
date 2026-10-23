@@ -16,12 +16,14 @@ import (
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/pkg/ssewriter"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/overhead"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/pkg/ssewriter"
 )
 
 // Handler serves the /llm dialect surface. It decodes OpenAI/Anthropic wire
@@ -201,6 +203,11 @@ type Handler struct {
 	// terms a saved one would be (issue #13). nil makes CheckConnection refuse
 	// every request — fail closed rather than skip the check.
 	egressPolicy EgressPolicy
+
+	// workloadIdentity admits keyless PLATFORM credentials on the probe
+	// routes (check_connection, list_provider_models). The zero value refuses
+	// every one; see checkconnection_workload_identity.go.
+	workloadIdentity probeWorkloadIdentity
 }
 
 // HandlerOption customises Handler construction. It keeps NewHandler's core
@@ -220,6 +227,19 @@ func WithModelResolver(r *ModelResolver) HandlerOption {
 // rest of the gateway uses for an unconfigured Account.
 func WithEgressPolicy(p EgressPolicy) HandlerOption {
 	return func(h *Handler) { h.egressPolicy = p }
+}
+
+// WithWorkloadIdentity arms keyless platform credentials on the probe routes.
+// enabled is GATEWAY_WORKLOAD_IDENTITY_ENABLED; publicProjectID is the
+// operator-configured public project (ELITEA_AI_PROJECT_ID); tokens mints the
+// ADC tokens. A probe is admitted only when enabled is true, tokens is not
+// nil, AND the SIGNED project of the request is publicProjectID.
+func WithWorkloadIdentity(enabled bool, publicProjectID string, tokens workloadidentity.Tokens) HandlerOption {
+	return func(h *Handler) {
+		h.workloadIdentity = probeWorkloadIdentity{
+			enabled: enabled, publicProjectID: publicProjectID, tokens: tokens,
+		}
+	}
 }
 
 // WithBudgetGate wires the pre-LLM budget enforcement gate. When gate is nil
@@ -535,6 +555,16 @@ func (h *Handler) buildContext(w http.ResponseWriter, r *http.Request, detach bo
 	}
 	ctx, cancel := schemas.NewBifrostContextWithCancel(parent)
 	sc := &streamCancel{fn: cancel}
+
+	// The degraded-mode reservations of this request (human decision,
+	// DECISIONS.md 2026-10-22). The request scope (DegradedHoldsScope, on the
+	// router root) creates them and ends them when the HTTP handler returns,
+	// NOT when a context is cancelled: a client disconnect must not release a
+	// hold before the request's cost is billed. Without a scope the request
+	// carries no holds, and CheckBudget reserves nothing for it.
+	if holds := failmode.HoldsFrom(r.Context()); holds != nil {
+		ctx.SetValue(failmode.HoldsKey, holds)
+	}
 
 	// vk = the resolved projectID handle (never the raw key). Only set when
 	// present; a missing project is fatal at the gateway only when
@@ -1100,6 +1130,7 @@ func (h *Handler) streamOpenAI(
 			continue
 		}
 		if chunk.BifrostError != nil {
+			h.logProviderRefusal(chunk.BifrostError)
 			data, _ := json.Marshal(openAIErrorBody(chunk.BifrostError))
 			_ = sw.Data(string(data))
 			s.settleEarly(lossReasonProviderError)
@@ -1185,6 +1216,7 @@ func (h *Handler) streamResponses(
 			continue
 		}
 		if chunk.BifrostError != nil {
+			h.logProviderRefusal(chunk.BifrostError)
 			data, _ := json.Marshal(openAIErrorBody(chunk.BifrostError))
 			_ = sw.Event("error", string(data))
 			s.settleEarly(lossReasonProviderError)

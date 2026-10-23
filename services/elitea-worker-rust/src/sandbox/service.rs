@@ -19,7 +19,12 @@ use super::{
 use crate::protocol::{
     command::Ed25519PublicKeyResolver,
     elitea::runtime::v1::{
-        CancelSandboxJobRequestV1, CancelSandboxJobResponseV1, HydrateSandboxDependenciesRequestV1,
+        CancelSandboxJobRequestV1, CancelSandboxJobResponseV1, CodeOwnerRecoveryReadRequestV1,
+        CodeOwnerRecoveryReadResponseV1, CodeOwnerRecoverySealNoEffectRequestV1,
+        CodeOwnerRecoverySealNoEffectResponseV1, CodePlatformOwnerPublishReplyRequestV1,
+        CodePlatformOwnerPublishReplyResponseV1, CodePlatformOwnerReadPendingCallRequestV1,
+        CodePlatformOwnerReadPendingCallResponseV1, CodePlatformOwnerReadRetainedRuntimeRequestV1,
+        CodePlatformOwnerReadRetainedRuntimeResponseV1, HydrateSandboxDependenciesRequestV1,
         HydrateSandboxDependenciesResponseV1, LookupSandboxDependenciesRequestV1,
         LookupSandboxDependenciesResponseV1, PrepareSandboxDependenciesRequestV1,
         PrepareSandboxDependenciesResponseV1, PublishSandboxDependenciesRequestV1,
@@ -29,7 +34,10 @@ use crate::protocol::{
             SandboxSupervisorService, SandboxSupervisorServiceServer,
         },
     },
-    sandbox_grant::{AuthorizedCodeIntent, AuthorizedJob, GrantVerifier},
+    sandbox_grant::{
+        AuthorizedCodeIntent, AuthorizedJob, CodeOwnerOperation, CodePlatformOwnerOperation,
+        GrantVerifier,
+    },
 };
 
 // This admission boundary has no runtime or content IO. A broker execution must
@@ -122,15 +130,11 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
         let _owners_guard = job_owners.serve_guard();
         let shutdown_owners = Arc::clone(&job_owners);
         let supervisor = Arc::clone(&self.supervisor);
-        let owner_reads =
-            CodeOwnerJsonService::new(Arc::clone(&self.verifier), Arc::clone(&self.supervisor));
-        let platform_owner_reads = code_recovery::CodePlatformOwnerJsonService::new(
-            Arc::clone(&self.verifier),
-            Arc::clone(&self.supervisor),
-        );
+        // Responses are bounded by their own contracts; the largest is a
+        // node-code recovery observation of at most MAX_CODE_RECOVERY_WIRE.
         let service = SandboxSupervisorServiceServer::new(self)
             .max_decoding_message_size(6 * 1024 * 1024)
-            .max_encoding_message_size(512 * 1024 + 8192);
+            .max_encoding_message_size(super::code_recovery::MAX_CODE_RECOVERY_WIRE + 64 * 1024);
         let server = Server::builder()
             .tls_config(
                 ServerTlsConfig::new()
@@ -141,8 +145,6 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
             .concurrency_limit_per_connection(32)
             .timeout(Duration::from_secs(3665))
             .add_service(service)
-            .add_service(owner_reads)
-            .add_service(platform_owner_reads)
             .serve_with_incoming_shutdown(
                 tokio_stream::wrappers::TcpListenerStream::new(listener),
                 async move {
@@ -166,11 +168,110 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
 mod job_owners;
 
 #[path = "service_code_recovery.rs"]
-mod code_recovery;
-use code_recovery::CodeOwnerJsonService;
+mod code_owner;
 
 #[tonic::async_trait]
 impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for SupervisorService<R> {
+    async fn code_owner_recovery_read(
+        &self,
+        request: Request<CodeOwnerRecoveryReadRequestV1>,
+    ) -> Result<Response<CodeOwnerRecoveryReadResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let input = request.into_inner();
+        let response_json = code_owner::recovery_owner(
+            &self.verifier,
+            &self.supervisor,
+            &peer,
+            &input.job_key,
+            CodeOwnerOperation::Read,
+            &input.request_json,
+        )
+        .await?;
+        Ok(Response::new(CodeOwnerRecoveryReadResponseV1 {
+            response_json,
+        }))
+    }
+
+    async fn code_owner_recovery_seal_no_effect(
+        &self,
+        request: Request<CodeOwnerRecoverySealNoEffectRequestV1>,
+    ) -> Result<Response<CodeOwnerRecoverySealNoEffectResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let input = request.into_inner();
+        let response_json = code_owner::recovery_owner(
+            &self.verifier,
+            &self.supervisor,
+            &peer,
+            &input.job_key,
+            CodeOwnerOperation::SealNoEffect,
+            &input.request_json,
+        )
+        .await?;
+        Ok(Response::new(CodeOwnerRecoverySealNoEffectResponseV1 {
+            response_json,
+        }))
+    }
+
+    async fn code_platform_owner_read_retained_runtime(
+        &self,
+        request: Request<CodePlatformOwnerReadRetainedRuntimeRequestV1>,
+    ) -> Result<Response<CodePlatformOwnerReadRetainedRuntimeResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let input = request.into_inner();
+        let response_json = code_owner::platform_owner(
+            &self.verifier,
+            &self.supervisor,
+            &peer,
+            &input.job_key,
+            CodePlatformOwnerOperation::ReadRetainedRuntime,
+            &input.request_json,
+        )
+        .await?;
+        Ok(Response::new(
+            CodePlatformOwnerReadRetainedRuntimeResponseV1 { response_json },
+        ))
+    }
+
+    async fn code_platform_owner_read_pending_call(
+        &self,
+        request: Request<CodePlatformOwnerReadPendingCallRequestV1>,
+    ) -> Result<Response<CodePlatformOwnerReadPendingCallResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let input = request.into_inner();
+        let response_json = code_owner::platform_owner(
+            &self.verifier,
+            &self.supervisor,
+            &peer,
+            &input.job_key,
+            CodePlatformOwnerOperation::ReadPendingPlatformCall,
+            &input.request_json,
+        )
+        .await?;
+        Ok(Response::new(CodePlatformOwnerReadPendingCallResponseV1 {
+            response_json,
+        }))
+    }
+
+    async fn code_platform_owner_publish_reply(
+        &self,
+        request: Request<CodePlatformOwnerPublishReplyRequestV1>,
+    ) -> Result<Response<CodePlatformOwnerPublishReplyResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let input = request.into_inner();
+        let response_json = code_owner::platform_owner(
+            &self.verifier,
+            &self.supervisor,
+            &peer,
+            &input.job_key,
+            CodePlatformOwnerOperation::PublishCommittedPlatformReply,
+            &input.request_json,
+        )
+        .await?;
+        Ok(Response::new(CodePlatformOwnerPublishReplyResponseV1 {
+            response_json,
+        }))
+    }
+
     async fn hydrate_sandbox_workspace(
         &self,
         request: Request<crate::protocol::elitea::runtime::v1::HydrateSandboxWorkspaceRequestV1>,

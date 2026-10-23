@@ -6,6 +6,7 @@ metadata:
   labels:
     {{- include "elitea-web.labels" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.web "field" "web") }}
   {{- if not .Values.web.autoscaling.enabled }}
   replicas: {{ .Values.web.replicaCount }}
   {{- end }}
@@ -34,6 +35,7 @@ spec:
     spec:
       serviceAccountName: {{ include "elitea-web.serviceAccountName" . }}
       terminationGracePeriodSeconds: {{ .Values.web.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.web "selector" (include "elitea-web.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.web.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-web

@@ -76,6 +76,15 @@ where
         }
     }
 
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        match self {
+            Self::Direct(completion) => completion.select_static_pause().await,
+            Self::Pipeline(completion) => completion.select_static_pause().await,
+        }
+    }
+
     async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
         match self {
             Self::Direct(completion) => completion.paused().await,
@@ -136,6 +145,18 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
     ) -> Self {
         self.direct = self.direct.with_office_runtime(office_runtime.clone());
         self.pipeline = self.pipeline.with_office_runtime(office_runtime);
+        self
+    }
+
+    /// The MCP connector of both modes: production's carries the platform
+    /// client identity for the internal MCP builders.
+    #[must_use]
+    pub(crate) fn with_mcp_connector(
+        mut self,
+        connector: Arc<dyn crate::toolkits::McpConnector>,
+    ) -> Self {
+        self.direct = self.direct.with_mcp_connector(Arc::clone(&connector));
+        self.pipeline = self.pipeline.with_mcp_connector(connector);
         self
     }
 

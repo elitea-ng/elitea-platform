@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 // The project MEMBER listing and the project ROLE listing under /admin (#313).
@@ -113,8 +113,8 @@ func TestAdminProjectListingsRefuseACallerWithNoCentralRole(t *testing.T) {
 // for the wrong reason — a router that had stopped serving altogether would
 // read as perfectly gated.
 //
-// `GET /admin/system_info/prompt_lib` is the help-center read that pylon leaves
-// ungated, and router.go keeps it that way on purpose.
+// `GET /admin/system_info/prompt_lib` is the help-center read that legacy
+// leaves ungated, and router.go keeps it that way on purpose.
 func TestAdminProjectListingGateIsNotVacuous(t *testing.T) {
 	router := newAdminProjectListingRouter(t)
 

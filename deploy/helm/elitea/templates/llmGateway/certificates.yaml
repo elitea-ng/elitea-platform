@@ -2,8 +2,8 @@
 {{- if .Values.llmGateway.mtls.enabled }}
 # mTLS material for the elitea-main -> gateway hop (design §9.1, BF0.2a).
 # Issued by cert-manager from an internal (private-CA) issuer. Two certs:
-#   - the gateway SERVER cert (presented by elitea-llm-gateway-svc)
-#   - the edge CLIENT cert (presented by elitea-main's httputil.ReverseProxy)
+#   - the gateway SERVER cert (presented by the gRPC listener, #1359)
+#   - the edge CLIENT cert (presented by elitea-main's GatewayClient)
 # Both trust the same CA bundle so each verifies the other. The CA issuer is
 # NOT created here — it is a cluster-shared prerequisite referenced by name.
 apiVersion: cert-manager.io/v1
@@ -22,8 +22,11 @@ spec:
   usages:
     - server auth
   dnsNames:
-    # The SAN elitea-main verifies (Config.ServerName). MUST match the internal
-    # service DNS name, or the mTLS handshake fails.
+    # The SAN elitea-main verifies: the host of LLM_GATEWAY_URL, which names
+    # the headless gRPC Service. MUST match, or the TLS handshake fails.
+    - {{ .Values.llmGateway.service.grpcName }}
+    - {{ .Values.llmGateway.service.grpcName }}.{{ .Release.Namespace }}.svc
+    - {{ .Values.llmGateway.service.grpcName }}.{{ .Release.Namespace }}.svc.cluster.local
     - {{ .Values.llmGateway.service.name }}
     - {{ .Values.llmGateway.service.name }}.{{ .Release.Namespace }}.svc
     - {{ .Values.llmGateway.service.name }}.{{ .Release.Namespace }}.svc.cluster.local
@@ -42,8 +45,8 @@ metadata:
   labels:
     {{- include "elitea-llm-gateway.labels" . | nindent 4 }}
 spec:
-  # Secret elitea-main mounts (ClientCertFile/ClientKeyFile/CAFile in
-  # llmproxy.Config). Rendered in the gateway chart so both certs share one CA
+  # Secret elitea-main mounts (LLM_GATEWAY_CLIENT_CERT / _KEY /
+  # LLM_GATEWAY_CA_FILE, llmproxy.GatewayClientConfig). Rendered in the gateway chart so both certs share one CA
   # issuer and rotate together; the edge Deployment references it by name.
   secretName: {{ .Values.llmGateway.mtls.clientSecretName }}
   duration: {{ .Values.llmGateway.mtls.duration }}
@@ -52,6 +55,10 @@ spec:
   usages:
     - client auth
   commonName: elitea-main
+  # The workload identity the gateway gRPC listener admits
+  # (GATEWAY_GRPC_CLIENTS, "dns:elitea-main"). It reads the SAN, never the CN.
+  dnsNames:
+    - elitea-main
   privateKey:
     algorithm: ECDSA
     size: 256

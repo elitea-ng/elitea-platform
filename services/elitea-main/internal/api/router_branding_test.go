@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
 )
 
 // minimalValidBrandPack is a schema-valid pack (spec §4.2) with a marker id,

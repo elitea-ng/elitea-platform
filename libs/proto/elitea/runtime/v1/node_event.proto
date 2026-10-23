@@ -2,10 +2,10 @@ syntax = "proto3";
 
 package elitea.runtime.v1;
 
-option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
 // NodeEventV1 is the language-neutral data-plane form of the current
-// pylon_indexer NodeEvent consumed by EliteaUI. Field names deliberately match
+// legacy indexer NodeEvent consumed by EliteaUI. Field names deliberately match
 // the current UI-facing JSON contract. Event type remains a bounded string so
 // adding a current-baseline event does not require synchronized enum releases.
 //

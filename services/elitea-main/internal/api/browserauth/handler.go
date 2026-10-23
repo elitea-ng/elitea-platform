@@ -17,8 +17,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
 // The browser authentication URLs, relative to BasePath: `/auth/login`,
@@ -148,9 +148,7 @@ func NewHandler(
 	}, nil
 }
 
-// Routes preserves the current Form route paths and effective methods. The
-// production Form graph mounts this provider-only router without exposing the
-// compatibility Auth Core handler through an ordinary reverse proxy.
+// Routes preserves the current Form route paths and effective methods.
 func (h *Handler) Routes() chi.Router {
 	router := newRouter()
 	h.registerRoutes(router)
@@ -166,10 +164,14 @@ func (h *Handler) registerRoutes(router chi.Router) {
 	h.registerReadRoute(router, FormLogoutPath, h.logout)
 }
 
-// FormPaths are every route of the Form router (NewFormRoutes), relative to
+// FormPaths are every route of the Form router (Handler.Routes), relative to
 // BasePath. The composition root registers each one under BasePath.
+//
+// There is no `/auth/check` any more. It was the Form plane's forward-auth
+// check, and its only output was the X-Auth-* identity projection that no
+// edge consumes (#1359).
 func FormPaths() []string {
-	return []string{AuthPath, LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath}
+	return []string{LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath}
 }
 
 func (h *Handler) registerReadRoute(router chi.Router, path string, handler http.HandlerFunc) {

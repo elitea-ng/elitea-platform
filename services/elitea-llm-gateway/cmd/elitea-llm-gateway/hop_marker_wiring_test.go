@@ -26,8 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 )
 
 // parseMainGo parses main.go with its positions, so a node's source text can be
@@ -164,13 +163,13 @@ func TestBothHopHalvesTakeTheSameMarker(t *testing.T) {
 func TestHopSecretIsItsOwnEnvVar(t *testing.T) {
 	t.Setenv("GATEWAY_IDENTITY_SECRET", "identity-only")
 	t.Setenv("GATEWAY_HOP_SECRET", "")
-	if got := config.FromEnv().HopSecret; got != "" {
+	if got := mustConfigFromEnv(t).HopSecret; got != "" {
 		t.Errorf("HopSecret = %q with only GATEWAY_IDENTITY_SECRET set, want \"\" — "+
 			"the marker must never inherit the identity key", got)
 	}
 
 	t.Setenv("GATEWAY_HOP_SECRET", "hop-only")
-	cfg := config.FromEnv()
+	cfg := mustConfigFromEnv(t)
 	if cfg.HopSecret != "hop-only" {
 		t.Errorf("HopSecret = %q, want %q", cfg.HopSecret, "hop-only")
 	}

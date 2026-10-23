@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/memories"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // MemoriesRepo backs BOTH persistent personal memory's CRUD
@@ -328,7 +328,7 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 
 	// No embedding index plane is wired for personal memory (#870's own
 	// scope note: an embedding-backed match would need every memory
-	// indexed into pgvector on write, which is a materially larger change
+	// indexed into the vector store on write, which is a materially larger change
 	// than this issue's recall path). Keyword overlap against the user's
 	// current turn, THEN recency, is the fallback the issue asked for.
 	keywords := memoryKeywordSet(userInput)

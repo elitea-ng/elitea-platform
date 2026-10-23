@@ -5,12 +5,12 @@ package api_test
 // That file proves that every gated permission has a grant. This one proves
 // that a retired permission (#6874) has no gate, no grant and no web check. A
 // retired string is one no code checks, so a row that carries it grants
-// nothing and only clutters the admin Roles matrix. Shared migration 0136
-// deletes the rows, and the admin catalogue hides the names.
+// nothing and only clutters the admin Roles matrix. Shared migrations 0136 and
+// 0172 delete the rows, and the admin catalogue hides the names.
 //
 // Three places must agree, and each one can drift alone:
 //
-//   - the dead_permission array in migrations/shared/0136;
+//   - the dead_permission arrays in migrations/shared/0136 and 0172;
 //   - admin.RetiredPermissions(), which hides the names in the Roles matrix;
 //   - the code: no route gate, no later grant and no web gate may name a
 //     retired string. The web side is the permission constants AND every
@@ -29,28 +29,54 @@ import (
 	"strings"
 	"testing"
 
-	v2admin "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2admin "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 )
 
-const retiredPermissionsMigration = "migrations/shared/0136_project_settings_permission_and_dead_permissions.sql"
+// projectSettingsMigration is 0136, which also carries the admin-only
+// `models.project_settings.edit` grant checked below.
+const projectSettingsMigration = "migrations/shared/0136_project_settings_permission_and_dead_permissions.sql"
 
 var (
 	deadPermissionArray = regexp.MustCompile(`(?s)dead_permission text\[\] := ARRAY\[(.*?)\];`)
 	quotedLiteral       = regexp.MustCompile(`'([^']+)'`)
 )
 
-// migrationRetiredPermissions reads the dead_permission array from 0136.
+// migrationRetiredPermissions reads the dead_permission array of every shared
+// migration that declares one, as one sorted list. The files are found by
+// their array, so a new retirement needs no edit here. A name retired by two
+// files is an error: the second file deletes nothing the first did not.
 func migrationRetiredPermissions(t *testing.T, root string) []string {
 	t.Helper()
-	source := stripSQLComments(readFile(t, filepath.Join(root, retiredPermissionsMigration)))
-	match := deadPermissionArray.FindStringSubmatch(source)
-	if match == nil {
-		t.Fatalf("%s carries no `dead_permission text[] := ARRAY[...]`; this test's premise is gone",
-			retiredPermissionsMigration)
+	files, err := filepath.Glob(filepath.Join(root, "migrations/shared/*.sql"))
+	if err != nil {
+		t.Fatalf("list shared migrations: %v", err)
 	}
-	var names []string
-	for _, literal := range quotedLiteral.FindAllStringSubmatch(match[1], -1) {
-		names = append(names, literal[1])
+	retiredBy := map[string]string{}
+	for _, file := range files {
+		source := stripSQLComments(readFile(t, file))
+		match := deadPermissionArray.FindStringSubmatch(source)
+		if match == nil {
+			continue
+		}
+		migration := filepath.Base(file)
+		literals := quotedLiteral.FindAllStringSubmatch(match[1], -1)
+		if len(literals) == 0 {
+			t.Fatalf("%s retires no permission; the array was emptied or its shape changed", migration)
+		}
+		for _, literal := range literals {
+			if earlier, ok := retiredBy[literal[1]]; ok {
+				t.Fatalf("%q is retired by both %s and %s; keep it in the earlier file only",
+					literal[1], earlier, migration)
+			}
+			retiredBy[literal[1]] = migration
+		}
+	}
+	if _, ok := retiredBy["projects"]; !ok {
+		t.Fatalf("no shared migration retires `projects`; 0136's dead_permission array was not found, so this test's premise is gone")
+	}
+	names := make([]string, 0, len(retiredBy))
+	for name := range retiredBy {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -61,12 +87,9 @@ func TestRetiredPermissionsAgreeBetweenMigrationAndCatalogue(t *testing.T) {
 
 	fromMigration := migrationRetiredPermissions(t, repoRootFrom(t))
 	fromCatalogue := v2admin.RetiredPermissions()
-	if len(fromMigration) == 0 {
-		t.Fatal("0136 retires no permission; the array was emptied or its shape changed")
-	}
 	if !slices.Equal(fromMigration, fromCatalogue) {
-		t.Fatalf("retired lists disagree.\n  0136 deletes: %v\n  catalogue hides: %v\n"+
-			"  A name only 0136 knows comes back on the Roles matrix when pylon re-seeds it.\n"+
+		t.Fatalf("retired lists disagree.\n  the migrations delete: %v\n  catalogue hides: %v\n"+
+			"  A name only a migration knows stays grantable on the Roles matrix, so a save can write it back.\n"+
 			"  A name only the catalogue knows keeps its rows forever.",
 			fromMigration, fromCatalogue)
 	}
@@ -88,7 +111,7 @@ func TestRetiredPermissionsAreNeitherGatedNorGranted(t *testing.T) {
 	for _, g := range gates {
 		for _, permission := range g.permissions {
 			if retired[permission] {
-				t.Errorf("%s:%d gates a route on %q, which shared/0136 retires as checked by no code.\n"+
+				t.Errorf("%s:%d gates a route on %q, which a shared migration retires as checked by no code.\n"+
 					"  Remove the name from the retired lists, or gate the route on a live permission.",
 					relativeTo(root, g.position), g.position.Line, permission)
 			}
@@ -107,7 +130,7 @@ func TestRetiredPermissionsAreNeitherGatedNorGranted(t *testing.T) {
 	// literal lists such as the admin nav's `anyPermission`. Both are scanned.
 	for _, use := range webPermissionLiterals(t, filepath.Join(root, "../../apps/elitea-web/src")) {
 		if retired[use.name] {
-			t.Errorf("%s gates on the retired permission %q, which shared/0136 deletes as checked by no code",
+			t.Errorf("%s gates on the retired permission %q, which a shared migration deletes as checked by no code",
 				use.file, use.name)
 		}
 	}
@@ -226,7 +249,7 @@ func TestProjectSettingsPermissionIsGrantedToAdminOnly(t *testing.T) {
 		t.Fatalf("no route gates on %q; the grant in 0136 would widen nothing and buy nothing", permission)
 	}
 
-	source := stripSQLComments(readFile(t, filepath.Join(root, retiredPermissionsMigration)))
+	source := stripSQLComments(readFile(t, filepath.Join(root, projectSettingsMigration)))
 	for _, block := range insertBlocks(source) {
 		if !slices.Contains(permissionLiterals(block), permission) {
 			continue

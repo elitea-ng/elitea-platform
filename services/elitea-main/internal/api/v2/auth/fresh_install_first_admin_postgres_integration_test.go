@@ -6,7 +6,7 @@ package auth
 // so on a new deployment the ONLY way to obtain an administrator is an OIDC or
 // SAML login named by `initial_global_admins` / ELITEA_INITIAL_GLOBAL_ADMINS.
 // newFirstLoginPool hand-builds the handful of tables the grants write, which
-// is exactly the kind of fixture that let a write to a pylon-only table
+// is exactly the kind of fixture that let a write to a legacy-only table
 // (auth_core__user_group) roll back every first login on a real fresh install
 // while the suite stayed green. These tests build the schema the way
 // cmd/elitea-migrate does on an empty database (Bootstrap + ApplyShared) and
@@ -15,7 +15,7 @@ package auth
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -24,11 +24,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	bootstrapschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	bootstrapschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 func TestAFreshInstallMakesItsFirstAdministratorThroughOIDCFromTheEnvironment(t *testing.T) {
@@ -104,8 +104,6 @@ func newFreshInstallFirstLoginPool(t *testing.T) *pgxpool.Pool {
 		adminPool.Close()
 	})
 
-	_, err = pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`)
-	require.NoError(t, err)
 	applied, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial)
 	require.NoError(t, err)
 	require.True(t, applied, "Bootstrap reported nothing to do on an empty database")

@@ -86,9 +86,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 // ToolkitCheckAllowlistEnv names the variable that replaces the built-in host

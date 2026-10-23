@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 const maxRuntimeTLSFileBytes = 1 << 20
@@ -45,6 +45,16 @@ func LoadServerTLSConfig(files ServerTLSFiles) (*tls.Config, error) {
 		return nil, errors.New("runtime client CA file contains no certificates")
 	}
 	return NewServerTLSConfig(certificate, clientCAs)
+}
+
+// LoadPlatformServerTLSConfig loads the platform listener's profile. The
+// platform listener is a gRPC server (#1359 D1), so this is exactly the
+// private gRPC listeners' fail-closed mutual TLS: TLS 1.3, ALPN h2 only, a
+// client certificate that chains to the runtime CA required at the
+// handshake. It is a separate name so the platform material can rotate on its
+// own.
+func LoadPlatformServerTLSConfig(files ServerTLSFiles) (*tls.Config, error) {
+	return LoadServerTLSConfig(files)
 }
 
 func NewServerTLSConfig(certificate tls.Certificate, clientCAs *x509.CertPool) (*tls.Config, error) {

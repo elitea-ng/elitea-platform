@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strconv"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	socialapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -28,7 +28,7 @@ type CurrentAuthorsReader interface {
 
 // CurrentAuthorsRoute owns only the source-compatible author-list endpoints.
 // Production composition remains explicit so this slice can be verified before
-// it replaces the current Pylon route.
+// it replaces the legacy route.
 type CurrentAuthorsRoute struct {
 	handler http.Handler
 }
@@ -38,8 +38,7 @@ func NewCurrentAuthorsRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentAuthorsRoute, error) {
-	if reader == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentAuthorsRoute
 	}
 

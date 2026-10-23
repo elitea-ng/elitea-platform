@@ -130,46 +130,21 @@ export function emptyBrandingValues(): BrandingValues {
 }
 
 /**
- * The section keys this page does not edit, at "inherit": the hand-tuned
- * scheme tokens a brand-package import writes, and the e-mail sender fields.
- * A save leaves them alone; a reset must not, because the server upserts only
- * the keys it is sent — omitting `scheme_tokens` kept every imported colour.
+ * Whether the stored section carries hand-tuned scheme tokens — what a brand
+ * package import writes (`scheme_tokens`, one token record per scheme). The
+ * Go resolver applies them AFTER the hue rule (`applyOverlay`), so while they
+ * are stored a new brand colour changes nothing they state; a save that
+ * changes the hue must clear them for the live app to match the preview's
+ * re-derivation (issue 1057). Records with no tokens (`{light: {}, dark:
+ * {}}`) state nothing.
  */
-const UNEDITED_KEYS_INHERIT: Readonly<Record<string, unknown>> = {
-  scheme_tokens: {},
-  sender_name: '',
-  support_email: '',
-};
-
-/**
- * The inherit value of a stored value's own shape, or `undefined` when the
- * shape cannot say (a boolean or null has no "inherit" a guess could trust —
- * sending the wrong type would refuse the whole reset with a 400).
- */
-function inheritLike(value: unknown): unknown {
-  if (Array.isArray(value)) return [];
-  if (typeof value === 'number') return 0;
-  if (typeof value === 'string') return '';
-  if (typeof value === 'object' && value !== null) return {};
-  return undefined;
-}
-
-/**
- * What "Reset to defaults" writes: EVERY key the section stores at inherit —
- * the edited ones, the known unedited ones, and any other key the server
- * answered with whose shape names its inherit value, so a text, number, list
- * or object key added server-side later does not survive a reset. Every key
- * this file knows is written from its own table, never from the guess.
- */
-export function resetBrandingPayload(stored?: unknown): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-  if (typeof stored === 'object' && stored !== null && !Array.isArray(stored)) {
-    for (const [key, value] of Object.entries(stored)) {
-      const inherit = inheritLike(value);
-      if (inherit !== undefined) payload[key] = inherit;
-    }
-  }
-  return { ...payload, ...UNEDITED_KEYS_INHERIT, ...emptyBrandingValues() };
+export function hasStoredSchemeTokens(stored: unknown): boolean {
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return false;
+  const tokens = (stored as Record<string, unknown>)['scheme_tokens'];
+  if (typeof tokens !== 'object' || tokens === null || Array.isArray(tokens)) return false;
+  return Object.values(tokens as Record<string, unknown>).some(
+    (scheme) => typeof scheme === 'object' && scheme !== null && Object.keys(scheme).length > 0,
+  );
 }
 
 /** Whether `key` is left to the layer below. */

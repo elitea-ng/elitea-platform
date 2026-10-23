@@ -2,9 +2,8 @@ package projectprovisioning_test
 
 // The vector_data step of a project delete against a real PostgreSQL (ADR-0031
 // decision 4): the deciding replica records elitea-vector as the application
-// "vector" on the journal row, the step runs beside the PgVector drop (which
-// records "skipped" on a provisioner without a pgvector store, the Rust
-// indexing runtime's shape), the store's summary is the step's note, and a
+// "vector" on the journal row, the base steps finish beside it, the store's
+// summary is the step's note, and a
 // store that is unreachable keeps the row open until a later run reaches it.
 // Uses the provisioning template TestMain builds (ELITEA_TEST_DATABASE_URL).
 
@@ -15,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
-func TestTheVectorStepIsRecordedRunBesideThePgvectorDropAndRetriedUntilReached(t *testing.T) {
+func TestTheVectorStepIsRecordedRunAndRetriedUntilReached(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -60,14 +59,15 @@ func TestTheVectorStepIsRecordedRunBesideThePgvectorDropAndRetriedUntilReached(t
 	if journalDone(entry, projectprovisioning.StepVectorData) {
 		t.Fatal("a retried step is marked done")
 	}
-	// The PgVector drop ran BESIDE it and recorded its skip: this provisioner
-	// has no pgvector store, which is the Rust indexing runtime's shape
-	// (ProjectVectorStoreProvisioned is false, nothing to drop).
-	if !journalDone(entry, projectprovisioning.StepProjectPgvectorDrop) {
-		t.Fatalf("journal = %+v, want the pgvector drop done (skipped) beside the vector step", entry)
+	// The base steps ran beside it and are done; no PgVector drop exists any
+	// more (#1359).
+	for _, step := range []string{projectprovisioning.StepArtifactBuckets, projectprovisioning.StepProjectSchema} {
+		if !journalDone(entry, step) {
+			t.Fatalf("journal = %+v, want %s done beside the vector step", entry, step)
+		}
 	}
-	if notes := journalNotes(entry); notes[projectprovisioning.StepProjectPgvectorDrop] != "skipped: no vector store configured" {
-		t.Fatalf("notes = %v, want the pgvector drop skipped", notes)
+	if journalDone(entry, "project_pgvector_drop") {
+		t.Fatal("the retired PgVector drop ran")
 	}
 
 	// The store is reachable on the next run: the summary is the step's note

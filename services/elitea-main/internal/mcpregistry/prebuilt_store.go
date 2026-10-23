@@ -192,10 +192,10 @@ func (s *PrebuiltStore) Lookup(ctx context.Context, nameOrType string) (Prebuilt
 
 // Upsert writes one catalogue entry, keyed by its normalised key.
 //
-// A write REPLACES the entry. That is pylon's semantics — its catalogue is a
-// dictionary rebuilt from the descriptor on every reload — and it is what makes
-// the admin page's save mean "this is the definition now" rather than "merge
-// this into whatever was there".
+// A write REPLACES the entry. That is the legacy runtime's semantics — its
+// catalogue is a dictionary rebuilt from the descriptor on every reload — and
+// it is what makes the admin page's save mean "this is the definition now"
+// rather than "merge this into whatever was there".
 //
 // ClientSecretRef is written as given. Sealing the plaintext secret into the
 // vault and producing the reference belongs to the admin write path, which owns
@@ -210,7 +210,7 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 		return PrebuiltServer{}, fmt.Errorf("mcpregistry: catalogue entry has no display name")
 	}
 	// The key is derived from the display name when the caller did not supply
-	// one, which is what pylon does: its dictionary key IS the YAML key.
+	// one, which is what the legacy runtime does: its dictionary key IS the YAML key.
 	key := NormalizeCatalogueKey(entry.Key)
 	if key == "" {
 		key = NormalizeCatalogueKey(display)

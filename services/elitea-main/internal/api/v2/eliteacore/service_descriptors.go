@@ -20,9 +20,9 @@ package eliteacore
 //
 // ## What a "service descriptor" is, in the system this page came from
 //
-// It is not a description of this platform's services. It is one row of pylon's
-// PROVIDER HUB: an external service provider that registers itself with Elitea
-// and contributes toolkits to agents.
+// It is not a description of this platform's services. It is one row of the
+// legacy runtime's PROVIDER HUB: an external service provider that registers
+// itself with Elitea and contributes toolkits to agents.
 //
 //   - An `ExternalServiceProviderDescriptor` (a JSON Schema in
 //     legacy/plugins/elitea_core/data/, from which a Pydantic model is generated
@@ -40,7 +40,7 @@ package eliteacore
 //   - `api/v2/admin.py` — the endpoint this page reads — walks exactly those two
 //     dicts and emits `{project_id, provider_name, service_location_url, healthy}`
 //     per entry. `healthy` is not a stored column: it is which dict the entry
-//     landed in when this pylon process last started.
+//     landed in when the legacy runtime's process last started.
 //   - `methods/provider_lookup.py:lookup_provider` reads `present_providers` to
 //     pick a provider for a toolkit call, and `utils/internal_tools.py` uses it to
 //     decide whether image generation is available.
@@ -61,10 +61,10 @@ package eliteacore
 //
 // 2. There would be NOTHING TO SERVE EVEN WITH THE TABLE. Two of the four
 //    columns this page displays do not come from storage. `healthy` is
-//    process-local health-probe state belonging to a Pylon plugin's module
-//    object, and the row set itself is the union of two such dicts — not a
-//    query. Copying the table across without the runtime that fills those dicts
-//    would produce a listing whose health column was invented.
+//    process-local health-probe state belonging to a legacy runtime plugin's
+//    module object, and the row set itself is the union of two such dicts — not
+//    a query. Copying the table across without the runtime that fills those
+//    dicts would produce a listing whose health column was invented.
 //
 // 3. The target architecture DOES plan provider descriptors, and deliberately
 //    not these. AGENTS.md's "Go owns provider descriptors, authorization, policy,
@@ -75,7 +75,7 @@ package eliteacore
 //    this page edits with an admitted, immutable `AdmittedProviderRevisionV1`
 //    reached through a review pipeline, and replaces the free-form
 //    `service_location_url` with a normalised reviewed origin. A page built now
-//    against the pylon shape would have to be rebuilt, and in the meantime would
+//    against the legacy shape would have to be rebuilt, and in the meantime would
 //    be a registration surface for a runtime that cannot invoke what it registers.
 //
 // So the page renders this reason and every endpoint refuses. Which is a change
@@ -83,7 +83,7 @@ package eliteacore
 //
 //   - `ServiceDescriptors` answered 200 with THREE HARDCODED ROWS naming
 //     `elitea_core`, `auth` and `indexer` at version "2.0.0" with status
-//     "active". None of those is a provider; they are Pylon plugin names, and the
+//     "active". None of those is a provider; they are legacy runtime plugin names, and the
 //     shape is not even this endpoint's shape — the client reads `project_id`,
 //     `provider_name`, `service_location_url` and `healthy`, none of which was
 //     present. It took `_ *http.Request`, so it was also ungated: any
@@ -99,7 +99,7 @@ package eliteacore
 //
 // ## Authorisation
 //
-// Gated in internal/api/router.go on the permissions the pylon originals declare,
+// Gated in internal/api/router.go on the permissions the legacy originals declare,
 // resolved in `administration` mode:
 //
 //	admin.py               -> runtime.airun.serviceproviders
@@ -113,13 +113,14 @@ package eliteacore
 //
 // ## Mode is stated, never sniffed
 //
-// pylon's `api_tools.APIBase` registers `admin.py` under `mode_handlers =
-// {'administration': AdminAPI}` and no other mode, so `administration` is the
-// only mode this path ever had. The route is registered as a STATIC
-// `administration` segment rather than `{mode}`, which means `chi.URLParam(r,
-// "mode")` is `""` on exactly the requests that are administration requests —
-// the trap #207's test caught. These handlers take no mode from the URL, and any
-// other mode 404s rather than being answered with something plausible.
+// The legacy runtime's `api_tools.APIBase` registers `admin.py` under
+// `mode_handlers = {'administration': AdminAPI}` and no other mode, so
+// `administration` is the only mode this path ever had. The route is registered
+// as a STATIC `administration` segment rather than `{mode}`, which means
+// `chi.URLParam(r, "mode")` is `""` on exactly the requests that are
+// administration requests — the trap #207's test caught. These handlers take no
+// mode from the URL, and any other mode 404s rather than being answered with
+// something plausible.
 
 import (
 	"errors"
@@ -127,7 +128,7 @@ import (
 	"strings"
 )
 
-// The permissions the pylon originals declare, resolved in `administration`
+// The permissions the legacy originals declare, resolved in `administration`
 // mode. Constants rather than literals at the registration site because the
 // router and the acceptance tests must not be able to disagree about them: a
 // typo in either place alone produces a 403 that reads exactly like a
@@ -146,9 +147,9 @@ const (
 	ServiceDescriptorRegisterPermission = "provider_hub.descriptor.register"
 
 	// ServiceDescriptorActivatePermission gates activate and deactivate. It has
-	// no pylon original — pylon had no activation, because it had no admission
-	// plane to activate anything in — so the string is CHOSEN, and granted by
-	// migrations/shared/0109_provider_policy_overlay.sql to the
+	// no legacy original — the legacy runtime had no activation, because it had no
+	// admission plane to activate anything in — so the string is CHOSEN, and
+	// granted by migrations/shared/0109_provider_policy_overlay.sql to the
 	// administration-mode `super_admin` and `admin` only.
 	//
 	// SEPARATE FROM `.register` ON PURPOSE. A facade's boot-time registrar
@@ -169,9 +170,9 @@ const (
 // string, one place: an operator who reaches the subject from either surface must
 // not be told two different things, and two copies drift the moment one is
 // edited.
-const ServiceDescriptorsUnavailableReason = "service descriptors register EXTERNAL PROVIDERS with pylon's provider " +
-	"hub: a posted descriptor is stored by elitea_core and then health-checked into an in-process dict that " +
-	"lookup_provider reads when an agent calls one of that provider's toolkits. This platform has no descriptor " +
+const ServiceDescriptorsUnavailableReason = "service descriptors registered EXTERNAL PROVIDERS with the legacy " +
+	"runtime's provider hub: a posted descriptor was health-checked into an in-process registry that an agent's " +
+	"toolkit call read to find its provider. This platform has no descriptor " +
 	"store, no provider health probe and no provider lookup, so there is nothing to list and nothing a " +
 	"registration would reach. The replacement is specified — immutable admitted provider manifests, ADR-0012 and " +
 	"the Provider Service Protocol — but both are still In Review and scheduled for migration phase P3, and that " +

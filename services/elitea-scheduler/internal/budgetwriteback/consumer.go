@@ -358,7 +358,7 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 
 // applyTimeout bounds one Apply transaction, so a stalled database cannot hold
 // the drain loop. It is below the consumer's AckWait (30s,
-// deploy/helm/nats-bootstrap deltas.writeback.ackWait), and applyGroup resets
+// deploy/helm/elitea natsBootstrap deltas.writeback.ackWait), and applyGroup resets
 // the group's ack timer (InProgress) just before the Apply, so a delta is not
 // normally redelivered while it applies. That is an efficiency property, not
 // the money invariant: exactly-once comes from the processed_event_ids claim
@@ -462,7 +462,7 @@ func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger
 	cons, err := js.Consumer(ctx, DeltasStream, DurableName)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
-			return nil, fmt.Errorf("%w: %s/%s is created by the nats-bootstrap Job (deploy/helm/nats-bootstrap; in compose, the nats-bootstrap service) — run it", ErrConsumerMissing, DeltasStream, DurableName)
+			return nil, fmt.Errorf("%w: %s/%s is created by the nats-bootstrap Job (deploy/helm/elitea natsBootstrap; in compose, the nats-bootstrap service) — run it", ErrConsumerMissing, DeltasStream, DurableName)
 		}
 		return nil, fmt.Errorf("bind %s/%s: %w", DeltasStream, DurableName, err)
 	}

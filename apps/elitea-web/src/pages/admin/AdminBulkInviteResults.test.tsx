@@ -2,10 +2,10 @@
  * The bulk-invite result table (issue 247).
  *
  * Every outcome the server can report gets its own visible sentence, and the
- * eight are not interchangeable: pylon joined them into one log blob, so an
- * operator could not tell "added" from "was already a member" from "that
- * project has no such role" without reading every line — and the three call for
- * three different next actions, or for none.
+ * eight are not interchangeable: the legacy runtime joined them into one log
+ * blob, so an operator could not tell "added" from "was already a member" from
+ * "that project has no such role" without reading every line — and the three
+ * call for three different next actions, or for none.
  *
  * A missing case would render as `undefined` in the chip, which reads as a
  * rendering fault rather than as the outcome it is.

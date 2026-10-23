@@ -21,6 +21,7 @@ use elitea_deepwiki_engine::llm::{
     ChatClient, ModelSettings, Timeouts, Transport, TransportSettings,
 };
 use elitea_deepwiki_engine::runner::{Line, StopSignal};
+use elitea_model_rpc::testing::with_model_service;
 use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -736,6 +737,9 @@ async fn gateway(status: u16, content: &'static str) -> (Seen, String) {
                 .unwrap_or_default()
         })
         .with_state(seen.clone());
+    // The engine's model calls are elitea.llm.v1.ModelService; the fake
+    // answers them through these handlers, at the path create_llm names.
+    let app = with_model_service(app, "/gw/v1");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
     tokio::spawn(async move {
@@ -867,6 +871,7 @@ async fn the_live_client_streams_the_answer() {
             .body(Body::from(format!("{}{}{end}", chunk("Notes live "), chunk("in NoteStore."))))
             .unwrap_or_default()
     });
+    let app = with_model_service(app, "/v1");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
     tokio::spawn(async move {

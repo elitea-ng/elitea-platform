@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // presignPartResponse is PresignUploadPartResponse's JSON shape
@@ -173,8 +173,8 @@ func (h *Handler) PresignUploadPart(w http.ResponseWriter, r *http.Request) {
 //
 // Claims the grant (MarkTransferGrantConsumed) BEFORE calling
 // store.CompleteMultipart, not after — an adversarial-review finding
-// confirmed that claiming afterward (this handler's first-draft shape, and
-// still CommitTransferGrant's shape today) races against a concurrent
+// confirmed that claiming afterward (this handler's first-draft shape)
+// races against a concurrent
 // AbortMultipartUpload on the same grant: both call an irreversible,
 // mutually exclusive backend operation on the same upload_id, and with no
 // prior claim, two concurrent same-project requests could both observe
@@ -189,7 +189,8 @@ func (h *Handler) PresignUploadPart(w http.ResponseWriter, r *http.Request) {
 // (digest/media-type/quota, inside finalizeGrantCommit) is no longer
 // retriable in place the way a single-shot CommitTransferGrant is — the
 // grant is already consumed by the time verification runs, unlike
-// CommitTransferGrant's claim-after-verification order. A caller whose
+// CommitTransferGrant, which hands its claim back when a commit fails
+// (multipart cannot: CompleteMultipart is irreversible). A caller whose
 // large upload fails verification must start a new grant. Judged
 // acceptable: multipart exists specifically for objects above the 64 MiB
 // threshold, where closing the concurrent-abort race matters more than

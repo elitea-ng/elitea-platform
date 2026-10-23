@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 type toolkitCheckResolver map[string]string

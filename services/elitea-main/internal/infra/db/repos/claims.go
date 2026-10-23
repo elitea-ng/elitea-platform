@@ -11,9 +11,9 @@ import (
 	"io"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -795,7 +795,8 @@ func (r *ClaimsRepository) CurrentLease(ctx context.Context, executionID string,
 	if executionID == "" || generation == 0 {
 		return runtimedomain.ActiveLease{}, time.Time{}, runtimedomain.ErrInvalidFence
 	}
-	lease, observedAt, live, err := scanLeaseAuthority(r.store.QueryRow(ctx, `
+	var capabilityID string
+	lease, observedAt, live, err := scanLeaseAuthority(&leaseCapabilityRow{row: r.store.QueryRow(ctx, `
 WITH authority_clock AS MATERIALIZED (
     SELECT clock_timestamp() AS observed_at
 )
@@ -804,12 +805,12 @@ SELECT c.claim_id, j.command_id, c.execution_id, c.generation,
        c.claim_attempt, c.lease_epoch,
        c.fence_token, c.lease_expires_at, j.desired_state,
        c.lease_expires_at > authority_clock.observed_at,
-       authority_clock.observed_at
+       authority_clock.observed_at, j.capability_id
 FROM elitea_runtime.execution_claims AS c
 JOIN elitea_runtime.execution_jobs AS j
   ON j.execution_id = c.execution_id AND j.generation = c.generation
 JOIN authority_clock ON TRUE
-WHERE c.execution_id = $1 AND c.generation = $2 AND c.released_at IS NULL`, executionID, int64(generation)))
+WHERE c.execution_id = $1 AND c.generation = $2 AND c.released_at IS NULL`, executionID, int64(generation)), capabilityID: &capabilityID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return runtimedomain.ActiveLease{}, time.Time{}, runtimedomain.ErrStaleFence
 	}
@@ -819,6 +820,7 @@ WHERE c.execution_id = $1 AND c.generation = $2 AND c.released_at IS NULL`, exec
 	if !live {
 		return runtimedomain.ActiveLease{}, time.Time{}, runtimedomain.ErrLeaseExpired
 	}
+	lease.CapabilityID = capabilityID
 	return lease, observedAt, nil
 }
 
@@ -829,7 +831,8 @@ func (r *ClaimsRepository) RenewLease(ctx context.Context, fence runtimedomain.F
 	if !leaseTTL.Valid() {
 		return runtimedomain.ActiveLease{}, time.Time{}, runtimedomain.ErrInvalidFence
 	}
-	lease, observedAt, _, err := scanLeaseAuthority(r.store.QueryRow(ctx, `
+	var capabilityID string
+	lease, observedAt, _, err := scanLeaseAuthority(&leaseCapabilityRow{capabilityID: &capabilityID, row: r.store.QueryRow(ctx, `
 WITH authority_clock AS MATERIALIZED (
     SELECT clock_timestamp() AS observed_at
 )
@@ -852,7 +855,7 @@ RETURNING c.claim_id, j.command_id, c.execution_id, c.generation,
           c.workload_identity, c.workload_session_id, c.producer_id,
           c.claim_attempt, c.lease_epoch,
           c.fence_token, c.lease_expires_at, j.desired_state, TRUE,
-          authority_clock.observed_at`,
+          authority_clock.observed_at, j.capability_id`,
 		fence.ExecutionID,
 		int64(fence.Generation),
 		fence.CommandID,
@@ -863,13 +866,14 @@ RETURNING c.claim_id, j.command_id, c.execution_id, c.generation,
 		int64(fence.LeaseEpoch),
 		fence.Token[:],
 		int64(leaseTTL),
-	))
+	)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return runtimedomain.ActiveLease{}, time.Time{}, runtimedomain.ErrStaleFence
 	}
 	if err != nil {
 		return runtimedomain.ActiveLease{}, time.Time{}, fmt.Errorf("renew execution claim: %w", err)
 	}
+	lease.CapabilityID = capabilityID
 	return lease, observedAt, nil
 }
 
@@ -1024,6 +1028,18 @@ func scanLeaseAuthority(row sqlRow) (runtimedomain.ActiveLease, time.Time, bool,
 		return runtimedomain.ActiveLease{}, time.Time{}, false, runtimedomain.ErrInvalidFence
 	}
 	return lease, observedAt.UTC(), live, nil
+}
+
+// leaseCapabilityRow reads the job's capability_id, selected after the lease
+// authority columns, for ActiveLease.CapabilityID.
+type leaseCapabilityRow struct {
+	row          sqlRow
+	capabilityID *string
+}
+
+func (r *leaseCapabilityRow) Scan(dest ...any) error {
+	dest = append(dest, r.capabilityID)
+	return r.row.Scan(dest...)
 }
 
 type leaseAuthorityRow struct {

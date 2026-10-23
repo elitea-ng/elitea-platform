@@ -1,12 +1,11 @@
 package runtimegrpc
 
 import (
-	"net/http"
 	"testing"
 	"time"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	vectorv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	vectorv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1"
 )
 
 // The vector token introspection service (ADR-0031) is served on the
@@ -24,15 +23,13 @@ func TestVectorIntrospectionIsRegisteredOnTheControlListenerOnlyWhenComposed(t *
 		ControlMaxRequestBytes: 64 * 1024, ControlMaxResponseBytes: 80 * 1024,
 		OutputMaxRequestBytes: 64 * 1024, OutputMaxResponseBytes: 80 * 1024,
 		ControlGRPC: testGRPCServerPolicy(), OutputGRPC: testGRPCServerPolicy(),
-		ContentMaxConnections: 16, ContentMaxStreams: 8,
-		ContentReadTimeout: 5 * time.Second, ContentWriteTimeout: 30 * time.Second,
-		ContentIdleTimeout: 30 * time.Second, ContentMaxHeaderBytes: 8 * 1024,
+		ContentGRPC:     testGRPCServerPolicy(),
 		ShutdownTimeout: 10 * time.Second,
 	}
 	services := PrivateServices{
 		Control: runtimev1.UnimplementedRuntimeControlServiceServer{},
 		Output:  runtimev1.UnimplementedExecutionOutputServiceServer{},
-		Content: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		Content: testContentServices(),
 	}
 	const name = "elitea.vector.v1.TokenIntrospectionService"
 

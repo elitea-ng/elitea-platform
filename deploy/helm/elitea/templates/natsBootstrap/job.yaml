@@ -1,0 +1,123 @@
+{{- if .Values.natsBootstrap.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nats-bootstrap.fullname" . }}
+  labels:
+    {{- include "nats-bootstrap.labels" . | nindent 4 }}
+  annotations:
+    # Idempotent, so it re-runs on every upgrade and every sync. Deleted
+    # before the next run so the Job name is reusable.
+    #
+    # Helm: post-install/post-upgrade. NATS is an ordinary resource of this
+    # release, so a pre-install hook would run before it exists; after
+    # install, the pod waits (connectWait) for the server to answer.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Argo CD: a Sync hook in the NATS wave (-10), NOT the PostSync Argo CD
+    # would map post-install to. PostSync starts only once every resource is
+    # healthy, and elitea-main, the gateway and the scheduler are not healthy
+    # until this Job has created the assets they bind: it would never start.
+    # In wave -10 it runs with the NATS server and its certificates, and Argo
+    # CD moves to the workloads' wave only after it has succeeded, so on Argo
+    # CD they never start against a server without its streams. The
+    # argocd.argoproj.io/hook annotation takes precedence over the Helm one.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-10"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  # Bounded so a wedged Job (e.g. NATS never comes up) does not hang the release.
+  activeDeadlineSeconds: {{ .Values.natsBootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "nats-bootstrap.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: nats-bootstrap
+          image: "{{ .Values.natsBootstrap.image.repository }}:{{ .Values.natsBootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.natsBootstrap.image.pullPolicy }}
+          command: ["/bin/sh", "/scripts/bootstrap.sh"]
+          env:
+            # Connection and identity. bootstrap.sh builds the nats CLI's
+            # --server/--tls*/--inbox-prefix flags from these, and refuses a
+            # half-configured set.
+            - name: NATS_URL
+              value: {{ include "nats-bootstrap.natsUrl" . | quote }}
+            # One certificate per account under NATS_TLS_DIR/<account>; the
+            # script connects to each account as that account's bootstrap
+            # identity, with its own inbox prefix
+            # (_INBOX_elitea-nats-bootstrap-<account>).
+            - name: NATS_TLS_DIR
+              value: {{ .Values.natsBootstrap.tls.mountPath | quote }}
+            - name: NATS_BOOTSTRAP_ACCOUNTS
+              value: {{ join " " .Values.natsBootstrap.accounts | quote }}
+            - name: NATS_ARGS
+              value: {{ .Values.natsBootstrap.extraNatsArgs | quote }}
+            - name: NATS_CONNECT_WAIT
+              value: {{ include "nats-bootstrap.int" (list "connectWait" .Values.natsBootstrap.connectWait) }}
+            - name: NATS_REPLICAS
+              value: {{ include "nats-bootstrap.int" (list "replicas" .Values.natsBootstrap.replicas) }}
+            - name: NATS_ALERT_COOLDOWN
+              value: {{ .Values.natsBootstrap.alertCooldown | quote }}
+            - name: NATS_BUDGET_DUPE_WINDOW
+              value: {{ .Values.natsBootstrap.budget.duplicateWindow | quote }}
+            - name: NATS_RATELIMIT_MAX_AGE
+              value: {{ .Values.natsBootstrap.rateLimit.maxAge | quote }}
+            - name: NATS_DELTAS_DUPE_WINDOW
+              value: {{ .Values.natsBootstrap.deltas.duplicateWindow | quote }}
+            - name: NATS_DELTAS_MAX_AGE
+              value: {{ .Values.natsBootstrap.deltas.maxAge | quote }}
+            - name: NATS_DELTAS_MAX_BYTES
+              value: {{ include "nats-bootstrap.int" (list "deltas.maxBytes" .Values.natsBootstrap.deltas.maxBytes) }}
+            - name: NATS_DELTAS_MAX_MSGS
+              value: {{ include "nats-bootstrap.int" (list "deltas.maxMsgs" .Values.natsBootstrap.deltas.maxMsgs) }}
+            - name: NATS_WRITEBACK_ACK_WAIT
+              value: {{ .Values.natsBootstrap.deltas.writeback.ackWait | quote }}
+            - name: NATS_WRITEBACK_MAX_DELIVER
+              value: {{ include "nats-bootstrap.int" (list "deltas.writeback.maxDeliver" .Values.natsBootstrap.deltas.writeback.maxDeliver) }}
+            - name: NATS_WRITEBACK_MAX_PENDING
+              value: {{ include "nats-bootstrap.int" (list "deltas.writeback.maxAckPending" .Values.natsBootstrap.deltas.writeback.maxAckPending) }}
+            - name: NATS_PRESENCE_TTL
+              value: {{ .Values.natsBootstrap.presence.ttl | quote }}
+            - name: NATS_RT_VALIDATE_MAX_MSGS
+              value: {{ include "nats-bootstrap.int" (list "runtime.validate.maxMsgs" .Values.natsBootstrap.runtime.validate.maxMsgs) }}
+            - name: NATS_RT_VALIDATE_MAX_AGE
+              value: {{ .Values.natsBootstrap.runtime.validate.maxAge | quote }}
+            - name: NATS_RT_AGENT_MAX_MSGS
+              value: {{ include "nats-bootstrap.int" (list "runtime.agent.maxMsgs" .Values.natsBootstrap.runtime.agent.maxMsgs) }}
+            - name: NATS_RT_AGENT_MAX_AGE
+              value: {{ .Values.natsBootstrap.runtime.agent.maxAge | quote }}
+            - name: NATS_RT_INDEX_MAX_MSGS
+              value: {{ include "nats-bootstrap.int" (list "runtime.index.maxMsgs" .Values.natsBootstrap.runtime.index.maxMsgs) }}
+            - name: NATS_RT_INDEX_MAX_AGE
+              value: {{ .Values.natsBootstrap.runtime.index.maxAge | quote }}
+            - name: NATS_RT_DEADLETTER_TTL
+              value: {{ .Values.natsBootstrap.runtime.deadLetterTtl | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            {{- range $acct := .Values.natsBootstrap.accounts }}
+            - name: nats-client-tls-{{ $acct }}
+              mountPath: {{ printf "%s/%s" (trimSuffix "/" $.Values.natsBootstrap.tls.mountPath) $acct }}
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.natsBootstrap.resources | nindent 12 }}
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "nats-bootstrap.fullname" . }}
+            defaultMode: 0755
+        # Each account's bootstrap certificate (templates/certificate.yaml).
+        # The pod waits in ContainerCreating until cert-manager has written
+        # every Secret.
+        {{- range $acct := .Values.natsBootstrap.accounts }}
+        - name: nats-client-tls-{{ $acct }}
+          secret:
+            secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
+        {{- end }}
+{{- end }}

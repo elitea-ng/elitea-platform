@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	v2promptcontextreads "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
 )
 
 // `GET /api/v2/elitea_core/chat_config/prompt_lib/{projectID}` is what

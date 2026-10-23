@@ -15,11 +15,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type Handler struct {
@@ -143,7 +143,8 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"meta": map[string]any{"default_version_id": defaultVersionID},
 	}
 
-	// Include version_details for the first (latest) version — matches pylon response contract.
+	// Include version_details for the first (latest) version — matches the
+	// legacy response contract.
 	if len(versions) > 0 {
 		firstVersionID := versions[0]["id"].(string)
 		if vd := h.fetchVersionDetails(r.Context(), projectID, applicationID, firstVersionID); vd != nil {
@@ -173,21 +174,22 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 // a missing applications row silently shorten it. "The default is unknown" is
 // the right degradation for that; "these versions do not exist" is not.
 //
-// The row carries FOUR fields pylon's `ApplicationVersionListModel`
+// The row carries FOUR fields the legacy `ApplicationVersionListModel`
 // (legacy/plugins/elitea_core/models/pd/version.py) does not agree with, and
 // each stays for a caller that reads it:
 //
-//   - `instructions` and `meta` — pylon HAD them and this projection dropped
-//     them (#844). Restored above.
-//   - `agent_type` — pylon excluded it; elitea-web reads it off the summary to
-//     shape the version dropdown (apps/elitea-web/src/pages/agents/lib/
-//     editApplicationMappers.ts `toVersionSummaries`, and its pipeline twin).
-//   - `is_default` — pylon had no such concept; elitea-web reads it to mark the
-//     default in the version bar on FIRST render (the same two mappers, and
-//     features/agents/model/useVersionBarCommands.ts).
+//   - `instructions` and `meta` — the legacy model HAD them and this projection
+//     dropped them (#844). Restored above.
+//   - `agent_type` — the legacy model excluded it; elitea-web reads it off the
+//     summary to shape the version dropdown (apps/elitea-web/src/pages/agents/
+//     lib/editApplicationMappers.ts `toVersionSummaries`, and its pipeline
+//     twin).
+//   - `is_default` — the legacy model had no such concept; elitea-web reads it
+//     to mark the default in the version bar on FIRST render (the same two
+//     mappers, and features/agents/model/useVersionBarCommands.ts).
 //
-// So neither is dead weight, and dropping either to match pylon would blank a
-// control that works today.
+// So neither is dead weight, and dropping either to match the legacy model
+// would blank a control that works today.
 // Issue 940/A11 (ELITEA-3278): the version-selector dropdown's search box
 // filters by creator as well as by name, which needs the creator's
 // name/email ON the list row — not just `author_id`. `fetchVersionDetails`
@@ -248,7 +250,7 @@ func (h *Handler) getVersions(ctx context.Context, projectID, applicationID stri
 			"status":     status,
 			"agent_type": agentType,
 			"created_at": createdAt,
-			// `instructions` and `meta` are the two fields pylon's
+			// `instructions` and `meta` are the two fields the legacy
 			// `ApplicationVersionListModel` carried on every summary and this
 			// projection dropped (#844). A client that read the prompt text off
 			// the version LIST — which is what the summary is for, and what the
@@ -531,10 +533,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		AuthorID:    ownership.UserID(ownerID),
 	}
 
-	// Pylon creates the first version alongside the application, and so does
-	// the repository — in one transaction. An application with no version row
-	// is invisible to List (which INNER JOINs application_versions) and cannot
-	// be opened in the agent editor, so a half-created agent must not commit.
+	// The legacy runtime creates the first version alongside the application,
+	// and so does the repository — in one transaction. An application with no
+	// version row is invisible to List (which INNER JOINs application_versions)
+	// and cannot be opened in the agent editor, so a half-created agent must
+	// not commit.
 	var initialVariables []any
 	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
@@ -651,10 +654,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// versionFromBody maps a pylon-shaped version write body onto the columns
+// versionFromBody maps a legacy-shaped version write body onto the columns
 // application_versions actually has. `variables` has no column of its own on
-// the version row — pylon carries it inside meta alongside step_limit — so it
-// is folded into meta here, matching what the prototype's raw SQL did.
+// the version row — the legacy runtime carries it inside meta alongside
+// step_limit — so it is folded into meta here, matching what the prototype's
+// raw SQL did.
 func versionFromBody(vBody map[string]any, authorID int64) *applications.Version {
 	name, _ := vBody["name"].(string)
 	agentType, _ := vBody["agent_type"].(string)
@@ -674,11 +678,11 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 	if vars, ok := vBody["variables"].([]any); ok && len(vars) > 0 {
 		meta["variables"] = vars
 	}
-	// #898 — the editor's Notes field, folded into `meta` the way pylon's own
+	// #898 — the editor's Notes field, folded into `meta` the way the legacy
 	// create path does (utils/create_utils.py:55-59). It runs AFTER the `meta`
 	// assignment above so a body carrying both keys cannot have its notes
-	// overwritten by its own stale `meta` copy — pylon's write path states the
-	// same ordering rule (utils/application_utils.py:193-195).
+	// overwritten by its own stale `meta` copy — the legacy write path states
+	// the same ordering rule (utils/application_utils.py:193-195).
 	if notes, ok := vBody[notesMetaKey].(string); ok {
 		meta[notesMetaKey] = notes
 	}
@@ -698,7 +702,7 @@ func versionFromBody(vBody map[string]any, authorID int64) *applications.Version
 
 const defaultStepLimit = 25
 
-// notesMaxLength is pylon's own ceiling on the field
+// notesMaxLength is the legacy ceiling on the field
 // (legacy/plugins/elitea_core/models/pd/version.py:116,
 // `notes: Optional[str] = Field(default=None, max_length=1000)`), which the
 // editor's input also caps at. Enforced here so an API caller cannot store
@@ -709,27 +713,28 @@ const notesMaxLength = 1000
 //
 // #898 — the editor's Notes control was written and then never mounted,
 // because `version_details.notes` "has no column on application_versions".
-// Neither does it in pylon: elitea_issues #5410 chose the `meta` jsonb over a
-// dedicated column precisely to avoid a per-tenant schema migration, and
-// pylon's write path folds the top-level field into `meta['notes']`
+// Neither does it in the legacy runtime: elitea_issues #5410 chose the `meta`
+// jsonb over a dedicated column precisely to avoid a per-tenant schema
+// migration, and the legacy write path folds the top-level field into
+// `meta['notes']`
 // (legacy/plugins/elitea_core/utils/application_utils.py:191-211,
 // utils/create_utils.py:55-59) while its read path lifts it back out
-// (models/pd/version.py:297-307, `hydrate_notes_from_meta`). This port does
-// the same, so the two stores agree and no migration is needed.
+// (models/pd/version.py:297-307, `hydrate_notes_from_meta`). This port does the
+// same, so the two stores agree and no migration is needed.
 const notesMetaKey = "notes"
 
 // notesFromMeta answers the top-level `notes` value a version detail carries.
 //
-// Pylon ALSO deletes the key from the `meta` copy it serves
+// The legacy runtime ALSO deletes the key from the `meta` copy it serves
 // (legacy/plugins/elitea_core/models/pd/version.py:299-306), so that the
 // predict payload and the indexer — both of which copy `meta` wholesale —
 // never carry author-only documentation. This port deliberately leaves the key
 // in place and answers it in both positions: `meta` is the store the agent
 // editor round-trips (it spreads the object it read back into every save), so
 // removing the key here would make an ordinary save of any OTHER field erase
-// the notes. Pylon has no such problem because its editor binds the top-level
-// field. Nothing in this service forwards `meta` into a model turn, so the
-// reason for pylon's deletion does not arise here.
+// the notes. The legacy runtime has no such problem because its editor binds
+// the top-level field. Nothing in this service forwards `meta` into a model
+// turn, so the reason for the legacy deletion does not arise here.
 func notesFromMeta(meta any) string {
 	asMap, ok := meta.(map[string]any)
 	if !ok {
@@ -1059,7 +1064,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 //
 // It used to be one statement against `%s.application_tools`, discarded with
 // `_, _ =`. No migration in this repository creates that table — it exists only
-// in pylon-migrated tenants — so on every schema this service builds the
+// in legacy-migrated tenants — so on every schema this service builds the
 // statement failed with 42P01 and the discard hid it. Nothing was ever
 // detached: the parent's version kept listing the child, the chat resolver kept
 // reading the row, and the only way to notice was to open the parent and find a
@@ -1122,7 +1127,7 @@ func (h *Handler) detachSubAgentReferences(ctx context.Context, schema, applicat
 	}
 
 	// The legacy leg, probe-guarded exactly as the repository's own delete is
-	// (internal/infra/db/repos/applications.go): a pylon-migrated tenant can
+	// (internal/infra/db/repos/applications.go): a legacy-migrated tenant can
 	// hold the same reference in `application_tools`, and leaving it there
 	// resurrects the relation through the union read.
 	var legacyTable *string
@@ -1422,7 +1427,7 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// SELECTs them from the `application_variables` table and ignores `meta`
 	// entirely. So a save whose only effect was on `meta` still came back
 	// empty on reload — the same 200-that-lies shape the field already had.
-	// This replaces the version's rows in that table, the pylon-shaped store
+	// This replaces the version's rows in that table, the legacy-shaped store
 	// `eliteacore`'s own version-create path already writes
 	// (eliteacore/handler.go:2485-2497).
 	if hasVariables {
@@ -1444,7 +1449,7 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, versionDetailsResponse(ver, user, strconv.FormatInt(ownerID, 10), h.versionTagsOrEmpty(r.Context(), s, versionID)))
 }
 
-// versionTagsOrEmpty reads the version's tags in the shape pylon's
+// versionTagsOrEmpty reads the version's tags in the shape the legacy
 // TagListModel serializes — {id, name, data} — which is what the agent
 // editor's tag control binds to
 // (legacy/plugins/elitea_core/models/pd/version.py:73-74).
@@ -1495,7 +1500,7 @@ func (h *Handler) versionTagsOrEmpty(ctx context.Context, schema, versionID stri
 // tagNameFrom reads the name out of one entry of a `tags` write list.
 //
 // The wire shape is the object VersionTag declares ({id, name, data}), which
-// is what pylon's PromptTagUpdateModel accepts and what the editor sends. A
+// is what the legacy PromptTagUpdateModel accepts and what the editor sends. A
 // bare string is accepted as well, because the skills write path speaks that
 // shape (repos/skills.go upsertBaseSkillVersion takes []string) and a client
 // that reuses it must not have its tags silently dropped.
@@ -1515,7 +1520,7 @@ func tagNameFrom(raw any) (string, any) {
 // list the caller sent, exactly — deleting the associations they dropped,
 // not only adding the ones they kept. It mirrors
 // repos/skills.go's upsertBaseSkillVersion, which does the same job for a
-// skill version, and pylon's own `version.tags.clear()` then re-append
+// skill version, and the legacy `version.tags.clear()` then re-append
 // (legacy/plugins/elitea_core/utils/application_utils.py:214-227).
 //
 // Transactional: a partial application would leave the version showing a
@@ -1524,9 +1529,9 @@ func tagNameFrom(raw any) (string, any) {
 //
 // Tags are keyed by name — `tags.name` is UNIQUE per tenant schema, so one
 // name is one row shared by every version that carries it. An entry's `id`
-// is therefore ignored, exactly as pylon ignores it. `data` is written only
-// when the name is NEW: an existing tag keeps the data it already has,
-// because it belongs to every other version using that name too.
+// is therefore ignored, exactly as the legacy runtime ignores it. `data` is
+// written only when the name is NEW: an existing tag keeps the data it already
+// has, because it belongs to every other version using that name too.
 func (h *Handler) replaceVersionTags(ctx context.Context, projectID, versionID string, tags []any) error {
 	if h.pool == nil {
 		return nil
@@ -1666,9 +1671,10 @@ func (h *Handler) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	// route since the spec was written, and the handler never read it: the
 	// delete went through regardless, leaving every parent that referenced
 	// this version as a sub-agent pointing at a row that no longer exists.
-	// Pylon refuses that delete outright and repoints the references when a
-	// replacement is named (`legacy/plugins/elitea_core/rpc/application.py:
-	// 1869-1961`). Both halves are here now.
+	// The legacy runtime refuses that delete outright and repoints the
+	// references when a replacement is named
+	// (`legacy/plugins/elitea_core/rpc/application.py:1869-1961`). Both
+	// halves are here now.
 	if h.pool != nil {
 		s, _ := tenantSchema(projectID)
 		replacementID := strings.TrimSpace(r.URL.Query().Get("replacement_version_id"))
@@ -1704,10 +1710,10 @@ func (h *Handler) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 // to a parent version through `entity_tool_mapping`.
 //
 // The join is the rule, not a convenience: a tool row with no valid parent
-// mapping is an ORPHAN, and pylon deletes those rather than demanding a
-// replacement for them (rpc/application.py:1911-1930). `DeleteVersion` in the
-// repository already removes this version's own mapping rows, so an orphan
-// cannot outlive the delete either way.
+// mapping is an ORPHAN, and the legacy runtime deletes those rather than
+// demanding a replacement for them (rpc/application.py:1911-1930).
+// `DeleteVersion` in the repository already removes this version's own mapping
+// rows, so an orphan cannot outlive the delete either way.
 func (h *Handler) versionIsReferenced(ctx context.Context, schema, versionID string) (bool, error) {
 	var referenced bool
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
@@ -1816,9 +1822,9 @@ func (h *Handler) BatchReplaceVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // secretHeaderRefusal reports why the `X-SECRET` request header cannot pass the
-// check pylon's `check_secret_header` makes, or nil when it passes.
+// check the legacy `check_secret_header` makes, or nil when it passes.
 //
-// THE CHECK IS CLOSED. Pylon reads
+// THE CHECK IS CLOSED. The legacy runtime reads
 // `secrets.get("secrets_header_value", "secret")`
 // (legacy/plugins/elitea_core/utils/secrets.py:4-9), so a project whose vault
 // holds no value accepts the literal string "secret" — a value every reader of
@@ -1840,7 +1846,7 @@ func (h *Handler) BatchReplaceVersion(w http.ResponseWriter, r *http.Request) {
 //	                                     reach this project. Nothing can pass.
 //	the vault will not open        403 — the same for the caller, and it is
 //	                                     already the pre-#408 behaviour.
-//	a value that does not match    400 — pylon's exact status and body.
+//	a value that does not match    400 — the legacy status and body, exactly.
 //
 // A caller here is already authenticated and already holds the
 // `models.applications.version.details` project permission, so a message that
@@ -1878,7 +1884,7 @@ func (h *Handler) secretHeaderRefusal(
 	// Constant-time comparison: the header is attacker-supplied and the vault
 	// value is a shared credential.
 	if subtle.ConstantTimeCompare([]byte(received), []byte(expected)) != 1 {
-		// The exact pylon status and body for this failure.
+		// The exact legacy status and body for this failure.
 		return apierr.BadRequest("Invalid secret header")
 	}
 	return nil
@@ -1893,8 +1899,8 @@ type secretsHeaderReader interface {
 	ResolveSecretValue(ctx context.Context, projectID, secretRef string) (string, error)
 }
 
-// currentSecretsHeaderName is the project-vault secret pylon compares the
-// `X-SECRET` request header against.
+// currentSecretsHeaderName is the project-vault secret the legacy runtime
+// compares the `X-SECRET` request header against.
 const currentSecretsHeaderName = "secrets_header_value"
 
 // GetVersionExpanded returns version details with expanded and unsecreted
@@ -1903,14 +1909,14 @@ const currentSecretsHeaderName = "secrets_header_value"
 // It serves the SDK's `get_app_version_details`
 // (elitea_sdk/runtime/clients/client.py:681-688), which issues a body-less
 // PATCH. The handler therefore never reads the request body: a PATCH on this
-// path is a READ, not a partial update, and pylon's handler
+// path is a READ, not a partial update, and the legacy handler
 // (legacy/plugins/elitea_core/api/v2/version.py:107-156) reads no body either.
 //
-// Authentication follows pylon: the `X-SECRET` header must equal the PROJECT
-// vault's `secrets_header_value`. The retired implementation compared it to the
-// `APPLICATION_SECRET_KEY` process environment variable — one value for every
-// project, which no deployment sets — so the route could never have
-// authenticated a real SDK caller.
+// Authentication follows the legacy runtime: the `X-SECRET` header must equal
+// the PROJECT vault's `secrets_header_value`. The retired implementation
+// compared it to the `APPLICATION_SECRET_KEY` process environment variable —
+// one value for every project, which no deployment sets — so the route could
+// never have authenticated a real SDK caller.
 func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	applicationID := chi.URLParam(r, "applicationID")
@@ -1979,16 +1985,16 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 
 	// The project every tool below belongs to.
 	//
-	// Read BEFORE the tool loops, because both of them stamp it. Pylon's
+	// Read BEFORE the tool loops, because both of them stamp it. The legacy
 	// expanded projection types this key on the tool model itself
 	// (ToolValidatedDetails.project_id is required, and
 	// get_application_version_details_expanded forwards the caller's project
 	// into every entry), so the SDK reads it on each tool and a sub-agent tool
 	// without it names an application the runtime cannot then locate: the
 	// child lives in a tenant schema, and the id alone does not say which.
-	// Only the pylon-era `application_tools` branch below used to carry it, and
-	// no schema this service builds has that table — so on every deployment of
-	// this branch the key was absent from every tool.
+	// Only the legacy-era `application_tools` branch below used to carry it,
+	// and no schema this service builds has that table — so on every deployment
+	// of this branch the key was absent from every tool.
 	projIDInt, _ := strconv.Atoi(projectID)
 
 	// Fetch tools from entity_tool_mapping
@@ -2047,7 +2053,7 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 		authorIDStr = strconv.Itoa(*authorID)
 	}
 
-	// Also fetch from application_tools (pylon-migrated tenants only)
+	// Also fetch from application_tools (legacy-migrated tenants only)
 	appToolRows, err := h.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, name, type, settings::text
 		FROM %s.application_tools
@@ -2116,8 +2122,8 @@ func (h *Handler) GetVersionExpanded(w http.ResponseWriter, r *http.Request) {
 // iconMetaFromMeta mirrors ApplicationVersionDetailModel.set_icon_meta
 // (legacy/plugins/elitea_core/models/pd/version.py:288-295): the value lives
 // inside the `meta` JSONB under `icon_meta`, and a missing or falsy value
-// becomes an empty object rather than null. `meta` keeps its own copy — pylon
-// does not strip the key.
+// becomes an empty object rather than null. `meta` keeps its own copy — the
+// legacy runtime does not strip the key.
 func iconMetaFromMeta(meta map[string]any) map[string]any {
 	value, ok := meta["icon_meta"].(map[string]any)
 	if !ok || value == nil {
@@ -2128,8 +2134,9 @@ func iconMetaFromMeta(meta map[string]any) map[string]any {
 
 // isForkedFromMeta mirrors ApplicationVersionDetailModel.set_is_forked
 // (legacy/plugins/elitea_core/models/pd/version.py:282-287): true when `meta`
-// carries BOTH `parent_entity_id` and `parent_project_id`. Pylon tests key
-// presence and never inspects the values, so a null value still yields true.
+// carries BOTH `parent_entity_id` and `parent_project_id`. The legacy runtime
+// tests key presence and never inspects the values, so a null value still
+// yields true.
 func isForkedFromMeta(meta map[string]any) bool {
 	_, hasEntity := meta["parent_entity_id"]
 	_, hasProject := meta["parent_project_id"]
@@ -2141,7 +2148,7 @@ func isForkedFromMeta(meta map[string]any) bool {
 // The SDK indexes `var['name']` directly
 // (elitea_sdk/runtime/clients/client.py:819-821), so a missing `name` key
 // raises there rather than degrading. `value` is emitted as "" and never null
-// for the same reason, which also matches pylon: its
+// for the same reason, which also matches the legacy runtime: its
 // ApplicationVariableDetailedModel types `value` as a non-optional str.
 func (h *Handler) versionVariables(ctx context.Context, schema, versionID string) ([]map[string]any, error) {
 	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
@@ -2176,15 +2183,15 @@ func (h *Handler) versionVariables(ctx context.Context, schema, versionID string
 // versionAttachedSkills reads the skill registry the SDK binds `load_skill`
 // against.
 //
-// The key is `attached_skills`, NOT `skills`. Pylon builds a 7-key `skills`
-// list, then `apply_runtime_skills`
+// The key is `attached_skills`, NOT `skills`. The legacy runtime builds a 7-key
+// `skills` list, then `apply_runtime_skills`
 // (legacy/plugins/elitea_core/utils/skill_utils.py:1547-1567) replaces it: it
 // appends this 5-key projection under `attached_skills` and POPS `skills`
 // entirely. The SDK reads only the new key
 // (elitea_sdk/runtime/tools/application.py:453-454), so emitting `skills`
 // would serve a key no consumer reads and omit the one that binds the tools.
 //
-// Two pylon filter rules are reproduced:
+// Two legacy filter rules are reproduced:
 //   - a pipeline contributes no skills at all;
 //   - a skill with no name, or with blank instructions, is dropped, because
 //     `load_skill` could neither name nor serve it.

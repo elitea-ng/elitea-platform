@@ -45,8 +45,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // inviteRecordExists is the half of an undelivered-invite explanation that is
@@ -102,7 +102,8 @@ func (h *Handler) UserInvite(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, pgx.ErrNoRows):
 		// The name is only applied at CREATION. Overwriting an existing user's
 		// name from an invite form would let this endpoint rename accounts,
-		// which is not what "invite" means and is not what pylon does.
+		// which is not what "invite" means and is not what the legacy runtime
+		// does.
 		if err := h.pool.QueryRow(ctx,
 			`INSERT INTO public.auth_core__user (email, name) VALUES ($1, $2) RETURNING id`,
 			email, name).Scan(&userID); err != nil {

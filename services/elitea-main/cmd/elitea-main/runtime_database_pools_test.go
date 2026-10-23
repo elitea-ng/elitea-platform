@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -133,7 +133,7 @@ func TestRuntimeDatabasePoolsOpenTheVectorIntrospectionPoolSeparately(t *testing
 	if err := pools.openVectorIntrospection(context.Background(), "postgres://runtime-test", limits, factory); err != nil {
 		t.Fatal(err)
 	}
-	if want := (runtimePoolSpec{role: "vector-introspection", maxConns: 8}); specs[6] != want {
+	if want := (runtimePoolSpec{role: "vector-introspection", maxConns: 2}); specs[6] != want {
 		t.Fatalf("seventh pool spec = %+v, want %+v", specs[6], want)
 	}
 	for _, other := range []*pgxpool.Pool{pools.Admission, pools.Control, pools.Output, pools.Replay, pools.TerminalEffects, pools.Content} {

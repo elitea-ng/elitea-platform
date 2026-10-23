@@ -834,14 +834,9 @@ async fn real_parent_adk_transition_applies_once_and_terminal_replay_skips_map()
         .unwrap();
     assert_eq!(first, second);
     assert_eq!(workers.calls.lock().unwrap().len(), 2);
-    assert!(
-        store
-            .load("root")
-            .await
-            .unwrap()
-            .unwrap()
-            .pending_nodes
-            .is_empty()
+    assert_eq!(
+        store.load("root").await.unwrap().unwrap().pending_nodes,
+        [] as [String; 0]
     );
 }
 

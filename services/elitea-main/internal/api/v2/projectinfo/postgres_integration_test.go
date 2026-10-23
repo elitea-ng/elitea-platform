@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,11 +13,12 @@ import (
 	"testing"
 	"time"
 
-	platformapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	platformapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -35,18 +35,7 @@ func TestProductionProjectInfoHTTPPostgresContractRBACAndTenantIsolation(t *test
 		repository,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: currentProjectInfoPeerVerifierFunc(
-				func(request *http.Request) error {
-					if request.RemoteAddr == "10.0.0.8:43120" {
-						return nil
-					}
-					host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
-					if splitErr == nil && (host == "127.0.0.1" || host == "::1") {
-						return nil
-					}
-					return fmt.Errorf("untrusted peer")
-				},
-			),
+			FormSessions:       authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -68,8 +57,7 @@ func TestProductionProjectInfoHTTPPostgresContractRBACAndTenantIsolation(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "11")
+		authtest.SignIn(request, "11")
 		response, err := publicServer.Client().Do(request)
 		if err != nil {
 			t.Fatal(err)

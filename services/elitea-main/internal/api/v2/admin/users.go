@@ -9,7 +9,7 @@ package admin
 // the UI reports success), the writes are implemented here for real and covered
 // by tests that WRITE and then RE-READ.
 //
-// The contract is not invented: it mirrors the pylon handlers the existing
+// The contract is not invented: it mirrors the legacy handlers the existing
 // admin_ui client already speaks to —
 //   legacy/plugins/admin/api/v2/auth_users.py   (GET list, POST action)
 //   legacy/plugins/admin/api/v2/user_suspend.py (PUT suspend)
@@ -17,8 +17,8 @@ package admin
 // — because guessing at a shape is how #137 broke elitea-sdk, admin_ui and the
 // QA suite at once.
 //
-// One deliberate DIVERGENCE from the pylon original, called out so it is not
-// mistaken for a porting slip: pylon's POST accepts any `action` string and
+// One deliberate DIVERGENCE from the legacy original, called out so it is not
+// mistaken for a porting slip: the legacy POST accepts any `action` string and
 // falls through to `{"ok": true}` for the ones it does not implement (notably
 // `toggle_admin`, which the client's `usersApi.js` declares). That is precisely
 // the "green toast that lies" shape, so unknown actions here are rejected with
@@ -37,10 +37,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // adminRolePriority orders the administration-mode roles from most to least
@@ -217,8 +217,8 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 			"email":      email,
 			"last_login": lastLogin,
 			"suspended":  suspended,
-			// `is_admin` and `is_active` are the pylon-era fields; both are kept
-			// so existing clients (admin_ui, the QA suite) keep working.
+			// `is_admin` and `is_active` are the legacy-era fields; both are
+			// kept so existing clients (admin_ui, the QA suite) keep working.
 			"is_admin":   adminRole != nil,
 			"is_active":  !suspended,
 			"admin_role": adminRole,
@@ -278,8 +278,8 @@ func (h *Handler) AuthUsersAction(w http.ResponseWriter, r *http.Request) {
 	case "set_admin_role":
 		h.setAdminRole(w, r, body)
 	default:
-		// Unlike pylon, an unimplemented action is NOT answered with
-		// {"ok": true}. See this file's header.
+		// Unlike the legacy runtime, an unimplemented action is NOT answered
+		// with {"ok": true}. See this file's header.
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("unsupported action %q", body.Action),
 		})

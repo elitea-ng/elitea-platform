@@ -202,7 +202,7 @@ PY
 # main_owner_on [helm args...] — Main's ConfigMap turns owner recovery on.
 main_owner_on() {
   "$HELM" template t "$CHART" "${RENDER[@]}" "$@" --show-only templates/main/configmap.yaml 2>/dev/null \
-    | grep -qF 'ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"'
+    | grep -F 'ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"' >/dev/null
 }
 
 refuses "$CODE_REFUSAL" --set worker.runtime.agentNodeRecovery=true \
@@ -213,6 +213,14 @@ refuses "$CODE_REFUSAL" --set worker.runtime.agentNodeRecovery=true \
   -f "$TMP/sandbox.yaml" --set main.runtime.codeOwnerRecovery.enabled=false \
   && ok "rust, journal and sandbox runtimes, owner recovery explicitly false: refused" \
   || bad "rust, journal and sandbox runtimes, owner recovery explicitly false: not refused with '$CODE_REFUSAL'"
+# Main dials the owner RPCs as gRPC (#1359), so the origin must name the
+# supervisor's port; a port-less origin would silently dial :443.
+refuses 'fixed https://host:port origins' --set worker.runtime.agentNodeRecovery=true \
+  -f "$TMP/sandbox.yaml" -f "$TMP/owner.yaml" \
+  --set 'main.runtime.codeOwnerRecovery.supervisors[0].audience=dns:sandbox-python' \
+  --set 'main.runtime.codeOwnerRecovery.supervisors[0].httpsOrigin=https://sandbox-python' \
+  && ok "owner supervisor origin without a port: refused" \
+  || bad "owner supervisor origin without a port: not refused"
 render rust-journal-no-code --set worker.runtime.agentNodeRecovery=true \
   && [ "$(node_recovery rust-journal-no-code)" = "true" ] \
   && ok "rust, journal without sandbox runtimes, owner recovery off: renders" \

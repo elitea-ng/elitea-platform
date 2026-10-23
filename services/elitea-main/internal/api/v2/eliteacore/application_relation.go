@@ -44,11 +44,12 @@ type relationQuerier interface {
 // only the new one.
 const applicationToolSettingsVersionSQL = `COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id')`
 
-// legacyApplicationToolsExists probes for the pylon-owned `application_tools`
+// legacyApplicationToolsExists probes for the legacy-owned `application_tools`
 // table. No migration in this repository creates it — it exists only in
-// pylon-migrated tenants — so every touch of it is probe-guarded, the same
-// arrangement internal/infra/db/repos/applications.go uses for its delete.
-// to_regclass accepts the quoted identifier this package already carries.
+// tenants migrated from the legacy runtime — so every touch of it is
+// probe-guarded, the same arrangement internal/infra/db/repos/applications.go
+// uses for its delete. to_regclass accepts the quoted identifier this package
+// already carries.
 func legacyApplicationToolsExists(ctx context.Context, q relationQuerier, schema string) (bool, error) {
 	var name *string
 	if err := q.QueryRow(ctx, `SELECT to_regclass($1)::text`,
@@ -61,7 +62,7 @@ func legacyApplicationToolsExists(ctx context.Context, q relationQuerier, schema
 // listApplicationToolReferences returns the sub-agent references attached to
 // one parent version: the canonical rows (`elitea_tools` +
 // `entity_tool_mapping`, what this service writes) first, then — on a
-// pylon-migrated tenant only — the rows the legacy runtime left in
+// legacy-migrated tenant only — the rows the legacy runtime left in
 // `application_tools`.
 func listApplicationToolReferences(ctx context.Context, q relationQuerier, schema, parentVersionID string) ([]applicationToolReference, error) {
 	rows, err := q.Query(ctx, fmt.Sprintf(`
@@ -116,26 +117,6 @@ func listApplicationToolReferences(ctx context.Context, q relationQuerier, schem
 	return refs, legacyRows.Err()
 }
 
-// eliteaToolsHasOwnerID reports whether this tenant's `elitea_tools` carries
-// the owner_id column. A schema built by 001_initial.sql has it NOT NULL; a
-// schema built by the legacy runtime has no such column, so the INSERT must
-// name it conditionally — the same probe-and-branch the toolkit repository
-// uses (internal/api/v2/toolkits, createToolkitInsertSQL). The probe compares
-// information_schema's RAW schema name, never the quoted identifier.
-func eliteaToolsHasOwnerID(ctx context.Context, q relationQuerier, ownerProjectID int) (bool, error) {
-	var exists bool
-	err := q.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_schema = $1
-			  AND table_name = 'elitea_tools'
-			  AND column_name = 'owner_id')`, fmt.Sprintf("p_%d", ownerProjectID)).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("read elitea_tools shape: %w", err)
-	}
-	return exists, nil
-}
-
 // insertApplicationToolReference writes one sub-agent reference: the tool row
 // and its mapping to the parent version. The settings shape is the freeze's
 // contract (freezeCurrentStoredApplicationReference admits exactly
@@ -144,7 +125,7 @@ func insertApplicationToolReference(
 	ctx context.Context, q relationQuerier, schema string,
 	parentVersionID int64, name string,
 	childAppID, childVersionID int64,
-	ownerProjectID int, includeOwnerID bool, authorID int,
+	ownerProjectID int, authorID int,
 ) error {
 	settingsJSON, err := json.Marshal(map[string]any{
 		"application_id":         childAppID,
@@ -154,19 +135,11 @@ func insertApplicationToolReference(
 		return fmt.Errorf("encode sub-agent settings: %w", err)
 	}
 	var toolID int64
-	if includeOwnerID {
-		err = q.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
-			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, $4, now() AT TIME ZONE 'UTC')
-			RETURNING id`, schema),
-			name, settingsJSON, ownerProjectID, authorID).Scan(&toolID)
-	} else {
-		err = q.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id, created_at)
-			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, now() AT TIME ZONE 'UTC')
-			RETURNING id`, schema),
-			name, settingsJSON, authorID).Scan(&toolID)
-	}
+	err = q.QueryRow(ctx, fmt.Sprintf(`
+		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, $4, now() AT TIME ZONE 'UTC')
+		RETURNING id`, schema),
+		name, settingsJSON, ownerProjectID, authorID).Scan(&toolID)
 	if err != nil {
 		return fmt.Errorf("insert sub-agent tool row: %w", err)
 	}
@@ -234,7 +207,7 @@ func deleteApplicationToolReferences(ctx context.Context, q relationQuerier, sch
 		}
 	}
 
-	// The legacy leg, probe-guarded like the reads: a pylon-migrated tenant
+	// The legacy leg, probe-guarded like the reads: a legacy-migrated tenant
 	// may hold the same reference in `application_tools`, and leaving it
 	// there would resurrect the relation through the union read.
 	hasLegacy, err := legacyApplicationToolsExists(ctx, q, schema)
@@ -262,9 +235,9 @@ func deleteApplicationToolReferences(ctx context.Context, q relationQuerier, sch
 // fmt.Sprintf("%v", float64), which renders 1234567 as "1.234567e+06" and a
 // missing id as "<nil>" — both refused by Postgres, both surfacing as 500s.
 //
-// The contract (v2.yaml ApplicationRelationUpdateRequest) and legacy pylon
-// both accept an id as a JSON number OR a numeric string ("42"). A plain
-// *int64 refused the string form with 400, so each id decodes through
+// The contract (v2.yaml ApplicationRelationUpdateRequest) and the legacy
+// runtime both accept an id as a JSON number OR a numeric string ("42"). A
+// plain *int64 refused the string form with 400, so each id decodes through
 // relationID, which takes either form and still refuses anything else.
 type applicationRelationRequest struct {
 	ApplicationID *relationID `json:"application_id"`
@@ -371,7 +344,7 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 	}
 
 	if body.HasRelation {
-		// The union read, not a bespoke EXISTS: a pylon-migrated tenant can
+		// The union read, not a bespoke EXISTS: a legacy-migrated tenant can
 		// hold the same reference in the legacy table, and attaching a second
 		// copy on top of it would double the child in every reader.
 		existing, err := listApplicationToolReferences(
@@ -415,16 +388,10 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		includeOwnerID, err := eliteaToolsHasOwnerID(ctx, transaction, ownerProjectID)
-		if err != nil {
-			slog.ErrorContext(ctx, "application relation: table shape probe failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})
-			return
-		}
 		if err := insertApplicationToolReference(
 			ctx, transaction, s, parentVersionID, childName,
 			childAppNumber, childVersionNumber,
-			ownerProjectID, includeOwnerID, childAuthorID,
+			ownerProjectID, childAuthorID,
 		); err != nil {
 			slog.ErrorContext(ctx, "application relation: attach failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})

@@ -12,7 +12,7 @@ Machines here use **podman**: `podman compose`, not `docker compose`.
 | | current platform | `elitea-main` |
 | --- | --- | --- |
 | engine | Apache libcloud, `LOCAL` driver | S3 / Azure Blob / GCS |
-| location | a directory on `pylon_main`'s own disk | an object-store endpoint |
+| location | a directory on the legacy main service's own disk | an object-store endpoint |
 | bucket name on disk | url-safe base64 of `p--<projectID>.<bucket>` | — |
 | object name on disk | url-safe base64 of the key | — |
 | object address | — | `[<prefix>/]p/<projectID>/b/<bucket>/o/<key>` in ONE container |
@@ -21,7 +21,7 @@ Machines here use **podman**: `podman compose`, not `docker compose`.
 Sources, so this table can be re-checked rather than believed:
 `legacy/plugins/shared/tools/storage_engines/libcloud.py` (the encoder, the
 `p--<id>.` prefix and the `StorageMeta` row), the deployed
-`configs/pylon_main/shared.yml` (`storage_engine: libcloud`,
+legacy main service's `shared.yml` (`storage_engine: libcloud`,
 `storage_libcloud_driver: LOCAL`, `storage_libcloud_encoder: base64`,
 `key: /data/libcloud/storage`), and
 `services/elitea-main/internal/infra/storage/ref.go` (`ObjectRef.StorageKey`).
@@ -44,19 +44,20 @@ The mixed `deploy/centry-hybrid` stack that this runbook was first written
 against is retired (see `docs/UPGRADING.md`). On your own edge, route both the
 browser surface (`/api/v2/artifacts/...`) and the root-mounted
 `/artifacts/s3/...` surface the pinned SDK speaks to `elitea-main`, and do not
-leave either half falling through to pylon.
+leave either half falling through to the legacy runtime.
 
 ## 3. The procedure
 
 ### 3.1 Before the flip
 
-1. **Inventory the source.** On the host that runs `pylon_main`, the libcloud
-   root is `<centry>/pylon_main/libcloud/storage` (the container path
-   `/data/libcloud/storage` under the `./pylon_main:/data` mount).
+1. **Inventory the source.** On the host that runs the legacy main service, the libcloud
+   root is `<legacy-main-data>/libcloud/storage`, where `<legacy-main-data>` is
+   the host directory that service mounts at `/data` (the container path is
+   `/data/libcloud/storage`).
 
    ```bash
    deploy/scripts/migrate-artifacts.sh \
-     --source <centry>/pylon_main/libcloud/storage \
+     --source <legacy-main-data>/libcloud/storage \
      --alias target --dry-run
    ```
 
@@ -80,7 +81,7 @@ leave either half falling through to pylon.
 
 ```bash
 deploy/scripts/migrate-artifacts.sh \
-  --source <centry>/pylon_main/libcloud/storage \
+  --source <legacy-main-data>/libcloud/storage \
   --alias target \
   --container elitea-artifacts
 ```
@@ -121,18 +122,18 @@ a running container attached to the previous inode.
 
 ### 3.5 Prove it
 
-1. **The index run.** Start one index run and confirm pylon serves no artifact
+1. **The index run.** Start one index run and confirm the legacy runtime serves no artifact
    request during it:
 
    ```bash
-   podman compose ... logs --since 10m pylon_main | grep -E '/artifacts/(s3|buckets)' || echo "no artifact request reached pylon"
+   podman compose ... logs --since 10m <legacy-main-service> | grep -E '/artifacts/(s3|buckets)' || echo "no artifact request reached the legacy runtime"
    ```
 
    `grep` finding nothing is the pass. Read the log for the run's window, not
    the whole file: an entry from before the flip is not a failure.
 
 2. **The browser round trip.** Upload an artifact in the UI, then download it.
-   Both calls must appear in `elitea-main`'s log and in neither pylon log.
+   Both calls must appear in `elitea-main`'s log and in neither legacy-runtime log.
 
 ## 4. Rollback
 

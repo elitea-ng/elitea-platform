@@ -19,14 +19,17 @@ elitea-engine-core = { path = "../engine-core" }
 # The shared host allowlist rule only (`egress::HostAllowlist`); no provider
 # client, no reqwest.
 elitea-connectors = { path = "../connectors", default-features = false }
+# The project artifact store over elitea-main's platform listener
+# (`ArtifactObjectService`, #1359 U5): an artifact-folder source.
+elitea-platform-rpc = { path = "../platform-rpc" }
 # HTTPS shallow clone in process, no git binary. The minimal feature set:
 # the blocking reqwest transport with rustls, checkout, SHA-1, and the
 # parallel pack resolution. The ssh and file transports compile in with
 # the blocking client but are unreachable: a CloneTarget holds only http(s).
 gix = { version = "0.88.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance-safe"] }
 regex = "1.13.1"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
 serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+tonic = { version = "0.14.6", default-features = false }
 sha2 = "0.10.9"
 tokio = { version = "1.53.1", features = ["fs", "macros", "rt", "sync", "time"] }
 tracing = "0.1.44"
@@ -34,7 +37,7 @@ zeroize = "1.9.0"
 
 [dev-dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
-elitea-model-client = { path = "../model-client" }
+elitea-platform-rpc = { path = "../platform-rpc", features = ["testing"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 tokio = { version = "1.53.1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 

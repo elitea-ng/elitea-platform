@@ -70,9 +70,9 @@ pub struct GenerateRequest {
     pub planner_mode: Option<String>,
     /// `exclude_tests` when the request set it (`None`: the environment).
     pub exclude_tests: Option<bool>,
-    /// The platform object API an artifact-folder source is read through
-    /// (`llm_settings`' base, bearer and project); `None` for a git source,
-    /// which has no use for the bearer there.
+    /// Who an artifact-folder source is read as (`llm_settings`' bearer and
+    /// project); `None` for a git source, which has no use for the bearer
+    /// there.
     pub platform_objects: Option<PlatformObjects>,
 }
 
@@ -242,8 +242,11 @@ mod tests {
         let Ok(folder) = GenerateRequest::parse(&arguments(value.clone())) else {
             panic!("refused");
         };
-        let platform = folder.platform_objects.as_ref().map(|p| p.base().as_str());
-        assert_eq!(platform, Some("http://gw/"));
+        let platform = folder
+            .platform_objects
+            .as_ref()
+            .map(elitea_repo_ingest::artifact::PlatformObjects::project_id);
+        assert_eq!(platform, Some(42));
         assert!(!format!("{folder:?}").contains("callback-bearer-secret"));
         // A folder source without a project is refused up front.
         value["llm_settings"]["organization"] = Value::Null;

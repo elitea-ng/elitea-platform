@@ -17,3 +17,10 @@ lint:
 breaking:
   use:
     - FILE
+  except:
+    # go_package is the Go import path of the generated stubs, not part of
+    # the wire format: an old and a new peer still exchange the same bytes.
+    # Every consumer is in this repository and is regenerated in the same
+    # change, so a module move (EliteaAI -> elitea-ng, #1406) is not a
+    # break that a rolling deploy can see.
+    - FILE_SAME_GO_PACKAGE

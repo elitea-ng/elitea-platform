@@ -29,7 +29,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,8 +41,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 const pinnedListingDatabaseURL = "ELITEA_TEST_DATABASE_URL"
@@ -115,6 +116,11 @@ CREATE TABLE p_1.chat_conversations (
     sync_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE TABLE p_1.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
+-- The listing buckets by last activity, which reads the newest message group.
+CREATE TABLE p_1.chat_message_group(id serial PRIMARY KEY,conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id),created_at timestamp NOT NULL DEFAULT now());
+-- tenant/0151: an archived conversation leaves this listing (client contract 1.10).
+CREATE TABLE p_1.chat_conversation_archives(conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,archived_by bigint NOT NULL,archived_at timestamp NOT NULL DEFAULT now());
+CREATE TABLE p_1.chat_selected_conversations(id serial PRIMARY KEY,user_id integer NOT NULL,conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE);
 INSERT INTO p_1.chat_participants VALUES (7,'user','{"id":7}'),(8,'user','{"id":8}');
 CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
 CREATE TABLE centry.social_pins (
@@ -128,6 +134,10 @@ CREATE TABLE centry.social_pins (
     CONSTRAINT _pin_unique UNIQUE (entity, project_id, entity_id)
 );`); err != nil {
 		t.Fatalf("create the pinned-listing fixture schema: %v", err)
+	}
+	// Client contract 1.12: the list rows read the activity columns.
+	if _, err := pool.Exec(ctx, chatactivitytest.Schema("p_1")); err != nil {
+		t.Fatalf("apply the activity fixture: %v", err)
 	}
 	return pool
 }
@@ -148,7 +158,8 @@ func seedPinnedListingConversation(t *testing.T, pool *pgxpool.Pool, name string
 }
 
 type groupedListing struct {
-	Pinned struct {
+	SelectedConversationID *int `json:"selected_conversation_id"`
+	Pinned                 struct {
 		Conversations []struct {
 			ID        int    `json:"id"`
 			Name      string `json:"name"`
@@ -217,6 +228,67 @@ func TestGroupedListingReadsThePinnedSetFromSocialPins(t *testing.T) {
 				t.Errorf("the pinned conversation is still in date group %q", group.Name)
 			}
 		}
+	}
+}
+
+// Client contract 1.10: an archived conversation leaves the sidebar of every
+// member, its pinned section included. The archive keeps the pin.
+func TestGroupedListingLeavesOutArchivedConversations(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	archived := seedPinnedListingConversation(t, pool, "autotest_archived", false)
+	kept := seedPinnedListingConversation(t, pool, "autotest_kept", false)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at) VALUES ('conversation', 1, $1, 7, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
+		archived); err != nil {
+		t.Fatalf("pin the conversation: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO p_1.chat_conversation_archives (conversation_id, archived_by) VALUES ($1, 7)`, archived); err != nil {
+		t.Fatalf("archive the conversation: %v", err)
+	}
+	for _, reader := range []string{"7", "8"} {
+		listing := readGroupedListing(t, pool, reader)
+		if len(listing.Pinned.Conversations) != 0 {
+			t.Fatalf("reader %s's pinned section = %v, want the archived pin left out", reader, listing.Pinned.Conversations)
+		}
+		seen := map[int]bool{}
+		for _, group := range listing.DateGroups {
+			for _, conversation := range group.Conversations {
+				seen[conversation.ID] = true
+			}
+		}
+		if seen[archived] || !seen[kept] {
+			t.Fatalf("reader %s's date groups = %v, want %d and not %d", reader, seen, kept, archived)
+		}
+	}
+}
+
+// Client contract 1.10: an archived conversation is not the listing's
+// selection. The listing leaves it out, so `selected_conversation_id` is
+// null; an unarchived selection is named as before.
+func TestGroupedListingSelectionIsNullForAnArchivedConversation(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	selected := seedPinnedListingConversation(t, pool, "autotest_selected", false)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO p_1.chat_selected_conversations (user_id, conversation_id) VALUES (7, $1)`, selected); err != nil {
+		t.Fatalf("select the conversation: %v", err)
+	}
+	if got := readGroupedListing(t, pool, "7").SelectedConversationID; got == nil || *got != selected {
+		t.Fatalf("selected_conversation_id = %v, want %d before the archive", got, selected)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO p_1.chat_conversation_archives (conversation_id, archived_by) VALUES ($1, 8)`, selected); err != nil {
+		t.Fatalf("archive the conversation: %v", err)
+	}
+	if got := readGroupedListing(t, pool, "7").SelectedConversationID; got != nil {
+		t.Fatalf("selected_conversation_id = %d, want null for an archived conversation", *got)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM p_1.chat_conversation_archives WHERE conversation_id = $1`, selected); err != nil {
+		t.Fatal(err)
+	}
+	if got := readGroupedListing(t, pool, "7").SelectedConversationID; got == nil || *got != selected {
+		t.Fatalf("selected_conversation_id = %v, want %d after the unarchive", got, selected)
 	}
 }
 

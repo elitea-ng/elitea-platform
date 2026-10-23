@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"strconv"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	indexmetaapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexmeta"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -43,8 +43,6 @@ type CurrentIndexConfigurationSaver interface {
 	SaveConfiguration(context.Context, indexmetaapp.ConfigurationRequest) error
 }
 
-var _ CurrentIndexConfigurationSaver = (*indexmetaapp.ConfigurationService)(nil)
-
 // CurrentIndexConfigurationRoute binds the exact path and method to trusted
 // authentication and project RBAC, which always run before the application
 // service sees the request.
@@ -57,8 +55,7 @@ func NewCurrentIndexConfigurationRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexConfigurationRoute, error) {
-	if saver == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if saver == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexConfigurationRoute
 	}
 	handler := &currentIndexConfigurationHandler{saver: saver}
@@ -166,16 +163,10 @@ func writeCurrentIndexConfigurationError(writer http.ResponseWriter, err error, 
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
 			"ok": false, "error": "Toolkit id is missing for toolkit " + strconv.FormatInt(toolkitID, 10),
 		})
-	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaConnectionMissing):
-		writeJSON(writer, http.StatusBadRequest, map[string]any{
-			"ok": false,
-			"error": "Connection string is missing in PGVector configuration for toolkit " +
-				strconv.FormatInt(toolkitID, 10),
-		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaTargetMissing):
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
 			"ok": false,
-			"error": "PGVector configuration is missing for toolkit " +
+			"error": "Index storage is not available for toolkit " +
 				strconv.FormatInt(toolkitID, 10),
 		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaNotFound):

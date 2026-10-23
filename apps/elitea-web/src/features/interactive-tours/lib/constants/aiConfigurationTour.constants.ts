@@ -24,7 +24,7 @@ export const aiConfigurationTourSteps: TourStep[] = [
     target: AI_CONFIG_TOUR_TARGETS.page,
     placement: 'center',
     title: 'What is AI Configuration?',
-    content: `AI Configuration is the project-level settings area where you connect ELITEA to the AI services it needs to function — language models, embedding models, vector storage, and image generation. All agents, pipelines, and chat conversations in the project draw from these configured integrations.
+    content: `AI Configuration is the project-level settings area where you connect ELITEA to the AI services it needs to function — language models, embedding models, and image generation. All agents, pipelines, and chat conversations in the project draw from these configured integrations.
 
 Settings in this section are project-specific. Use the project selector to view or modify configurations for a particular project.`,
   },
@@ -61,13 +61,6 @@ Designate which model serves as the default for each role. Changes take effect i
     placement: 'top',
     title: 'Embedding Models',
     content: `Convert text into vector representations for semantic search and document indexing. Embedding models power RAG (Retrieval-Augmented Generation) workflows — they are required whenever a toolkit indexes content for semantic search. A project can have multiple embedding models configured; one is designated as the default for all indexing operations.`,
-  },
-  {
-    id: 'vector-storage',
-    target: AI_CONFIG_TOUR_TARGETS.vectorStorage,
-    placement: 'top',
-    title: 'Vector Storage',
-    content: `Stores and queries the embedding vectors produced by embedding models. Vector storage is required for toolkit indexing and semantic search features. Configure one or more vector storage backends and designate one as the project default.`,
   },
   {
     id: 'image-generation',

@@ -29,7 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -44,14 +44,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	v2artifacts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const (
@@ -102,10 +102,10 @@ func TestMain(m *testing.M) {
 }
 
 // supportSeedSQL is the LEGACY-OWNED schema, the part the ledgered corpus does
-// not create because pylon created it first. It is the same arrangement every
-// other integration suite here uses: the seed provides what a real deployment
-// inherited, the corpus then runs on top of it, and the test proves the
-// corpus's tables and the inherited ones work together.
+// not create because the legacy runtime created it first. It is the same
+// arrangement every other integration suite here uses: the seed provides what a
+// real deployment inherited, the corpus then runs on top of it, and the test
+// proves the corpus's tables and the inherited ones work together.
 const supportSeedSQL = `
 CREATE SCHEMA centry;
 CREATE TABLE centry.project (
@@ -501,6 +501,10 @@ func (a *testAttachmentStore) RequireAttachmentBucket(ctx context.Context, proje
 		return row.ID, nil
 	}
 	return 0, err
+}
+
+func (a *testAttachmentStore) ReserveAttachmentObject(ctx context.Context, bucketID int64, key string, mediaType string, expiresAt *time.Time) (bool, error) {
+	return a.objects.ReserveObjectKey(ctx, bucketID, key, mediaType, expiresAt)
 }
 
 func (a *testAttachmentStore) RecordAttachmentObject(ctx context.Context, bucketID int64, key string, byteLength int64, mediaType string, expiresAt *time.Time) error {

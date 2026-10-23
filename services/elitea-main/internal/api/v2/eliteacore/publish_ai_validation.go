@@ -49,7 +49,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // publishCallerID is the authenticated principal, or "" when the request

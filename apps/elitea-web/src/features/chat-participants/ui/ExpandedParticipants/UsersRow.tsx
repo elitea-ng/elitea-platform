@@ -57,6 +57,8 @@ export interface UsersRowProps {
   readonly onDeleteParticipant?: ((participant: TransformedParticipant) => void) | undefined;
   /** When true, the remove control is rendered but refuses (playback). */
   readonly disabledEdit?: boolean | undefined;
+  /** The desktop inspector: a vertical list, one person per line, instead of the web rail's strip. */
+  readonly vertical?: boolean | undefined;
 }
 
 /** One avatar plus its hover-revealed remove control. */
@@ -95,10 +97,11 @@ export const UsersRow = memo(function UsersRow({
   onSelectParticipant,
   onDeleteParticipant,
   disabledEdit,
+  vertical = false,
 }: UsersRowProps): ReactNode {
   return (
-    <Box sx={styles.usersRow()} data-testid="users-section">
-      <Box sx={styles.usersDisplay}>
+    <Box sx={vertical ? styles.usersColumn : styles.usersRow()} data-testid="users-section">
+      <Box sx={vertical ? styles.usersColumn : styles.usersDisplay}>
         {usersToRender.map((participant) => (
           <UserRowEntry
             key={getChatParticipantUniqueId(asWireRow(participant))}

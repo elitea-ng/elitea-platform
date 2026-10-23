@@ -181,13 +181,13 @@ describe('EditToolkit', () => {
    * COMPOSITION ROOT — a failed index_meta read is not reported as an empty
    * project.
    *
-   * The response below is the one the 2026-09-06 production-parity walk
-   * actually recorded (validation matrix row F4): the single HTTP failure of
-   * the whole session, on a plain READ, naming the missing prerequisite in a
-   * sentence written for a human. The screen it produced said "Still no
-   * indexes created".
+   * The 2026-09-06 production-parity walk (validation matrix row F4)
+   * recorded a single HTTP failure, a 400 on a plain READ whose body named
+   * the cause in a sentence written for a human, and the screen it produced
+   * said "Still no indexes created". The 400 below is another sentence the
+   * same handler writes.
    */
-  it('surfaces the index_meta failure and its prerequisite instead of the empty-list placeholder', async () => {
+  it('surfaces the index_meta failure instead of the empty-list placeholder', async () => {
     server.use(
       http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () =>
         HttpResponse.json({ rows: [mockToolkitRow({ type: 'artifact', name: 'My Artifacts', settings: { selected_tools: ['index_data'] } })], total: 1 }),
@@ -196,7 +196,7 @@ describe('EditToolkit', () => {
         HttpResponse.json({ artifact: { properties: { selected_tools: { args_schemas: { index_data: { type: 'object' } } } } } }),
       ),
       http.get('/api/v2/elitea_core/index_meta/prompt_lib/:projectId/:toolkitId', () =>
-        HttpResponse.json({ error: 'PGVector configuration is missing for toolkit 1' }, { status: 400 }),
+        HttpResponse.json({ error: 'Toolkit id is missing for toolkit 1' }, { status: 400 }),
       ),
     );
     const user = userEvent.setup();
@@ -208,8 +208,7 @@ describe('EditToolkit', () => {
 
     const panel = await screen.findByTestId('edit-toolkit-indexes-tab-panel');
     expect(await within(panel).findByTestId('indexes-list-error', undefined, { timeout: 15_000 })).toBeInTheDocument();
-    expect(within(panel).getByText('PGVector configuration is missing for toolkit 1')).toBeInTheDocument();
-    expect(within(panel).getByText(/Create a PgVector configuration in Settings/)).toBeInTheDocument();
+    expect(within(panel).getByText('Toolkit id is missing for toolkit 1')).toBeInTheDocument();
     expect(within(panel).queryByText('Still no indexes created')).not.toBeInTheDocument();
   });
 

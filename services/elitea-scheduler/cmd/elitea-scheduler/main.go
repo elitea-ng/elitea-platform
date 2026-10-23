@@ -13,16 +13,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/observability"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/auditretention"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/authstateretention"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/maintenance"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/pricesync"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/syncretention"
+	"github.com/elitea-ng/elitea-platform/libs/go/observability"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/auditretention"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/authstateretention"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/config"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/health"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/maintenance"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/pricesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
 
 func main() {
@@ -52,7 +52,12 @@ func main() {
 	}()
 
 	// Database
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := databasePoolConfig(cfg.DatabaseURL, os.LookupEnv)
+	if err != nil {
+		slog.Error("failed to configure db pool", "err", err)
+		os.Exit(1)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		slog.Error("failed to create db pool", "err", err)
 		os.Exit(1)

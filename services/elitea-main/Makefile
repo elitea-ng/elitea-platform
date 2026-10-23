@@ -1,6 +1,6 @@
 .PHONY: build auth-validate test lint run docker-build sqlc
 
-MODULE := github.com/EliteaAI/elitea-platform/services/elitea-main
+MODULE := github.com/elitea-ng/elitea-platform/services/elitea-main
 BINARY := elitea-main
 IMAGE  := eliteaai/elitea-main
 

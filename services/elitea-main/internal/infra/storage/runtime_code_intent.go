@@ -6,15 +6,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	runtime "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"math"
+
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+
+	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"io"
-	"math"
-	"net/http"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
-	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 type OriginalCodeIntentStore interface {
@@ -200,83 +203,85 @@ func (s *ContentServer) WithOriginalCodeIntents(store OriginalCodeIntentStore) *
 	}
 	return s
 }
-func (s *ContentServer) PostOriginalCodeVisit(w http.ResponseWriter, r *http.Request) {
-	if s.originalCodeIntents == nil || r.URL.RawQuery != "" {
-		http.NotFound(w, r)
-		return
+
+// maxCodeRegistrationBytes bounds one visit or intent document.
+const maxCodeRegistrationBytes = 5 * 1024 * 1024
+
+// RegisterCodeVisit registers the original Code sandbox visit of the claimed
+// execution.
+func (s *ContentServer) RegisterCodeVisit(ctx context.Context, request *runtimev1.RegisterCodeVisitRequestV1) (*runtimev1.RegisterCodeVisitResponseV1, error) {
+	if s.originalCodeIntents == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	claim, err := parseExecutionClaim(r)
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		http.Error(w, "Code visit claim denied", http.StatusForbidden)
-		return
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Code visit claim denied")
 	}
-	if !s.takeNodeRecoverySlot(w) {
-		return
-	}
-	defer func() { <-s.requests }()
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 5*1024*1024))
+	release, err := takeNodeRecoverySlot(s.requests)
 	if err != nil {
-		http.Error(w, "Invalid Code visit", http.StatusBadRequest)
-		return
+		return nil, err
 	}
-	var request code.VisitRequest
-	if code.Decode(raw, &request, 5*1024*1024) != nil || !code.RequiredFields(raw, []string{"schema", "activation_id", "node_id", "graph_thread", "step", "attempt", "node_digest", "owning_yaml_sha256", "exact_configuration_json_base64url", "pre_workspace_prepared_job_json_base64url", "saved_child_scope"}, "saved_child_scope") {
-		http.Error(w, "Invalid Code visit", http.StatusBadRequest)
-		return
+	defer release()
+	raw := request.GetVisitJson()
+	invalid := grpcstatus.Error(codes.InvalidArgument, "Invalid Code visit")
+	var visitRequest code.VisitRequest
+	if len(raw) > maxCodeRegistrationBytes || code.Decode(raw, &visitRequest, maxCodeRegistrationBytes) != nil || !code.RequiredFields(raw, []string{"schema", "activation_id", "node_id", "graph_thread", "step", "attempt", "node_digest", "owning_yaml_sha256", "exact_configuration_json_base64url", "pre_workspace_prepared_job_json_base64url", "saved_child_scope"}, "saved_child_scope") {
+		return nil, invalid
 	}
-	if _, _, err := ValidateOriginalCodeVisit(request); err != nil {
-		http.Error(w, "Invalid Code visit", http.StatusBadRequest)
-		return
+	if _, _, err := ValidateOriginalCodeVisit(visitRequest); err != nil {
+		return nil, invalid
 	}
-	visit, err := s.originalCodeIntents.RegisterOriginalCodeVisit(r.Context(), claim, request)
+	visit, err := s.originalCodeIntents.RegisterOriginalCodeVisit(ctx, claim, visitRequest)
 	if err != nil {
-		writeOriginalCodeError(w, err)
-		return
+		return nil, originalCodeStatus(err)
 	}
-	writeNodeRecoveryJSON(w, visit)
-}
-func (s *ContentServer) PostOriginalCodeIntent(w http.ResponseWriter, r *http.Request) {
-	if s.originalCodeIntents == nil || r.URL.RawQuery != "" {
-		http.NotFound(w, r)
-		return
-	}
-	claim, err := parseExecutionClaim(r)
+	encoded, err := nodeRecoveryJSON(visit)
 	if err != nil {
-		http.Error(w, "Code intent claim denied", http.StatusForbidden)
-		return
+		return nil, err
 	}
-	if !s.takeNodeRecoverySlot(w) {
-		return
-	}
-	defer func() { <-s.requests }()
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 5*1024*1024))
-	if err != nil {
-		http.Error(w, "Invalid Code intent", http.StatusBadRequest)
-		return
-	}
-	var request code.IntentRequest
-	if code.Decode(raw, &request, 5*1024*1024) != nil || !code.RequiredFields(raw, []string{"schema", "original_visit", "dispatch_activation", "request_digest", "supervisor_audience", "prepared_job_json_base64url", "compiled_binding_json_base64url", "selected_descriptor_sha256"}, "compiled_binding_json_base64url", "selected_descriptor_sha256") {
-		http.Error(w, "Invalid Code intent", http.StatusBadRequest)
-		return
-	}
-	if _, err := ValidateOriginalCodeIntent(request); err != nil {
-		http.Error(w, "Invalid Code intent", http.StatusBadRequest)
-		return
-	}
-	intent, err := s.originalCodeIntents.RegisterOriginalCodeIntent(r.Context(), claim, request)
-	if err != nil {
-		writeOriginalCodeError(w, err)
-		return
-	}
-	writeNodeRecoveryJSON(w, code.IntentResponse{Schema: "elitea.sandbox.original-code-intent-response.v1", Intent: intent})
+	return &runtimev1.RegisterCodeVisitResponseV1{VisitJson: encoded}, nil
 }
 
-func writeOriginalCodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, code.ErrRejected) {
-		http.Error(w, "Code authority denied", http.StatusConflict)
-		return
+// RegisterCodeIntent registers the original whole-Code intent of a visit and
+// answers Main's signed intent grant.
+func (s *ContentServer) RegisterCodeIntent(ctx context.Context, request *runtimev1.RegisterCodeIntentRequestV1) (*runtimev1.RegisterCodeIntentResponseV1, error) {
+	if s.originalCodeIntents == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	writeNodeRecoveryControlError(w, err)
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
+	if err != nil {
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Code intent claim denied")
+	}
+	release, err := takeNodeRecoverySlot(s.requests)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	raw := request.GetIntentJson()
+	invalid := grpcstatus.Error(codes.InvalidArgument, "Invalid Code intent")
+	var intentRequest code.IntentRequest
+	if len(raw) > maxCodeRegistrationBytes || code.Decode(raw, &intentRequest, maxCodeRegistrationBytes) != nil || !code.RequiredFields(raw, []string{"schema", "original_visit", "dispatch_activation", "request_digest", "supervisor_audience", "prepared_job_json_base64url", "compiled_binding_json_base64url", "selected_descriptor_sha256"}, "compiled_binding_json_base64url", "selected_descriptor_sha256") {
+		return nil, invalid
+	}
+	if _, err := ValidateOriginalCodeIntent(intentRequest); err != nil {
+		return nil, invalid
+	}
+	intent, err := s.originalCodeIntents.RegisterOriginalCodeIntent(ctx, claim, intentRequest)
+	if err != nil {
+		return nil, originalCodeStatus(err)
+	}
+	encoded, err := nodeRecoveryJSON(code.IntentResponse{Schema: "elitea.sandbox.original-code-intent-response.v1", Intent: intent})
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.RegisterCodeIntentResponseV1{ResponseJson: encoded}, nil
+}
+
+func originalCodeStatus(err error) error {
+	if errors.Is(err, code.ErrRejected) {
+		return grpcstatus.Error(codes.Aborted, "Code authority denied")
+	}
+	return nodeRecoveryControlStatus(err)
 }
 
 type OriginalCodeWorkspaceVerifier interface {

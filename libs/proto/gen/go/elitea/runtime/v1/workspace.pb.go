@@ -1723,7 +1723,7 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x0fWorkspaceUpload\x12).elitea.runtime.v1.WorkspaceUploadFrameV1\x1a,.elitea.runtime.v1.WorkspaceUploadResponseV1(\x01\x12o\n" +
 	"\x10WorkspacePublish\x12,.elitea.runtime.v1.WorkspacePublishRequestV1\x1a-.elitea.runtime.v1.WorkspacePublishResponseV1\x12t\n" +
 	"\x12WorkspaceEnvSecret\x12..elitea.runtime.v1.WorkspaceEnvSecretRequestV1\x1a,.elitea.runtime.v1.WorkspaceEnvSecretFrameV10\x01\x12{\n" +
-	"\x14WorkspaceRecordEvent\x120.elitea.runtime.v1.WorkspaceRecordEventRequestV1\x1a1.elitea.runtime.v1.WorkspaceRecordEventResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x14WorkspaceRecordEvent\x120.elitea.runtime.v1.WorkspaceRecordEventRequestV1\x1a1.elitea.runtime.v1.WorkspaceRecordEventResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_workspace_proto_rawDescOnce sync.Once

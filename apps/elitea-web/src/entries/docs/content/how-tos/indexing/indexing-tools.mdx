@@ -36,7 +36,7 @@ You can also run these search tools directly from an index's own page, without g
 
 ## Vector store and embeddings
 
-Search quality depends on the same two project-level configurations indexing itself needs: an embedding model (to turn your query into a vector) and a pgvector vector-store configuration (where the vectors are stored and compared). See [Index external data](/how-tos/indexing/indexing-overview) for how to set these up.
+Search quality depends on the embedding model indexing itself uses: it turns your query into a vector, which is compared with the indexed vectors in the platform's vector store (Qdrant, behind the elitea-vector service). There is no vector-store configuration to set up. See [Index external data](/how-tos/indexing/indexing-overview) for how to configure the embedding model.
 
 ## Next steps
 

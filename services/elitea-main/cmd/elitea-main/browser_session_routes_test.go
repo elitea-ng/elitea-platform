@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	projectinfoapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
-	socialapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
-	socialapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/social"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	projectinfoapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
+	socialapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
+	socialapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/social"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
 )
 
 const browserSessionTestSecret = "browser-session-secret"
@@ -27,7 +27,7 @@ func formShapeAuth(principals apimw.PrincipalValidator) apimw.AuthConfig {
 	return apiGroupAuthConfig(
 		&authcomposition.FormGraph{},
 		principals,
-		stubForwardedIdentityVerifier{},
+		stubFormSessions{},
 		nil,
 		nil,
 		browserSessionTestSecret,

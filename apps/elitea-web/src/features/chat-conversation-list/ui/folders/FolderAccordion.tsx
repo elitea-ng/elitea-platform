@@ -33,6 +33,8 @@ const MENU_CONTAINER_TESTID = 'folder-accordion-menu-container';
 interface FolderAccordionItemDef {
   readonly title: string;
   readonly content: ReactNode;
+  /** Shown after the title (the folder's activity summary, client contract 1.12). */
+  readonly adornment?: ReactNode;
 }
 
 export interface FolderAccordionSlotProps {
@@ -192,6 +194,7 @@ export function FolderAccordion({
                     style={{ width: '0.875rem', height: '0.875rem' }}
                   />
                 )}
+                {item.adornment}
               </Box>
             </StyledAccordionSummary>
             <Box

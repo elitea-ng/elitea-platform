@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 )
 
 type fakeDeletionJournal struct {
@@ -76,10 +76,10 @@ func TestProjectDeletionReconcilerResumesTheClaimedBatch(t *testing.T) {
 	journal := &fakeDeletionJournal{
 		claimable: []int64{3, 4, 5, 6},
 		failures: map[int64]error{
-			4: errors.Join(projectprovisioning.ErrVectorStoreNotDropped),
+			4: errors.Join(projectprovisioning.ErrTenantSchemaNotRemoved),
 			5: projectprovisioning.ErrProjectNotFound, // the row is gone: nothing was finished
 		},
-		unfinished: map[int64]bool{6: true}, // a quiet failure: no error, not complete
+		unfinished: map[int64]bool{6: true}, // a planned wait: no error, not complete
 	}
 	reconciler := newTestDeletionReconciler(t, journal,
 		ProjectDeletionReconcilerConfig{GracePeriod: 7 * time.Minute, BatchSize: 3})

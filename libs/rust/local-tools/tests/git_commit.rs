@@ -147,6 +147,7 @@ fn fixture_with(
         shell: Some(shell),
         deny_read: Vec::new(),
         app_id: None,
+        budgets: elitea_local_tools::budget::Budgets::default(),
     })
     .expect("session");
     Fixture {
@@ -256,6 +257,7 @@ async fn remembered_shell_choices_and_approve_always_never_allow_a_commit() {
                 glob: None,
                 sandbox: Some(SandboxMode::FullAccess),
                 network: true,
+                runner: None,
             })
             .expect("remember");
     }

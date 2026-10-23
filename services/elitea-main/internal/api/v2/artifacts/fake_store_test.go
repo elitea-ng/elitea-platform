@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // fakeStore is a minimal in-memory storage.ObjectStore double. Only Put,

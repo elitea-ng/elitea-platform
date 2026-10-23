@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // requireVaultMasterKey decides whether the gateway may start with the master

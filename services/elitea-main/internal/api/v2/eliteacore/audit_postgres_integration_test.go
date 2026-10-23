@@ -31,7 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,8 +43,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -249,7 +249,7 @@ func TestAuditTrailPaginationIsStableAcrossTiedTimestamps(t *testing.T) {
 
 	// Every row shares one timestamp. Without a tiebreaker, `ORDER BY timestamp
 	// DESC LIMIT 1 OFFSET n` is free to return the same row twice across pages
-	// and never return another — a real defect in the pylon original.
+	// and never return another — a real defect in the legacy original.
 	spans := make([]seedSpan, 0, 6)
 	for i := range 6 {
 		spans = append(spans, seedSpan{
@@ -449,7 +449,7 @@ func TestAuditTracesDoNotMultiplyOnMultipleRootSpans(t *testing.T) {
 		t.Fatalf("span_count = %d, want 3", listing.Rows[0].SpanCount)
 	}
 	// Ties between parentless spans resolve by timestamp, deterministically.
-	// pylon resolved them by dict overwrite — whichever row came back last.
+	// The legacy runtime resolved them by dict overwrite — whichever row came back last.
 	if listing.Rows[0].RootAction == nil || *listing.Rows[0].RootAction != "first_root" {
 		t.Fatalf("root_action = %v, want first_root (the earliest parentless span)", listing.Rows[0].RootAction)
 	}

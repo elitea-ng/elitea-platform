@@ -3,7 +3,7 @@ package evaluation
 import (
 	"context"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // The RBAC strings the run routes gate on. Transcribed from the reference's

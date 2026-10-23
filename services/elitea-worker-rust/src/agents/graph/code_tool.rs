@@ -82,6 +82,7 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
             | "sandbox.memory_limit"
             | "sandbox.step_limit" => AnalysisCodeFailure::Overrun,
             "sandbox.cancelled" => AnalysisCodeFailure::Cancelled,
+            crate::sandbox::runtime_loss::FAILURE_CODE => AnalysisCodeFailure::Interrupted,
             _ => AnalysisCodeFailure::Failed,
         },
         ToolCodeError::Submission | ToolCodeError::Untyped(_) => AnalysisCodeFailure::Failed,
@@ -346,6 +347,10 @@ mod tests {
                 AnalysisCodeFailure::Overrun,
             ),
             (sandbox("sandbox.cancelled"), AnalysisCodeFailure::Cancelled),
+            (
+                sandbox("sandbox.runtime_lost"),
+                AnalysisCodeFailure::Interrupted,
+            ),
             (sandbox("sandbox.code_failed"), AnalysisCodeFailure::Failed),
             (
                 sandbox("sandbox.launch_failed"),

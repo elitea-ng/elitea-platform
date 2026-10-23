@@ -86,7 +86,7 @@ fn golden(name: &str, chunks: &[Chunk]) {
 /// and neighbours touch or overlap (only whitespace may fall between them,
 /// which the splitters trim).
 fn assert_covers(text: &str, chunks: &[Chunk]) {
-    assert!(!chunks.is_empty());
+    assert_ne!(chunks, []);
     let (mut from, mut end) = (0, 0);
     for (i, c) in chunks.iter().enumerate() {
         let at = text[from..]

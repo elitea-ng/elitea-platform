@@ -1,8 +1,9 @@
 /**
- * The live transcript of one turn: streamed text (Markdown, as in chat), tool rows (local or remote,
- * with a collapsible result), the status line and the cancel button.
+ * The live transcript of one turn: streamed text (Markdown, as in chat), each step's reasoning as a
+ * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
+ * the status line and the cancel button.
  */
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 
 import CheckIcon from '@mui/icons-material/Check';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -23,6 +24,7 @@ import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
+import { ThinkingBlock } from './ThinkingBlock';
 
 type ToolItem = Extract<TranscriptItem, { type: 'tool' }>;
 
@@ -164,6 +166,8 @@ export interface TurnTranscriptProps {
   onCancel: () => void;
   /** The turn's commit failed after `done`: send it again (absent: the notice offers no Retry). */
   onRetryCommit?: (executionId: string) => Promise<void>;
+  /** Right-click on the agent's text (the desktop's native context menu: Copy). */
+  onTextContextMenu?: (text: string, event: MouseEvent) => void;
 }
 
 /** The answer is on screen, but not in the conversation: the host's reason, and "Retry". */
@@ -190,16 +194,20 @@ function CommitFailed({ failed, onRetry }: { failed: NonNullable<TurnView['commi
   );
 }
 
-export function TurnTranscript({ view, busy, onCancel, onRetryCommit }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {view.items.map((item) =>
         item.type === 'text' ? (
           // The chat's own renderer; raw HTML from the model is dropped, not rendered.
-          <Markdown key={item.key} renderHtml={false} data-testid="turn-text">
-            {item.text}
-          </Markdown>
+          <Box key={item.key} onContextMenu={onTextContextMenu === undefined ? undefined : (event: MouseEvent) => onTextContextMenu(item.text, event)}>
+            <Markdown renderHtml={false} data-testid="turn-text">
+              {item.text}
+            </Markdown>
+          </Box>
+        ) : item.type === 'thinking' ? (
+          <ThinkingBlock key={item.key} item={item} />
         ) : (
           <ToolRow key={item.key} item={item} />
         ),

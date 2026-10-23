@@ -12,7 +12,7 @@ A toolkit is a configured integration with an external service, or with an Elite
 <Steps>
   <Step title="Start creation">Select **+ Toolkit** from the Toolkits page, or **/toolkits/create** from anywhere.</Step>
   <Step title="Pick a type">Choose a type from the categorized tile grid, or search by name.</Step>
-  <Step title="Configure it">Give it a **Name** and **Description**, select or create a **Credential**, and set any type-specific parameters. For index-capable types, optionally select a **PGVector configuration** and **embedding model** to turn on indexing.</Step>
+  <Step title="Configure it">Give it a **Name** and **Description**, select or create a **Credential**, and set any type-specific parameters. For index-capable types, optionally select an **embedding model** to turn on indexing; indexes are kept in the platform's vector store, so there is no vector-storage setting.</Step>
   <Step title="Select tools">In **Tools**, turn on only the operations the toolkit needs — grouped as Read, Create & update, Delete, and Execute — then **Save**.</Step>
 </Steps>
 
@@ -38,7 +38,7 @@ Select **Test** on a toolkit's detail page to open a dedicated test view: pick a
 
 ## Indexing
 
-Toolkit types that carry an `index_data` tool (Artifact, the ADO family, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, SharePoint, TestRail, XRAY Cloud, and the Zephyr family) show an **Indexes** panel once PGVector and an embedding model are configured and the `Index data` tool is turned on. Use it to create, reindex, or delete indexes. See [Indexing overview](/how-tos/indexing/indexing-overview).
+Toolkit types that carry an `index_data` tool (Artifact, the ADO family, Bitbucket, Confluence, Figma, GitHub, GitLab, Jira, QTest, SharePoint, TestRail, XRAY Cloud, and the Zephyr family) show an **Indexes** panel once an embedding model is configured and the `Index data` tool is turned on. Use it to create, reindex, or delete indexes. See [Indexing overview](/how-tos/indexing/indexing-overview).
 
 ## MCP servers
 
@@ -64,7 +64,7 @@ Attach a toolkit or MCP from an agent's or pipeline's **Tools** section, or add 
 <AccordionGroup>
   <Accordion title="Connection fails">Verify the selected credential and any required URL or project identifier, and confirm the target service is reachable.</Accordion>
   <Accordion title="Toolkit type is missing from the create list">The running worker may not support that type — check the [toolkit catalogue](/reference/toolkit-catalogue), or ask your administrator whether the type is restricted for this project.</Accordion>
-  <Accordion title="Indexes panel is unavailable">Confirm the toolkit type supports indexing, that PGVector and an embedding model are configured in [AI Providers](/menus/settings/ai-providers), and that `Index data` is turned on in Tools.</Accordion>
+  <Accordion title="Indexes panel is unavailable">Confirm the toolkit type supports indexing, that an embedding model is configured in [AI Providers](/menus/settings/ai-providers), and that `Index data` is turned on in Tools.</Accordion>
   <Accordion title="MCP shows Disconnected">For a Remote MCP, verify the server URL is reachable and its authentication has not expired.</Accordion>
 </AccordionGroup>
 

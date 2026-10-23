@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 const (
@@ -68,6 +68,8 @@ type artifactRetentionNotifier interface {
 // is the defect it exists to fix.
 type artifactRetentionGrantsRepository interface {
 	ClaimExpiredTransferGrants(ctx context.Context, olderThan time.Time, limit int32) ([]repos.ExpiredTransferGrantRow, error)
+	ListExpiredGrantStaging(ctx context.Context, olderThan time.Time, limit int32) ([]repos.GrantStagingRow, error)
+	ClearGrantStaging(ctx context.Context, id, key string) error
 }
 
 // artifactRetentionAttachmentChunksRepository is S20a's cleanup dependency
@@ -142,6 +144,9 @@ func (s *artifactRetentionSweep) Execute(
 		return "", err
 	}
 	if err := s.sweepExpiredGrants(ctx); err != nil {
+		return "", err
+	}
+	if err := s.sweepGrantStaging(ctx); err != nil {
 		return "", err
 	}
 	if err := s.notifyExpiringBuckets(ctx); err != nil {
@@ -264,7 +269,85 @@ func (s *artifactRetentionSweep) reclaimGrantBytes(
 	if err := s.store.Delete(ctx, ref); err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return fmt.Errorf("delete bytes for expired grant %s: %w", grant.ID, err)
 	}
+	if repos.IsGrantStagingKey(grant.ID, grant.Key) {
+		// A staged grant's commit copies to the grant id before it verifies.
+		// A commit that failed after the copy, and was never retried, leaves
+		// that copy behind with no metadata row. The grant was never
+		// consumed, so nothing was committed there.
+		final, err := storage.NewObjectRef(strconv.FormatInt(grant.ProjectID, 10), bucket.Name, grant.ID)
+		if err != nil {
+			return fmt.Errorf("build object ref for expired grant %s: %w", grant.ID, err)
+		}
+		if err := s.store.Delete(ctx, final); err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("delete copied bytes for expired grant %s: %w", grant.ID, err)
+		}
+	}
 	return nil
+}
+
+// sweepGrantStaging reclaims the staging object of a presigned single-shot
+// grant once its URL has expired (api/v2/artifacts grantStagingKey).
+//
+// A commit deletes the staging object, but the URL stays valid until the
+// grant expires, so a PUT after the commit recreates it: bytes no metadata
+// row counts against the quota and no object sweep finds, under a grant that
+// is already consumed and so never claimed by sweepExpiredGrants. After
+// expires_at plus the grace nothing can write there again, so one delete is
+// final. The marker is cleared only after the delete, so a failed delete is
+// retried next tick.
+func (s *artifactRetentionSweep) sweepGrantStaging(ctx context.Context) error {
+	olderThan := time.Now().Add(-artifactRetentionGrantGrace)
+	bucketCache := map[int64]repos.BucketRow{}
+	var firstErr error
+	for i := 0; i < artifactRetentionSweepMaxBatchesPerTick; i++ {
+		staged, err := s.grants.ListExpiredGrantStaging(ctx, olderThan, artifactRetentionSweepBatchSize)
+		if err != nil {
+			return fmt.Errorf("list expired artifact grant staging: %w", err)
+		}
+		cleared := 0
+		for _, grant := range staged {
+			if err := s.reclaimGrantStaging(ctx, grant, bucketCache); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			cleared++
+		}
+		// A batch that cleared nothing would be listed again unchanged.
+		if int32(len(staged)) < artifactRetentionSweepBatchSize || cleared == 0 {
+			return firstErr
+		}
+	}
+	return firstErr
+}
+
+func (s *artifactRetentionSweep) reclaimGrantStaging(
+	ctx context.Context,
+	grant repos.GrantStagingRow,
+	bucketCache map[int64]repos.BucketRow,
+) error {
+	bucket, ok := bucketCache[grant.BucketID]
+	if !ok {
+		var err error
+		bucket, err = s.buckets.GetBucketByID(ctx, grant.BucketID)
+		if errors.Is(err, storage.ErrNotFound) {
+			// The bucket's objects went with it.
+			return s.grants.ClearGrantStaging(ctx, grant.ID, grant.Key)
+		}
+		if err != nil {
+			return fmt.Errorf("get bucket %d for grant staging %s: %w", grant.BucketID, grant.ID, err)
+		}
+		bucketCache[grant.BucketID] = bucket
+	}
+	ref, err := storage.NewObjectRef(strconv.FormatInt(grant.ProjectID, 10), bucket.Name, grant.Key)
+	if err != nil {
+		return fmt.Errorf("build object ref for grant staging %s: %w", grant.ID, err)
+	}
+	if err := s.store.Delete(ctx, ref); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return fmt.Errorf("delete staging bytes for grant %s: %w", grant.ID, err)
+	}
+	return s.grants.ClearGrantStaging(ctx, grant.ID, grant.Key)
 }
 
 var _ schedulingapp.Handler = (*artifactRetentionSweep)(nil)

@@ -70,11 +70,12 @@ export function useStaticPipelineContinuation(
         staticPauseKey(pause),
       ])
     : undefined;
+  /** Resolves `true` only once the durable continuation has started. */
   const submit = useCallback(
-    async (text: string, selected: readonly string[]) => {
+    async (text: string, selected: readonly string[]): Promise<boolean> => {
       const active = latest.current;
       const identity = submissionIdentity(active, key);
-      if (inFlight.current || !identity) return;
+      if (inFlight.current || !identity) return false;
       const { pause: current, projectId } = identity;
       let body;
       try {
@@ -87,7 +88,7 @@ export function useStaticPipelineContinuation(
         );
       } catch (e) {
         setError(e instanceof Error ? e.message : "Invalid continuation.");
-        return;
+        return false;
       }
       inFlight.current = true;
       setBusy(true);
@@ -102,6 +103,7 @@ export function useStaticPipelineContinuation(
           active.setChatHistory((history) =>
             consumeStaticPause(history, current, selected),
           );
+          return true;
         } else {
           setError(
             result.reason === "rejected"
@@ -124,6 +126,7 @@ export function useStaticPipelineContinuation(
         inFlight.current = false;
         setBusy(false);
       }
+      return false;
     },
     [key],
   );

@@ -7,6 +7,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
+      # The chart-rendered workspace profile the supervisor test parses.
+      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
@@ -29,8 +31,13 @@ on:
       - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
+      # The bundled NATS server's permission table and the bootstrap script.
+      - "deploy/helm/elitea/values.yaml"
+      - "deploy/helm/elitea/values-nats-ha.yaml"
+      - "deploy/helm/elitea/templates/nats/**"
+      - "deploy/helm/elitea/Chart.lock"
+      - "deploy/helm/elitea/build-deps.sh"
+      - "deploy/helm/elitea/files/nats-bootstrap.sh"
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
@@ -40,60 +47,29 @@ on:
       - "services/elitea-main/cmd/elitea-migrate/**"
       - "services/elitea-main/internal/infra/db/migrate/**"
       - "scripts/runtime/test_sandbox_ledger.py"
-      - "scripts/ci/check_worker_ignored_tests.py"
-      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/check-worker-ignored-tests.mjs"
+      - "scripts/ci/check-worker-ignored-tests.test.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/package.json"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/worker-ignored-tests-allowlist.txt"
+      # The guard's install: ci-scripts-deps and the npm cache actions it uses.
+      - ".github/actions/ci-scripts-deps/**"
+      - ".github/actions/npm-cache/**"
+      - ".github/actions/main-write-cache/**"
       - ".github/workflows/ci-rust.yml"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-worker-rust/**"
-      - "services/elitea-code-runner/**"
-      - "services/elitea-main/migrations/agentstate/**"
-      - "libs/proto/**"
-      # elitea-llm-wire (the /llm caller contract) and elitea-agent-runtime
-      # (the runtime shared with the desktop host, ADR-0029), path dependencies,
-      # and the patched adk crates in libs/rust/vendor; they inherit package
-      # fields and lints from the libs/rust workspace.
-      - "libs/rust/**"
-      # The workspace-run Docker proofs create the egress network with it.
-      - "deploy/docker/workspace-egress.sh"
-      # ...and run the real egress proxy for the proxy-mode proof.
-      - "services/elitea-egress-proxy/**"
-      - "libs/go/egresslib/**"
-      # The /llm caller contract both Rust callers assert (worker, engine model client).
-      - "conformance/llm-caller/**"
-      # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
-      # the worker's artifact suite asserts it through `test-support`).
-      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
-      # The live command-bus test runs the worker against the NATS chart's
-      # own permission table and the real bootstrap (docs/runtime-command-bus.md).
-      - "deploy/helm/nats/**"
-      - "deploy/helm/nats-bootstrap/**"
-      - "scripts/nats/**"
-      - "libs/go/natsconn/**"
-      - "docs/runtime-command-bus.md"
-      # The owner-schema fixture is migrated by the real command, and the
-      # Docker supervisor tests run through the ledger helper; the ignored-test
-      # guard reads its own script and allowlist.
-      - "services/elitea-main/cmd/elitea-migrate/**"
-      - "services/elitea-main/internal/infra/db/migrate/**"
-      - "scripts/runtime/test_sandbox_ledger.py"
-      - "scripts/ci/check_worker_ignored_tests.py"
-      - "scripts/ci/test_check_worker_ignored_tests.py"
-      - "scripts/ci/worker-ignored-tests-allowlist.txt"
-      - ".github/workflows/ci-rust.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "19 0 * * *"
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -170,9 +146,11 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # The two jobs get separate cache entries (rust-cache keys on the job),
-      # which is correct: `quality` builds --release and docs, `test` builds
-      # test targets, and one shared entry would thrash between them.
+      # `quality` keeps its own entry (rust-cache keys on the job id when no
+      # shared-key is set): it builds --release and docs, `test` builds test
+      # targets, and one shared entry would thrash between them. `test`
+      # shares its entry with `workspace-run-docker` (shared-key
+      # worker-rust-test), which builds the same test profile.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -241,12 +219,20 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # The two jobs get separate cache entries (rust-cache keys on the job),
-      # which is correct: `quality` builds --release and docs, `test` builds
-      # test targets, and one shared entry would thrash between them.
+      # `quality` keeps its own entry (rust-cache keys on the job id when no
+      # shared-key is set): it builds --release and docs, `test` builds test
+      # targets, and one shared entry would thrash between them. `test`
+      # shares its entry with `workspace-run-docker` (shared-key
+      # worker-rust-test), which builds the same test profile.
+      #
+      # `test` and `workspace-run-docker` build the same `--all-features` test
+      # profile: measured 2026-10-20 each saved an entry of exactly
+      # 1292.66 MB, two copies of one directory. They share one key now,
+      # and only `test` saves it.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: worker-rust-test
           # Read everywhere, write on main only: a pull request's target directory
           # is ~1 GB of the repository's 10 GB Actions cache, duplicated per branch.
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -263,7 +249,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.0
+          version: v4.3.1
 
       - uses: actions/setup-go@v7
         with:
@@ -407,7 +393,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
 
       - name: Build the code runner Deno/Pyodide image
         uses: docker/build-push-action@v7
@@ -423,7 +409,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
 
       # The Rust language image (vendored Cargo tree + the Rust adapter): the
       # Docker PID-limit test compiles and runs user Rust code in it.
@@ -441,7 +427,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
 
       # The helper starts its own disposable postgres:18 container
       # (--pull=never; the service above already pulled the image), generates
@@ -510,6 +496,9 @@ jobs:
       # tests once sat ignored with no step to run them, reading like passes.
       # The list comes from the compiled binaries; the checker also counts the
       # #[ignore] attributes in the sources so an empty list cannot pass.
+      - name: Install the ignored-test guard's one dependency
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/ci-scripts-deps
       - name: Every ignored worker test runs somewhere
         # Not gated on the Docker step: an unrun test is reported either way.
         if: ${{ !cancelled() }}
@@ -519,18 +508,25 @@ jobs:
           # checker needs them to tell which target each test belongs to.
           cargo test --locked --all-features --lib --bins --tests -- --list --ignored \
             > "${RUNNER_TEMP}/worker-ignored-tests.txt" 2>&1
-          python3 ../../scripts/ci/check_worker_ignored_tests.py \
+          node ../../scripts/ci/check-worker-ignored-tests.mjs \
             --list "${RUNNER_TEMP}/worker-ignored-tests.txt" \
             --workflow ../../.github/workflows/ci-rust.yml \
             --allowlist ../../scripts/ci/worker-ignored-tests-allowlist.txt \
             --sources .
-          expected="$(grep -c '^    def test_' ../../scripts/ci/test_check_worker_ignored_tests.py)"
-          output="$(python3 -m unittest discover -s ../../scripts/ci -p 'test_check_worker_ignored_tests.py' -v 2>&1)"
+          expected="$(grep -c '^test(' ../../scripts/ci/check-worker-ignored-tests.test.mjs)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap ../../scripts/ci/check-worker-ignored-tests.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${expected}" -lt 10 ]; then
-            echo "::error::the guard's own suite ran ${ran:-no} of ${expected} scenario(s)"
+            echo "::error::the guard's own suite passed ${ran:-no} of ${expected} scenario(s)"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-worker-ignored-tests.test.mjs exited ${status}"
+            exit "${status}"
           fi
 
   # ADR-0034 decision 9: the cloud executor's workspace runs on the real
@@ -572,10 +568,16 @@ jobs:
           rustc --version
           cargo --version
 
+      # The `test` job's entry (same `--all-features` test profile), restored
+      # and never saved here: two jobs saving one key would race to reserve it.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: worker-rust-test
+          # Never saves: `test` is the one writer of this key. `false`, not a
+          # main-ref expression: scripts/ci/check-workflow-cache-writes.mjs
+          # accepts a literal false as the strongest form.
+          save-if: false
           workspaces: services/elitea-worker-rust
 
       - name: Build and push the workspace runner image

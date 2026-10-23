@@ -10,11 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type Handler struct {
@@ -29,7 +29,7 @@ type Handler struct {
 
 // DefaultDeleteBudget is how long a project DELETE waits, after the project row
 // and its credentials are gone, for the slow cleanup (artifact bytes, the tenant
-// schema, the PgVector database) before it answers 202 and leaves the rest to
+// schema, application data) before it answers 202 and leaves the rest to
 // the cleanup journal.
 const DefaultDeleteBudget = 20 * time.Second
 
@@ -125,11 +125,11 @@ func (h *Handler) Routes() chi.Router {
 	r.With(apimw.RequireCentralPermissions(
 		h.resolver, auth.PermissionModeAdministration, DeleteProjectPermission,
 	)).Delete("/project/{mode}/{projectID}", h.DeleteProject)
-	// The three group WRITES, gated on the permissions their pylon originals
+	// The three group WRITES, gated on the permissions their legacy originals
 	// declare — `projects.projects.groups.edit` for the set-replacement PUT
 	// (groups.py) and `projects.projects.group.create` / `.delete` for the
 	// singular create and detach (group.py). Resolved in DEFAULT mode against
-	// the project in the path, which is the mode pylon's `recommended_roles`
+	// the project in the path, which is the mode the legacy `recommended_roles`
 	// names for these handlers and the one the `prompt_lib` segment reaches.
 	r.With(h.requireProjectPermission("projects.projects.groups.edit")).
 		Put("/groups/prompt_lib/{projectID}", h.PutProjectGroups)
@@ -140,7 +140,7 @@ func (h *Handler) Routes() chi.Router {
 	// Quota and statistics (issue #246, quota.go). Gated on the permissions
 	// quota.py and statistics.py declare — `projects.projects.project.view` for
 	// the two reads and `…project.edit` for the write — resolved in DEFAULT
-	// mode against the project in the path. Neither pylon module carries a
+	// mode against the project in the path. Neither legacy module carries a
 	// `{mode}` segment, so neither does the route.
 	r.With(h.requireProjectPermission("projects.projects.project.view")).
 		Get("/quota/{projectID}", h.GetQuota)

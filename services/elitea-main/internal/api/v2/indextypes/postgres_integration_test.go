@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,12 +14,13 @@ import (
 	"testing"
 	"time"
 
-	platformapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	platformapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -37,16 +37,7 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 		snapshot,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: currentIndexTypesPeerVerifierFunc(
-				func(request *http.Request) error {
-					host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
-					if splitErr == nil &&
-						(host == "127.0.0.1" || host == "::1") {
-						return nil
-					}
-					return fmt.Errorf("untrusted peer")
-				},
-			),
+			FormSessions:       authtest.FormSessions{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -158,8 +149,7 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request.Header.Set("X-Auth-Type", "user")
-			request.Header.Set("X-Auth-ID", test.userID)
+			authtest.SignIn(request, test.userID)
 			response, err := server.Client().Do(request)
 			if err != nil {
 				t.Fatal(err)
@@ -182,14 +172,14 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			}
 			if test.wantStatus == http.StatusOK {
 				// The body carries both halves since #394: the published
-				// `items`/`total` envelope beside the three Pylon maps. Read
+				// `items`/`total` envelope beside the three legacy maps. Read
 				// the maps back out and hold them to the pinned SDK fixture,
 				// and require the published half to be present.
-				var pylon handler.CurrentIndexTypes
-				if err := json.Unmarshal(body, &pylon); err != nil {
+				var legacyMaps handler.CurrentIndexTypes
+				if err := json.Unmarshal(body, &legacyMaps); err != nil {
 					t.Fatalf("UI response does not decode: %v", err)
 				}
-				if !reflect.DeepEqual(pylon, fixture) {
+				if !reflect.DeepEqual(legacyMaps, fixture) {
 					t.Fatalf("UI response drifted: %s", body)
 				}
 				var published struct {

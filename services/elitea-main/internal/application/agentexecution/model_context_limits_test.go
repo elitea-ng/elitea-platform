@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -56,13 +56,13 @@ func TestCurrentModelContextLimitsUseAuthorizedCatalogue(t *testing.T) {
 	applicationInput, err := currentApplicationInput(validCurrentApplicationStartRequest(), CurrentApplicationTarget{
 		ApplicationID: 31, ApplicationVersionID: 41, VersionDetails: raw,
 		Variables: json.RawMessage(`[]`), ChatHistory: json.RawMessage(`[]`), InternalTools: json.RawMessage(`[]`),
-	}, json.RawMessage(`null`), json.RawMessage(`{}`), nil, "", "")
+	}, json.RawMessage(`{}`), nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	adhocInput, err := currentAdhocInput(validCurrentAdhocStartRequest(), CurrentAdhocTarget{
 		ConversationMeta: json.RawMessage(`{}`), ChatHistory: json.RawMessage(`[]`),
-	}, raw, json.RawMessage(`null`), json.RawMessage(`{}`), nil, "", "")
+	}, raw, json.RawMessage(`{}`), nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

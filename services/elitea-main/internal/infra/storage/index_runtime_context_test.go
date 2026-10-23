@@ -4,19 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,25 +101,13 @@ func TestIndexRuntimeContextReturnsOnlyClaimActorToken(t *testing.T) {
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)
 
-	request := httptest.NewRequest(http.MethodPost, "/executions/execution-1/generations/7/runtime-context/elitea-client-token", nil)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
+	ctx := contentClaimContext(context.Background(), certificate, "claim-1", fence)
+	response := serve(server, runtimeContextCall(ctx, "execution-1", 7))
 
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
-	require.Equal(t, "no-store, no-cache, must-revalidate", response.Header().Get("Cache-Control"))
-	require.Equal(t, "no-cache", response.Header().Get("Pragma"))
-	require.Equal(t, "0", response.Header().Get("Expires"))
-	require.Equal(t, "nosniff", response.Header().Get("X-Content-Type-Options"))
-	require.NotEmpty(t, response.Header().Get("Content-Length"))
-	digest := sha256.Sum256(response.Body.Bytes())
-	require.Equal(t, formatSHA256Digest(digest), response.Header().Get("Content-Digest"))
+	require.Equal(t, codes.OK, response.Code)
 
 	var value EliteaClientTokenContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &value))
+	require.NoError(t, json.Unmarshal(response.Body, &value))
 	require.Equal(t, EliteaClientTokenSchemaVersion, value.SchemaVersion)
 	require.EqualValues(t, 42, value.ProjectID)
 	require.Equal(t, token, value.Token)
@@ -456,40 +445,24 @@ func TestIndexRuntimeContextRouteRejectsUntrustedOrNonEmptyRequests(t *testing.T
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)
 
-	missingTLS := httptest.NewRequest(http.MethodPost, "/executions/e/generations/1/runtime-context/elitea-client-token", nil)
-	missingTLS.Header.Set(claimIDHeader, "claim")
-	missingTLS.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(make([]byte, sha256.Size)))
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, missingTLS)
-	require.Equal(t, http.StatusUnauthorized, response.Code)
-	require.Zero(t, calls)
-	require.Contains(t, response.Header().Get("Cache-Control"), "no-store")
-
-	nonEmpty := validRuntimeContextRequest(t, bytes.NewBufferString("not-allowed"))
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, nonEmpty)
-	require.Equal(t, http.StatusBadRequest, response.Code)
+	fence := make([]byte, sha256.Size)
+	missingTLS := metadata.NewIncomingContext(context.Background(), metadata.Pairs(grpcauth.MetadataClaimID, "claim", grpcauth.MetadataClaimFence, string(fence)))
+	response := serve(server, runtimeContextCall(missingTLS, "e", 1))
+	require.Equal(t, codes.Unauthenticated, response.Code)
 	require.Zero(t, calls)
 
-	nonCanonical := validRuntimeContextRequest(t, nil)
-	nonCanonical.URL.Path = "/executions/execution-1/generations/01/runtime-context/elitea-client-token"
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, nonCanonical)
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	duplicateClaim := metadata.NewIncomingContext(contentPeerContext(context.Background(), nil), metadata.Pairs(
+		grpcauth.MetadataClaimID, "claim-1", grpcauth.MetadataClaimID, "claim-2", grpcauth.MetadataClaimFence, string(fence)))
+	response = serve(server, runtimeContextCall(duplicateClaim, "execution-1", 1))
+	require.Equal(t, codes.Unauthenticated, response.Code)
 	require.Zero(t, calls)
 
-	duplicateClaim := validRuntimeContextRequest(t, nil)
-	duplicateClaim.Header.Add(claimIDHeader, "claim-2")
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, duplicateClaim)
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	response = serve(server, runtimeContextCall(validContentContext(), "execution-1", 9223372036854775808))
+	require.Equal(t, codes.Unauthenticated, response.Code)
 	require.Zero(t, calls)
 
-	overflowGeneration := validRuntimeContextRequest(t, nil)
-	overflowGeneration.URL.Path = "/executions/execution-1/generations/9223372036854775808/runtime-context/elitea-client-token"
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, overflowGeneration)
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	response = serve(server, runtimeContextCall(validContentContext(), "execution-1", 0))
+	require.Equal(t, codes.Unauthenticated, response.Code)
 	require.Zero(t, calls)
 }
 
@@ -514,11 +487,9 @@ func TestIndexRuntimeContextRouteSharesContentCapacityAndIsNotMountedByDefault(t
 	require.NoError(t, err)
 	server := newIndexRuntimeContextTestServer(t, service)
 	server.requests <- struct{}{}
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, validRuntimeContextRequest(t, nil))
+	response := serve(server, validRuntimeContextRequest(t))
 	<-server.requests
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
-	require.Equal(t, "1", response.Header().Get("Retry-After"))
+	require.Equal(t, codes.Unavailable, response.Code)
 
 	ordinary, err := NewContentServer(
 		contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
@@ -530,9 +501,8 @@ func TestIndexRuntimeContextRouteSharesContentCapacityAndIsNotMountedByDefault(t
 		1024,
 	)
 	require.NoError(t, err)
-	response = httptest.NewRecorder()
-	ordinary.Routes().ServeHTTP(response, validRuntimeContextRequest(t, nil))
-	require.Equal(t, http.StatusNotFound, response.Code)
+	response = serve(ordinary, validRuntimeContextRequest(t))
+	require.Equal(t, codes.Unimplemented, response.Code)
 }
 
 func TestIndexRuntimeContextFailureLogContainsOnlyOneBoundedStage(t *testing.T) {
@@ -556,11 +526,10 @@ func TestIndexRuntimeContextFailureLogContainsOnlyOneBoundedStage(t *testing.T) 
 	var logs bytes.Buffer
 	server.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, validRuntimeContextRequest(t, nil))
+	response := serve(server, validRuntimeContextRequest(t))
 
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
-	require.NotContains(t, response.Body.String(), "canary")
+	require.Equal(t, codes.Unavailable, response.Code)
+	require.NotContains(t, string(response.Body), "canary")
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	require.Len(t, lines, 1)
 	require.Contains(t, lines[0], `"msg":"runtime context unavailable"`)
@@ -591,13 +560,22 @@ func newIndexRuntimeContextTestServer(t *testing.T, service *EliteaClientTokenSe
 	return server
 }
 
-func validRuntimeContextRequest(t *testing.T, body io.Reader) *http.Request {
+// validRuntimeContextRequest prepares a GetEliteaClientToken call under a
+// well-formed claim for execution-1 generation 1, naming the optional fields
+// the worker can read.
+func validRuntimeContextRequest(t *testing.T, accept ...string) contentCall {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodPost, "/executions/execution-1/generations/1/runtime-context/elitea-client-token", body)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, sha256.Size)))
-	return request
+	return runtimeContextCall(validContentContext(), "execution-1", 1, accept...)
+}
+
+func runtimeContextCall(ctx context.Context, executionID string, generation uint64, accept ...string) contentCall {
+	return func(server *ContentServer) contentResult {
+		response, err := server.GetEliteaClientToken(ctx, &runtimev1.GetEliteaClientTokenRequestV1{
+			Scope:        contentScope(executionID, generation),
+			AcceptFields: accept,
+		})
+		return resultOf(response.GetContextJson(), err)
+	}
 }
 
 func validRuntimeContextAuthorization() RuntimeContextAuthorization {

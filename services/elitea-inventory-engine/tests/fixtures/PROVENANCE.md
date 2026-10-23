@@ -50,3 +50,14 @@ Python had no such attribute: its edge kept the last writer's
 
 Also without a golden: `full_rebuild` rebuilds only the source it names
 (Python deleted the whole graph, every other source's data with it).
+
+## Released migrations
+
+`tests/fixtures/released_migrations/*.sql` are the engine's migrations exactly
+as `origin/main` released them before the pgvector removal (#1359), copied with
+`git show origin/main:services/elitea-inventory-engine/migrations/<file>`.
+`0004_entity_vectors.sql` there is the released text (SHA-256
+`a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f`, the only
+text of 0004 ever released) that `migrations/0004_entity_vectors.sql` now
+replaces; `tests/graph_store.rs` migrates a database along that chain and then
+along the current one. Never edit them.

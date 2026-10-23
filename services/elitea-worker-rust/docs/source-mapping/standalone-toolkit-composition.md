@@ -7,10 +7,10 @@ index ingestion. This change fixes Main composition and control verification.
 
 | Current business source under the umbrella workspace | Responsibility | Native owner |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/elitea_core/api/v2/toolkit_available_tools.py`, `PromptLibAPI.get` | Authorize a saved toolkit and request discovery independently of an index run. | Main `application/toolkitdiscovery` and `runtimecomposition/toolkit_discovery_runtime.go` |
-| `projects/centry/pylon_indexer/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py` | Dispatch SDK tool enumeration from the existing worker. | Rust `execution/toolkit_delivery_processor.rs`; Main `redisdispatch.ToolkitAvailableToolsProducer` |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/toolkit_available_tools.py`, `PromptLibAPI.get` | Authorize a saved toolkit and request discovery independently of an index run. | Main `application/toolkitdiscovery` and `runtimecomposition/toolkit_discovery_runtime.go` |
+| `legacy/centry/<indexer runtime>/plugins/indexer_worker/methods/indexer_toolkit_available_tools.py` | Dispatch SDK tool enumeration from the existing worker. | Rust `execution/toolkit_delivery_processor.rs`; Main `redisdispatch.ToolkitAvailableToolsProducer` |
 | `projects/elitea-sdk/elitea_sdk/tools/__init__.py`, `get_toolkit_available_tools` | Enumerate instance tools and argument schemas. | Existing Rust toolkit registry and shared discovery command |
-| `projects/centry/pylon_main/plugins/elitea_core/utils/mcp_service.py`, `__handle_call_tool_request` | Execute an exact saved tool through the shared runtime. | Existing Main toolkit-call admission and Rust direct runtime |
+| `legacy/centry/<main runtime>/plugins/elitea_core/utils/mcp_service.py`, `__handle_call_tool_request` | Execute an exact saved tool through the shared runtime. | Existing Main toolkit-call admission and Rust direct runtime |
 
 Inspected Core revision: `b701a00aeff0af1a416916c4a537bfdd4b7d8337`.
 Inspected Indexer revision: `1f0fbcf5c3429c5ef08a3a3e7a4e81ee94b49460`.

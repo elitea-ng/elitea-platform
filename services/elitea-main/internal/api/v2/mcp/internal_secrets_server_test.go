@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type recordingInternalSecretExecutor struct {
@@ -94,7 +94,7 @@ func TestInternalSecretsCategoryPublishesExactlyCurrentSafeMCPOptIns(t *testing.
 	}
 	updateProperties := tools[2].InputSchema["properties"].(map[string]any)
 	if _, advertised := updateProperties["name"]; advertised {
-		t.Fatal("update schema advertises a rename that current pylon ignores")
+		t.Fatal("update schema advertises a rename that the legacy contract ignores")
 	}
 	for _, required := range []string{"project_id", "secret"} {
 		if _, advertised := updateProperties[required]; !advertised {

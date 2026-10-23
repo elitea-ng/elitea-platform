@@ -2,14 +2,13 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"slices"
 	"sync"
 	"time"
+
+	enginev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
 )
 
 // What an engine can do, from the engine itself.
@@ -17,7 +16,7 @@ import (
 // A rolling deploy runs a newer host against an older engine for a while. The
 // host used to find out that the engine lacked a tool by calling it and
 // matching the refusal's text ("Unknown tool"). The engine now LISTS the tools
-// it serves in GET /engine/health (`tools`), the host reads the list when it
+// it serves in Health (`tools`), the host reads the list when it
 // starts and again every ToolsRefresh, and decides from the list.
 //
 // The list is a statement of the engine's release, so it is cached: a tool
@@ -30,49 +29,36 @@ import (
 // DefaultToolsRefresh is how often the host re-reads the engine's tool list.
 const DefaultToolsRefresh = time.Minute
 
-// toolsFetchTimeout bounds one health request: the list is read in the
-// background, and an engine that does not answer must not stall a caller.
-const toolsFetchTimeout = 3 * time.Second
-
 type capabilities struct {
 	mu    sync.RWMutex
 	known bool
 	tools []string
 }
 
-// Health is what GET /engine/health reports.
+// Health is what the engine's Health reports.
 type Health struct {
-	Status string   `json:"status"`
-	Runner string   `json:"runner"`
-	Active int      `json:"active"`
-	Tools  []string `json:"tools"`
+	Status string
+	Runner string
+	Active int
+	Tools  []string
 }
 
-// Health reads the engine's health document.
+// Health asks the engine how it is.
 func (c *Client) Health(ctx context.Context) (Health, error) {
-	ctx, cancel := context.WithTimeout(ctx, toolsFetchTimeout)
+	if c.dialErr != nil {
+		return Health{}, c.dialErr
+	}
+	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://engine/engine/health", nil)
+	health, err := c.rpc.Health(ctx, &enginev1.HealthRequest{})
 	if err != nil {
-		return Health{}, err
+		return Health{}, fmt.Errorf("Health: %w", err)
 	}
-	response, err := c.HTTP.Do(request)
-	if err != nil {
-		return Health{}, err
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return Health{}, fmt.Errorf("GET /engine/health answered %d", response.StatusCode)
-	}
-	var health Health
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&health); err != nil {
-		return Health{}, fmt.Errorf("the health document is not JSON: %w", err)
-	}
-	return health, nil
+	return Health{Status: health.GetStatus(), Runner: health.GetRunner(), Active: int(health.GetActive()), Tools: health.GetTools()}, nil
 }
 
 // RefreshTools reads the engine's tool list now and caches it. An engine that
-// answers without a `tools` list (a release from before the field) makes the
+// answers with an empty `tools` list (one that does not list them) makes the
 // answer unknown again, so a downgrade is noticed too. An error leaves the
 // last answer in place.
 func (c *Client) RefreshTools(ctx context.Context) error {

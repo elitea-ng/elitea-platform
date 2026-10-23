@@ -349,7 +349,7 @@ fn decode32(value: &str) -> Result<[u8; 32], GrantRejected> {
         return Err(GrantRejected);
     }
     let mut result = [0; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let digit = |v: u8| {
             if v.is_ascii_digit() {
                 v - b'0'

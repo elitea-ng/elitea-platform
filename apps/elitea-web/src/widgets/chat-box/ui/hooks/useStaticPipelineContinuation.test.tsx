@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   act,
   fireEvent,
-  render,
   renderHook,
   screen,
   waitFor,
@@ -14,7 +13,12 @@ import {
   useStaticPipelineContinuation,
   type StaticContinuationParams,
 } from "./useStaticPipelineContinuation";
-import { StaticPipelineContinueControls } from "../StaticPipelineContinueControls";
+import {
+  sendTypedStaticContinuation,
+  useStaticPauseCards,
+} from "../StaticPipelineContinueControls";
+import { StaticPauseCard } from "@/features/chat-messages/ui/chat-box/StaticPauseCard";
+import { renderWithTheme } from "@/shared/ui/lib/testTheme";
 import type { StreamStartOutcome } from "./useChatBoxHandlers.helpers";
 
 const response = "30e0913e-10d4-43db-b8d0-c7b79480935a",
@@ -103,7 +107,7 @@ describe("static Continue controls", () => {
     expect(result.current.pause).toBeUndefined();
     expect(calls).toBe(0);
   });
-  it("submits a selected subset once and preserves unselected static/dynamic siblings", async () => {
+  it("continues one leaf on its own card once and keeps its siblings and dynamic cards", async () => {
     const calls: Parameters<
       StaticContinuationParams["continueExecution"]
     >[0][] = [];
@@ -115,39 +119,39 @@ describe("static Continue controls", () => {
       const [messages, setChatHistory] = useState<readonly ChatMessage[]>([
         message,
       ]);
-      const controls = useStaticPipelineContinuation({
+      const binding = useStaticPauseCards({
         ...base((request) => {
           calls.push(request);
           return continuation;
         }),
         messages,
         setChatHistory,
+        editorTest: undefined,
       });
       return (
         <>
           <span data-testid="dynamic">
             {messages[0]?.hitlInterrupt ? "dynamic remains" : "missing"}
           </span>
-          {controls.pause && (
-            <StaticPipelineContinueControls
-              key={controls.key}
-              pause={controls.pause}
-              busy={controls.busy}
-              error={controls.error}
-              onContinue={controls.submit}
-            />
-          )}
+          {binding?.pause.kind === "tools" &&
+            binding.pause.inventory.pauses.map((leafPause) => (
+              <StaticPauseCard
+                key={leafPause.proof.pause_id}
+                nodeName={leafPause.proof.node_name}
+                disabled={binding.busy}
+                onContinue={() => binding.onContinue(leafPause.proof.pause_id)}
+              />
+            ))}
         </>
       );
     }
-    render(<Host />);
+    renderWithTheme(<Host />);
     expect(calls).toHaveLength(0);
-    fireEvent.click(screen.getAllByRole("checkbox")[1]!);
-    const button = screen.getByRole("button", {
-      name: "Continue selected pipelines",
-    });
-    fireEvent.click(button);
-    fireEvent.click(button);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    const second = screen.getAllByTestId("chat-static-pause-continue-button")[1]!;
+    fireEvent.click(second);
+    fireEvent.click(second);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       conversationUuid: generation,
@@ -170,9 +174,72 @@ describe("static Continue controls", () => {
       await continuation;
     });
     await waitFor(() =>
-      expect(screen.getAllByRole("checkbox")).toHaveLength(1),
+      expect(screen.getAllByTestId("chat-static-pause-panel")).toHaveLength(1),
     );
     expect(screen.getByTestId("dynamic")).toHaveTextContent("dynamic remains");
+  });
+  it("continues every paused leaf with a message typed in the chat input", async () => {
+    const calls: Parameters<
+      StaticContinuationParams["continueExecution"]
+    >[0][] = [];
+    const { result } = renderHook(() =>
+      useStaticPauseCards({
+        ...base((request) => {
+          calls.push(request);
+          return Promise.resolve({ started: true });
+        }),
+        editorTest: undefined,
+      }),
+    );
+    let reset = 0;
+    await act(async () => {
+      await sendTypedStaticContinuation(result.current!, "go ahead", () => {
+        reset++;
+      });
+    });
+    expect(calls).toHaveLength(1);
+    expect(reset).toBe(1);
+    expect(calls[0]).toMatchObject({
+      contract: "agent.continue.static.v1",
+      body: {
+        message_id: response,
+        static_decisions: [
+          { pause_id: leaf("one", "a").proof.pause_id, action: "continue", value: "go ahead" },
+          { pause_id: leaf("two", "d").proof.pause_id, action: "continue", value: "go ahead" },
+        ],
+      },
+    });
+  });
+  it("keeps the typed text when the continuation does not start", async () => {
+    let calls = 0;
+    const { result } = renderHook(() =>
+      useStaticPauseCards({
+        ...base(() => {
+          calls++;
+          return Promise.resolve({
+            started: false,
+            reason: "rejected",
+            message: "stale",
+          } as StreamStartOutcome);
+        }),
+        editorTest: undefined,
+      }),
+    );
+    let reset = 0;
+    const resetInput = () => {
+      reset++;
+    };
+    // Refused before any request: the text exceeds the 8 KiB continuation bound.
+    await act(async () => {
+      await sendTypedStaticContinuation(result.current!, "x".repeat(8193), resetInput);
+    });
+    expect(calls).toBe(0);
+    // Refused by Main: the request was sent but nothing started.
+    await act(async () => {
+      await sendTypedStaticContinuation(result.current!, "go ahead", resetInput);
+    });
+    expect(calls).toBe(1);
+    expect(reset).toBe(0);
   });
   it("refuses a stale closure after generation/context changes", async () => {
     let calls = 0;
@@ -231,8 +298,8 @@ describe("static Continue controls", () => {
     );
   });
   it.each(["before", "after"] as const)(
-    "renders an explicit %s root Continue",
-    (kind) => {
+    "continues a %s root pause with the fixed text and no selection",
+    async (kind) => {
       const root = staticPauseBinding(
         response,
         generation,
@@ -240,22 +307,25 @@ describe("static Continue controls", () => {
         proof("a", kind),
         undefined,
       )!;
-      const calls: unknown[] = [];
-      render(
-        <StaticPipelineContinueControls
-          pause={root}
-          busy={false}
-          onContinue={(text, selected) => {
-            calls.push({ text, selected });
-            return Promise.resolve();
-          }}
-        />,
+      const calls: Parameters<StaticContinuationParams["continueExecution"]>[0][] = [];
+      const { result } = renderHook(() =>
+        useStaticPauseCards({
+          ...base((request) => {
+            calls.push(request);
+            return Promise.resolve({ started: true });
+          }),
+          messages: [{ ...message, staticPause: root }],
+          editorTest: undefined,
+        }),
       );
-      expect(screen.getByText(`Paused ${kind} tick`)).toBeVisible();
-      fireEvent.click(
-        screen.getByRole("button", { name: "Continue pipeline" }),
-      );
-      expect(calls).toEqual([{ text: "Continue", selected: [] }]);
+      await act(async () => {
+        result.current?.onContinue(undefined);
+        await Promise.resolve();
+      });
+      expect(calls[0]?.body).toMatchObject({
+        static_pause_id: proof("a", kind).pause_id,
+        user_input: "Continue",
+      });
     },
   );
 });

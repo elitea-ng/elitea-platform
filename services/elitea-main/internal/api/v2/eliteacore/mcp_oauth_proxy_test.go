@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
-	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 type delegatedAuthSettingsStub struct {
@@ -26,6 +26,9 @@ type delegatedAuthSettingsStub struct {
 	projectID int32
 	actorID   int32
 	toolkitID int32
+	// withoutProvenance leaves ProjectOwnedSettings nil, as a resolver
+	// composed without the provenance twin would.
+	withoutProvenance bool
 }
 
 func (stub *delegatedAuthSettingsStub) ResolveDelegatedAuthToolkitSettings(
@@ -38,7 +41,13 @@ func (stub *delegatedAuthSettingsStub) ResolveDelegatedAuthToolkitSettings(
 	stub.projectID = projectID
 	stub.actorID = actorID
 	stub.toolkitID = toolkitID
-	return stub.result, stub.found, stub.err
+	result := stub.result
+	if result.ProjectOwnedSettings == nil && !stub.withoutProvenance {
+		// Unless a test says otherwise, the stored settings were built from
+		// project-owned material only, so both resolutions agree (#1286).
+		result.ProjectOwnedSettings = result.Settings
+	}
+	return result, stub.found, stub.err
 }
 
 func authenticatedOAuthRequest(t *testing.T, body string) *http.Request {

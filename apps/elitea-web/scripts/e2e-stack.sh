@@ -64,10 +64,33 @@ case "$CMD" in
     # in place and neither hop is signed by a root the other does not trust.
     INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
       bash "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
+    # elitea-main's platform gRPC listener (#1359 U5), where the hosts store
+    # their artifacts: its server certificate and the hosts' callback client
+    # certificate, off the same CA.
+    bash "${REPO_ROOT}/deploy/scripts/gen-platform-listener-certs.sh"
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
     # --wait: wait for every healthcheck to report healthy before returning.
     # elitea-main runs migrations on startup; postgres is its dependency.
-    $COMPOSE_BIN $COMPOSE_F up -d --wait
+    # --remove-orphans drops the `traefik` container a pre-#1359 stack still
+    # runs; it holds E2E_PORT, which elitea-main now publishes itself.
+    # A service that dies before it is healthy fails `up --wait` with only
+    # "container ... exited (1)"; its reason is in its own log, and the
+    # `logs` step's file is an artifact nobody opens first (#1359: elitea-main
+    # refused its platform key and the job log said nothing). So on this
+    # failure print, into the job log, the tail of every service that is not
+    # running or not healthy, then fail as before. Never fatal itself.
+    if ! $COMPOSE_BIN $COMPOSE_F up -d --wait --remove-orphans; then
+      echo "✗ The E2E stack did not come up. Services that are not running and healthy:" >&2
+      $COMPOSE_BIN $COMPOSE_F ps -a >&2 || true
+      # A one-shot that exited 0 (bucket init, NATS bootstrap) is fine.
+      for service in $($COMPOSE_BIN $COMPOSE_F ps -a --format '{{.Service}} {{.State}} {{.ExitCode}} {{.Health}}' 2>/dev/null \
+          | awk '($2 != "running" && $3 != "0") || ($2 == "running" && $4 != "" && $4 != "healthy") { print $1 }' \
+          | sort -u); do
+        echo "=== ${service}: last 80 log lines ===" >&2
+        $COMPOSE_BIN $COMPOSE_F logs --no-color --tail 80 "$service" >&2 || true
+      done
+      exit 1
+    fi
     echo "→ Stack ready."
     ;;
 
@@ -88,10 +111,11 @@ case "$CMD" in
     rm -f "$(cd "$(dirname "$0")/.." && pwd)/.playwright-state/audit-fixture.json"
 
     # ── 0. Bootstrap DB schema if running on a fresh postgres ────────────────
-    # elitea-main uses SKIP_MIGRATIONS=1 in dev (migrations assume a legacy pylon
-    # DB is already present). For the standalone E2E stack we first apply
-    # 001_initial.sql (creates centry + p_1 tenant schema from scratch), then run
-    # elitea-migrate to bring the shared history tables up to date.
+    # elitea-main uses SKIP_MIGRATIONS=1 in dev (migrations assume a
+    # legacy-runtime DB is already present). For the standalone E2E stack we
+    # first apply 001_initial.sql (creates centry + p_1 tenant schema from
+    # scratch), then run elitea-migrate to bring the shared history tables up to
+    # date.
     INIT_SQL="${REPO_ROOT}/services/elitea-main/internal/infra/db/migrations/001_initial.sql"
     if [ -f "$INIT_SQL" ]; then
       EXEC_BIN_EARLY="${COMPOSE_BIN%% *}"
@@ -215,7 +239,6 @@ case "$CMD" in
     echo "  ✓ oidc-mock user: e2e-viewer@autotest.local"
 
     # ── 2. Insert matching DB rows ─────────────────────────────────────────
-    # Adapted from deploy/scripts/seed-staging-oidc-user.sql.
     # DB: elitea (local compose default), user: elitea, host: postgres.
     # Write SQL to a temp file — avoids bash 3.x heredoc-in-subshell limits.
     # The X placeholders must be the LAST characters of the template: BSD mktemp
@@ -338,23 +361,24 @@ WHERE email IN (
 -- broken, which is why A14 could not gate the READS.
 --
 -- That is fixed at the source now: 001_initial.sql seeds the four
--- administration roles and their pylon-parity grants on a fresh database, and
+-- administration roles and their legacy-parity grants on a fresh database, and
 -- migrations/shared/0060_admin_central_rbac.sql back-fills databases that
 -- predate it. Both run before this seed (see `up`), so the roles already exist
 -- by the time this file runs, and the assertions at the end of `seed` check
 -- what those migrations produced.
 --
 -- The grants below stay, and are deliberately a SUPERSET of what the migrations
--- seed. The migrations seed the pylon-parity baseline for the routes the server
--- gates; this list is what the JOURNEYS need the admin persona to hold, which
--- includes permissions no migration grants to `admin` (the audit, secrets and
--- project-member ones below) and one it grants only to `super_admin`. Every
+-- seed. The migrations seed the legacy-parity baseline for the routes the
+-- server gates; this list is what the JOURNEYS need the admin persona to hold,
+-- which includes permissions no migration grants to `admin` (the audit, secrets
+-- and project-member ones below) and one it grants only to `super_admin`. Every
 -- statement is ON CONFLICT DO NOTHING, so the overlap is inert.
 --
--- `admin.auth.users.super_admin` is the deliberate divergence: pylon and the
--- migrations both make it super_admin-only, and it is granted to `admin` here
--- so the journey can exercise the role-assignment path. The escalation guard it
--- gates is covered by the Go integration tests, which can revoke it.
+-- `admin.auth.users.super_admin` is the deliberate divergence: the legacy
+-- runtime and the migrations both make it super_admin-only, and it is granted
+-- to `admin` here so the journey can exercise the role-assignment path. The
+-- escalation guard it gates is covered by the Go integration tests, which can
+-- revoke it.
 --
 -- Note what none of this changes: `window.admin_ui_config.permissions` is
 -- hardcoded by adminui/handler.go and was always present. The rows below are
@@ -367,7 +391,7 @@ CROSS JOIN (VALUES
     ('admin.auth.users'),
     ('admin.auth.users.super_admin'),
     -- Unit A14, Audit Trail: all four `/elitea_core/audit*` READS are gated on
-    -- this, matching the pylon originals. Unlike the user LISTING, the audit
+    -- this, matching the legacy originals. Unlike the user LISTING, the audit
     -- listing is gated rather than open — an audit row names the user, the
     -- project and the action taken, so the listing itself is the sensitive
     -- part. Without this row the page renders with four 403s.
@@ -391,8 +415,8 @@ CROSS JOIN (VALUES
     ('configuration.users.users.create'),
     ('configuration.users.users.edit'),
     -- Unit A14, Secrets: the GLOBAL vault. `.view` gates BOTH reads (the
-    -- listing and the single-value reveal), matching pylon's AdminAPI, and it
-    -- is a different grant from `.list` — the admin SPA's sidebar has always
+    -- listing and the single-value reveal), matching the legacy AdminAPI, and
+    -- it is a different grant from `.list` — the admin SPA's sidebar has always
     -- gated the page on `.list` while the server checks `.view`, and on the
     -- reference deployment the administration-mode `editor` role holds the
     -- first and not the second. Both are granted here so journey 32 exercises
@@ -418,11 +442,11 @@ CROSS JOIN (VALUES
     ('admin.moderation'),
     ('admin.moderation.edit'),
     -- Unit A14, Configuration. `runtime.plugins` is the SINGLE permission every
-    -- pylon handler in that set declares — schemas, values, suggestions,
-    -- restart, maintenance and all four runtime_* endpoints — and pylon
-    -- registers its recommended roles as super_admin only. Without this row the
-    -- page renders a 403 for the section list, which a journey must be able to
-    -- tell apart from an unwired route.
+    -- legacy handler in that set declares — schemas, values, suggestions,
+    -- restart, maintenance and all four runtime_* endpoints — and the legacy
+    -- runtime registers its recommended roles as super_admin only. Without this
+    -- row the page renders a 403 for the section list, which a journey must be
+    -- able to tell apart from an unwired route.
     ('runtime.plugins'),
     -- Unit A14, Service Descriptors. Both routes answer 501 — this platform has
     -- no provider hub — and the gate runs BEFORE the refusal, so without these
@@ -463,11 +487,12 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- would have chromium's "enable, reload, assert enabled" racing webkit's
 -- "assert disabled". There is no per-worker fixture that can partition a
 -- platform-wide table, so the partition is seeded here instead.
--- \`centry.schedule\` has no unique constraint on \`name\` (it is pylon's model,
--- column for column), so \`ON CONFLICT DO NOTHING\` has no conflict to detect and
--- a second seed simply INSERTED the probe rows again. Two identically named rows
--- then made the listing's name button ambiguous and every schedules journey
--- failed Playwright strict mode. CI seeds once and never saw it. Delete first.
+-- \`centry.schedule\` has no unique constraint on \`name\` (it is the legacy
+-- model, column for column), so \`ON CONFLICT DO NOTHING\` has no conflict to
+-- detect and a second seed simply INSERTED the probe rows again. Two
+-- identically named rows then made the listing's name button ambiguous and
+-- every schedules journey failed Playwright strict mode. CI seeds once and
+-- never saw it. Delete first.
 DELETE FROM centry.schedule WHERE name LIKE 'e2e_schedule_probe_%';
 INSERT INTO centry.schedule (name, project_id, cron, active, rpc_func, rpc_kwargs, last_run)
 VALUES
@@ -668,7 +693,7 @@ CROSS JOIN (VALUES
     ('configuration.secrets.secret.create'),
     ('configuration.secrets.secret.delete'),
     -- The project secrets routes are gated in-package on the permission each
-    -- pylon `ProjectAPI` method declares (internal/api/v2/secrets/handler.go).
+    -- legacy `ProjectAPI` method declares (internal/api/v2/secrets/handler.go).
     -- `.unsecret` gates the two routes that return a secret VALUE in plaintext
     -- — the mode-ful GET and the mode-less one elitea-sdk's `unsecret()` calls
     -- — and `.hide` gates POST /secrets/hide/…, which the Secrets page's row
@@ -693,11 +718,11 @@ CROSS JOIN (VALUES
     ('configuration.artifacts.buckets.delete'),
     -- The per-bucket ACCESS LIST routes (`/api/v2/artifacts/bucket_permissions/
     -- {projectID}`) are gated on the two strings the artifacts plugin declares
-    -- for them, which are DISTINCT from the four above: pylon keeps the access
-    -- map inside an `s3_api_credentials` row, so it gates it on that resource.
-    -- Shared migration 0118 grants both centrally; project 1 carries
-    -- per-project rows, which SUPPRESS that central fallback, so they have to
-    -- be listed here as well or the "Manage access" dialog 403s.
+    -- for them, which are DISTINCT from the four above: the legacy runtime
+    -- keeps the access map inside an `s3_api_credentials` row, so it gates it
+    -- on that resource. Shared migration 0118 grants both centrally; project 1
+    -- carries per-project rows, which SUPPRESS that central fallback, so they
+    -- have to be listed here as well or the "Manage access" dialog 403s.
     ('configuration.artifacts.s3_credentials.view'),
     ('configuration.artifacts.s3_credentials.edit'),
     -- #496 gated the whole /api/v2/configurations mount, which until then
@@ -747,7 +772,7 @@ CROSS JOIN (VALUES
     ('admin.moderation.view'),
     ('admin.moderation.create'),
     -- #302/#313: the /elitea_core group no longer enforces membership alone —
-    -- every route now resolves the permission its pylon module declares
+    -- every route now resolves the permission its legacy module declares
     -- (services/elitea-main/internal/api/router.go). This project carries
     -- per-project rows, which SUPPRESSES the central default-mode fallback
     -- that shared/0068 seeds, so each of those strings has to be listed here
@@ -1139,7 +1164,7 @@ CROSS JOIN (VALUES
     ('configurations.configuration.update'),
     ('configurations.configuration.delete'),
     -- #302/#313: the /elitea_core group no longer enforces membership alone —
-    -- every route now resolves the permission its pylon module declares
+    -- every route now resolves the permission its legacy module declares
     -- (services/elitea-main/internal/api/router.go). This project carries
     -- per-project rows, which SUPPRESSES the central default-mode fallback
     -- that shared/0068 seeds, so each of those strings has to be listed here
@@ -1391,7 +1416,7 @@ ON CONFLICT (id) DO NOTHING;
 --                        distinguish and the unsuspend path has a target
 --   e2e-team-active      two project admins besides the owner, so a listing
 --                        that JOINs rather than aggregates emits it twice
---   project_user_90001   PERSONAL by pylon's `project_user_%` rule, so the
+--   project_user_90001   PERSONAL by the legacy `project_user_%` rule, so the
 --                        two tabs return different sets — a client-side tab
 --                        that filtered nothing would show it on both
 --
@@ -1677,9 +1702,9 @@ ON CONFLICT (id) DO NOTHING;
 -- fails its preflight on the rest — a FIRST seed then breaks while a second
 -- one "fixes" it, which is exactly how this was found.
 --
--- In a real deployment pylon provisions `p_<id>` when it creates the project;
--- this seeder is that provisioner's stand-in, so it owes the same schema.
--- elitea-migrate VALIDATES the schema and never creates one
+-- In a real deployment the project provisioner creates `p_<id>` with the
+-- project; this seeder is that provisioner's stand-in, so it owes the same
+-- schema. elitea-migrate VALIDATES the schema and never creates one
 -- (`migrate/runner.go:50`), and its `-all-tenants` preflight ERRORS on any
 -- create_success project that lacks one — so a project row seeded without a
 -- schema does not merely miss migrations, it makes the next `up` fail for the

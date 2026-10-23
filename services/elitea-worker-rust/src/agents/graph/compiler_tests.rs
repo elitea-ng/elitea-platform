@@ -927,7 +927,7 @@ async fn direct_code_dispatch_observes_its_durable_initial_frontier() {
         .unwrap();
     run_graph(graph, sessions, "run code").await;
     let terminal = checkpoints.load(THREAD).await.unwrap().unwrap();
-    assert!(terminal.pending_nodes.is_empty());
+    assert_eq!(terminal.pending_nodes, [] as [String; 0]);
     assert_eq!(terminal.state["count"], 7);
     assert!(definition.recovery_frontier_supported(&["run".into()]));
     assert!(!definition.recovery_frontier_supported(&["missing".into()]));

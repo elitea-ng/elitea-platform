@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/azure"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/gcs"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/s3"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/azure"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/gcs"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage/s3"
 )
 
 // newObjectStore dispatches to the concrete backend constructor named by
@@ -37,6 +37,7 @@ func newObjectStore(ctx context.Context, cfg storage.Config) (storage.ObjectStor
 			ForcePathStyle: cfg.S3.ForcePathStyle,
 			Bucket:         cfg.S3.Bucket,
 			KeyPrefix:      cfg.S3.KeyPrefix,
+			NoPresign:      cfg.S3.NoPresign,
 		})
 	case "azure":
 		store, err = azure.New(ctx, azure.Config{

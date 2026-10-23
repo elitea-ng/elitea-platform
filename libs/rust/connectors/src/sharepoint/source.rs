@@ -1134,8 +1134,8 @@ mod tests {
         assert_eq!(keys(&listed), ["Documents/i1", "Documents/i3"]);
 
         let (listed, transport) = list_with(json!({"limit_files": 0})).await;
-        assert!(listed.is_empty());
-        assert!(transport.seen().is_empty());
+        assert_eq!(listed, []);
+        assert_eq!(transport.seen(), [] as [String; 0]);
 
         let (transport, _) = fixture();
         let error = SharePointSource::new(

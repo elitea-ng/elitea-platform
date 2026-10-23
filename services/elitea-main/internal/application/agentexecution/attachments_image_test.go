@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // #979: an attached IMAGE must reach the model as an `image_url` chunk, not as

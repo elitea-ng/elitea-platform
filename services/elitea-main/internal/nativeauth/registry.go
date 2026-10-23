@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gopkg.in/yaml.v3"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/clientversion"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/clientversion"
 )
 
 // NativeClientsPathEnv names the file layer of the client registry: a JSON or

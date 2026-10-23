@@ -1,0 +1,228 @@
+# DRAFT fixture: etl_job, the root of the Point 5 ETL acceptance (ACCEPTANCE-ETL.md §2, PLAN.md §8.7). Run from chat.
+# Not admitted on main yet: each node that needs unmerged work carries a TODO naming the POINT5-REMAINING.md item
+# that unblocks it. The final versions are rebuilt in the UI for the browser run. Coverage table: ../README.md.
+#
+# Chat input: "<dataset> <run label>", for example "orders 20261019a". The dataset names the uploaded big CSV
+# (orders.csv) and its row-batch folder (orders.batches/). run_id = "<label>-<sha256(dataset)[:16]>" is stable across
+# retries, crashes and reloads, and differs between the two concurrent runs of §4.4 when the labels differ.
+# Child pipelines are saved pipelines called as Application nodes (`type: agent`); each takes JSON text as its task
+# and answers with one JSON text message.
+state:
+  input: {type: str}
+  messages: {type: list}
+  run_id: {type: str}
+  run_request: {type: str}
+  bronze_result: {type: str}
+  silver_result: {type: str}
+  gold_result: {type: str}
+  quality: {type: dict}
+  quality_route: {type: str}
+  quality_summary: {type: str}
+  report_name: {type: str}
+  report_json: {type: str}
+  webhook_payload: {type: dict}
+  publish_results: {type: list}
+  # Typed reducers live in the root: a nested child pipeline refuses them (compiler.rs:1405-1408, decision X3).
+  run_counters: {type: dict, value: {}, reducer: merge}
+  published_artifacts: {type: list, value: [], reducer: append}
+  publications: {type: int, value: 0, reducer: sum_int}
+  answer: {type: str}
+  # node_errors is the platform's 5b channel (typed list, append reducer), read by compose_answer. TODO(1.5).
+entry_point: start_run
+nodes:
+  - id: start_run
+    type: code
+    language: javascript
+    code:
+      type: fixed
+      value: |
+        export default async function run(state) {
+          const parts = state.input.trim().split(/\s+/);
+          if (parts.length !== 2 || !/^[a-z0-9-]{1,64}$/.test(parts[0]) || !/^[A-Za-z0-9-]{1,32}$/.test(parts[1])) {
+            throw new Error('etl.input_invalid: expected "<dataset> <run label>"');
+          }
+          const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(parts[0]));
+          const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+          const runId = `${parts[1]}-${hex.slice(0, 16)}`;
+          return { run_id: runId, run_request: JSON.stringify({ bucket: "etl", customers: "customers.csv",
+            dataset: parts[0], run_id: runId }) };
+        }
+    input: [input]
+    output: [run_id, run_request]
+    transition: bronze_ingest
+
+  # TODO(0.4): a saved pipeline as an Application node needs 2a-1 scoped continuation (pipeline.rs:76).
+  - id: bronze_ingest
+    type: agent
+    tool: bronze_ingest
+    input_mapping:
+      task: {type: variable, value: run_request}
+    output: [bronze_result]
+    transition: silver_clean
+
+  # TODO(0.4): as bronze_ingest. The Map lives inside silver_clean.
+  - id: silver_clean
+    type: agent
+    tool: silver_clean
+    input_mapping:
+      task: {type: variable, value: bronze_result}
+    output: [silver_result]
+    transition: gold_build
+
+  # TODO(0.4): as bronze_ingest. The Parallel load lives inside gold_build.
+  - id: gold_build
+    type: agent
+    tool: gold_build
+    input_mapping:
+      task: {type: variable, value: silver_result}
+    output: [gold_result]
+    transition: assess
+
+  # Overall reject rate above 2 % (manifest quality_gate.limit_ppm) or any reconcile drift goes to the approval HITL;
+  # anything unexpected fails closed to approval.
+  - id: assess
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        silver = json.loads(elitea_state['silver_result'])
+        gold = json.loads(elitea_state['gold_result'])
+        rows, rejected = silver['rows_well_formed'], silver['rejected_rows']
+        reject_ppm = rejected * 1_000_000 // rows if rows else 1_000_000
+        drift = bool(gold.get('drift', True))
+        run_id = gold['run_id']
+        summary = (f"run {run_id}: {silver['valid_rows']} valid of {rows} rows, {rejected} rejected "
+                   f"({reject_ppm / 10_000:.2f} %), reconcile drift: {'yes' if drift else 'no'}")
+        report = {'run_id': run_id, 'reject_ppm': reject_ppm, 'drift': drift, 'rejects': silver['rejects'],
+                  'cleaning': silver['cleaning'], 'gold': gold['totals'],
+                  'rejects_file': silver['rejects_file']}
+        {'quality': report,
+         'quality_route': 'approve_publish' if reject_ppm > 20_000 or drift else 'publish',
+         'quality_summary': summary,
+         'report_name': f'reports/report-{run_id}.json',
+         'report_json': json.dumps(report, sort_keys=True),
+         'webhook_payload': {'run_id': run_id, 'status': 'published', 'valid_rows': silver['valid_rows'],
+                             'rejected_rows': rejected, 'net_amount_usd': gold['totals']['net_amount_usd']}}
+    input: [silver_result, gold_result]
+    output: [quality, quality_route, quality_summary, report_name, report_json, webhook_payload]
+    transition: record_counts
+
+  # State modifier into a merge reducer: the per-expectation reject counts of this run.
+  # TODO(2.4): confirm a state_modifier template rendered as JSON lands as a dict in a dict channel.
+  - id: record_counts
+    type: state_modifier
+    template: "{{ quality.rejects | tojson }}"
+    input: [quality]
+    output: [run_counters]
+    transition: quality_gate
+
+  - id: quality_gate
+    type: router
+    condition: "{{ quality_route }}"
+    routes: [approve_publish, publish]
+    default_output: approve_publish
+    input: [quality_route]
+
+  - id: approve_publish
+    type: hitl
+    input: [quality_summary]
+    user_message:
+      type: fstring
+      value: "Data quality needs a data steward's approval before publication: {quality_summary}"
+    routes:
+      approve: publish
+      reject: publication_rejected
+
+  - id: publication_rejected
+    type: state_modifier
+    template: "Publication rejected by the data steward. {{ quality_summary }}"
+    input: [quality_summary]
+    output: [answer]
+    transition: print_answer
+
+  # Publish: the report and the notification are independent.
+  # TODO(0.8): Parallel admitted (FIXED_PARALLEL_INTEGRATION_READY, parallel_compiler.rs:33).
+  # TODO(1.14): non-Agent branches (a Toolkit node and an HTTP node; parallel_compiler.rs:252-291 is Agent-only).
+  # TODO(1.15): an HTTP node as a Parallel branch (5d-3).
+  - id: publish
+    type: parallel
+    branches:
+      - id: report
+        node: write_report
+      - id: notify
+        node: send_webhook
+    max_concurrency: 2
+    wait: all
+    error_policy: fail_after_drain
+    output: [publish_results]
+    transition: record_publication
+
+  # State modifiers into append and sum_int reducers.
+  - id: record_publication
+    type: state_modifier
+    template: "{{ report_name }}"
+    input: [report_name]
+    output: [published_artifacts]
+    transition: count_publication
+
+  - id: count_publication
+    type: state_modifier
+    template: "1"
+    output: [publications]
+    transition: compose_answer
+
+  # report-<run>.json through the artifact toolkit (Code nodes have no artifact write on Main yet). Effectful
+  # direct toolkit call: journaled, never repeated without a receipt (direct-tool effects, #1159).
+  - id: write_report
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: create_file
+    input_mapping:
+      filename: {type: variable, value: report_name}
+      filedata: {type: variable, value: report_json}
+    input: [report_name, report_json]
+    output: [output]
+
+  # Completion webhook, exactly once per run_id: the idempotency key is the run_id. The rule (admin) names the
+  # method, the mock's base URL and the credential by reference; see ../README.md "Admin rules".
+  # TODO(1.9): HTTP node admitted (5d-2). TODO(1.5): 5b settings (execute_once, timeout_ms, on_error).
+  # §8.7 failures as results: on_error continue puts a typed entry in node_errors (compose_answer reads it) and
+  # always_output_data gives `output` its neutral value.
+  - id: send_webhook
+    type: http
+    revision: 2
+    operation: etl_webhook.complete
+    request:
+      body: {kind: json, from: webhook_payload}
+      idempotency_key: {from: run_id}
+    response: {mode: json, accepted_statuses: [{first: 200, last: 201}], max_bytes: 65536}
+    settings:
+      execute_once: true
+      timeout_ms: 10000
+      on_error: continue
+      always_output_data: true
+    input: [webhook_payload, run_id]
+    output: [output]
+
+  - id: compose_answer
+    type: llm
+    input_mapping:
+      system:
+        type: fixed
+        value: >-
+          You summarise a finished ETL run for a data team in at most four sentences. Use only the numbers given.
+          If node_errors is not empty, say which step failed, its error code, and whether it is retryable.
+      task:
+        type: fstring
+        value: "Run: {quality_summary}. Gold totals: {quality}. Published: {publish_results}. node_errors: {node_errors}"
+    input: [quality_summary, quality, publish_results, node_errors]
+    output: [answer]
+    transition: print_answer
+
+  - id: print_answer
+    type: printer
+    input_mapping:
+      printer: {type: variable, value: answer}
+    transition: END

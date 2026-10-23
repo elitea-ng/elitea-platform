@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
-	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
+	subappv1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -27,21 +29,26 @@ import (
 // transport AGENTS.md prescribes for internal service-to-service calls (gRPC
 // over mTLS).
 //
-// It listens on a port of its own, behind the same TLS configuration as the
-// SPI's listener (the server certificate, and the client CA with
-// RequireAndVerifyClientCert), and every call is authorised by ONE thing: the
+// It is served on the host's one gRPC listener beside the provider service
+// (grpc.go), behind the server certificate and the client CA with
+// RequireAndVerifyClientCert, and every call is authorised by ONE thing: the
 // verified mutual-TLS client certificate of the platform's own service
-// (elitea-main), matched against the allowlist <PREFIX>PLATFORM_CLIENTS. With
-// an empty allowlist the service is not served at all.
+// (elitea-main), matched against the allowlist <PREFIX>PLATFORM_CLIENTS.
 //
 // What does NOT authorise it: an identity signature (the facade signs one for
 // every user call, and "a signed hop with no user id" is not proof of
-// anything), request metadata, or a request field. The SPI's HTTP listener
-// carries user traffic only and has no route for these operations.
+// anything), request metadata, or a request field. The provider service has
+// no method for these operations.
 
-// DefaultPlatformGRPCAddr is where the service listens when
-// <PREFIX>PLATFORM_CLIENTS is set and <PREFIX>PLATFORM_GRPC_ADDR is not.
+// DefaultPlatformGRPCAddr is where the host's gRPC listener (the provider
+// service and the platform operations) listens when
+// <PREFIX>PLATFORM_GRPC_ADDR is not set.
 const DefaultPlatformGRPCAddr = ":9443"
+
+// MaxConnectionAge is how long a client connection to the gRPC listener
+// lives before the server sends GOAWAY and the client opens a new one
+// (newAuthorizedGRPCServer).
+const MaxConnectionAge = time.Minute
 
 // Failures a platform operation reports as such, so the transport can give
 // the caller a code it can act on.
@@ -231,36 +238,89 @@ type toolkitService struct {
 	toolkits ToolkitOps
 }
 
-// NewPlatformGRPCServer is the platform service over tlsConfig, which must
-// require and verify client certificates (the SPI listener's own
-// configuration), authorising every call by the verified client certificate
+// NewGRPCServer is the host's one gRPC listener: the provider service
+// (grpc.go) and, when the runner has any, the platform operations — both
+// over tlsConfig, which must require and verify client certificates, and
+// both behind one authorisation: the verified client certificate, matched
 // against clients. It refuses to build with no clients or a configuration
 // that would accept a call without a certificate.
+func NewGRPCServer(server *Server, clients []string, tlsConfig *tls.Config, logger *slog.Logger) (*grpc.Server, error) {
+	if server == nil {
+		return nil, fmt.Errorf("%w: %w", ErrConfig, errNoServer)
+	}
+	if logger == nil {
+		logger = server.logger
+	}
+	grpcServer, err := newAuthorizedGRPCServer(clients, tlsConfig, logger,
+		// An invoke body (MaxInvokeBytes) plus the message's own framing.
+		MaxInvokeBytes+64<<10)
+	if err != nil {
+		return nil, err
+	}
+	subappv1.RegisterProviderServiceServer(grpcServer, &providerService{server: server})
+	if ops, ok := server.PlatformOps(); ok {
+		registerPlatform(grpcServer, ops, logger)
+	}
+	return grpcServer, nil
+}
+
+// NewPlatformGRPCServer is the platform operations alone over tlsConfig,
+// authorised as NewGRPCServer authorises: for a runner tested without a host.
 func NewPlatformGRPCServer(ops PlatformOps, clients []string, tlsConfig *tls.Config, logger *slog.Logger) (*grpc.Server, error) {
-	switch {
-	case ops == nil:
+	if ops == nil {
 		return nil, fmt.Errorf("%w: the runner has no platform operations to serve", ErrConfig)
-	case len(clients) == 0:
-		return nil, fmt.Errorf("%w: the platform service needs an allowlist of client certificate identities", ErrConfig)
-	case tlsConfig == nil || tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || tlsConfig.ClientCAs == nil:
-		return nil, fmt.Errorf("%w: the platform service needs a TLS configuration that requires and verifies client certificates (set the TLS certificate, key and client CA files)", ErrConfig)
 	}
 	if logger == nil {
 		logger = slog.Default()
+	}
+	// A request is a project id and a toolkit id; nothing legitimate is larger.
+	server, err := newAuthorizedGRPCServer(clients, tlsConfig, logger, 4096)
+	if err != nil {
+		return nil, err
+	}
+	registerPlatform(server, ops, logger)
+	return server, nil
+}
+
+func registerPlatform(server *grpc.Server, ops PlatformOps, logger *slog.Logger) {
+	base := &platformService{ops: ops, logger: logger}
+	if toolkits, ok := ops.(ToolkitOps); ok {
+		subappv1.RegisterPlatformOperationsServer(server, &toolkitService{platformService: base, toolkits: toolkits})
+	} else {
+		subappv1.RegisterPlatformOperationsServer(server, base)
+	}
+}
+
+// newAuthorizedGRPCServer is a gRPC server over tlsConfig whose every call,
+// unary or streaming, is authorised by the verified client certificate
+// against clients before any handler runs.
+func newAuthorizedGRPCServer(clients []string, tlsConfig *tls.Config, logger *slog.Logger, maxRecv int) (*grpc.Server, error) {
+	switch {
+	case len(clients) == 0:
+		return nil, fmt.Errorf("%w: the gRPC listener needs an allowlist of client certificate identities (PLATFORM_CLIENTS)", ErrConfig)
+	case tlsConfig == nil || tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || tlsConfig.ClientCAs == nil:
+		return nil, fmt.Errorf("%w: the gRPC listener needs a TLS configuration that requires and verifies client certificates (set the TLS certificate, key and client CA files)", ErrConfig)
 	}
 	allowed := append([]string(nil), clients...)
 	authorize := func(ctx context.Context, method string) (context.Context, error) {
 		caller, err := VerifiedPeerIdentity(ctx, allowed)
 		if err != nil {
-			logger.Warn("refusing a platform operation", "method", method, "code", status.Code(err).String())
+			logger.Warn("refusing a call", "method", method, "code", status.Code(err).String())
 			return nil, err
 		}
 		return context.WithValue(ctx, platformCaller{}, caller), nil
 	}
-	server := grpc.NewServer(
+	return grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(tlsConfig)),
-		// A request is a project id and a toolkit id; nothing legitimate is larger.
-		grpc.MaxRecvMsgSize(4096),
+		grpc.MaxRecvMsgSize(maxRecv),
+		// elitea-main reaches the host through its Service on one HTTP/2
+		// connection, which stays on the replica it first landed on whatever
+		// that replica's readiness says. The age makes the client reconnect,
+		// and a reconnect goes to a ready replica, so one that lost its owner
+		// claim (#1359) stops receiving work within the age. The grace is
+		// unlimited (grpc-go's default): a call still running on the old
+		// connection finishes.
+		grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionAge: MaxConnectionAge}),
 		grpc.ChainUnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			ctx, err := authorize(ctx, info.FullMethod)
 			if err != nil {
@@ -269,21 +329,12 @@ func NewPlatformGRPCServer(ops PlatformOps, clients []string, tlsConfig *tls.Con
 			return handler(ctx, request)
 		}),
 		grpc.ChainStreamInterceptor(func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-			// The service has no streaming method; an authorised caller
-			// gets the same Unimplemented the framework would answer.
 			if _, err := authorize(stream.Context(), info.FullMethod); err != nil {
 				return err
 			}
 			return handler(srv, stream)
 		}),
-	)
-	base := &platformService{ops: ops, logger: logger}
-	if toolkits, ok := ops.(ToolkitOps); ok {
-		subappv1.RegisterPlatformOperationsServer(server, &toolkitService{platformService: base, toolkits: toolkits})
-	} else {
-		subappv1.RegisterPlatformOperationsServer(server, base)
-	}
-	return server, nil
+	), nil
 }
 
 func (p *platformService) DeleteProject(ctx context.Context, request *subappv1.DeleteProjectRequest) (*subappv1.DeleteProjectResponse, error) {

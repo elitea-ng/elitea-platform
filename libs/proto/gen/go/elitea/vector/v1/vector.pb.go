@@ -28,8 +28,14 @@
 // the token's project is refused with PERMISSION_DENIED. An administrator
 // caller must set it.
 //
-// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space,
-// named `emb_<model_slug>_<dimension>`. Points carry the payload keys
+// LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space
+// and collection family. The shared family (toolkit indexes, DeepWiki,
+// memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
+// int8 quantized copy, plus a BM25 sparse vector. The Inventory family is
+// `inv_<model_slug>_<dimension>`: float32 dense vectors, no quantization, no
+// BM25 (HybridSearch is refused for it), searched by an exact scan, so its
+// scores are the exact cosine similarities. A source's points are only ever
+// in its own family's collections. Points carry the payload keys
 // `project_id`, `source`, `namespace_id`, `generation` (optional),
 // `document_key`, `document_version`, `parent_id`, `chunk_id`, `chunk_type`,
 // `acl`, `text` and `metadata`. A point id is UUIDv5, under namespace_id, of
@@ -63,7 +69,9 @@ const (
 	Source_SOURCE_TOOLKIT_INDEX Source = 1
 	// A DeepWiki wiki; namespace_id is UUIDv5 of (project, wiki id).
 	Source_SOURCE_DEEPWIKI Source = 2
-	// Reserved for Inventory (ADR-0031 decision 7). Refused in V0.
+	// Inventory (ADR-0031 decision 7): entity embeddings, kept in their own
+	// float32 collections `inv_<model_slug>_<dimension>` (see LAYOUT).
+	// HybridSearch is refused for it (INVALID_ARGUMENT).
 	Source_SOURCE_INVENTORY Source = 3
 	// The memory toolkit (elitea.vector.v1 MemoryScope). Not an index: it is
 	// never listed by ListIndexes. namespace_id is a hash of the toolkit's
@@ -121,7 +129,7 @@ func (Source) EnumDescriptor() ([]byte, []int) {
 // SOURCE_MEMORY and refused for every other source.
 //
 //	PERSONAL: the memories of the user the token was minted for (the
-//	          principal "user:<id>"). Refused for a token that names no user
+//	          principal `user:<id>`). Refused for a token that names no user
 //	          and for a token whose claim runs in a conversation with more
 //	          than one person (TokenIntrospection personal_memory_allowed).
 //	PROJECT:  the memories shared by every user of the token's project.
@@ -178,7 +186,8 @@ func (MemoryScope) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{1}
 }
 
-// EmbeddingSpace selects the collection `emb_<model_slug>_<dimension>`.
+// EmbeddingSpace selects the collection `<family prefix><model_slug>_<dimension>`
+// (see LAYOUT): the source names the family.
 type EmbeddingSpace struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// model_slug matches ^[a-z0-9][a-z0-9-]{0,62}$. The caller makes the slug
@@ -1903,12 +1912,23 @@ type SearchRequest struct {
 	// vector has exactly the collection's dimension.
 	Vector []float32 `protobuf:"fixed32,3,rep,packed,name=vector,proto3" json:"vector,omitempty"`
 	Filter *Filter   `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
-	// limit is 1 to 1000.
+	// limit is 1 to 1000; 1 to 10000 for an exactly searched family
+	// (Inventory), whose caller reads a whole ranking in one call (one exact
+	// scan) rather than page by page (one scan per page).
 	Limit uint32 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
 	// score_threshold, when set, drops results with a lower cosine similarity.
 	ScoreThreshold *float32 `protobuf:"fixed32,6,opt,name=score_threshold,json=scoreThreshold,proto3,oneof" json:"score_threshold,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// offset skips that many results of the ranking before the first one
+	// returned: a page. offset + limit is at most 10000.
+	//
+	// The ranking is by score, highest first, and equal scores by point id
+	// (ascending text form), so consecutive pages over unchanged points are
+	// disjoint and together are the ranking's prefix. For an exactly searched
+	// family (Inventory) the ranking is the exact cosine ranking; for the
+	// others it is the HNSW walk's, which can miss a point.
+	Offset        uint32 `protobuf:"varint,7,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchRequest) Reset() {
@@ -1979,6 +1999,13 @@ func (x *SearchRequest) GetLimit() uint32 {
 func (x *SearchRequest) GetScoreThreshold() float32 {
 	if x != nil && x.ScoreThreshold != nil {
 		return *x.ScoreThreshold
+	}
+	return 0
+}
+
+func (x *SearchRequest) GetOffset() uint32 {
+	if x != nil {
+		return x.Offset
 	}
 	return 0
 }
@@ -3236,14 +3263,15 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\rmetadata_json\x18\x0e \x01(\tR\fmetadataJson\x12$\n" +
 	"\vdense_score\x18\x0f \x01(\x02H\x00R\n" +
 	"denseScore\x88\x01\x01B\x0e\n" +
-	"\f_dense_score\"\x98\x02\n" +
+	"\f_dense_score\"\xb0\x02\n" +
 	"\rSearchRequest\x12-\n" +
 	"\x05scope\x18\x01 \x01(\v2\x17.elitea.vector.v1.ScopeR\x05scope\x126\n" +
 	"\x05space\x18\x02 \x01(\v2 .elitea.vector.v1.EmbeddingSpaceR\x05space\x12\x16\n" +
 	"\x06vector\x18\x03 \x03(\x02R\x06vector\x120\n" +
 	"\x06filter\x18\x04 \x01(\v2\x18.elitea.vector.v1.FilterR\x06filter\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\rR\x05limit\x12,\n" +
-	"\x0fscore_threshold\x18\x06 \x01(\x02H\x00R\x0escoreThreshold\x88\x01\x01B\x12\n" +
+	"\x0fscore_threshold\x18\x06 \x01(\x02H\x00R\x0escoreThreshold\x88\x01\x01\x12\x16\n" +
+	"\x06offset\x18\a \x01(\rR\x06offsetB\x12\n" +
 	"\x10_score_threshold\"G\n" +
 	"\x0eSearchResponse\x125\n" +
 	"\x06points\x18\x01 \x03(\v2\x1d.elitea.vector.v1.ScoredPointR\x06points\"\x9d\x03\n" +
@@ -3347,7 +3375,7 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"ReadMemory\x12#.elitea.vector.v1.ReadMemoryRequest\x1a$.elitea.vector.v1.ReadMemoryResponse\x12l\n" +
 	"\x11SetMemoryMetadata\x12*.elitea.vector.v1.SetMemoryMetadataRequest\x1a+.elitea.vector.v1.SetMemoryMetadataResponse\x12i\n" +
 	"\x10DeleteMemoryUser\x12).elitea.vector.v1.DeleteMemoryUserRequest\x1a*.elitea.vector.v1.DeleteMemoryUserResponse\x12r\n" +
-	"\x13DeleteMemoryToolkit\x12,.elitea.vector.v1.DeleteMemoryToolkitRequest\x1a-.elitea.vector.v1.DeleteMemoryToolkitResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
+	"\x13DeleteMemoryToolkit\x12,.elitea.vector.v1.DeleteMemoryToolkitRequest\x1a-.elitea.vector.v1.DeleteMemoryToolkitResponseBRZPgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 
 var (
 	file_elitea_vector_v1_vector_proto_rawDescOnce sync.Once

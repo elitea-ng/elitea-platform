@@ -4,22 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/go-chi/chi/v5"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/grpc/codes"
+
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,10 +60,17 @@ func TestContentServerRequiresVerifiedMTLSAndClaimFence(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	request := httptest.NewRequest(http.MethodGet, "/executions/e1/generations/1/inputs/settings/versions/v1", nil)
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	// A verified peer without the claim metadata, and a call with no peer.
+	for _, ctx := range []context.Context{contentPeerContext(context.Background(), nil), context.Background()} {
+		_, _, err = collectInput(server, ctx, &runtimev1.GetInputRequestV1{Scope: contentScope("e1", 1), ContentId: "settings", ImmutableVersion: "v1"})
+		requireContentCode(t, err, codes.Unauthenticated)
+	}
+	// A short fence is not a claim.
+	_, _, err = collectInput(server, contentClaimContext(context.Background(), nil, "claim-1", []byte{1}), validInputRequest())
+	requireContentCode(t, err, codes.Unauthenticated)
+	// Generation zero is not a claim.
+	_, _, err = collectInput(server, validContentContext(), &runtimev1.GetInputRequestV1{Scope: contentScope("e1", 0), ContentId: "settings", ImmutableVersion: "v1"})
+	requireContentCode(t, err, codes.Unauthenticated)
 }
 
 func TestContentServerReturnsOnlyAuthorizedVerifiedBytes(t *testing.T) {
@@ -105,21 +110,59 @@ func TestContentServerReturnsOnlyAuthorizedVerifiedBytes(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	request := httptest.NewRequest(http.MethodGet, "/executions/execution-1/generations/1/inputs/settings/versions/v1", nil)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
+	header, body, err := collectInput(server, contentClaimContext(context.Background(), certificate, "claim-1", fence), validInputRequest())
+	require.NoError(t, err)
+	require.Equal(t, data, body)
+	require.Equal(t, executiondomain.AgentExecutionInputMediaType, header.GetMediaType())
+	require.EqualValues(t, len(data), header.GetLength())
+	require.Equal(t, digest[:], header.GetSha256())
+	require.Equal(t, header.GetSha256(), header.GetSourceSha256())
+	require.Equal(t, "v1", header.GetSourceImmutableVersion())
+	require.EqualValues(t, 2, header.GetSourceLength())
+}
 
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, data, response.Body.Bytes())
-	require.Equal(t, executiondomain.AgentExecutionInputMediaType, response.Header().Get("Content-Type"))
-	require.Equal(t, "private, no-store", response.Header().Get("Cache-Control"))
-	require.NotEmpty(t, response.Header().Get("Content-Digest"))
-	require.Equal(t, response.Header().Get("Content-Digest"), response.Header().Get(SourceContentDigestHeader))
-	require.Equal(t, "v1", response.Header().Get(SourceImmutableVersionHeader))
-	require.Equal(t, "2", response.Header().Get(SourceContentLengthHeader))
+func TestContentServerStreamsLargeInputInBoundedChunks(t *testing.T) {
+	t.Parallel()
+
+	data := bytes.Repeat([]byte{'x'}, 3*contentChunkBytes+17)
+	digest := sha256.Sum256(data)
+	server, err := NewContentServer(
+		contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
+			return ContentAuthorization{
+				ResourceProjectID: "42", ActorID: "17", InputBundleID: "bundle-1",
+				CapabilityID: executiondomain.ConfigurationValidationCapability, SemanticRole: "configuration.settings",
+				ExpectedMediaType: "application/json", ExpectedDigest: digest, ExpectedLength: int64(len(data)),
+			}, nil
+		}),
+		contentStoreFunc(func(context.Context, string, string, string, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}),
+		0,
+	)
+	require.NoError(t, err)
+
+	stream := newRecordingServerStream[runtimev1.GetInputResponseV1](validContentContext())
+	require.NoError(t, server.GetInput(validInputRequest(), stream))
+	require.Len(t, stream.sent, 5)
+	require.NotNil(t, stream.sent[0].GetHeader())
+	var body []byte
+	for _, message := range stream.sent[1:] {
+		require.Nil(t, message.GetHeader())
+		require.LessOrEqual(t, len(message.GetChunk()), contentChunkBytes)
+		body = append(body, message.GetChunk()...)
+	}
+	require.Equal(t, data, body)
+
+	// A cancelled stream ends the call with the send error; nothing more is sent.
+	cancelled := newRecordingServerStream[runtimev1.GetInputResponseV1](validContentContext())
+	cancelled.sendErr = func(sent int) error {
+		if sent == 2 {
+			return context.Canceled
+		}
+		return nil
+	}
+	require.ErrorIs(t, server.GetInput(validInputRequest(), cancelled), context.Canceled)
+	require.Len(t, cancelled.sent, 2)
 }
 
 func TestContentServerDecodesEscapedClaimPathParts(t *testing.T) {
@@ -158,33 +201,39 @@ func TestContentServerDecodesEscapedClaimPathParts(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	request := httptest.NewRequest(
-		http.MethodGet,
-		"/executions/execution%3Aone/generations/1/inputs/settings%3Aid/versions/sha256%3A"+strings.Repeat("a", 64),
-		nil,
-	)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(fence))
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
-
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, data, response.Body.Bytes())
-	require.Equal(t, immutableVersion, response.Header().Get(SourceImmutableVersionHeader))
+	header, body, err := collectInput(server, contentClaimContext(context.Background(), certificate, "claim-1", fence), &runtimev1.GetInputRequestV1{
+		Scope:            contentScope("execution:one", 1),
+		ContentId:        "settings:id",
+		ImmutableVersion: immutableVersion,
+	})
+	require.NoError(t, err)
+	require.Equal(t, data, body)
+	require.Equal(t, immutableVersion, header.GetSourceImmutableVersion())
 }
 
-func TestClaimPathPartRejectsMalformedOrNULValue(t *testing.T) {
+func TestContentClaimPartsRejectNULOrUnboundedValues(t *testing.T) {
 	t.Parallel()
 
-	for _, value := range []string{"sha256%ZZ", "sha256%00value"} {
-		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		routeContext := chi.NewRouteContext()
-		routeContext.URLParams.Add("version", value)
-		request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
-
-		_, err := claimPathPart(request, "version")
-		require.ErrorIs(t, err, ErrContentUnauthorized)
+	server, err := NewContentServer(
+		contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
+			t.Fatal("a malformed claim part must not reach authorization")
+			return ContentAuthorization{}, nil
+		}),
+		contentStoreFunc(func(context.Context, string, string, string, string) (io.ReadCloser, error) {
+			t.Fatal("store must not be called")
+			return nil, nil
+		}),
+		0,
+	)
+	require.NoError(t, err)
+	for _, request := range []*runtimev1.GetInputRequestV1{
+		{Scope: contentScope("execution-1", 1), ContentId: "settings", ImmutableVersion: "sha256\x00value"},
+		{Scope: contentScope("execution-1", 1), ContentId: "settings", ImmutableVersion: ""},
+		{Scope: contentScope("execution\x00one", 1), ContentId: "settings", ImmutableVersion: "v1"},
+		{Scope: contentScope("execution-1", 1), ContentId: strings.Repeat("a", 4096), ImmutableVersion: "v1"},
+	} {
+		_, _, err := collectInput(server, validContentContext(), request)
+		requireContentCode(t, err, codes.Unauthenticated)
 	}
 }
 
@@ -212,11 +261,9 @@ func TestContentServerDoesNotReleaseWrongDigest(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	request := validContentRequest(t)
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
-	require.Equal(t, http.StatusInternalServerError, response.Code)
-	require.NotEqual(t, data, response.Body.Bytes())
+	stream := newRecordingServerStream[runtimev1.GetInputResponseV1](validContentContext())
+	requireContentCode(t, server.GetInput(validInputRequest(), stream), codes.Internal)
+	require.Empty(t, stream.sent, "no header or byte may precede the digest check")
 }
 
 func TestContentServerHidesAuthorizationFailure(t *testing.T) {
@@ -234,11 +281,9 @@ func TestContentServerHidesAuthorizationFailure(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	request := validContentRequest(t)
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
-	require.Equal(t, http.StatusForbidden, response.Code)
-	require.NotContains(t, response.Body.String(), "sensitive")
+	_, _, err = collectInput(server, validContentContext(), validInputRequest())
+	requireContentCode(t, err, codes.PermissionDenied)
+	require.NotContains(t, err.Error(), "sensitive")
 }
 
 func TestContentServerRejectsOverLimitBeforeOpeningContent(t *testing.T) {
@@ -265,10 +310,8 @@ func TestContentServerRejectsOverLimitBeforeOpeningContent(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	request := validContentRequest(t)
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
-	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+	_, _, err = collectInput(server, validContentContext(), validInputRequest())
+	requireContentCode(t, err, codes.ResourceExhausted)
 }
 
 func TestContentServerRejectsMultiplexedWorkBeyondRequestCapacity(t *testing.T) {
@@ -290,10 +333,8 @@ func TestContentServerRejectsMultiplexedWorkBeyondRequestCapacity(t *testing.T) 
 	server.requests <- struct{}{}
 	defer func() { <-server.requests }()
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, validContentRequest(t))
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
-	require.Equal(t, "1", response.Header().Get("Retry-After"))
+	_, _, err = collectInput(server, validContentContext(), validInputRequest())
+	requireContentCode(t, err, codes.Unavailable)
 }
 
 func TestMaterializingRuntimeContentServerComposesBothBoundedPaths(t *testing.T) {
@@ -342,28 +383,24 @@ func TestMaterializingRuntimeContentServerComposesBothBoundedPaths(t *testing.T)
 	require.Same(t, runtimeToken, server.runtimeToken)
 	require.Equal(t, 1, cap(server.requests))
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, validContentRequest(t))
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, expanded, response.Body.Bytes())
+	header, body, err := collectInput(server, validContentContext(), validInputRequest())
+	require.NoError(t, err)
+	require.Equal(t, expanded, body)
+	expandedDigest := sha256.Sum256(expanded)
+	require.Equal(t, expandedDigest[:], header.GetSha256())
+	require.Equal(t, digest[:], header.GetSourceSha256())
+	require.EqualValues(t, len(source), header.GetSourceLength())
 	require.Equal(t, 1, materializerCalls)
 
-	runtimeRequest := httptest.NewRequest(
-		http.MethodPost,
-		"/executions/execution-1/generations/1/runtime-context/elitea-client-token",
-		nil,
-	)
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, runtimeRequest)
-	require.Equal(t, http.StatusUnauthorized, response.Code)
+	tokenRequest := &runtimev1.GetEliteaClientTokenRequestV1{Scope: contentScope("execution-1", 1)}
+	_, err = server.GetEliteaClientToken(contentPeerContext(context.Background(), nil), tokenRequest)
+	requireContentCode(t, err, codes.Unauthenticated)
 
 	server.requests <- struct{}{}
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, validContentRequest(t))
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, runtimeRequest)
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	_, _, err = collectInput(server, validContentContext(), validInputRequest())
+	requireContentCode(t, err, codes.Unavailable)
+	_, err = server.GetEliteaClientToken(validContentContext(), tokenRequest)
+	requireContentCode(t, err, codes.Unavailable)
 	<-server.requests
 }
 
@@ -400,13 +437,13 @@ func TestMaterializingContentFailureLogsStatusWithoutPrivateValues(t *testing.T)
 	t.Parallel()
 
 	for _, test := range []struct {
-		name   string
-		cause  error
-		status int
-		stage  string
+		name  string
+		cause error
+		code  codes.Code
+		stage string
 	}{
-		{"rejected", ErrContentRejected, http.StatusUnprocessableEntity, "unknown"},
-		{"unavailable", runtimeContextUnavailable(runtimeContextStageActorPATIssuance), http.StatusServiceUnavailable, runtimeContextStageActorPATIssuance},
+		{"rejected", ErrContentRejected, codes.FailedPrecondition, "unknown"},
+		{"unavailable", runtimeContextUnavailable(runtimeContextStageActorPATIssuance), codes.Unavailable, runtimeContextStageActorPATIssuance},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const privateValue = "private-input-and-credential-canary"
@@ -435,13 +472,10 @@ func TestMaterializingContentFailureLogsStatusWithoutPrivateValues(t *testing.T)
 			require.NoError(t, err)
 			var logs bytes.Buffer
 			server.logger = slog.New(slog.NewJSONHandler(&logs, nil))
-			request := validContentRequest(t)
-			request.Header.Set("Authorization", "Bearer "+privateValue)
-			response := httptest.NewRecorder()
-			server.Routes().ServeHTTP(response, request)
+			_, _, err = collectInput(server, validContentContext(), validInputRequest())
 
-			require.Equal(t, test.status, response.Code)
-			require.Equal(t, http.StatusText(test.status)+"\n", response.Body.String())
+			requireContentCode(t, err, test.code)
+			require.NotContains(t, err.Error(), privateValue)
 			require.NotContains(t, logs.String(), privateValue)
 			var record map[string]any
 			require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
@@ -449,45 +483,70 @@ func TestMaterializingContentFailureLogsStatusWithoutPrivateValues(t *testing.T)
 			require.Equal(t, "execution-1", record["execution_id"])
 			require.Equal(t, float64(1), record["generation"])
 			require.Equal(t, "materialization", record["boundary"])
-			require.Equal(t, float64(test.status), record["status"])
+			require.Equal(t, test.code.String(), record["code"])
 			require.Equal(t, test.stage, record["stage"])
 		})
 	}
 }
 
-func TestPrivateContentListenerDoesNotExposePublicLLMFacade(t *testing.T) {
+func TestContentServerLeavesUncomposedRPCsUnimplemented(t *testing.T) {
 	t.Parallel()
 
-	server, err := NewRuntimeContentServerWithLimits(
+	server, err := NewContentServer(
 		contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
-			t.Fatal("unknown private-listener route must not authorize content")
+			t.Fatal("an uncomposed RPC must not authorize content")
 			return ContentAuthorization{}, nil
 		}),
 		contentStoreFunc(func(context.Context, string, string, string, string) (io.ReadCloser, error) {
-			t.Fatal("unknown private-listener route must not open content")
+			t.Fatal("an uncomposed RPC must not open content")
 			return nil, nil
 		}),
-		&EliteaClientTokenService{},
-		1024,
-		1,
+		0,
 	)
 	require.NoError(t, err)
+	ctx := validContentContext()
+	scope := contentScope("execution-1", 1)
 
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(
-		response,
-		httptest.NewRequest(http.MethodPost, "/llm/v1/embeddings", strings.NewReader(`{"model":"embed"}`)),
-	)
-	require.Equal(t, http.StatusNotFound, response.Code)
+	_, err = server.GetEliteaClientToken(ctx, &runtimev1.GetEliteaClientTokenRequestV1{Scope: scope})
+	requireContentCode(t, err, codes.Unimplemented)
+	_, err = server.GetApplicationVersion(ctx, &runtimev1.GetApplicationVersionRequestV1{Scope: scope, ApplicationId: 1, VersionId: 1})
+	requireContentCode(t, err, codes.Unimplemented)
+	_, err = server.GetAttachmentObject(ctx, &runtimev1.GetAttachmentObjectRequestV1{Scope: scope, Bucket: "b", Name: "n"})
+	requireContentCode(t, err, codes.Unimplemented)
+	_, err = server.WriteSkill(ctx, &runtimev1.WriteSkillRequestV1{Scope: scope, RequestJson: []byte(`{}`)})
+	requireContentCode(t, err, codes.Unimplemented)
+	_, err = server.ListArtifacts(ctx, &runtimev1.ListArtifactsRequestV1{Scope: scope, RequestJson: []byte(`{}`)})
+	requireContentCode(t, err, codes.Unimplemented)
+	_, err = server.PutToolkitDiscoveryResult(ctx, &runtimev1.PutToolkitDiscoveryResultRequestV1{Scope: scope, ContentId: "settings", ImmutableVersion: "v1", ResultJson: []byte(`{}`)})
+	requireContentCode(t, err, codes.Unimplemented)
 }
 
-func validContentRequest(t *testing.T) *http.Request {
-	t.Helper()
-	request := httptest.NewRequest(http.MethodGet, "/executions/execution-1/generations/1/inputs/settings/versions/v1", nil)
-	request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
-	request.Header.Set(claimIDHeader, "claim-1")
-	request.Header.Set(fenceHeader, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, sha256.Size)))
-	return request
+// collectInput runs one GetInput call and reassembles its header and chunks,
+// refusing a stream that is not exactly one header followed by chunks.
+func collectInput(server *ContentServer, ctx context.Context, request *runtimev1.GetInputRequestV1) (*runtimev1.InputContentHeaderV1, []byte, error) {
+	stream := newRecordingServerStream[runtimev1.GetInputResponseV1](ctx)
+	if err := server.GetInput(request, stream); err != nil {
+		return nil, nil, err
+	}
+	if len(stream.sent) == 0 || stream.sent[0].GetHeader() == nil {
+		return nil, nil, errors.New("stream did not start with a header")
+	}
+	var body []byte
+	for _, message := range stream.sent[1:] {
+		if message.GetHeader() != nil {
+			return nil, nil, errors.New("second header")
+		}
+		body = append(body, message.GetChunk()...)
+	}
+	return stream.sent[0].GetHeader(), body, nil
+}
+
+func validInputRequest() *runtimev1.GetInputRequestV1 {
+	return &runtimev1.GetInputRequestV1{Scope: contentScope("execution-1", 1), ContentId: "settings", ImmutableVersion: "v1"}
+}
+
+func validContentContext() context.Context {
+	return contentClaimContext(context.Background(), nil, "claim-1", bytes.Repeat([]byte{1}, sha256.Size))
 }
 
 func TestWorkloadIdentityRequiresOneUnambiguousVerifiedSAN(t *testing.T) {

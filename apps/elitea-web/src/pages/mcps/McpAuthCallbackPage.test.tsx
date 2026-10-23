@@ -80,7 +80,9 @@ describe('McpAuthCallbackPage', () => {
       { type: 'mcp-auth-result', state: 'state-xyz', success: true, code: 'auth-code-1' },
       window.location.origin,
     );
-    expect(screen.getByText(/Authorization successful/i)).toBeInTheDocument();
+    // The page posts first and sets its state after, so the copy lands a
+    // render later than the postMessage.
+    await vi.waitFor(() => expect(screen.getByText(/Authorization successful/i)).toBeInTheDocument());
 
     vi.advanceTimersByTime(1000);
     expect(close).toHaveBeenCalled();
@@ -98,7 +100,7 @@ describe('McpAuthCallbackPage', () => {
       { type: 'mcp-auth-result', state: 's1', error: 'access_denied', error_description: 'User declined' },
       window.location.origin,
     );
-    expect(screen.getByText('Authorization failed')).toBeInTheDocument();
+    expect(await screen.findByText('Authorization failed')).toBeInTheDocument();
     expect(screen.getByText('User declined')).toBeInTheDocument();
   });
 
@@ -113,7 +115,7 @@ describe('McpAuthCallbackPage', () => {
       { type: 'mcp-auth-result', state: 's2', error: 'invalid_request', error_description: 'Missing authorization code' },
       window.location.origin,
     );
-    expect(screen.getByText('Invalid authorization response')).toBeInTheDocument();
+    expect(await screen.findByText('Invalid authorization response')).toBeInTheDocument();
   });
 
   it('also writes the result to localStorage (state-scoped key) as the cross-tab fallback channel', async () => {
@@ -139,7 +141,7 @@ describe('McpAuthCallbackPage', () => {
     mountAt('/mcp-auth-callback?error=server_error&state=s4');
     await waitFor(() => expect(postMessage).toHaveBeenCalled());
 
-    expect(screen.getByText('server_error')).toBeInTheDocument();
+    expect(await screen.findByText('server_error')).toBeInTheDocument();
   });
 
   it('auto-closes the window on an OAuth error, but ONLY outside dev mode (baseline: isDev gates this)', async () => {

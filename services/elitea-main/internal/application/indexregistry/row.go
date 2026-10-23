@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // State is the closed set index_meta carries today. `scheduled_reindex` is a
@@ -47,11 +47,11 @@ func (s State) Valid() bool {
 }
 
 const (
-	// MaxHistoryEntries is the cap index_meta_writer.go applies
-	// (indexing.MaxCurrentIndexMetaHistoryEntries): history gains one entry per
-	// run, and the oldest go first.
+	// MaxHistoryEntries is the cap the retired pgvector writer
+	// (index_meta_writer.go) applied, indexing.MaxCurrentIndexMetaHistoryEntries:
+	// history gains one entry per run, and the oldest go first.
 	MaxHistoryEntries = indexingapp.MaxCurrentIndexMetaHistoryEntries
-	// MaxHistoryBytes is the same byte budget the pgvector writer keeps: a
+	// MaxHistoryBytes is the same byte budget the retired pgvector writer kept: a
 	// quarter of the row cap, so a worst-case encoding still fits the row.
 	MaxHistoryBytes = indexingapp.MaxCurrentInitialIndexMetaBytes / 4
 )

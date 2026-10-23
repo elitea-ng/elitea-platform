@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/artifacts"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // -- harness ------------------------------------------------------------------
@@ -665,8 +665,8 @@ func TestTheArtifactTransportIsDerivedFromTheRequestsLlmSettings(t *testing.T) {
 	// The same derivation the engine performs on its download side. Two
 	// implementations of one legacy rule, so both are pinned.
 	settings := run.ExtractArtifactSettings(llmSettings())
-	if settings.BaseURL != "https://elitea.example" {
-		t.Fatalf("base %q: the /llm/v1 suffix addresses the gateway, not the artifact routes", settings.BaseURL)
+	if settings.APIKey == "" {
+		t.Fatalf("no bearer: %+v", settings)
 	}
 	if settings.ProjectID != "7" {
 		t.Fatalf("project %q", settings.ProjectID)

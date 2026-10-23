@@ -18,11 +18,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	identity "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 const (
@@ -199,8 +199,8 @@ func (r *postgresTokenRepository) Create(ctx context.Context, input tokenCreateI
 	// without one. It is what lets the expiry notice tell a key that has been
 	// alive for a month and has a day left from a key whose WHOLE life is
 	// twelve hours — the second must not be warned about the moment it is
-	// minted (ELITEA-0755). auth_core__token is pylon-owned and carries no
-	// creation timestamp, so the stamp lives in this corpus's own side table
+	// minted (ELITEA-0755). auth_core__token is a legacy-era table and carries
+	// no creation timestamp, so the stamp lives in this corpus's own side table
 	// (shared migration 0125, and 0071's header for why a side table).
 	if err := repos.RecordPATIssued(ctx, tx, int64(row.ID), time.Now().UTC()); err != nil {
 		return tokenRecord{}, err

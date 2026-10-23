@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 const (
@@ -91,7 +91,7 @@ type StartOutcome struct {
 }
 
 // ScheduledStartRequest is accepted only from Main's schedule executor after
-// current Configurations and PgVector state have been resolved. Inputs must
+// current Configurations and the index's registry state have been resolved. Inputs must
 // contain frozen references; transient unsecreted preflight values must never
 // be persisted in this request.
 type ScheduledStartRequest struct {

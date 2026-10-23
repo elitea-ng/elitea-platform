@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	egressauditapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	egressauditapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 type egressAuditRecorder struct{ events []audit.Event }

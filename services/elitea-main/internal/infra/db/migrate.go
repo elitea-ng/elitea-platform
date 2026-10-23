@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 //go:embed migrations/*.sql
@@ -77,8 +77,8 @@ const requestLogMigrationPath = "shared/0099_gateway_request_logs.sql"
 // list only; it never applies the ledgered shared corpus, so a file that the
 // hot read path depends on must be named here.
 //
-// Every real deploy path (the Helm migrate-job, deploy/scripts/standalone-stack.sh,
-// the hybrid POV compose) runs elitea-migrate and applies the whole ledgered
+// Every real deploy path (the Helm migrate-job, deploy/scripts/standalone-stack.sh)
+// runs elitea-migrate and applies the whole ledgered
 // history, so none of them need this. Only ELITEA_DEV_BOOTSTRAP_LEGACY_SCHEMA
 // does.
 const tokenBindingMigrationPath = "shared/0071_token_project_binding.sql"

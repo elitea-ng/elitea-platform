@@ -1,0 +1,87 @@
+package spi
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// DefaultAdminAddr is where the host's admin port listens when
+// <PREFIX>ADMIN_ADDR is not set.
+const DefaultAdminAddr = ":9090"
+
+// AdminHandler serves the admin port: /healthz (the process is up) and
+// /readyz (every readiness check passes — Server.Readiness, the same checks
+// the provider service's Health reports). Plain HTTP and no mTLS, like every
+// other service's health port: the kubelet and the container probe present
+// no client certificate, and the gRPC listener requires one, so a pod whose
+// readiness is false (a lost owner claim, #1359) could otherwise never leave
+// the Service. /metrics serves the capacity gauges (MetricsText). Nothing
+// else is served here.
+func AdminHandler(server *Server) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, "ok\n")
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		ready, checks := server.Readiness(r.Context())
+		if !ready {
+			var failing []string
+			for name, ok := range checks {
+				if !ok {
+					failing = append(failing, name)
+				}
+			}
+			sort.Strings(failing)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, "not ready: "+strings.Join(failing, ",")+"\n")
+			return
+		}
+		_, _ = io.WriteString(w, "ready\n")
+	})
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = io.WriteString(w, server.MetricsText())
+	})
+	return mux
+}
+
+// The capacity gauges an autoscaler reads. An invocation runs on the replica
+// that accepted it, start to end, and nothing queues it anywhere else, so the
+// load of a replica is its own in-flight count. A Prometheus scaler divides
+// the sum over the replicas by the slots of one.
+//
+// Admission refuses a slot holder when every slot of the fleet is busy, so
+// the in-flight sum never goes above the fleet's slots: alone it cannot ask
+// for one more replica. The refusal counter has a `reason` label
+// (RefusalReasons). Only reason="fleet_full" is demand that was turned
+// away; the scaler adds its recent increase to the in-flight sum. A
+// draining refusal is a replica that goes away, and local_full happens only
+// without a durable store (one replica); neither is demand.
+const (
+	MetricInvocationsInFlight = "elitea_subapp_invocations_in_flight"
+	MetricInvocationSlots     = "elitea_subapp_invocation_slots"
+	MetricSlotRefusals        = "elitea_subapp_slot_refusals_total"
+)
+
+// MetricsText is the admin port's /metrics body, in the Prometheus text
+// format: the in-flight gauge and the slot count Slots reports as total.
+func (s *Server) MetricsText() string {
+	app := strconv.Quote(s.app.Name)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# HELP %s Invocations this replica is running now.\n# TYPE %s gauge\n%s{app=%s} %d\n",
+		MetricInvocationsInFlight, MetricInvocationsInFlight, MetricInvocationsInFlight, app, s.manager.InFlight())
+	fmt.Fprintf(&b, "# HELP %s Invocations one replica runs at once: <PREFIX>MAX_PARALLEL_WORKERS, the total its slots report.\n# TYPE %s gauge\n%s{app=%s} %d\n",
+		MetricInvocationSlots, MetricInvocationSlots, MetricInvocationSlots, app, s.settings.MaxParallelWorkers)
+	fmt.Fprintf(&b, "# HELP %s Slot-holding invocations this replica refused, by reason: fleet_full (every slot of the fleet was busy), draining (this replica was shutting down), local_full (every slot of this replica was busy, without a durable store).\n# TYPE %s counter\n",
+		MetricSlotRefusals, MetricSlotRefusals)
+	for _, reason := range RefusalReasons {
+		fmt.Fprintf(&b, "%s{app=%s,reason=%s} %d\n", MetricSlotRefusals, app, strconv.Quote(reason), s.manager.RefusalsFor(reason))
+	}
+	return b.String()
+}

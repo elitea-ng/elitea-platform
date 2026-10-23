@@ -7,7 +7,10 @@ import "encoding/json"
 // type `cloud_executor` in section `project_settings`. It holds `enabled`,
 // `shell`, `network`, `network_allowlist`, `history` and optional lower caps,
 // and it can only NARROW the platform ceiling (`cloud_executor` platform
-// section): the handoff's effective policy takes the minimum of the two. Its
+// section): the handoff's effective policy takes the minimum of the two. The
+// exception is `enabled`: an explicit value wins under a platform that has the
+// executor on, and an unset one follows the platform's
+// `project_default_enabled`. Its
 // writes take `models.project_settings.edit` (the configurations routes add
 // that gate for this type).
 const (
@@ -63,8 +66,8 @@ func (catalog *CurrentAvailableCatalog) addCloudExecutorProjectSetting() error {
 			"label": "Cloud executor", "section": CloudExecutorSection, "type": CloudExecutorConfigurationType,
 		},
 		"properties": map[string]any{
-			"enabled": optionalBool("Enabled", "Allow Send to cloud in this project. Off cannot be turned on "+
-				"when the platform has the cloud executor off."),
+			"enabled": optionalBool("Enabled", "Allow Send to cloud in this project. Unset follows the "+
+				"platform's default for projects. On has no effect while the platform has the cloud executor off."),
 			"shell":   optionalBool("Shell", "Allow shell commands in the cloud sandbox."),
 			"network": optionalBool("Network", "Allow the cloud sandbox to reach the public internet."),
 			"network_allowlist": map[string]any{

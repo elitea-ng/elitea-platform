@@ -10,7 +10,7 @@
 // the rule explicit — "Budget gate runs before the provider on EVERY /llm
 // endpoint" — because the endpoint that FORGETS the gate is indistinguishable
 // from one that has it: both answer 200, and only the ceiling stops applying.
-// A voice deployment is where that matters most, because pylon-indexer's ASR
+// A voice deployment is where that matters most, because the legacy indexer's ASR
 // relay sends one request per utterance.
 package llmproxy
 
@@ -24,7 +24,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // The two audio methods trackingRouter needs. Without them the embedded

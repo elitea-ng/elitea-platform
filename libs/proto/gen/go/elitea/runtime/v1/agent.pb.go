@@ -212,8 +212,8 @@ type AgentExecutionInputV1 struct {
 	DebugMode                   *bool  `protobuf:"varint,36,opt,name=debug_mode,json=debugMode,proto3,oneof" json:"debug_mode,omitempty"`
 	// A bounded, non-secret snapshot of the current live guardrail. The Go
 	// admission path resolves this policy before dispatch; the worker never
-	// reads Pylon configuration directly and treats suggestion generation as a
-	// best-effort post-response side effect.
+	// reads the legacy runtime's configuration directly and treats suggestion
+	// generation as a best-effort post-response side effect.
 	NextInputSuggestion []byte `protobuf:"bytes,37,opt,name=next_input_suggestion,json=nextInputSuggestion,proto3" json:"next_input_suggestion,omitempty"`
 	// The platform-wide toolkit guardrails, as one bounded, non-secret JSON
 	// object: `sensitive_tools`, `blocked_toolkits`, `blocked_tools` and the two
@@ -879,10 +879,11 @@ func (x *AgentExecutionArtifactReferenceV1) GetClassification() string {
 // AgentExecutionAttachmentContentV1 returns ONE attachment item's enriched
 // content so the platform can persist what the worker extracted (#607).
 //
-// Pylon extracts a document's text once, at message-persist time, and stores
-// it: rpc/chat_all.py:344-377 reads the files through the SDK artifact toolkit
-// and appends the text as a second `{"type": "text"}` chunk of the item's
-// `content`, with `flag_modified(item, "content")` at :376. Every later turn is
+// The legacy runtime extracts a document's text once, at message-persist time,
+// and stores it (paths in the legacy/plugins/elitea_core dev clone):
+// rpc/chat_all.py:346-379 reads the files through the SDK artifact toolkit and
+// appends the text as a second `{"type": "text"}` chunk of the item's
+// `content`, with `flag_modified(item, "content")` at :378. Every later turn is
 // then pure DB — utils/chat_history.py:67-73 extends the stored chunks straight
 // into the message and re-reads nothing.
 //
@@ -907,7 +908,7 @@ type AgentExecutionAttachmentContentV1 struct {
 	// value `chat_messages_attachment.content` is to hold, not a delta. It is the
 	// admission scaffold's own header chunk — marker included, byte-for-byte —
 	// followed by the extracted text as a second `{"type": "text"}` chunk, which
-	// is the shape pylon's extraction step leaves behind and the shape the
+	// is the shape the legacy extraction step leaves behind and the shape the
 	// worker's own reader recognises as "already extracted".
 	Content       []byte `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1205,7 +1206,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"+AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED\x10\x01\x121\n" +
 	"-AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL\x10\x02\x125\n" +
 	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH\x10\x03\x125\n" +
-	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_agent_proto_rawDescOnce sync.Once

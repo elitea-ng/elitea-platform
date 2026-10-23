@@ -12,13 +12,16 @@
 # target below builds from this one stage.
 FROM node:26-trixie-slim AS admin-builder
 
-WORKDIR /build
+# The repository layout is kept (the app at apps/elitea-web), because the app
+# compiles the shared client package from source at ../../libs/ts/client-core.
+WORKDIR /build/apps/elitea-web
 
 # npm ci + package-lock.json: apps/elitea-web has no packageManager field and
 # ships a package-lock.json, so npm is the package manager, not pnpm/yarn.
 COPY apps/elitea-web/package.json apps/elitea-web/package-lock.json ./
 RUN npm ci
 
+COPY libs/ts/client-core/ /build/libs/ts/client-core/
 COPY apps/elitea-web/index.html apps/elitea-web/tsconfig.json apps/elitea-web/vite.config.ts ./
 COPY apps/elitea-web/src/ ./src/
 
@@ -75,26 +78,24 @@ WORKDIR /src/services/elitea-main
 # layer cache — it cannot make a stale layer be reused, and the module cache is
 # content-addressed and verified against go.sum — so it does not weaken
 # ci-web-e2e.yml's recorded "no buildx/gha layer cache here on purpose".
-# `go build` below mounts the same cache; without that the modules this step
-# fetched would not be visible to it.
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    for attempt in 1 2 3 4 5; do \
-        go mod download && exit 0; \
-        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
-        sleep $((attempt * 5)); \
-    done; \
-    echo "go mod download failed after 5 attempts" >&2; \
-    exit 1
-
+# The retry runs in the SAME step as `go build`. A separate download step
+# writes only into the cache mount, so its layer is empty: when CI's
+# cache-from imports that layer, the step never runs, the mount starts empty,
+# and `go build` fetches the whole graph itself with no retry (seen in CI).
 COPY services/elitea-main/ ./
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    for attempt in 1 2 3 4 5; do \
+        go mod download && break; \
+        [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }; \
+        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
+        sleep $((attempt * 5)); \
+    done; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w -X github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo.Version=${VERSION}" -o /out/elitea-main ./cmd/elitea-main && \
+    go build -trimpath -ldflags="-s -w -X github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo.Version=${VERSION}" -o /out/elitea-main ./cmd/elitea-main && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-migrate ./cmd/elitea-migrate && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -106,7 +107,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/index-v2-preflight ./cmd/index-v2-preflight && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/cutover-ctl ./cmd/cutover-ctl
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-admission-ctl ./cmd/elitea-admission-ctl && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/cutover-ctl ./cmd/cutover-ctl && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-grpc-health ./cmd/elitea-grpc-health && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-keda-cleanup ./cmd/elitea-keda-cleanup
 
 # ── Vulnerability scan: NOT a stage here. Do not add one back. ────────────────
 # A `FROM aquasec/trivy:latest AS scanner` stage used to sit at this point. No
@@ -142,27 +149,17 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["/elitea-main"]
 
-# ── Stage 4: mixed Centry deployment ──────────────────────────────────────────
-# `/nonexistent` is deliberate and stays that way. In deploy/centry-hybrid the
-# traefik router sends only /healthz and a short list of API paths to
-# elitea-main; `/admin/app` falls through the `current-platform` PathPrefix(`/`)
-# router to pylon_main, which serves the legacy admin_ui plugin. This image is
-# not an admin server, so it carries no admin bundle.
-FROM runtime AS hybrid
-
-ENV ADMIN_UI_STATIC_DIR=/nonexistent
-
-# ── Stage 5: E2E test image ───────────────────────────────────────────────────
+# ── Stage 4: E2E test image ───────────────────────────────────────────────────
 # Byte-identical to `final` below, which derives from it. The separate name is
 # kept only because deploy/docker-compose.e2e-standalone.yml selects
 # `target: e2e`; keeping `final` a child of this stage makes "E2E exercises the
 # artefact that ships" true by construction rather than by convention (#122).
 FROM runtime AS e2e
 
-COPY --from=admin-builder /build/dist/admin /data/admin_ui/static/dist
-COPY --from=admin-builder /build/dist/brand-preview/ /data/admin_ui/static/brand-preview/
+COPY --from=admin-builder /build/apps/elitea-web/dist/admin /data/admin_ui/static/dist
+COPY --from=admin-builder /build/apps/elitea-web/dist/brand-preview/ /data/admin_ui/static/brand-preview/
 
-# ── Stage 6: standalone final image (default target) ──────────────────────────
+# ── Stage 5: standalone final image (default target) ──────────────────────────
 # Last stage, so a `docker build` with no --target still produces the shipping
 # image. publish.yml and docker-bake.hcl also name it explicitly.
 FROM e2e AS final

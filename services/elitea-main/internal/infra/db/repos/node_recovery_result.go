@@ -9,8 +9,8 @@ import (
 	"errors"
 	"strconv"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/noderecovery"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
 )
 

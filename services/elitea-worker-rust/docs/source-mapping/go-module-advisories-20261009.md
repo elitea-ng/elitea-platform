@@ -6,7 +6,7 @@ because the delivery gate keeps every source mapping here. It continues
 
 ## Business behavior and scope
 
-The current platform (Python SDK, Pylon) is not involved: it has no Go modules. Nothing was ported.
+The current platform (Python SDK, legacy runtime) is not involved: it has no Go modules. Nothing was ported.
 The change takes upstream fixes for advisories that `govulncheck` reported against merged `main` at `0def77b22`. The
 vulnerability database was updated on 2026-10-08 22:31 UTC.
 

@@ -2,7 +2,7 @@
 name = "elitea-worker-rust"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 default-run = "elitea-worker-rust"
 
@@ -33,6 +33,13 @@ chrono = { version = "=0.4.45", default-features = false, features = ["clock", "
 # It enables no serde_json feature: the worker's own `arbitrary_precision`
 # without `preserve_order` (its canonical hashes) stays what Cargo unifies.
 elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
+# The model calls themselves: elitea.llm.v1.ModelService on elitea-main's
+# platform listener, over the facade's mTLS channel (#1359 U2).
+elitea-model-rpc = { path = "../../libs/rust/model-rpc" }
+# The artifact store (Office host, artifact index source) and the internal
+# MCP tool categories: elitea.runtime.v1 services on the same listener and
+# channel (#1359 U5).
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 # The pure agent runtime shared with the desktop host (ADR-0029). Its own
 # serde_json uses default features; its digests are order-explicit
 # (`canonical`), so neither this crate's `arbitrary_precision` nor a
@@ -148,6 +155,15 @@ elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["te
 # The in-process fake of elitea-vector the index handler's tests run against.
 elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }
 http-body = "=1.1.0"
+# The model facade tests serve an HTTP-shaped fake as a real ModelService
+# over a loopback gRPC channel (#1359 U2).
+axum = { version = "=0.8.9", default-features = false, features = ["http2", "tokio"] }
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
+# The fake artifact store and internal tool service (#1359 U5).
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc", features = ["testing"] }
+# A throwaway runtime CA and workload certificates for the content-listener
+# and sandbox code-owner TLS tests (#1359 U4).
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
 
 [lints.rust]

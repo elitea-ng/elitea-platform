@@ -1,0 +1,22 @@
+{"Time":"2026-10-21T13:47:39.577748-04:00","Action":"start","Package":"example.com/fixture"}
+{"Time":"2026-10-21T13:47:40.464129-04:00","Action":"run","Package":"example.com/fixture","Test":"TestAdds"}
+{"Time":"2026-10-21T13:47:40.464176-04:00","Action":"output","Package":"example.com/fixture","Test":"TestAdds","Output":"=== RUN   TestAdds\n"}
+{"Time":"2026-10-21T13:47:40.464214-04:00","Action":"output","Package":"example.com/fixture","Test":"TestAdds","Output":"--- PASS: TestAdds (0.00s)\n"}
+{"Time":"2026-10-21T13:47:40.464224-04:00","Action":"pass","Package":"example.com/fixture","Test":"TestAdds","Elapsed":0}
+{"Time":"2026-10-21T13:47:40.464243-04:00","Action":"run","Package":"example.com/fixture","Test":"TestBreaks"}
+{"Time":"2026-10-21T13:47:40.46425-04:00","Action":"output","Package":"example.com/fixture","Test":"TestBreaks","Output":"=== RUN   TestBreaks\n"}
+{"Time":"2026-10-21T13:47:40.464255-04:00","Action":"run","Package":"example.com/fixture","Test":"TestBreaks/two"}
+{"Time":"2026-10-21T13:47:40.464262-04:00","Action":"output","Package":"example.com/fixture","Test":"TestBreaks/two","Output":"=== RUN   TestBreaks/two\n"}
+{"Time":"2026-10-21T13:47:40.464294-04:00","Action":"output","Package":"example.com/fixture","Test":"TestBreaks/two","Output":"    add_test.go:14: Add(2, 2) = 4, want 5\n"}
+{"Time":"2026-10-21T13:47:40.464312-04:00","Action":"output","Package":"example.com/fixture","Test":"TestBreaks/two","Output":"--- FAIL: TestBreaks/two (0.00s)\n"}
+{"Time":"2026-10-21T13:47:40.46432-04:00","Action":"fail","Package":"example.com/fixture","Test":"TestBreaks/two","Elapsed":0}
+{"Time":"2026-10-21T13:47:40.464328-04:00","Action":"output","Package":"example.com/fixture","Test":"TestBreaks","Output":"--- FAIL: TestBreaks (0.00s)\n"}
+{"Time":"2026-10-21T13:47:40.464335-04:00","Action":"fail","Package":"example.com/fixture","Test":"TestBreaks","Elapsed":0}
+{"Time":"2026-10-21T13:47:40.464342-04:00","Action":"run","Package":"example.com/fixture","Test":"TestSkips"}
+{"Time":"2026-10-21T13:47:40.464348-04:00","Action":"output","Package":"example.com/fixture","Test":"TestSkips","Output":"=== RUN   TestSkips\n"}
+{"Time":"2026-10-21T13:47:40.464354-04:00","Action":"output","Package":"example.com/fixture","Test":"TestSkips","Output":"    add_test.go:19: later\n"}
+{"Time":"2026-10-21T13:47:40.464361-04:00","Action":"output","Package":"example.com/fixture","Test":"TestSkips","Output":"--- SKIP: TestSkips (0.00s)\n"}
+{"Time":"2026-10-21T13:47:40.464368-04:00","Action":"skip","Package":"example.com/fixture","Test":"TestSkips","Elapsed":0}
+{"Time":"2026-10-21T13:47:40.464375-04:00","Action":"output","Package":"example.com/fixture","Output":"FAIL\n"}
+{"Time":"2026-10-21T13:47:40.466284-04:00","Action":"output","Package":"example.com/fixture","Output":"FAIL\texample.com/fixture\t0.888s\n"}
+{"Time":"2026-10-21T13:47:40.466324-04:00","Action":"fail","Package":"example.com/fixture","Elapsed":0.889}

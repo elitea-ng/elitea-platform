@@ -12,9 +12,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@ func TestTheEntitledStreamSubscribesToItsOwnProject(t *testing.T) {
 	if status := serveStatus(t, router, http.MethodGet, "/api/v2/events/prompt_lib/7/"); status != http.StatusOK {
 		t.Fatalf("status = %d for an entitled member, want 200", status)
 	}
-	assertSubscribedToOwnProject(t, source, 7)
+	assertSubscribedToOwnProject(t, source, 7, false)
 }
 
 // drainAsked returns every channel the stream asked the source for, in order.
@@ -355,15 +355,18 @@ func drainAsked(source closedEventSource) []string {
 }
 
 // assertSubscribedToOwnProject requires the admitted stream to have subscribed
-// to exactly its own project's two families — the project events and the
-// canvas presence rosters — and to nothing else.
-func assertSubscribedToOwnProject(t *testing.T, source closedEventSource, projectID int) {
+// to exactly its own project's families, and to nothing else.
+func assertSubscribedToOwnProject(t *testing.T, source closedEventSource, projectID int, canListConversations bool) {
 	t.Helper()
 	got := drainAsked(source)
 	sort.Strings(got)
 	// The project's live updates, canvas presence and handoff state events
-	// (ADR-0034), each on its own channel.
+	// (ADR-0034), each on its own channel; the conversation activity frames
+	// (client contract 1.12) only for a caller who may list conversations.
 	want := []string{fmt.Sprintf("project:%d:events", projectID), fmt.Sprintf("project:%d:presence", projectID), fmt.Sprintf("project:%d:workspace", projectID)}
+	if canListConversations {
+		want = append([]string{fmt.Sprintf("project:%d:conversations", projectID)}, want...)
+	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the admitted stream subscribed to %q, want %q", got, want)
 	}

@@ -1,13 +1,16 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
 
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
-	code "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+
+	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codeplatform"
+	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 const CodePlatformStepBodyLimit = 512
@@ -39,42 +42,41 @@ func (s *ContentServer) WithCodePlatformPump(pump *CodePlatformPump) *ContentSer
 	}
 	return s
 }
-func (s *ContentServer) PostCodePlatformStep(w http.ResponseWriter, r *http.Request) {
-	if s == nil || s.codePlatformPump == nil || r.Method != http.MethodPost || r.URL.RawQuery != "" {
-		http.NotFound(w, r)
-		return
+
+// StepCodePlatform runs one Code platform pump step for the claimed
+// execution. The claim binds the exact scope execution/generation, the
+// verified peer and the fence.
+func (s *ContentServer) StepCodePlatform(ctx context.Context, request *runtimev1.StepCodePlatformRequestV1) (*runtimev1.StepCodePlatformResponseV1, error) {
+	if s == nil || s.codePlatformPump == nil {
+		return nil, contentStatus(codes.Unimplemented)
 	}
-	// This parser binds the exact route execution/generation, verified peer and fence.
-	claim, err := parseExecutionClaim(r)
+	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
-		http.Error(w, "Code platform claim denied", http.StatusForbidden)
-		return
+		return nil, grpcstatus.Error(codes.PermissionDenied, "Code platform claim denied")
 	}
-	if !s.acquire(w) {
-		return
-	}
-	defer s.release()
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, CodePlatformStepBodyLimit))
+	release, err := acquireContentSlot(s.requests)
 	if err != nil {
-		http.Error(w, "Invalid Code platform step", http.StatusBadRequest)
-		return
+		return nil, err
 	}
-	request, err := ParseCodePlatformStep(raw)
-	if err != nil {
-		http.Error(w, "Invalid Code platform step", http.StatusBadRequest)
-		return
+	defer release()
+	raw := request.GetRequestJson()
+	if len(raw) > CodePlatformStepBodyLimit {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "Invalid Code platform step")
 	}
-	result, err := s.codePlatformPump.Step(r.Context(), claim, request.DispatchActivation, request.PreparedRequestFingerprint)
+	parsed, err := ParseCodePlatformStep(raw)
 	if err != nil {
-		writeCodePlatformError(w, err, "Invalid Code platform step")
-		return
+		return nil, grpcstatus.Error(codes.InvalidArgument, "Invalid Code platform step")
+	}
+	result, err := s.codePlatformPump.Step(ctx, claim, parsed.DispatchActivation, parsed.PreparedRequestFingerprint)
+	if err != nil {
+		return nil, codePlatformStatus(err, "Invalid Code platform step")
 	}
 	response := CodePlatformStepResponse{Schema: "elitea.runtime.code-platform-step-response.v1", Revision: 1, Disposition: "idle"}
+	refused := grpcstatus.Error(codes.Aborted, "Code platform observation refused")
 	switch result.State {
 	case "idle":
 		if result.EffectID != "" {
-			http.Error(w, "Code platform observation refused", http.StatusConflict)
-			return
+			return nil, refused
 		}
 	case "committed":
 		response.Disposition = "committed"
@@ -83,32 +85,31 @@ func (s *ContentServer) PostCodePlatformStep(w http.ResponseWriter, r *http.Requ
 		response.Disposition = "unknown"
 		response.EffectID = &result.EffectID
 	default:
-		http.Error(w, "Code platform observation refused", http.StatusConflict)
-		return
+		return nil, refused
 	}
 	if response.EffectID != nil && !code.NonzeroDigest(*response.EffectID) {
-		http.Error(w, "Code platform observation refused", http.StatusConflict)
-		return
+		return nil, refused
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	if err = json.NewEncoder(w).Encode(response); err != nil {
-		return
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nil, contentStatus(codes.Unavailable)
 	}
+	return &runtimev1.StepCodePlatformResponseV1{ResponseJson: encoded}, nil
 }
 
-// writeCodePlatformError is the single status mapping for the claim-bound Code
-// platform routes: 403 authority denied, 400 invalid frame, 409 binding refused,
-// 503 anything else (including a missing dependency). It never echoes err.
-func writeCodePlatformError(w http.ResponseWriter, err error, invalid string) {
+// codePlatformStatus is the single status mapping for the claim-bound Code
+// platform RPCs: PermissionDenied authority denied, InvalidArgument invalid
+// frame, Aborted binding refused, Unavailable anything else (including a
+// missing dependency). It never echoes err.
+func codePlatformStatus(err error, invalid string) error {
 	switch {
 	case errors.Is(err, domain.ErrUnauthorized), errors.Is(err, ErrContentUnauthorized):
-		http.Error(w, "Code platform authority denied", http.StatusForbidden)
+		return grpcstatus.Error(codes.PermissionDenied, "Code platform authority denied")
 	case errors.Is(err, domain.ErrFrame):
-		http.Error(w, invalid, http.StatusBadRequest)
+		return grpcstatus.Error(codes.InvalidArgument, invalid)
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, code.ErrRejected):
-		http.Error(w, "Code platform original binding refused", http.StatusConflict)
+		return grpcstatus.Error(codes.Aborted, "Code platform original binding refused")
 	default:
-		http.Error(w, "Code platform dependency unavailable", http.StatusServiceUnavailable)
+		return grpcstatus.Error(codes.Unavailable, "Code platform dependency unavailable")
 	}
 }

@@ -57,6 +57,6 @@ The full chart checks also run after the correction.
 No Kubernetes deployment occurs during these render checks.
 
 The running rehearsal Main remains healthy with image `sha256:17984c30c0d44c3dd731cfa8694bbd433eacc10a9c0c3561dd69b9304c5acf6d`.
-Its internal MCP origin is `https://elitea-platform-edge`.
+Its internal MCP origin is now `https://internal-tools.elitea.invalid` (#1359 U5): an endpoint there is never dialled, it is routed to `elitea.runtime.v1.InternalToolService` on Main's platform listener (it was `https://elitea-platform-edge` at the time of this rehearsal).
 Its configured trust file is the shared MCP CA bundle.
 The browser acceptance and credential reference evidence remain in [point 3 delivery reconciliation](point3-delivery-reconciliation.md).

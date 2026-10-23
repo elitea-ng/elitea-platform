@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 )
 
 // EnvSecureHAConf names the nats.conf rendered from the chart's HA profile
-// (scripts/nats/render-secure-conf.sh OUT deploy/helm/nats/values-ha.yaml).
+// (scripts/nats/render-secure-conf.sh OUT deploy/helm/elitea/values-nats-ha.yaml).
 const EnvSecureHAConf = "ELITEA_TEST_NATS_SECURE_HA_CONF"
 
 // Route identities for the cluster tests.
@@ -57,7 +57,7 @@ func StartCluster(t testing.TB) *Cluster {
 	t.Helper()
 	bin, conf := os.Getenv(EnvServerBin), os.Getenv(EnvSecureHAConf)
 	if strings.TrimSpace(bin) == "" || strings.TrimSpace(conf) == "" {
-		msg := fmt.Sprintf("the route identity test needs %s and %s (scripts/nats/render-secure-conf.sh OUT deploy/helm/nats/values-ha.yaml)", EnvServerBin, EnvSecureHAConf)
+		msg := fmt.Sprintf("the route identity test needs %s and %s (scripts/nats/render-secure-conf.sh OUT deploy/helm/elitea/values-nats-ha.yaml)", EnvServerBin, EnvSecureHAConf)
 		if os.Getenv(EnvRequire) == "1" {
 			t.Fatal(msg)
 		}

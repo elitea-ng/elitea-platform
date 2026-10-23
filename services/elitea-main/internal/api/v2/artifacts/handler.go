@@ -16,8 +16,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // bucketNamePattern matches api/openapi/v2.yaml's CreateBucketRequest.name
@@ -74,6 +74,11 @@ type Repository interface {
 	CreateTransferGrant(ctx context.Context, input repos.NewTransferGrantInput) (repos.TransferGrantRow, error)
 	GetTransferGrant(ctx context.Context, id string, projectID int64) (repos.TransferGrantRow, error)
 	MarkTransferGrantConsumed(ctx context.Context, id string) error
+	// ClaimTransferGrant and ReleaseTransferGrantClaim bracket a single-shot
+	// commit (CommitTransferGrant): the claim is taken before the commit
+	// writes the grant's final key and handed back if the commit fails.
+	ClaimTransferGrant(ctx context.Context, id string) (time.Time, error)
+	ReleaseTransferGrantClaim(ctx context.Context, id string, claimedAt time.Time) (bool, error)
 	GetBucketByID(ctx context.Context, id int64) (repos.BucketRow, error)
 	// GetTransferGrantByID is S16's addition, backing multipart.go's
 	// ownership check — see its own doc comment in

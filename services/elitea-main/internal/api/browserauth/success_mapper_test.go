@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
+	forwardapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/edgeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
 func TestSuccessMapperPreservesTrackedGrafanaProjection(t *testing.T) {
@@ -150,4 +150,13 @@ func mapperSource() forwardapp.Source {
 		Method: "GET", Proto: "https", Host: "elitea.example.test", URI: "/grafana", IP: "192.0.2.7",
 		Target: "header", TargetPresent: true, Scope: "grafana", ScopePresent: true,
 	}
+}
+
+func newTrackedSuccessMapper(t *testing.T) *SuccessMapper {
+	t.Helper()
+	mapper, err := NewSuccessMapper(MapperContractTrackedV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mapper
 }

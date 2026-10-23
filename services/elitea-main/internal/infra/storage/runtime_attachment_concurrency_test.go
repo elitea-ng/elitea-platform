@@ -5,18 +5,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+
 	"github.com/stretchr/testify/require"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 // These tests pin how the attachment route behaves under load: one
@@ -337,7 +336,7 @@ func TestAttachmentObjectRouteHasItsOwnRequestPool(t *testing.T) {
 		server.requests <- struct{}{}
 	}
 	response := serveAttachment(t, server, key)
-	require.Equal(t, http.StatusOK, response.Code, "a full shared pool must not refuse an attachment read")
+	require.Equal(t, codes.OK, response.Code, "a full shared pool must not refuse an attachment read")
 	for range cap(server.requests) {
 		<-server.requests
 	}
@@ -346,13 +345,14 @@ func TestAttachmentObjectRouteHasItsOwnRequestPool(t *testing.T) {
 		server.attachmentRequests <- struct{}{}
 	}
 	response = serveAttachment(t, server, key)
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
-	require.True(t, server.acquire(httptest.NewRecorder()), "a full attachment pool must not take the shared pool")
-	server.release()
+	require.Equal(t, codes.Unavailable, response.Code)
+	release, err := acquireContentSlot(server.requests)
+	require.NoError(t, err, "a full attachment pool must not take the shared pool")
+	release()
 }
 
-// A missing OBJECT is a 404 with a JSON reason, so the worker can tell it
-// from a 404 for the route itself (a listener without the attachment route).
+// A missing OBJECT is NotFound, which the worker tells apart from a listener
+// without the attachment RPC (Unimplemented).
 func TestAttachmentObjectRouteNamesAMissingObject(t *testing.T) {
 	t.Parallel()
 	server := newAttachmentObjectTestServer(
@@ -362,17 +362,12 @@ func TestAttachmentObjectRouteNamesAMissingObject(t *testing.T) {
 			return AttachmentObjectRecord{}, ErrContentNotFound
 		}),
 	)
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, attachmentObjectRequest(
+	response := serve(server, attachmentObjectRequest(
 		t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size),
 		"chat-attachments", attachmentTestConversation+"/gone.txt",
 	))
-	require.Equal(t, http.StatusNotFound, response.Code)
-	var body RuntimeAttachmentUnreadable
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
-	require.Equal(t, RuntimeAttachmentUnreadableSchemaVersion, body.SchemaVersion)
-	require.Equal(t, "not_found", body.Reason)
-	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
+	require.Equal(t, codes.NotFound, response.Code)
+	require.Empty(t, response.Unreadable)
 }
 
 func TestAttachmentObjectRouteNamesAnEmptyUpload(t *testing.T) {
@@ -386,6 +381,6 @@ func TestAttachmentObjectRouteNamesAnEmptyUpload(t *testing.T) {
 		}),
 	)
 	response := serveAttachment(t, server, key)
-	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
-	require.Contains(t, response.Body.String(), `"reason":"empty"`)
+	require.Equal(t, codes.OK, response.Code)
+	require.Equal(t, "empty", response.Unreadable)
 }

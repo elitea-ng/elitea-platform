@@ -62,10 +62,10 @@ deploy/certs/
 # Go coverage profiles (task coverage / ci-go.yml write one per module)
 coverage.out
 
-# Vendored Helm subchart archives. `helm dependency build` recreates them from
-# Chart.lock, which IS tracked; the .tgz files are build output and would trip
-# scripts/no-binaries-check.sh.
-deploy/helm/*/charts/*.tgz
+# Helm chart dependencies. deploy/helm/elitea/build-deps.sh (`helm dependency
+# build`) fetches them from Chart.lock, which IS tracked; charts/ is build
+# output and is never committed.
+deploy/helm/*/charts/
 
 # The vendored DeepWiki SPA's build output (ADR-0022 decision 8). The bundle is
 # produced by elitea-main's Containerfile from the source in apps/deepwiki-ui;

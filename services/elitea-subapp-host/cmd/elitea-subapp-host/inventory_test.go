@@ -4,7 +4,7 @@ package main
 // the registry, from the environment.
 //
 // With no runner named, a deployment gets the whole SPI and NO engine:
-// /descriptor and /health answer, and every tool the descriptor advertises
+// the descriptor and health answer, and every tool the descriptor advertises
 // terminates with a readable refusal rather than an empty success something
 // downstream could be built against. That is still the default after
 // ADR-0023 stage I3 gave the application a `sidecar` runner (`legacy` before ADR-0027), and deliberately:
@@ -22,8 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
-	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 func TestInventoryComposesAndRefusesEveryToolWithNoRunnerNamed(t *testing.T) {
@@ -38,8 +39,11 @@ func TestInventoryComposesAndRefusesEveryToolWithNoRunnerNamed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(context.Background())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	defer server.Stop()
+	wire := spitest.Handler(t, server)
 
 	call := func(method, path string, body io.Reader) (*httptest.ResponseRecorder, map[string]any) {
 		request := httptest.NewRequest(method, path, body)
@@ -47,7 +51,7 @@ func TestInventoryComposesAndRefusesEveryToolWithNoRunnerNamed(t *testing.T) {
 			request.Header.Set("Content-Type", "application/json")
 		}
 		recorder := httptest.NewRecorder()
-		server.ServeHTTP(recorder, request)
+		wire.ServeHTTP(recorder, request)
 		var decoded map[string]any
 		_ = json.Unmarshal(recorder.Body.Bytes(), &decoded)
 		return recorder, decoded

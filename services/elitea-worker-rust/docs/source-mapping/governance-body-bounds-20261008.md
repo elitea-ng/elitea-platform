@@ -14,7 +14,7 @@ Neighbouring handlers already bound their bodies
 
 ## Business behaviour
 
-The current platform (Pylon/EliteaUI) has no governance CEL authoring surface, so there is no business
+The current platform (legacy runtime/EliteaUI) has no governance CEL authoring surface, so there is no business
 behaviour to port. The Web client (`apps/elitea-web/src/pages/admin/api/adminGovernanceApi.ts:206,222,262`)
 sends only `type`, `name`, `data`, `enabled` for writes and `{cel}` for validation; all of them are still
 accepted. `useValidateCel` treats a `{valid:false,error}` 200 as a result and any non-2xx as a transport

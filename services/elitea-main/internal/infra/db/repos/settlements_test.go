@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -175,5 +175,47 @@ func TestSettlementProposalBytesPreserveVerifiedIdempotencyContract(t *testing.T
 	}
 	if decoded.GetPrepareIdempotencyKey() != proposal.IdempotencyKey {
 		t.Fatalf("prepare idempotency key was lost: %q", decoded.GetPrepareIdempotencyKey())
+	}
+}
+
+func TestSettlementErrorCodeNamesOnlyARegisteredRuntimeFailureCode(t *testing.T) {
+	encode := func(code runtimev1.RuntimeErrorCodeV1) []byte {
+		raw, err := proto.Marshal(&runtimev1.RuntimeErrorV1{Code: code, SafeMessage: "private detail"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	got := settlementErrorCode(executionapp.SettlementFailed, payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED))
+	if got == nil || *got != "RECOVERY_REFUSED" {
+		t.Fatalf("recovery refusal code = %v", got)
+	}
+	got = settlementErrorCode(executionapp.SettlementFailed, payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY))
+	if got == nil || *got != "UNSUPPORTED_CAPABILITY" {
+		t.Fatalf("unsupported capability code = %v", got)
+	}
+	for name, input := range map[string]struct {
+		payloadType string
+		payload     []byte
+	}{
+		"unspecified":  {payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSPECIFIED)},
+		"unregistered": {payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1(9999))},
+		"malformed":    {payloadTypeRuntimeFailure, []byte{0xff, 0xff}},
+		"empty":        {payloadTypeRuntimeFailure, nil},
+		"agent result": {"AGENT_EXECUTION_RESULT", encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED)},
+	} {
+		if got := settlementErrorCode(executionapp.SettlementFailed, input.payloadType, input.payload); got != nil {
+			t.Fatalf("%s: error code = %q, want none", name, *got)
+		}
+	}
+	// Only a FAILED settlement names a failure code (review round 4 item 5).
+	for _, outcome := range []executionapp.SettlementOutcome{
+		executionapp.SettlementCancelled,
+		executionapp.SettlementSucceeded,
+		executionapp.SettlementOutcomeUnknown,
+	} {
+		if got := settlementErrorCode(outcome, payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED)); got != nil {
+			t.Fatalf("%s settlement: error code = %q, want none", outcome, *got)
+		}
 	}
 }

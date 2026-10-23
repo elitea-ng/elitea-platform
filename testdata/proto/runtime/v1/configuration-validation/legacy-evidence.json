@@ -5,7 +5,7 @@
     "indexer_worker": {
       "revision": "d55520115dacc3dac41ee45d85a4d705b149dadf",
       "repository_method_path": "methods/indexer_configuration_validator.py",
-      "legacy_workspace_method_path": "centry/pylon_indexer/plugins/indexer_worker/methods/indexer_configuration_validator.py",
+      "legacy_workspace_method_path": "centry/legacy_indexer/plugins/indexer_worker/methods/indexer_configuration_validator.py",
       "lines": "35-54"
     },
     "elitea_sdk": {
@@ -104,7 +104,7 @@
     "version_policy": "The pinned source revision and digests are authoritative; mutable or inconsistent package version strings are not.",
     "canonicalization": "UTF-8 JSON produced with keys sorted lexicographically, separators ',' and ':', and ensure_ascii=false; no trailing byte",
     "digest_algorithm": "sha256",
-    "digest": "4a96e3ab8e3842ebf2645a851aeb12e3e2343f28e7d024c1a2960eb4ec254351"
+    "digest": "211e972b482804f8734345c261f4cca3273d12a2a9e62f654379bae781379b27"
   },
   "target_fixture_binding": {
     "authoritative_input_manifest": "deterministic binary serialization of elitea.runtime.v1.ExecutionInputBundleV1 in input-bundle.pb",

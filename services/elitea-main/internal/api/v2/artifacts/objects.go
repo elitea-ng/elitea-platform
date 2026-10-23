@@ -17,8 +17,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 const (
@@ -807,6 +807,12 @@ func (h *Handler) streamObject(w http.ResponseWriter, r *http.Request, ref stora
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
 	if info.ETag != "" {
 		w.Header().Set("ETag", info.ETag)
+	}
+	// As the HEAD answer carries it: a reader that pins an object's version
+	// (the worker's indexing source, over ArtifactObjectService.GetObject)
+	// reads etag and modified_at from the download itself.
+	if !info.LastModified.IsZero() {
+		w.Header().Set("Last-Modified", info.LastModified.UTC().Format(http.TimeFormat))
 	}
 	if rng != nil {
 		// RFC 7233 makes Content-Range mandatory on a 206. Without it a

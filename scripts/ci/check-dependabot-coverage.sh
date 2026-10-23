@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Every dependency manifest in this repository is either scanned by
+# Every dependency manifest in this repository (composite actions included) is either scanned by
 # .github/dependabot.yml or exempt here with a reason.
 #
 # WHY A GATE AT ALL. A dependabot configuration is a list of directories, and
@@ -32,9 +32,11 @@ CONFIG=.github/dependabot.yml
 # 3.2, `declare -A` is a syntax error there, and a gate that only runs on the CI
 # runner cannot be checked by the person writing it.
 EXEMPT=$(cat <<'EXEMPTIONS'
+apps/elitea-mobile/package.json Expo SDK app: its versions are chosen by `npx expo install` against the SDK version table (apps/elitea-mobile/AGENTS.md), and an SDK moves as one reviewed upgrade; a version bump outside that table breaks native builds that no Linux CI job compiles. Security alerts still come from the dependency graph
 apps/elitea-web/tools/lint-rules/fixtures/knip/bad/package.json  knip lint-rule fixture: its dependencies are deliberately wrong, and bumping them breaks the rule it exercises
 apps/elitea-web/tools/lint-rules/fixtures/knip/good/package.json knip lint-rule fixture, same reason
 conformance/provider/pyproject.toml              test harness: a pytest runner and an HTTP client, shipping in no image, run in CI against a container someone else built
+libs/ts/client-core/package.json shared client TypeScript with no dependencies at all (no dependencies, devDependencies or lockfile): it runs on node --test and borrows tsc from apps/elitea-web, whose entry scans that compiler. A first dependency here needs a /libs/ts/client-core entry in dependabot.yml and this line removed
 libs/rust/vendor/adk-agent/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker and the libs/rust workspace: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
 libs/rust/vendor/adk-runner/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker and the libs/rust workspace: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
 libs/rust/vendor/adk-sandbox/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker only (its optional sandbox-supervisor feature; the libs/rust workspace does not link it): the worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
@@ -50,8 +52,14 @@ libs/rust/engine-sidecar/Cargo.toml member of the libs/rust workspace: the /libs
 libs/rust/graph-algos/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/inventory-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/llm-wire/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/local-embed/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/local-index/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/local-tools/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/local-tools/tests/fixtures/projects/cargo/Cargo.toml run_tests detection fixture (#1224): a dependency-free crate the project detector and a real `cargo test` read; it ships in nothing
+libs/rust/local-tools/tests/fixtures/projects/go/go.mod run_tests detection fixture (#1224): a marker the project detector reads, no dependencies, ships in nothing
+libs/rust/local-tools/tests/fixtures/projects/jest/package.json run_tests detection fixture (#1224): a marker the project detector reads; never installed
+libs/rust/local-tools/tests/fixtures/projects/pytest/pyproject.toml run_tests detection fixture (#1224): a marker the project detector reads; never installed
+libs/rust/local-tools/tests/fixtures/projects/vitest/package.json run_tests detection fixture (#1224): a marker the project detector reads; never installed
 libs/rust/workspace-runner/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/workspace-store/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/model-client/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
@@ -65,6 +73,8 @@ libs/rust/office-core/fuzz/Cargo.toml cargo-fuzz harness of office-core, not a w
 libs/rust/pg-migrate/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/repo-ingest/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/vector-index/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/model-rpc/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/platform-rpc/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixture: package versions are test inputs; runner and worker scan shipping dependencies
 EXEMPTIONS
 )
@@ -73,8 +83,11 @@ is_exempt() {
   printf '%s\n' "$EXEMPT" | grep -q "^$1[[:space:]]"
 }
 
+# A composite action's action.yml is the github-actions manifest: the `uses:`
+# pins inside it are dependencies like any other, and the `/` entry (which
+# covers .github/workflows) does not reach them.
 manifests=$(git ls-files \
-  | grep -E '(^|/)(go\.mod|Cargo\.toml|package\.json|pyproject\.toml)$' \
+  | grep -E '(^|/)(go\.mod|Cargo\.toml|package\.json|pyproject\.toml)$|^\.github/actions/(.+/)?action\.ya?ml$' \
   | grep -v node_modules || true)
 
 if [ -z "$manifests" ]; then
@@ -118,11 +131,11 @@ done
 # Direction 2: an entry that points nowhere.
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue   # the repository root, for github-actions
-  # ANY one of the four is enough. The first version of this asked `ls` for
+  # ANY one of them is enough. The first version of this asked `ls` for
   # all four at once, and `ls` exits non-zero when ANY operand is missing — so
   # every real directory failed, because no directory holds all four.
   found=0
-  for name in go.mod Cargo.toml package.json pyproject.toml; do
+  for name in go.mod Cargo.toml package.json pyproject.toml action.yml action.yaml; do
     if [ -f "$dir/$name" ]; then
       found=1
       break

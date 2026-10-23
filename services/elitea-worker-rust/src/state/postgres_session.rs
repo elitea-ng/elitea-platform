@@ -323,6 +323,7 @@ pub struct PostgresSessionService {
     limits: SessionLimits,
     state_writer_lease: Arc<dyn StateWriterLease>,
     parent: Option<Arc<Self>>,
+    replay_equivalence: Option<fn(&mut Event)>,
 }
 
 struct StoredSession {
@@ -442,7 +443,71 @@ impl PostgresSessionService {
             limits,
             state_writer_lease,
             parent,
+            replay_equivalence: None,
         })
+    }
+
+    /// Treat a re-send of an already stored event as that event when the two differ only in the
+    /// routing context `canonical` removes.
+    ///
+    /// A resumed graph re-emits the original events of the calls it owns, under the same event
+    /// id, content and timestamp, but routed to the CURRENT invocation. Without this the exact
+    /// append check would call every such replay a conflict and fail the resume. Any difference
+    /// outside the removed routing keys is still `EventConflict`.
+    #[must_use]
+    pub(crate) fn with_replay_equivalence(mut self, canonical: fn(&mut Event)) -> Self {
+        self.replay_equivalence = Some(canonical);
+        self
+    }
+
+    /// Whether `event` is the stored event of the same id, modulo replay routing.
+    async fn is_stored_replay(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &Event,
+    ) -> Result<bool, PostgresSessionError> {
+        let Some(canonical) = self.replay_equivalence else {
+            return Ok(false);
+        };
+        let stored = sqlx::query_scalar::<_, String>(
+            r"
+SELECT event_payload
+FROM elitea_runtime.agent_session_events
+WHERE tenant_id = $1
+  AND resource_project_id = $2
+  AND projection_project_id = $3
+  AND capability_id = $4
+  AND session_family = $5
+  AND definition_digest = $6
+  AND thread_id = $7
+  AND app_name = $8
+  AND user_id = $9
+  AND session_id = $10
+  AND event_id = $11
+            ",
+        )
+        .bind(&self.authority.tenant_id)
+        .bind(self.authority.resource_project_id)
+        .bind(self.authority.projection_project_id)
+        .bind(self.authority.capability_id)
+        .bind(SESSION_FAMILY)
+        .bind(self.authority.definition_digest.as_slice())
+        .bind(&self.authority.thread_id)
+        .bind(&self.authority.app_name)
+        .bind(&self.authority.user_id)
+        .bind(&self.authority.session_id)
+        .bind(&event.id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage_error)?;
+        let Some(stored) = stored else {
+            return Ok(false);
+        };
+        let mut stored = decode_event(&stored, self.limits)?;
+        let mut incoming = event.clone();
+        canonical(&mut stored);
+        canonical(&mut incoming);
+        Ok(encode_event(&stored, self.limits)? == encode_event(&incoming, self.limits)?)
     }
 
     /// Derive a worker-owned model session without widening the root service scope.
@@ -762,6 +827,59 @@ WHERE tenant_id = $1
         Ok(events)
     }
 
+    /// Whether this exact event is already stored: `Ok(true)` for an idempotent re-append,
+    /// `EventConflict` when the id is taken by a different event, `Ok(false)` when it is new.
+    async fn is_already_stored(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &Event,
+        encoded_event: &str,
+    ) -> Result<bool, PostgresSessionError> {
+        let exact_existing = sqlx::query_scalar::<_, bool>(
+            r"
+SELECT event_payload = $11 AND event_timestamp = $12
+FROM elitea_runtime.agent_session_events
+WHERE tenant_id = $1
+  AND resource_project_id = $2
+  AND projection_project_id = $3
+  AND capability_id = $4
+  AND session_family = $5
+  AND definition_digest = $6
+  AND thread_id = $7
+  AND app_name = $8
+  AND user_id = $9
+  AND session_id = $10
+  AND event_id = $13
+            ",
+        )
+        .bind(&self.authority.tenant_id)
+        .bind(self.authority.resource_project_id)
+        .bind(self.authority.projection_project_id)
+        .bind(self.authority.capability_id)
+        .bind(SESSION_FAMILY)
+        .bind(self.authority.definition_digest.as_slice())
+        .bind(&self.authority.thread_id)
+        .bind(&self.authority.app_name)
+        .bind(&self.authority.user_id)
+        .bind(&self.authority.session_id)
+        .bind(encoded_event)
+        .bind(event.timestamp)
+        .bind(&event.id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage_error)?;
+        match exact_existing {
+            Some(true) => Ok(true),
+            Some(false) => {
+                if self.is_stored_replay(transaction, event).await? {
+                    return Ok(true);
+                }
+                Err(PostgresSessionError::EventConflict)
+            }
+            None => Ok(false),
+        }
+    }
+
     async fn append(
         &self,
         identity: &adk_rust::AdkIdentity,
@@ -792,46 +910,12 @@ WHERE tenant_id = $1
 
         let mut transaction = begin_bounded(&self.pool, self.limits).await?;
         self.lock_current_writer(&mut transaction, true).await?;
-        let exact_existing = sqlx::query_scalar::<_, bool>(
-            r"
-SELECT event_payload = $11 AND event_timestamp = $12
-FROM elitea_runtime.agent_session_events
-WHERE tenant_id = $1
-  AND resource_project_id = $2
-  AND projection_project_id = $3
-  AND capability_id = $4
-  AND session_family = $5
-  AND definition_digest = $6
-  AND thread_id = $7
-  AND app_name = $8
-  AND user_id = $9
-  AND session_id = $10
-  AND event_id = $13
-            ",
-        )
-        .bind(&self.authority.tenant_id)
-        .bind(self.authority.resource_project_id)
-        .bind(self.authority.projection_project_id)
-        .bind(self.authority.capability_id)
-        .bind(SESSION_FAMILY)
-        .bind(self.authority.definition_digest.as_slice())
-        .bind(&self.authority.thread_id)
-        .bind(&self.authority.app_name)
-        .bind(&self.authority.user_id)
-        .bind(&self.authority.session_id)
-        .bind(&encoded_event)
-        .bind(event.timestamp)
-        .bind(&event.id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(storage_error)?;
-        match exact_existing {
-            Some(true) => {
-                self.commit_current(transaction).await?;
-                return Ok(());
-            }
-            Some(false) => return Err(PostgresSessionError::EventConflict),
-            None => {}
+        if self
+            .is_already_stored(&mut transaction, &event, &encoded_event)
+            .await?
+        {
+            self.commit_current(transaction).await?;
+            return Ok(());
         }
 
         self.ensure_event_capacity(&mut transaction, encoded_event.len(), &event)

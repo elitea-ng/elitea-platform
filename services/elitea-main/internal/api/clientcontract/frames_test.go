@@ -10,7 +10,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/clientcontract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/clientcontract"
 )
 
 const framesFixture = `openapi: "3.0.3"

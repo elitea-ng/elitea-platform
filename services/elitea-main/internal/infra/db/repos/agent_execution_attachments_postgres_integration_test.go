@@ -16,9 +16,9 @@ import (
 	"strings"
 	"testing"
 
-	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -53,9 +53,10 @@ func TestPostgresCurrentApplicationTurnWritesAttachmentItemsOnTheQuestionGroup(t
 	}
 
 	items := readCurrentAgentQuestionItems(t, tx, turn.QuestionID)
-	// order_index 0 is the question's own text item. Pylon enumerates the
-	// attachments from 1 for exactly that reason (rpc/chat_all.py:303); a
-	// second item at 0 would make the transcript's ordering ambiguous.
+	// order_index 0 is the question's own text item. The legacy runtime
+	// enumerates the attachments from 1 for exactly that reason
+	// (rpc/chat_all.py:303); a second item at 0 would make the transcript's
+	// ordering ambiguous.
 	if len(items) != 4 {
 		t.Fatalf("items=%+v", items)
 	}
@@ -165,7 +166,7 @@ func TestPostgresCurrentAdhocTurnWritesAttachmentItemsOnTheQuestionGroup(t *test
 
 // currentAgentAttachmentFixtures builds what the application layer would hand
 // the repository for three uploads: a document, an image and the .svg that is
-// an image by MIME but a document by pylon's rule.
+// an image by MIME but a document by the legacy rule.
 func currentAgentAttachmentFixtures(
 	t *testing.T,
 	questionID string,
@@ -269,7 +270,7 @@ func readCurrentAgentQuestionItems(
 // gates — both resolvers and both inserters, agent_chat.sql — refused any
 // conversation whose history contained an `attachment_message` item, because
 // until now nothing in this service could produce one and the type meant "a
-// pylon-era conversation outside the parity slice". The moment admission began
+// legacy-era conversation outside the parity slice". The moment admission began
 // writing those items the gate read its own output: turn 1 carrying the file
 // was admitted, turn 2 was refused as unsupported, and attaching a file ended
 // the conversation.
@@ -333,8 +334,9 @@ func TestPostgresATurnAfterAnAttachmentIsStillAdmitted(t *testing.T) {
 // rows the admission it follows had just created.
 //
 // The RESPONSE-side gate in both queries stays strict on purpose: nothing here
-// writes attachment items onto a response group. Pylon does, for agent-produced
-// files (events/message_stream.py:107-120), and that is genuinely unported.
+// writes attachment items onto a response group. The legacy runtime does, for
+// agent-produced files (events/message_stream.py:107-120), and that is
+// genuinely unported.
 //
 // Remove `attachment_message` from either question allow-list and this fails
 // with pgx.ErrNoRows.

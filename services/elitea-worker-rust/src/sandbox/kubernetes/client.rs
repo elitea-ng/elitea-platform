@@ -394,26 +394,40 @@ fn termination_receipt(pod: &Pod) -> Result<Option<Vec<u8>>, ControlError> {
         .and_then(|state| state.state.as_ref())
         .and_then(|state| state.terminated.as_ref())
         .ok_or(ControlError::Running)?;
-    let status = if terminated.reason.as_deref() == Some("OOMKilled") {
-        "memory_limit"
-    } else if pod
+    let pod_reason = pod
         .status
         .as_ref()
-        .and_then(|status| status.reason.as_deref())
-        == Some("DeadlineExceeded")
-    {
+        .and_then(|status| status.reason.as_deref());
+    let disruption = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.conditions.as_ref())
+        .and_then(|conditions| {
+            conditions.iter().find(|condition| {
+                condition.type_ == "DisruptionTarget" && condition.status == "True"
+            })
+        })
+        .map(|condition| condition.reason.as_deref().unwrap_or(""));
+    let status = if terminated.reason.as_deref() == Some("OOMKilled") {
+        "memory_limit"
+    } else if pod_reason == Some("DeadlineExceeded") {
         "timeout"
+    } else if crate::sandbox::runtime_loss::kubernetes_lost(
+        terminated.exit_code,
+        terminated.reason.as_deref(),
+        pod_reason,
+        disruption,
+    ) {
+        // Node loss, node shutdown or a platform kill: the runner never finished.
+        crate::sandbox::runtime_loss::RECEIPT_STATUS
     } else if terminated.exit_code != 0 {
         "failed"
     } else {
         return Ok(None);
     };
-    serde_json::to_vec(&serde_json::json!({
-        "revision": 1, "status": status, "exit_code": terminated.exit_code,
-        "stdout": "", "stderr": ""
-    }))
-    .map(Some)
-    .map_err(|_| ControlError::Receipt)
+    crate::sandbox::runtime_loss::envelope(status, Some(i64::from(terminated.exit_code)))
+        .map(Some)
+        .map_err(|_| ControlError::Receipt)
 }
 
 fn validate_receipt(bytes: &[u8]) -> Result<(), ControlError> {
@@ -534,8 +548,14 @@ mod tests {
 
     #[tokio::test]
     async fn killed_original_pod_returns_failure_without_runner_logs() {
-        for (reason, exit, expected) in [("OOMKilled", 137, "memory_limit"), ("Error", 1, "failed")]
-        {
+        for (reason, exit, expected) in [
+            ("OOMKilled", 137, "memory_limit"),
+            ("Error", 1, "failed"),
+            // Node loss: the kubelet lost the container's state.
+            ("Unknown", 255, "runtime_lost"),
+            // A platform kill from outside the PID namespace.
+            ("Error", 137, "runtime_lost"),
+        ] {
             let identity = PodIdentity::new(&[1; 32], &[2; 32]);
             let pod = json!({"apiVersion":"v1", "kind":"Pod", "metadata": {
                 "name":identity.name,"namespace":"execution","uid":"original",
@@ -556,7 +576,12 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            validate_receipt(&receipt).unwrap();
+            // A runner envelope can never claim a lost runtime; only this
+            // platform observation synthesizes one.
+            assert_eq!(
+                validate_receipt(&receipt).is_ok(),
+                expected != "runtime_lost"
+            );
             let envelope: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
             assert_eq!(envelope["status"], expected);
             assert_eq!(envelope["exit_code"], exit);
@@ -567,6 +592,75 @@ mod tests {
         }
     }
 
+    /// Node disruption and kubelet eviction are read from the Pod itself: its
+    /// reason and the `DisruptionTarget` condition, not only the exit code.
+    #[test]
+    fn node_disruption_is_loss_and_a_kubelet_eviction_is_not() {
+        let pod = |status: serde_json::Value| -> Pod {
+            serde_json::from_value(json!({
+            "apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"status":status}))
+            .unwrap()
+        };
+        let terminated = |exit: i32| {
+            json!([{"name":"code","image":"t","imageID":"t","ready":false,
+            "restartCount":0,"state":{"terminated":{"exitCode":exit,"reason":"Error"}}}])
+        };
+        let status = |pod: &Pod| -> String {
+            let bytes = termination_receipt(pod).unwrap().unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["status"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        // A kubelet eviction can be the code's own resource use: not loss.
+        assert_eq!(
+            status(&pod(
+                json!({"reason":"Evicted","conditions":[{"type":"DisruptionTarget",
+                "status":"True","reason":"TerminationByKubelet"}],
+                "containerStatuses":terminated(137)})
+            )),
+            "failed"
+        );
+        // The taint manager deleting the Pod of a lost node is loss.
+        assert_eq!(
+            status(&pod(
+                json!({"conditions":[{"type":"DisruptionTarget","status":"True",
+                "reason":"DeletionByTaintManager"}],"containerStatuses":terminated(2)})
+            )),
+            "runtime_lost"
+        );
+        // A graceful node shutdown is loss.
+        assert_eq!(
+            status(&pod(
+                json!({"reason":"Terminated","containerStatuses":terminated(143)})
+            )),
+            "runtime_lost"
+        );
+        // A false condition and a runner error exit are the code's own failure.
+        assert_eq!(
+            status(&pod(
+                json!({"conditions":[{"type":"DisruptionTarget","status":"False"}],
+                "containerStatuses":terminated(2)})
+            )),
+            "failed"
+        );
+        // The Pod deadline stays a timeout even when the kubelet killed the runner.
+        assert_eq!(
+            status(&pod(
+                json!({"reason":"DeadlineExceeded","containerStatuses":terminated(137)})
+            )),
+            "timeout"
+        );
+        // A clean exit is read from the runner's own envelope, never synthesized.
+        assert!(
+            termination_receipt(&pod(
+                json!({"reason":"Evicted","containerStatuses":terminated(0)})
+            ))
+            .unwrap()
+            .is_none()
+        );
+    }
+
     #[test]
     fn receipt_requires_a_complete_runner_envelope_and_successful_exit() {
         assert!(validate_receipt(br#"{"status":"completed"}"#).is_err());
@@ -575,6 +669,7 @@ mod tests {
             ("completed", 1, false),
             ("failed", 1, true),
             ("unknown", 0, false),
+            ("runtime_lost", 255, false),
         ] {
             let bytes = serde_json::to_vec(&json!({"revision":1,"status":status,"exit_code":code,"stdout":"result","stderr":""})).unwrap();
             assert_eq!(validate_receipt(&bytes).is_ok(), valid);

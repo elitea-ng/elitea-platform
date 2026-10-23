@@ -1,20 +1,29 @@
 /**
- * The 34 `SocketMessageType` discriminants a streamed socket message can
- * carry, and their payload schemas.
+ * The `SocketMessageType` discriminants a streamed socket message can carry,
+ * and their payload schemas.
  *
- * MAINTAINED BY HAND, for the reason events.ts's header gives: the generator
- * that produced this file required the Go prototype socket.io server as an
- * input, and #126 deleted it. Evidence below is the CLIENT side only —
- * apps/elitea-ui/src/common/constants.js and the call sites that read each
- * discriminant. messages.test.ts holds the file to its shape.
+ * The discriminant VALUES are not listed here: they are
+ * `@elitea/client-core`'s `FRAME_TYPE`, the one chat stream vocabulary the
+ * web, desktop and mobile clients share. This file used to hold its own
+ * hand-written copy of the 34 baseline values, and it drifted: the six frame
+ * types added after it (context status, full message, result chunk, tool
+ * paused, tool output chunk, node recovery) were missing. The schemas below
+ * are MAINTAINED BY HAND, for the reason events.ts's header gives: the
+ * generator that produced this file required the Go prototype socket.io
+ * server as an input, and #126 deleted it. Evidence below is the CLIENT side
+ * only — apps/elitea-ui/src/common/constants.js and the call sites that read
+ * each discriminant. messages.test.ts holds the union to exactly
+ * `FRAME_TYPE`, so a frame type added to the package fails here until it
+ * has a schema.
  */
+import { FRAME_TYPE, type FrameType } from '@elitea/client-core/stream';
 import { z } from 'zod';
 
 /** Shared `response_metadata` shape — see events.ts for the full rationale (permissive by evidence, not by default). */
 const responseMetadataSchema = z.record(z.string(), z.unknown());
 
-/** The 34 catalogued SocketMessageType discriminant VALUES, in constants.js declaration order. Narrow with `(typeof SOCKET_MESSAGE_TYPES)[number]` if a bare type name is ever needed — no consumer does yet. */
-export const SOCKET_MESSAGE_TYPES = ["agent_start", "agent_response", "agent_exception", "agent_tool_start", "agent_tool_end", "agent_tool_error", "agent_requires_confirmation", "agent_hitl_interrupt", "mcp_authorization_required", "agent_llm_start", "agent_llm_chunk", "agent_llm_end", "agent_on_function_tool_node", "agent_on_tool_node", "agent_on_transitional_edge", "agent_on_conditional_edge", "agent_on_decision_edge", "references", "chunk", "AIMessageChunk", "chat_user_message", "start_task", "freeform", "error", "llm_error", "pipeline_finish", "agent_thinking_step", "agent_thinking_step_update", "chat_predict_summary_started", "chat_predict_summary_finished", "swarm_child_message", "agent_swarm_agent_start", "agent_swarm_agent_response", "agent_swarm_handoff"] as const;
+/** Every SocketMessageType discriminant VALUE, in `FRAME_TYPE` declaration order. Narrow with `(typeof SOCKET_MESSAGE_TYPES)[number]` if a bare type name is ever needed. */
+export const SOCKET_MESSAGE_TYPES: readonly FrameType[] = Object.values(FRAME_TYPE);
 
 /**
  * evidence:
@@ -34,11 +43,59 @@ const AgentStartMessageSchema = z.looseObject({
 
 /**
  * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFrame.ts
+ */
+const AgentContextStatusMessageSchema = z.looseObject({
+  type: z.literal("agent_context_status"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
  *   - apps/elitea-ui/src/common/constants.js:159
  *   - apps/elitea-ui/src/components/Chat/hooks.js:492-507
  */
 const AgentResponseMessageSchema = z.looseObject({
   type: z.literal("agent_response"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFrame.ts
+ */
+const FullMessageMessageSchema = z.looseObject({
+  type: z.literal("full_message"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFrame.ts
+ */
+const AgentResultChunkMessageSchema = z.looseObject({
+  type: z.literal("agent_result_chunk"),
   message_id: z.string().optional(),
   sio_event: z.string().optional(),
   question_id: z.string().optional(),
@@ -114,6 +171,38 @@ const AgentToolErrorMessageSchema = z.looseObject({
 
 /**
  * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts (client contract 1.2, #1066)
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFrame.ts
+ */
+const AgentToolPausedMessageSchema = z.looseObject({
+  type: z.literal("agent_tool_paused"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts (#956)
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFrame.ts
+ */
+const AgentToolOutputChunkMessageSchema = z.looseObject({
+  type: z.literal("agent_tool_output_chunk"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
  *   - apps/elitea-ui/src/common/constants.js:164
  *   - apps/elitea-ui/src/components/Chat/hooks.js:1011-1035
  */
@@ -135,6 +224,22 @@ const AgentRequiresConfirmationMessageSchema = z.looseObject({
  */
 const AgentHitlInterruptMessageSchema = z.looseObject({
   type: z.literal("agent_hitl_interrupt"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts
+ *   - apps/elitea-web/src/features/pipelines/lib/flow-editor/hooks/useRunEvent.ts
+ */
+const AgentNodeRecoveryRequiredMessageSchema = z.looseObject({
+  type: z.literal("agent_node_recovery_required"),
   message_id: z.string().optional(),
   sio_event: z.string().optional(),
   question_id: z.string().optional(),
@@ -571,16 +676,22 @@ const AgentSwarmHandoffMessageSchema = z.looseObject({
   threadId: z.string().optional(),
 });
 
-/** `z.discriminatedUnion('type', [...])` over all 34 variants (spec §5.5). */
+/** `z.discriminatedUnion('type', [...])` over every `FRAME_TYPE` variant (spec §5.5). */
 export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentStartMessageSchema,
+  AgentContextStatusMessageSchema,
   AgentResponseMessageSchema,
+  FullMessageMessageSchema,
+  AgentResultChunkMessageSchema,
   AgentExceptionMessageSchema,
   AgentToolStartMessageSchema,
   AgentToolEndMessageSchema,
   AgentToolErrorMessageSchema,
+  AgentToolPausedMessageSchema,
+  AgentToolOutputChunkMessageSchema,
   AgentRequiresConfirmationMessageSchema,
   AgentHitlInterruptMessageSchema,
+  AgentNodeRecoveryRequiredMessageSchema,
   McpAuthorizationRequiredMessageSchema,
   AgentLlmStartMessageSchema,
   AgentLlmChunkMessageSchema,
@@ -617,7 +728,7 @@ export type SocketMessageParseResult =
   | { readonly ok: false; readonly reason: 'unknown_event'; readonly rawType: string | undefined; readonly raw: unknown };
 
 /**
- * Validate a raw socket payload against the 34-discriminant union. Spec
+ * Validate a raw socket payload against the `FRAME_TYPE` union. Spec
  * §5.5: "unknown discriminants route to a logged `unknown_event` branch
  * rather than crashing or silently dropping" — mirrors the old app's own
  * fallback exactly (components/Chat/hooks.js:1453-1460,

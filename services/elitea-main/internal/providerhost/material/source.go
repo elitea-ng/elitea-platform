@@ -31,8 +31,8 @@ import (
 	"strings"
 	"time"
 
-	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 var (
@@ -54,8 +54,8 @@ type Kind struct {
 	HostField     string
 	DefaultHost   string
 	// Credentials and Settings are ENUMERATIONS, not filters. A source
-	// toolkit's settings also hold a PgVector connection string and an
-	// embedding model, and a provider has no business receiving either.
+	// toolkit's settings also hold an embedding model and other indexing
+	// settings, and a provider has no business receiving any of them.
 	Credentials []string
 	Settings    []string
 }

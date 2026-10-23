@@ -99,7 +99,7 @@ async fn execution_checksum(client: &DockerClient, scope: &CodeJobIdentity, path
 async fn fixed_command(session: &dyn SandboxSession, command: &str) -> String {
     let output = session.exec_command(command, None).await.unwrap();
     assert_eq!(output.exit_code, 0, "fixed probe command failed");
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, "");
     assert!(!output.timed_out);
     output.stdout
 }
@@ -160,7 +160,7 @@ async fn assert_policy(client: &DockerClient, scope: &CodeJobIdentity) {
         .output()
         .unwrap();
     assert!(network.status.success());
-    assert!(network.stderr.is_empty());
+    assert_eq!(network.stderr, [] as [u8; 0]);
     assert_eq!(std::str::from_utf8(&network.stdout).unwrap().trim(), "none");
     fixed_command(session.as_ref(), "test ! -e /var/run/docker.sock").await;
 }

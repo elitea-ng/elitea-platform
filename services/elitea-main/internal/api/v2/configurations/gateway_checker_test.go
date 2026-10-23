@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	handler "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // fakeGateway is an httptest server standing in for elitea-llm-gateway's
@@ -15,15 +16,15 @@ import (
 // behaviour (request shape, identity headers, response mapping) can be
 // verified without a live gateway or podman stack.
 type fakeGateway struct {
-	*httptest.Server
+	*llmproxytest.Server
 	lastRequest map[string]any
 	lastHeaders http.Header
 	respond     func(w http.ResponseWriter)
 }
 
-func newFakeGateway(respond func(w http.ResponseWriter)) *fakeGateway {
+func newFakeGateway(t *testing.T, respond func(w http.ResponseWriter)) *fakeGateway {
 	fg := &fakeGateway{respond: respond}
-	fg.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fg.Server = llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		fg.lastRequest = body
@@ -31,6 +32,17 @@ func newFakeGateway(respond func(w http.ResponseWriter)) *fakeGateway {
 		fg.respond(w)
 	}))
 	return fg
+}
+
+// client is a Gateway client of fg over real mutual TLS.
+func (fg *fakeGateway) client(t *testing.T, secret string) llmproxy.Gateway {
+	t.Helper()
+	client, err := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{Target: fg.Target, IdentitySecret: secret, TLS: fg.ClientTLS(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }
 
 func writeGatewayJSON(w http.ResponseWriter, status int, v any) {
@@ -43,12 +55,12 @@ func writeGatewayJSON(w http.ResponseWriter, status int, v any) {
 // the credential type/data to the gateway and reports success only when the
 // gateway itself reports success.
 func TestGatewayConnectionChecker_SuccessRoundTrip(t *testing.T) {
-	gw := newFakeGateway(func(w http.ResponseWriter) {
+	gw := newFakeGateway(t, func(w http.ResponseWriter) {
 		writeGatewayJSON(w, http.StatusOK, map[string]any{"success": true, "reason": "ok"})
 	})
 	defer gw.Close()
 
-	checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "shared-secret")
+	checker := handler.NewGatewayConnectionChecker(gw.client(t, "shared-secret"))
 	ctx := handler.WithConnectionCheckProjectID(context.Background(), "42")
 
 	result, err := checker.Check(ctx, "open_ai", map[string]any{"api_base": "https://api.openai.com/v1", "api_key": "sk-good"})
@@ -87,12 +99,12 @@ func TestGatewayConnectionChecker_SuccessRoundTrip(t *testing.T) {
 // The wire field names are the gateway's own (checkConnectionRequest).
 func TestGatewayConnectionChecker_ForwardsCloudCredentialFields(t *testing.T) {
 	t.Run("amazon_bedrock", func(t *testing.T) {
-		gw := newFakeGateway(func(w http.ResponseWriter) {
+		gw := newFakeGateway(t, func(w http.ResponseWriter) {
 			writeGatewayJSON(w, http.StatusOK, map[string]any{"success": true, "reason": "ok"})
 		})
 		defer gw.Close()
 
-		checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "")
+		checker := handler.NewGatewayConnectionChecker(gw.client(t, ""))
 		if _, err := checker.Check(context.Background(), "amazon_bedrock", map[string]any{
 			"aws_access_key_id":     "AKIAIOSFODNN7EXAMPLE",
 			"aws_secret_access_key": "secret-value",
@@ -113,12 +125,12 @@ func TestGatewayConnectionChecker_ForwardsCloudCredentialFields(t *testing.T) {
 	})
 
 	t.Run("vertex_ai", func(t *testing.T) {
-		gw := newFakeGateway(func(w http.ResponseWriter) {
+		gw := newFakeGateway(t, func(w http.ResponseWriter) {
 			writeGatewayJSON(w, http.StatusOK, map[string]any{"success": true, "reason": "ok"})
 		})
 		defer gw.Close()
 
-		checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "")
+		checker := handler.NewGatewayConnectionChecker(gw.client(t, ""))
 		if _, err := checker.Check(context.Background(), "vertex_ai", map[string]any{
 			"vertex_project":     "elitea-test-project",
 			"vertex_location":    "us-central1",
@@ -143,12 +155,12 @@ func TestGatewayConnectionChecker_ForwardsCloudCredentialFields(t *testing.T) {
 	// than through a string coercion that would silently drop it) is what
 	// keeps that shape working; the gateway accepts both forms.
 	t.Run("vertex_ai credentials as a nested object", func(t *testing.T) {
-		gw := newFakeGateway(func(w http.ResponseWriter) {
+		gw := newFakeGateway(t, func(w http.ResponseWriter) {
 			writeGatewayJSON(w, http.StatusOK, map[string]any{"success": true, "reason": "ok"})
 		})
 		defer gw.Close()
 
-		checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "")
+		checker := handler.NewGatewayConnectionChecker(gw.client(t, ""))
 		if _, err := checker.Check(context.Background(), "vertex_ai", map[string]any{
 			"vertex_project":     "elitea-test-project",
 			"vertex_location":    "us-central1",
@@ -171,12 +183,12 @@ func TestGatewayConnectionChecker_ForwardsCloudCredentialFields(t *testing.T) {
 // failure surfaces as ConnectionCheckResult{Success:false} with a safe
 // message, not an error and not success.
 func TestGatewayConnectionChecker_FailureRoundTrip(t *testing.T) {
-	gw := newFakeGateway(func(w http.ResponseWriter) {
+	gw := newFakeGateway(t, func(w http.ResponseWriter) {
 		writeGatewayJSON(w, http.StatusOK, map[string]any{"success": false, "reason": "unauthorized", "detail": "the provider rejected the credential"})
 	})
 	defer gw.Close()
 
-	checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "")
+	checker := handler.NewGatewayConnectionChecker(gw.client(t, ""))
 	result, err := checker.Check(context.Background(), "open_ai", map[string]any{"api_base": "https://api.openai.com/v1", "api_key": "sk-bad"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -194,10 +206,10 @@ func TestGatewayConnectionChecker_FailureRoundTrip(t *testing.T) {
 // success or a silently-empty failure.
 func TestGatewayConnectionChecker_GatewayUnreachableIsError(t *testing.T) {
 	// A closed server: connecting fails immediately.
-	gw := newFakeGateway(func(w http.ResponseWriter) { writeGatewayJSON(w, http.StatusOK, map[string]any{"success": true}) })
+	gw := newFakeGateway(t, func(w http.ResponseWriter) { writeGatewayJSON(w, http.StatusOK, map[string]any{"success": true}) })
 	gw.Close()
 
-	checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "")
+	checker := handler.NewGatewayConnectionChecker(gw.client(t, ""))
 	_, err := checker.Check(context.Background(), "open_ai", map[string]any{"api_base": "https://api.openai.com/v1"})
 	if err == nil {
 		t.Fatal("expected an error when the gateway is unreachable")
@@ -208,10 +220,10 @@ func TestGatewayConnectionChecker_GatewayUnreachableIsError(t *testing.T) {
 // status from the gateway (e.g. 500, 403 from a broken identity secret) is
 // reported as an error rather than silently treated as failure or success.
 func TestGatewayConnectionChecker_NonOKStatusIsError(t *testing.T) {
-	gw := newFakeGateway(func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) })
+	gw := newFakeGateway(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) })
 	defer gw.Close()
 
-	checker := handler.NewGatewayConnectionChecker(gw.URL, http.DefaultTransport, "")
+	checker := handler.NewGatewayConnectionChecker(gw.client(t, ""))
 	_, err := checker.Check(context.Background(), "open_ai", map[string]any{"api_base": "https://api.openai.com/v1"})
 	if err == nil {
 		t.Fatal("expected an error for a non-200 gateway response")

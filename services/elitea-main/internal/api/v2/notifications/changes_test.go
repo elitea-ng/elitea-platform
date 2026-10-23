@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
 )
 
 type changesStoreStub struct {

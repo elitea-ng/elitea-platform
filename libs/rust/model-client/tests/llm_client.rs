@@ -26,8 +26,10 @@ use elitea_model_client::{
     ChatClient, ChatMessage, ChatRequest, EmbeddingClient, EmbeddingOptions, ModelSettings,
     Sampling, Timeouts, ToolChoice, ToolDefinition, Transport, TransportSettings,
 };
+use elitea_model_rpc::testing::with_model_service;
 use serde_json::{Value, json};
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -139,11 +141,60 @@ async fn gateway(
     let Ok(address) = listener.local_addr() else {
         panic!("no local address");
     };
-    let app = Router::new().fallback(handle).with_state(gateway.clone());
+    let app = with_model_service(
+        Router::new().fallback(handle).with_state(gateway.clone()),
+        "/llm/v1",
+    );
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
     (gateway, format!("http://{address}/llm/v1"))
+}
+
+/// [`gateway`], served over HTTP/2 by a server that sends GOAWAY on every
+/// connection at `max_age` and lets the streams already on it finish however
+/// long they take — elitea-main's platform listener (`MaxConnectionAge` with
+/// `ConnectionAgeGraceUnlimited`). Also returns how many connections it
+/// accepted.
+async fn gateway_with_max_age(
+    script: impl Fn(usize, &Seen) -> Reply + Send + Sync + 'static,
+    max_age: Duration,
+) -> (Gateway, String, Arc<AtomicUsize>) {
+    let gateway = Gateway {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        script: Arc::new(script),
+    };
+    let Ok(listener) = TcpListener::bind("127.0.0.1:0").await else {
+        panic!("cannot bind loopback");
+    };
+    let Ok(address) = listener.local_addr() else {
+        panic!("no local address");
+    };
+    let app = with_model_service(
+        Router::new().fallback(handle).with_state(gateway.clone()),
+        "/llm/v1",
+    );
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let service = hyper_util::service::TowerToHyperService::new(app.clone());
+            tokio::spawn(async move {
+                let builder =
+                    hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new());
+                let connection =
+                    builder.serve_connection(hyper_util::rt::TokioIo::new(socket), service);
+                tokio::pin!(connection);
+                tokio::select! {
+                    _ = connection.as_mut() => return,
+                    () = tokio::time::sleep(max_age) => connection.as_mut().graceful_shutdown(),
+                }
+                let _ = connection.await;
+            });
+        }
+    });
+    (gateway, format!("http://{address}/llm/v1"), accepted)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -310,6 +361,68 @@ async fn embeddings_batch_in_order_with_the_right_headers() {
     assert_eq!(client.prompt_tokens(), 150);
     let query = ok(client.embed_query("t7", &StopSignal::default()).await);
     assert_eq!(query[0], 7.0);
+}
+
+/// A unary answer the platform listener may send is up to the gateway's
+/// 64 MiB unary cap plus its head (elitea-main
+/// `runtimegrpc.PlatformMaxSendMessageBytes`, 65 MiB): the client decodes one
+/// well past the listener's 16 MiB receive cap, which it used to apply to
+/// answers too and refused such a message as too large.
+#[tokio::test]
+async fn a_unary_answer_over_sixteen_mib_is_received() {
+    const PADDING: usize = 20 * 1024 * 1024;
+    let (_gw, base) = gateway(|_, seen| {
+        let Reply::Json(status, mut value, headers) = embeddings_reply(seen, 4) else {
+            panic!("an embeddings reply is JSON")
+        };
+        value["padding"] = Value::String("x".repeat(PADDING));
+        Reply::Json(status, value, headers)
+    })
+    .await;
+    let client = embedder(&base, EmbeddingOptions::default());
+    let vector = ok(client.embed_query("t9", &StopSignal::default()).await);
+    assert_eq!(vector.len(), 4);
+    assert_eq!(vector[0], 9.0);
+}
+
+/// The engines' `api_base` is the artifact API's cleartext HTTP base; the
+/// configured model service origin is where every model call goes, and the
+/// `api_base` path still names the route.
+#[tokio::test]
+async fn a_configured_model_service_origin_wins_over_the_api_base_origin() {
+    let (gw, base) = gateway(|_, seen| embeddings_reply(seen, 4)).await;
+    let Some(origin) = base.strip_suffix("/llm/v1") else {
+        panic!("gateway base {base}");
+    };
+    let client = EmbeddingClient::new(
+        transport(&TransportSettings {
+            model_service: Some(origin.to_owned()),
+            ..fast()
+        }),
+        // Not on loopback and not https: dialled directly, it is refused.
+        settings("http://elitea-main.invalid:8080/llm/v1", json!({})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let vectors = ok(client
+        .embed_documents(&texts(2), &StopSignal::default())
+        .await);
+    assert_eq!(vectors.len(), 2);
+    let requests = gw.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/llm/v1/embeddings");
+
+    let direct = embedder(
+        "http://elitea-main.invalid:8080/llm/v1",
+        EmbeddingOptions::default(),
+    );
+    let error = err(direct
+        .embed_documents(&texts(1), &StopSignal::default())
+        .await);
+    assert!(
+        error.message.contains("must be reached over https"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -754,6 +867,66 @@ async fn a_streamed_answer_arrives_in_fragments_with_usage() {
     );
 }
 
+/// The platform listener ends a connection at its maximum age with GOAWAY
+/// and lets the streams already on it finish (elitea-main
+/// `ConnectionAgeGraceUnlimited`). A completion streaming across that moment
+/// completes, and the next call goes over a new connection without an error.
+#[tokio::test]
+async fn a_stream_outlives_its_connections_goaway_and_the_next_call_reconnects() {
+    let mut events = vec![delta(json!({"role": "assistant", "content": ""}))];
+    for word in 0..12 {
+        events.push(delta(json!({"content": format!("w{word} ")})));
+    }
+    events.push(json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}));
+    // One SSE event per chunk.
+    let mut chunks: Vec<Vec<u8>> = events
+        .iter()
+        .map(|event| format!("data: {event}\n\n").into_bytes())
+        .collect();
+    chunks.push(b"data: [DONE]\n\n".to_vec());
+    let (_gw, base, accepted) = gateway_with_max_age(
+        move |_, seen| {
+            if seen.path.ends_with("/embeddings") {
+                return embeddings_reply(seen, 4);
+            }
+            // 16 events 200 ms apart: about 3 s, well past the connection's
+            // one-second age.
+            Reply::Stream(chunks.clone(), Duration::from_millis(200))
+        },
+        Duration::from_secs(1),
+    )
+    .await;
+    let transport = transport(&fast());
+    let chat = ChatClient::new(transport.clone(), settings(&base, json!({})));
+    let request = ChatRequest::new(vec![ChatMessage::User("hello".to_owned())]);
+    let started = std::time::Instant::now();
+    let response = ok(chat
+        .chat(&request, &StopSignal::default(), &mut |_| {})
+        .await);
+    assert!(
+        started.elapsed() > Duration::from_millis(1_500),
+        "the stream ended before the connection's age: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(response.finish_reason.as_deref(), Some("stop"));
+    assert!(response.content.ends_with("w11 "), "{}", response.content);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    // The connection is closed now; the next call opens another.
+    let embedder = EmbeddingClient::new(
+        transport,
+        settings(&base, json!({})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let vector = ok(embedder.embed_query("t3", &StopSignal::default()).await);
+    assert_eq!(vector[0], 3.0);
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        2,
+        "the call after GOAWAY reused the old connection"
+    );
+}
+
 #[tokio::test]
 async fn streamed_tool_call_deltas_assemble() {
     let tool_delta = |calls: Value| delta(json!({"tool_calls": calls}));
@@ -959,6 +1132,10 @@ async fn the_key_never_reaches_errors_or_logs() {
         .with_writer(move || LogWriter(Arc::clone(&writer_logs)))
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
+    // Another test's thread can register the retry callsite while no
+    // subscriber wants it and cache that interest; recompute it now that
+    // this thread has one, or the retry line is never written here.
+    tracing::callsite::rebuild_interest_cache();
 
     let client = ChatClient::new(
         transport(&fast()),
@@ -1116,12 +1293,14 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     else {
         panic!("protocol versions")
     };
-    let Ok(config) = builder
+    let Ok(mut config) = builder
         .with_no_client_auth()
         .with_single_cert(vec![leaf], key)
     else {
         panic!("server config")
     };
+    // The model service is gRPC: HTTP/2 is negotiated.
+    config.alpn_protocols = vec![b"h2".to_vec()];
     let Ok(tcp) = TcpListener::bind("127.0.0.1:0").await else {
         panic!("bind")
     };
@@ -1132,9 +1311,12 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
         seen: Arc::new(Mutex::new(Vec::new())),
         script: Arc::new(|_, seen| embeddings_reply(seen, 3)),
     };
-    let app = Router::new()
-        .fallback(handle)
-        .with_state(gateway_state.clone());
+    let app = with_model_service(
+        Router::new()
+            .fallback(handle)
+            .with_state(gateway_state.clone()),
+        "/llm/v1",
+    );
     let listener = TlsListener {
         tcp,
         acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
@@ -1177,10 +1359,7 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     let error = err(untrusted
         .embed_documents(&texts(1), &StopSignal::default())
         .await);
-    assert!(
-        error.message.contains("cannot reach the model gateway"),
-        "{error}"
-    );
+    assert!(error.message.contains("needs the platform CA"), "{error}");
     assert_eq!(
         gateway_state.requests().len(),
         1,
@@ -1198,54 +1377,161 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     let _ = std::fs::remove_dir_all(&scratch);
 }
 
-/// A real round trip against the LAN vLLM, when asked for.
+/// The callback hop to elitea-main's platform listener requires a client
+/// certificate. The configured identity is presented; without it the
+/// handshake fails and nothing is sent; an unreadable key names its setting.
 #[tokio::test]
-async fn live_lan_model_chat() {
-    if std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM")
-        .ok()
-        .as_deref()
-        != Some("1")
-    {
-        return;
-    }
-    let base = std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM_BASE")
-        .unwrap_or_else(|_| "http://192.168.29.60:8000/v1".to_owned());
-    let model = std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM_MODEL")
-        .unwrap_or_else(|_| "RadixArk/Qwen3.8-27B-NVFP4".to_owned());
-    let settings = settings(&base, json!({"model_name": model, "max_tokens": 2048}));
-    let live = TransportSettings::default();
-    let client = ChatClient::new(transport(&live), settings);
-    let mut request = ChatRequest::new(vec![
-        ChatMessage::System("Answer in one short sentence. /no_think"),
-        ChatMessage::User("What is the capital of France?".to_owned()),
-    ]);
-    let blocking = ok(client.complete(&request, &StopSignal::default()).await);
-    eprintln!("live blocking: {blocking:?}");
-    assert!(blocking.content.contains("Paris"), "{blocking:?}");
+#[allow(clippy::too_many_lines)] // One PKI, one server, three clients.
+async fn the_client_identity_is_presented_to_a_listener_that_requires_one() {
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa,
+        KeyPair, KeyUsagePurpose, date_time_ymd,
+    };
+    use tokio_rustls::rustls;
+    use tokio_rustls::rustls::pki_types::{
+        CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject,
+    };
 
-    let mut fragments = 0;
-    let streamed = ok(client
-        .stream(&request, &StopSignal::default(), &mut |_| fragments += 1)
-        .await);
-    eprintln!("live streamed ({fragments} fragments): {streamed:?}");
-    assert!(streamed.content.contains("Paris"), "{streamed:?}");
-
-    request.messages = vec![ChatMessage::User(
-        "Call the get_weather tool for Paris. /no_think".to_owned(),
-    )];
-    request.tools = vec![ToolDefinition {
-        name: "get_weather".to_owned(),
-        description: "Current weather for a city".to_owned(),
-        parameters: json!({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}),
-    }];
-    request.tool_choice = Some(ToolChoice::Required);
-    let tools = ok(client
-        .stream(&request, &StopSignal::default(), &mut |_| {})
-        .await);
-    eprintln!("live tool call: {tools:?}");
-    assert_eq!(
-        tools.tool_calls.first().map(|c| c.name.as_str()),
-        Some("get_weather"),
-        "{tools:?}"
+    let today = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() / 86_400),
+    )
+    .unwrap_or(0);
+    let (y0, m0, d0) = civil_from_days(today - 1);
+    let (y1, m1, d1) = civil_from_days(today + 30);
+    let validity = |params: &mut CertificateParams| {
+        params.not_before = date_time_ymd(y0, m0, d0);
+        params.not_after = date_time_ymd(y1, m1, d1);
+    };
+    let ca_key = KeyPair::generate().expect("ca key");
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    validity(&mut ca_params);
+    let ca = CertifiedIssuer::self_signed(ca_params, ca_key).expect("ca cert");
+    let leaf = |names: Vec<String>, purpose: ExtendedKeyUsagePurpose| {
+        let key = KeyPair::generate().expect("leaf key");
+        let mut params = CertificateParams::new(names).expect("leaf params");
+        params.extended_key_usages = vec![purpose];
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        validity(&mut params);
+        let certificate = params.signed_by(&key, &ca).expect("leaf cert");
+        (certificate.pem(), key)
+    };
+    let (server_pem, server_key) = leaf(
+        vec!["localhost".to_owned()],
+        ExtendedKeyUsagePurpose::ServerAuth,
     );
+    let (client_pem, client_key) = leaf(
+        vec!["elitea-subapp-host".to_owned()],
+        ExtendedKeyUsagePurpose::ClientAuth,
+    );
+
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_slice(ca.pem().as_bytes()).expect("ca der"))
+        .expect("root");
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        Arc::clone(&provider),
+    )
+    .build()
+    .expect("client verifier");
+    let mut config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(
+            vec![CertificateDer::from_pem_slice(server_pem.as_bytes()).expect("server der")],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+        )
+        .expect("server config");
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = tcp.local_addr().expect("address");
+    let gateway_state = Gateway {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        script: Arc::new(|_, seen| embeddings_reply(seen, 3)),
+    };
+    let app = with_model_service(
+        Router::new()
+            .fallback(handle)
+            .with_state(gateway_state.clone()),
+        "/llm/v1",
+    );
+    let listener = TlsListener {
+        tcp,
+        acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
+    };
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let base = format!("https://localhost:{}/llm/v1", address.port());
+
+    let scratch =
+        std::env::temp_dir().join(format!("elitea-model-client-mtls-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&scratch);
+    let ca_file = scratch.join("ca.pem");
+    let cert_file = scratch.join("client.crt");
+    let key_file = scratch.join("client.key");
+    std::fs::write(&ca_file, ca.pem()).expect("ca file");
+    std::fs::write(&cert_file, client_pem).expect("cert file");
+    std::fs::write(&key_file, client_key.serialize_pem()).expect("key file");
+    let identity = elitea_model_client::ClientIdentityFiles {
+        cert_file,
+        cert_file_setting: "TEST_CALLBACK_CERT_FILE",
+        key_file,
+        key_file_setting: "TEST_CALLBACK_KEY_FILE",
+    };
+
+    let with_identity = TransportSettings {
+        ca_file: Some(ca_file.clone()),
+        client_identity: Some(identity.clone()),
+        ..fast()
+    };
+    let client = EmbeddingClient::new(
+        transport(&with_identity),
+        settings(&base, json!({"max_retries": 0})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let vectors = ok(client
+        .embed_documents(&texts(2), &StopSignal::default())
+        .await);
+    assert_eq!(vectors.len(), 2);
+
+    let without_identity = EmbeddingClient::new(
+        transport(&TransportSettings {
+            ca_file: Some(ca_file.clone()),
+            ..fast()
+        }),
+        settings(&base, json!({"max_retries": 0})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let error = err(without_identity
+        .embed_documents(&texts(1), &StopSignal::default())
+        .await);
+    assert!(
+        error.message.contains("cannot reach the model gateway"),
+        "{error}"
+    );
+    assert_eq!(
+        gateway_state.requests().len(),
+        1,
+        "the call without a client certificate sent nothing"
+    );
+
+    let missing_key = TransportSettings {
+        client_identity: Some(elitea_model_client::ClientIdentityFiles {
+            key_file: scratch.join("absent.key"),
+            ..identity
+        }),
+        ..fast()
+    };
+    let error = err(Transport::new(&missing_key));
+    assert!(error.message.contains("TEST_CALLBACK_KEY_FILE"), "{error}");
+    let _ = std::fs::remove_dir_all(&scratch);
 }

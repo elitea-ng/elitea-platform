@@ -36,7 +36,7 @@
 -- already exist, never creates one, and ignores conflicts. Before this file no
 -- caller could create or delete a project through the Go stack at all, so no
 -- deployment loses a capability and none gains one it did not already have
--- through pylon.
+-- through the legacy runtime.
 --
 -- 0060's VIRGIN-mode guard is NOT reproduced, for the reason 0061/0062/0063/
 -- 0066/0068 all give: these permissions have never existed on a Go deployment,

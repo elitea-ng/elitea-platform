@@ -3,7 +3,7 @@ package tenantschema
 import (
 	"strconv"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
 // OwnerID returns the number a PROJECT-kind `owner_id` column must hold in the

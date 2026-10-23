@@ -20,7 +20,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // ConfigResponse is the widget's `TAssistantConfig`

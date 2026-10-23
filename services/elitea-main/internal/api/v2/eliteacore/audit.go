@@ -23,7 +23,7 @@ package eliteacore
 //
 // Audit rows carry user emails, project ids and the actions people took. Every
 // route here is gated in internal/api/router.go on the same permission its
-// pylon counterpart declares (`models.admin.audit_trail.view`), resolved from
+// legacy counterpart declares (`models.admin.audit_trail.view`), resolved from
 // the database per request. No record content is ever written to a log line.
 
 import (
@@ -33,7 +33,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -277,10 +277,10 @@ func (h *Handler) listAuditTraces(
 
 	// The root-span lookup is a LATERAL with LIMIT 1, so it contributes exactly
 	// one row per trace and cannot multiply the page against `total`. It also
-	// folds in pylon's fallback: `parent_span_id IS NULL` first, then the
-	// earliest span. pylon ran that fallback as one extra query PER trace
-	// missing a root, and resolved ties between several parentless spans by
-	// dict overwrite — whichever row the driver happened to yield last.
+	// folds in the legacy runtime's fallback: `parent_span_id IS NULL` first, then
+	// the earliest span. The legacy runtime ran that fallback as one extra query
+	// PER trace missing a root, and resolved ties between several parentless spans
+	// by dict overwrite — whichever row the driver happened to yield last.
 	listSQL := fmt.Sprintf(`
 WITH a AS (%s)
 SELECT a.trace_id, a.start_time, a.duration_ms, a.span_count, a.error_count, a.has_error,
@@ -353,9 +353,9 @@ func (h *Handler) AuditTraceHeatmap(w http.ResponseWriter, r *http.Request) {
 	h.serveHeatmap(w, r, traceHeatmapSQL, "total_traces", "audit trace heatmap")
 }
 
-// spanHeatmapSQL counts SPANS. `duration_ms IS NOT NULL` matches pylon: a span
-// with no recorded duration belongs to no band, and bucketing it into ">10s"
-// (the CASE's else) would invent latency that was never measured.
+// spanHeatmapSQL counts SPANS. `duration_ms IS NOT NULL` matches the legacy
+// runtime: a span with no recorded duration belongs to no band, and bucketing
+// it into ">10s" (the CASE's else) would invent latency that was never measured.
 const spanHeatmapSQL = `
 SELECT %[3]s AS bucket, %[4]s AS band, COUNT(*)
 FROM %[1]s AS e
@@ -391,7 +391,7 @@ func (h *Handler) serveHeatmap(w http.ResponseWriter, r *http.Request, template,
 		return
 	}
 	// Both bounds are required: without them there is no axis to draw and no
-	// way to choose a bucket width. pylon answers 400 here too.
+	// way to choose a bucket width. The legacy runtime answers 400 here too.
 	if filters.dateFrom == nil || filters.dateTo == nil {
 		apierr.WriteStatus(w, http.StatusBadRequest, "date_from and date_to are required")
 		return

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -52,7 +52,7 @@ func NewCurrentNotificationEventsRoute(
 	if reader == nil || permissions == nil {
 		return nil, ErrInvalidCurrentNotificationEventsRoute
 	}
-	// PrincipalValidator and ForwardedIdentityVerifier are optional — when nil
+	// PrincipalValidator and FormSessions are optional — when nil
 	// the auth middleware falls back to session-cookie verification, which is
 	// the only credential OIDC-only deployments have (no
 	// ELITEA_AUTH_CONFIG_FILE, hence no FormGraph). Requiring them made this
