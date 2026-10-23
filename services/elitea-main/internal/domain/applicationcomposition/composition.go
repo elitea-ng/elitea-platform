@@ -148,7 +148,13 @@ func Check(ctx context.Context, source Source, root Identity, override *Version)
 		}
 		version = &read
 	}
-	w := walker{source: source, cache: map[Identity]Version{}}
+	w := walker{source: source, cache: map[Identity]Version{root: *version}}
+	// A cycle through ANY attachment is refused (PLAN §8.8), whether or not a
+	// pipeline's Agent node runs it: an agent reaching itself is an authoring
+	// error even where today's run would not follow the edge.
+	if err := w.cycles(ctx, *version, map[Identity]int{root: visiting}, []string{label(version.Name)}); err != nil {
+		return err
+	}
 	start := path{ancestors: []Identity{root}, trail: []string{label(version.Name)}, tier: 1}
 	if version.Kind == KindPipeline {
 		start.depth = 1
@@ -191,6 +197,52 @@ func (w *walker) read(ctx context.Context, id Identity) (Version, bool, error) {
 	}
 	w.cache[id] = version
 	return version, true, nil
+}
+
+// Cycle search states; a version absent from the map is unvisited.
+const (
+	visiting = 1
+	visited  = 2
+)
+
+// maxCycleVersions bounds the versions the cycle search reads in one check
+// (MaxCycleVersions exported for the read-budget test).
+// Past it the search stops (it does not refuse): the bound walk's hop budget
+// still applies to everything a run would build.
+const maxCycleVersions = MaxCycleVersions
+
+// MaxCycleVersions is the most versions one check reads.
+const MaxCycleVersions = 128
+
+// cycles searches every attachment depth-first; a version met again while it
+// is still on the path closes a cycle.
+func (w *walker) cycles(ctx context.Context, version Version, state map[Identity]int, trail []string) error {
+	for _, attachment := range version.Attachments {
+		child, ok, err := w.read(ctx, attachment.Identity)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		switch state[attachment.Identity] {
+		case visiting:
+			return violation(BoundCycle, fmt.Sprintf(
+				"These attachments would create a circular agent reference: %s. Remove the circular dependency first.",
+				chain(trail, child.Name)))
+		case visited:
+			continue
+		}
+		if len(state) >= maxCycleVersions {
+			return nil
+		}
+		state[attachment.Identity] = visiting
+		if err := w.cycles(ctx, child, state, append(append([]string(nil), trail...), label(child.Name))); err != nil {
+			return err
+		}
+		state[attachment.Identity] = visited
+	}
+	return nil
 }
 
 // enter mirrors ApplicationMaterializationPath::enter: cycle, then the hop budget.

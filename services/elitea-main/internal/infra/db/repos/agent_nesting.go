@@ -80,7 +80,21 @@ func validateCurrentApplicationNesting(
 	versionID int32,
 	startDepth int,
 ) error {
-	_, err := resolveCurrentApplicationNesting(ctx, queries, versionID, startDepth)
+	_, err := resolveCurrentApplicationNesting(ctx, queries, versionID, startDepth, true)
+	return err
+}
+
+// validateCurrentApplicationRows is validateCurrentApplicationNesting without
+// the agent-tier rule: the start of a selected agent or pipeline checks its
+// levels with the shared composition check (checkStartComposition, the rule
+// attach, save, publish and the Worker apply), and this walk keeps the row,
+// cycle, hop and skill-name checks.
+func validateCurrentApplicationRows(
+	ctx context.Context,
+	queries currentApplicationNestingQuerier,
+	versionID int32,
+) error {
+	_, err := resolveCurrentApplicationNesting(ctx, queries, versionID, 1, false)
 	return err
 }
 
@@ -89,6 +103,7 @@ func resolveCurrentApplicationNesting(
 	queries currentApplicationNestingQuerier,
 	versionID int32,
 	startDepth int,
+	enforceTiers bool,
 ) (currentApplicationNestingResolution, error) {
 	if ctx == nil || queries == nil || versionID <= 0 || startDepth <= 0 {
 		return currentApplicationNestingResolution{}, errInvalidCurrentApplicationNesting
@@ -139,6 +154,7 @@ func resolveCurrentApplicationNesting(
 			path,
 			&registries,
 			registered,
+			enforceTiers,
 		); err != nil {
 			return currentApplicationNestingResolution{}, err
 		}
@@ -155,6 +171,7 @@ func walkCurrentApplicationNesting(
 	path map[currentApplicationNestingKey]struct{},
 	registries *[]currentApplicationSkillRegistry,
 	registered map[currentApplicationNestingKey]struct{},
+	enforceTiers bool,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -199,7 +216,7 @@ func walkCurrentApplicationNesting(
 		)
 	}
 	currentAgentTiers := agentTiers + currentApplicationAgentTierContribution(node.agentType)
-	if node.agentType != "pipeline" && len(node.children) > 0 &&
+	if enforceTiers && node.agentType != "pipeline" && len(node.children) > 0 &&
 		currentAgentTiers >= currentMaxAgentNestingTiers {
 		return fmt.Errorf(
 			"%w: %w: agent version %d is a container at tier %d",
@@ -243,6 +260,7 @@ func walkCurrentApplicationNesting(
 			path,
 			registries,
 			registered,
+			enforceTiers,
 		); err != nil {
 			return err
 		}
@@ -455,6 +473,7 @@ func materializeCurrentApplicationToolNestedSkills(
 		queries,
 		versionID,
 		startDepth,
+		true,
 	)
 	if err != nil {
 		return nil, err

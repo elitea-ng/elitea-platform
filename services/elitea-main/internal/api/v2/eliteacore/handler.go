@@ -34,6 +34,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -1997,57 +1998,23 @@ func (h *Handler) runPublishValidation(
 		}
 	}
 
-	// Cycle and depth detection — if either found, short-circuit
-	const maxSubAgentDepth = 3
-	if len(subAgents) > 0 {
-		visited := map[string]bool{versionID: true}
-		var hasCycle bool
-		var depthExceeded bool
-		var checkGraph func(verID string, depth int)
-		checkGraph = func(verID string, depth int) {
-			if hasCycle || depthExceeded {
-				return
-			}
-			if depth > maxSubAgentDepth {
-				depthExceeded = true
-				return
-			}
-			childRefs, err2 := listApplicationToolReferences(ctx, h.pool, s, verID)
-			if err2 != nil {
-				return
-			}
-			for _, childRef := range childRefs {
-				if visited[childRef.VersionID] {
-					hasCycle = true
-					return
-				}
-				visited[childRef.VersionID] = true
-				checkGraph(childRef.VersionID, depth+1)
-				if hasCycle || depthExceeded {
-					return
-				}
-			}
-		}
-		for _, sa := range subAgents {
-			if visited[sa.versionID] {
-				hasCycle = true
-				break
-			}
-			visited[sa.versionID] = true
-			checkGraph(sa.versionID, 1)
-			if hasCycle || depthExceeded {
-				break
-			}
-		}
-		if hasCycle {
+	// Cycle and nesting bounds — if broken, short-circuit (FU-244, PLAN §8.8).
+	// The shared composition check, the one attach, save and run start use: a
+	// circular reference through agents OR pipelines, at most 3 agent levels.
+	// (This used to be its own walk that counted pipeline hops as levels and
+	// never looked inside a pipeline's Agent nodes.)
+	if numericVersionID, err := strconv.ParseInt(versionID, 10, 64); err == nil {
+		root := applicationcomposition.Identity{ApplicationID: int64(appID), VersionID: numericVersionID}
+		err := applicationcomposition.Check(ctx, repos.NewCompositionSource(h.pool, s), root, nil)
+		if refusal := applicationcomposition.Refusal(err); refusal != nil {
 			return map[string]any{
 				"status": "FAIL",
 				"critical_issues": []map[string]any{{
 					"field":   "sub_agents",
-					"issue":   "circular dependency detected among sub-agents",
+					"issue":   refusal.Message,
 					"source":  "deterministic",
 					"context": nil,
-					"fix":     "Remove one of the circular sub-agent references to break the cycle",
+					"fix":     "Remove or change the attachment named in the issue",
 				}},
 				"warnings":                []map[string]any{},
 				"recommendations":         []map[string]any{},
@@ -2057,23 +2024,8 @@ func (h *Handler) runPublishValidation(
 				"validation_token":        nil,
 			}, http.StatusUnprocessableEntity
 		}
-		if depthExceeded {
-			return map[string]any{
-				"status": "FAIL",
-				"critical_issues": []map[string]any{{
-					"field":   "sub_agents",
-					"issue":   "sub-agent nesting depth exceeds maximum allowed",
-					"source":  "deterministic",
-					"context": nil,
-					"fix":     "Reduce the nesting depth of sub-agent references",
-				}},
-				"warnings":                []map[string]any{},
-				"recommendations":         []map[string]any{},
-				"summary":                 fmt.Sprintf("Validation FAIL for version %s", versionID),
-				"counts":                  map[string]any{"critical": 1, "warnings": 0, "suggestions": 0},
-				"ai_validation_available": false,
-				"validation_token":        nil,
-			}, http.StatusUnprocessableEntity
+		if err != nil {
+			slog.ErrorContext(ctx, "publish validation: composition check failed", "error", err)
 		}
 	}
 

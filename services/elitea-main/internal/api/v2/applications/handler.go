@@ -17,8 +17,10 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -1756,6 +1758,11 @@ func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicat
 	if !sameApplication {
 		return apierr.BadRequest("the replacement version must belong to the same agent")
 	}
+	// FU-244: re-pointing is a version switch for every parent; each parent
+	// must still hold with the replacement (no cycle, at most 3 agent levels).
+	if err := h.checkRepointedParents(ctx, schema, applicationID, versionID, replacementID); err != nil {
+		return err
+	}
 	if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.elitea_tools AS tool
 		SET settings = jsonb_set(tool.settings, '{application_version_id}', to_jsonb($1::int)) - 'version_id'
@@ -1765,6 +1772,67 @@ func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicat
 		slog.ErrorContext(ctx, "delete version: repoint failed",
 			"schema", schema, "version_id", versionID, "replacement_version_id", replacementID, "err", err)
 		return apierr.Internal("could not move the references to the replacement version")
+	}
+	return nil
+}
+
+// checkRepointedParents walks every parent that references versionID as if it
+// referenced replacementID instead, and answers the composition refusal of the
+// first parent the switch would break.
+func (h *Handler) checkRepointedParents(ctx context.Context, schema, applicationID, versionID, replacementID string) error {
+	appID, appErr := strconv.ParseInt(applicationID, 10, 64)
+	oldID, oldErr := strconv.ParseInt(versionID, 10, 64)
+	newID, newErr := strconv.ParseInt(replacementID, 10, 64)
+	if appErr != nil || oldErr != nil || newErr != nil {
+		return apierr.BadRequest("replacement_version_id must be a version id")
+	}
+	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
+		SELECT DISTINCT version.application_id, version.id
+		FROM %s.elitea_tools AS tool
+		JOIN %s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id
+		JOIN %s.application_versions AS version ON version.id = mapping.entity_version_id
+		WHERE tool.type = 'application'
+		  AND COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id') = $1
+		  AND mapping.entity_version_id <> $1::int`, schema, schema, schema), versionID)
+	if err != nil {
+		return apierr.Internal("could not read the versions that use this one")
+	}
+	var parents []applicationcomposition.Identity
+	for rows.Next() {
+		var parent applicationcomposition.Identity
+		if err := rows.Scan(&parent.ApplicationID, &parent.VersionID); err != nil {
+			rows.Close()
+			return apierr.Internal("could not read the versions that use this one")
+		}
+		parents = append(parents, parent)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return apierr.Internal("could not read the versions that use this one")
+	}
+	source := repos.NewCompositionSource(h.pool, schema)
+	from := applicationcomposition.Identity{ApplicationID: appID, VersionID: oldID}
+	to := applicationcomposition.Identity{ApplicationID: appID, VersionID: newID}
+	for _, parent := range parents {
+		version, ok, err := source.Version(ctx, parent)
+		if err != nil {
+			return apierr.Internal("could not read the versions that use this one")
+		}
+		if !ok {
+			continue
+		}
+		for index := range version.Attachments {
+			if version.Attachments[index].Identity == from {
+				version.Attachments[index].Identity = to
+			}
+		}
+		err = applicationcomposition.Check(ctx, source, parent, &version)
+		if refusal := applicationcomposition.Refusal(err); refusal != nil {
+			return refusal
+		}
+		if err != nil {
+			return apierr.Internal("could not check the versions that use this one")
+		}
 	}
 	return nil
 }

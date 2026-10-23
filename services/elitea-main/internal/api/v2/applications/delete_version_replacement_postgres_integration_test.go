@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,5 +175,41 @@ func TestHandlerPostgres_DeleteVersionStillNeedsNoReplacementWhenNothingReferenc
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("deleting a version that only uses its own tool answered %d %s, want 204",
 			recorder.Code, recorder.Body.String())
+	}
+}
+
+// FU-244, PLAN §8.8: re-pointing is a version switch for every parent. A
+// replacement whose own attachments reach the parent would close a cycle, so
+// the delete is refused with the composition refusal and nothing moves.
+func TestHandlerPostgres_DeleteVersionRefusesAReplacementThatClosesACycle(t *testing.T) {
+	pool := newHandlerTestPool(t)
+	seedHandlerUser(t, pool, 1, "one@elitea.ai")
+	router := newHandlerTestServer(t, pool, auth.User{ID: "1", UserID: "1", Email: "one@elitea.ai"})
+
+	_, child := do(t, router, http.MethodPost, "/applications/prompt_lib/1", j14CreateBody("cycle-child"))
+	childAppID := child["id"].(string)
+	childBaseID := child["version_details"].(map[string]any)["id"].(string)
+	_, childSecond := do(t, router, http.MethodPost, "/versions/prompt_lib/1/"+childAppID, map[string]any{"name": "v2"})
+	childSecondID := childSecond["id"].(string)
+
+	_, parent := do(t, router, http.MethodPost, "/applications/prompt_lib/1", j14CreateBody("cycle-parent"))
+	parentAppID := parent["id"].(string)
+	parentVersionID := parent["version_details"].(map[string]any)["id"].(string)
+	toolID := attachSubAgentReference(t, pool, parentAppID, parentVersionID, childAppID, childSecondID)
+	// The base version of the child uses the parent.
+	attachSubAgentReference(t, pool, childAppID, childBaseID, parentAppID, parentVersionID)
+
+	recorder, body := do(t, router, http.MethodDelete,
+		"/version/prompt_lib/1/"+childAppID+"/"+childSecondID+"?replacement_version_id="+childBaseID, nil)
+	message, _ := body["error"].(string)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(message, `"cycle-parent" → "cycle-child" → "cycle-parent"`) {
+		t.Fatalf("a re-point closing a cycle answered %d %s", recorder.Code, recorder.Body.String())
+	}
+	if got := referencedVersionID(t, pool, toolID); got != childSecondID {
+		t.Errorf("the refused re-point moved the reference to %q", got)
+	}
+	_, fetched := do(t, router, http.MethodGet, "/application/prompt_lib/1/"+childAppID, nil)
+	if !contains(versionIDs(t, fetched), childSecondID) {
+		t.Errorf("the refused delete removed the version anyway")
 	}
 }

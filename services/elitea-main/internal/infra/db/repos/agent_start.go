@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"time"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -432,11 +433,15 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					return agentexecutionapp.UnsupportedCurrentAgentStart(
 						"the resolved turn carries a malformed JSON projection")
 				}
-				if validationErr := validateCurrentApplicationNesting(
+				// FU-244, PLAN §8.8: the shared composition rule first (typed,
+				// readable), then the row checks of the nesting walk.
+				if err := checkStartComposition(ctx, tx, schema(strconv.FormatInt(request.ProjectID, 10)), row.ApplicationID, row.ApplicationVersionID); err != nil {
+					return err
+				}
+				if validationErr := validateCurrentApplicationRows(
 					ctx,
 					nesting,
 					row.ApplicationVersionID,
-					1,
 				); validationErr != nil {
 					if contextErr := ctx.Err(); contextErr != nil {
 						return contextErr
@@ -618,6 +623,9 @@ func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationSource
 			); validationErr != nil {
 				if contextErr := ctx.Err(); contextErr != nil {
 					return contextErr
+				}
+				if errors.Is(validationErr, errCurrentApplicationCompositionBound) {
+					return applicationcomposition.ErrAtStart
 				}
 				if errors.Is(validationErr, errInvalidCurrentApplicationNesting) {
 					return agentexecutionapp.ErrUnsupportedCurrentAgentStart

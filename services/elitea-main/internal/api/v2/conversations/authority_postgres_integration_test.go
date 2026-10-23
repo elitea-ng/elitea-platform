@@ -73,6 +73,10 @@ INSERT INTO public.auth_core__project_user_role VALUES (1,9,1),(1,7,2),(1,8,2),(
 CREATE TABLE p_1.chat_conversation_folders(id serial PRIMARY KEY,name text,owner_id integer,position integer,uuid uuid,meta jsonb,created_at timestamp DEFAULT now(),updated_at timestamp);
 CREATE TABLE p_1.chat_conversations(id serial PRIMARY KEY,uuid uuid UNIQUE DEFAULT gen_random_uuid(),name text NOT NULL,author_id integer NOT NULL,is_private boolean NOT NULL DEFAULT true,meta jsonb NOT NULL DEFAULT '{}',source text DEFAULT 'elitea',instructions text,folder_id integer REFERENCES p_1.chat_conversation_folders(id),created_at timestamp DEFAULT now(),updated_at timestamp);
 CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,uuid uuid UNIQUE,entity_name text,entity_meta jsonb,meta jsonb,created_at timestamp DEFAULT now(),updated_at timestamp);
+CREATE TABLE p_1.applications(id serial PRIMARY KEY,name text);
+CREATE TABLE p_1.application_versions(id serial PRIMARY KEY,application_id integer,agent_type text,instructions text,llm_settings jsonb);
+CREATE TABLE p_1.elitea_tools(id serial PRIMARY KEY,name text,type text,settings jsonb);
+CREATE TABLE p_1.entity_tool_mapping(id serial PRIMARY KEY,entity_version_id integer,entity_type text,tool_id integer);
 CREATE TABLE p_1.chat_conversation_archives(conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,archived_by bigint NOT NULL,archived_at timestamp NOT NULL DEFAULT now());
 ALTER TABLE p_1.chat_conversations ADD COLUMN attachment_participant_id integer REFERENCES p_1.chat_participants(id);
 CREATE TABLE p_1.chat_participant_mapping(id serial PRIMARY KEY,conversation_id integer REFERENCES p_1.chat_conversations(id),participant_id integer REFERENCES p_1.chat_participants(id),entity_settings jsonb DEFAULT '{}',created_at timestamp DEFAULT now(),updated_at timestamp,UNIQUE(participant_id,conversation_id));
@@ -525,8 +529,7 @@ func TestChatAuthorityPersonalizationContextAndParticipantMutations(t *testing.T
 	pool := newChatAuthorityPool(t)
 	_, err := pool.Exec(context.Background(), `CREATE TABLE centry.social_users(user_id integer,personalization jsonb,default_context_management jsonb,default_summarization jsonb);
  INSERT INTO centry.social_users VALUES (7,'{"persona":"developer","default_instructions":"Wrong fallback","personality_instructions":{"developer":"Selected instructions","analyst":"Other persona"}}','{"max_context_tokens":64000}',NULL);
- CREATE TABLE p_1.application_versions(id integer,llm_settings jsonb);
- INSERT INTO p_1.application_versions VALUES (3,'{"model_name":"model","reasoning_effort":"low"}');`)
+ INSERT INTO p_1.application_versions (id, llm_settings) VALUES (3,'{"model_name":"model","reasoning_effort":"low"}');`)
 	if err != nil {
 		t.Fatal(err)
 	}

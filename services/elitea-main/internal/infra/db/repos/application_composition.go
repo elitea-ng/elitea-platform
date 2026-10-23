@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
 // ApplicationToolReference is one agent or pipeline attached to a parent
@@ -31,6 +33,23 @@ type relationReader interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// compositionReader is what the attachment and version reads need: a pgx pool
+// or transaction (through pgxReader) or a project transaction's sqlExecutor.
+type compositionReader interface {
+	QueryRow(ctx context.Context, sql string, args ...any) sqlRow
+	Query(ctx context.Context, sql string, args ...any) (sqlRows, error)
+}
+
+type pgxReader struct{ q relationReader }
+
+func (r pgxReader) QueryRow(ctx context.Context, sql string, args ...any) sqlRow {
+	return r.q.QueryRow(ctx, sql, args...)
+}
+
+func (r pgxReader) Query(ctx context.Context, sql string, args ...any) (sqlRows, error) {
+	return r.q.Query(ctx, sql, args...)
+}
+
 // ApplicationToolSettingsVersionSQL reads the child version id out of a tool
 // row's settings. Two spellings exist in the wild: Main writes
 // `application_version_id` (the key the freeze admits), and rows written by
@@ -45,6 +64,10 @@ const ApplicationToolSettingsVersionSQL = `COALESCE(tool.settings->>'application
 // uses for its delete. to_regclass accepts the quoted identifier this package
 // already carries.
 func LegacyApplicationToolsExists(ctx context.Context, q relationReader, schema string) (bool, error) {
+	return legacyApplicationToolsExists(ctx, pgxReader{q}, schema)
+}
+
+func legacyApplicationToolsExists(ctx context.Context, q compositionReader, schema string) (bool, error) {
 	var name *string
 	if err := q.QueryRow(ctx, `SELECT to_regclass($1)::text`,
 		schema+".application_tools").Scan(&name); err != nil {
@@ -59,6 +82,10 @@ func LegacyApplicationToolsExists(ctx context.Context, q relationReader, schema 
 // legacy-migrated tenant only — the rows the legacy runtime left in
 // `application_tools`.
 func ListApplicationToolReferences(ctx context.Context, q relationReader, schema, parentVersionID string) ([]ApplicationToolReference, error) {
+	return listApplicationToolReferences(ctx, pgxReader{q}, schema, parentVersionID)
+}
+
+func listApplicationToolReferences(ctx context.Context, q compositionReader, schema, parentVersionID string) ([]ApplicationToolReference, error) {
 	rows, err := q.Query(ctx, fmt.Sprintf(`
 		SELECT tool.id, tool.name,
 		       COALESCE(tool.settings->>'application_id', ''),
@@ -85,7 +112,7 @@ func ListApplicationToolReferences(ctx context.Context, q relationReader, schema
 		return nil, err
 	}
 
-	hasLegacy, err := LegacyApplicationToolsExists(ctx, q, schema)
+	hasLegacy, err := legacyApplicationToolsExists(ctx, q, schema)
 	if err != nil || !hasLegacy {
 		return refs, err
 	}
@@ -116,13 +143,13 @@ func ListApplicationToolReferences(ctx context.Context, q relationReader, schema
 // (tenantschema.Quote). Each read is one version row plus its attachments;
 // the walk itself is bounded by the composition's hop budget.
 type CompositionSource struct {
-	q      relationReader
+	q      compositionReader
 	schema string
 }
 
 // NewCompositionSource reads through q in the quoted tenant schema.
 func NewCompositionSource(q relationReader, schema string) CompositionSource {
-	return CompositionSource{q: q, schema: schema}
+	return CompositionSource{q: pgxReader{q}, schema: schema}
 }
 
 // Version answers one saved version of the composition. A missing version, or
@@ -158,7 +185,7 @@ func (s CompositionSource) Version(ctx context.Context, id applicationcompositio
 // Attachments answers the agents and pipelines attached to one version.
 // A reference whose ids are not numbers cannot be built and is left out.
 func (s CompositionSource) Attachments(ctx context.Context, versionID int64) ([]applicationcomposition.Attachment, error) {
-	refs, err := ListApplicationToolReferences(ctx, s.q, s.schema, strconv.FormatInt(versionID, 10))
+	refs, err := listApplicationToolReferences(ctx, s.q, s.schema, strconv.FormatInt(versionID, 10))
 	if err != nil {
 		return nil, fmt.Errorf("composition: read attachments: %w", err)
 	}
@@ -175,4 +202,80 @@ func (s CompositionSource) Attachments(ctx context.Context, versionID int64) ([]
 		})
 	}
 	return attachments, nil
+}
+
+// checkParticipantComposition refuses an agent or pipeline participant whose
+// saved composition breaks a bound (FU-244, PLAN §8.8): a conversation runs it
+// as a root, so it is walked as one. A participant that is not an application,
+// or names no version yet, is not checked here (its turn's start check runs).
+// conversationSchema is the quoted schema of the conversation's project; an
+// entity of another project (entity_meta.project_id) is read in its own.
+func checkParticipantComposition(ctx context.Context, q relationReader, conversationSchema, entityName string, meta, settings map[string]any) error {
+	if entityName != "application" && entityName != "pipeline" {
+		return nil
+	}
+	applicationID, okApplication := positiveInteger(meta["id"])
+	versionID, okVersion := positiveInteger(settings["version_id"])
+	if !okApplication || !okVersion {
+		return nil
+	}
+	schema := conversationSchema
+	if owner, ok := positiveInteger(meta["project_id"]); ok {
+		quoted, err := tenantschema.Quote(strconv.FormatInt(owner, 10))
+		if err != nil {
+			return nil
+		}
+		schema = quoted
+	}
+	root := applicationcomposition.Identity{ApplicationID: applicationID, VersionID: versionID}
+	err := applicationcomposition.Check(ctx, NewCompositionSource(q, schema), root, nil)
+	if refusal := applicationcomposition.Refusal(err); refusal != nil {
+		return refusal
+	}
+	if err != nil {
+		return fmt.Errorf("conversations: participant composition: %w", err)
+	}
+	return nil
+}
+
+// positiveInteger reads a JSON id: a number, or a decimal string.
+func positiveInteger(value any) (int64, bool) {
+	var parsed int64
+	switch typed := value.(type) {
+	case float64:
+		if typed != float64(int64(typed)) {
+			return 0, false
+		}
+		parsed = int64(typed)
+	case json.Number:
+		number, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		parsed = number
+	case string:
+		number, err := strconv.ParseInt(typed, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		parsed = number
+	default:
+		return 0, false
+	}
+	return parsed, parsed > 0
+}
+
+// checkStartComposition refuses a run whose stored composition breaks a bound
+// (FU-244, PLAN §8.8) with the typed composition refusal, read in the start's
+// own project transaction.
+func checkStartComposition(ctx context.Context, q sqlExecutor, schema string, applicationID, versionID int32) error {
+	root := applicationcomposition.Identity{ApplicationID: int64(applicationID), VersionID: int64(versionID)}
+	err := applicationcomposition.Check(ctx, CompositionSource{q: q, schema: schema}, root, nil)
+	if applicationcomposition.Refusal(err) != nil {
+		return applicationcomposition.ErrAtStart
+	}
+	if err != nil {
+		return fmt.Errorf("current application composition: %w", err)
+	}
+	return nil
 }

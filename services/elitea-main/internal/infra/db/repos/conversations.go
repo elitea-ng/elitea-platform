@@ -1297,6 +1297,27 @@ func (r *ConversationsRepo) UpdateEntitySettings(ctx context.Context, projectID,
 	if err != nil {
 		return apierr.BadRequest("invalid participant settings")
 	}
+	// FU-244: switching an agent or pipeline participant to another version is
+	// a composition change; the new version must hold as a root.
+	if _, switches := settings["version_id"]; switches {
+		var entityName string
+		var entityMeta []byte
+		err := r.pool.QueryRow(ctx, fmt.Sprintf(`SELECT p.entity_name, p.entity_meta::text
+			FROM %s.chat_participant_mapping AS pm JOIN %s.chat_participants AS p ON p.id = pm.participant_id
+			WHERE pm.conversation_id = $1 AND pm.participant_id = $2`, s, s), id, participantID).Scan(&entityName, &entityMeta)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apierr.NotFound("participant not found")
+		}
+		if err != nil {
+			return fmt.Errorf("conversations: update entity settings: participant: %w", err)
+		}
+		var meta map[string]any
+		if json.Unmarshal(entityMeta, &meta) == nil {
+			if err := checkParticipantComposition(ctx, r.pool, s, entityName, meta, settings); err != nil {
+				return err
+			}
+		}
+	}
 	q := fmt.Sprintf(`UPDATE %s.chat_participant_mapping SET entity_settings = $1 WHERE conversation_id = $2 AND participant_id = $3`, s)
 	result, err := r.pool.Exec(ctx, q, data, id, participantID)
 	if err != nil {
@@ -3097,6 +3118,12 @@ func nilIfEmpty(s string) *string {
 func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) (int, error) {
 	entityName, _ := body["entity_name"].(string)
 	entityMetaMap, _ := body["entity_meta"].(map[string]any)
+	entitySettingsMap, _ := body["entity_settings"].(map[string]any)
+	// FU-244: a conversation runs an agent or pipeline participant as a root,
+	// so its saved composition must hold (no cycle, at most 3 agent levels).
+	if err := checkParticipantComposition(ctx, transaction, s, entityName, entityMetaMap, entitySettingsMap); err != nil {
+		return 0, err
+	}
 	entityMeta, _ := json.Marshal(body["entity_meta"])
 	entitySettings, _ := json.Marshal(body["entity_settings"])
 	if string(entitySettings) == "null" {

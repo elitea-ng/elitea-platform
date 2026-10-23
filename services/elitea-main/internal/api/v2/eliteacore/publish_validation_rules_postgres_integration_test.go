@@ -529,3 +529,47 @@ func newPubValRulesPool(t *testing.T) *pgxpool.Pool {
 	}
 	return pool
 }
+
+// FU-244, PLAN §8.8: publish validation runs the shared composition check. A
+// cycle through a saved pipeline (the old walk skipped pipelines) and a fourth
+// agent level are refused; three levels publish.
+func TestPublishValidationRefusesACycleThroughAPipelineAndAFourthLevel(t *testing.T) {
+	pool := newPubValRulesPool(t)
+	router := pubValRouter(eliteacore.NewHandler(pool))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	top := seedPubValAgent(t, pool, "levels top", "a fixture agent long enough to pass the floor")
+	middle := seedPubValAgent(t, pool, "levels middle", "a fixture agent long enough to pass the floor")
+	leaf := seedPubValAgent(t, pool, "levels leaf", "a fixture agent long enough to pass the floor")
+	attachPubValSubAgent(t, pool, top.appID, top.versionID, middle.appID, middle.versionID, "levels middle")
+	attachPubValSubAgent(t, pool, middle.appID, middle.versionID, leaf.appID, leaf.versionID, "levels leaf")
+	recorder, result := doPubValValidate(t, router, top.versionID, "rel-levels")
+	for _, finding := range result.CriticalIssues {
+		if finding.Field == "sub_agents" {
+			t.Fatalf("three agent levels must pass the composition rule: %d %+v", recorder.Code, finding)
+		}
+	}
+
+	extra := seedPubValAgent(t, pool, "levels extra", "a fixture agent long enough to pass the floor")
+	attachPubValSubAgent(t, pool, leaf.appID, leaf.versionID, extra.appID, extra.versionID, "levels extra")
+	recorder, result = doPubValValidate(t, router, top.versionID, "rel-levels")
+	if recorder.Code != http.StatusUnprocessableEntity || len(result.CriticalIssues) != 1 ||
+		!containsFold(result.CriticalIssues[0].Issue, "more than 3 levels") {
+		t.Fatalf("a fourth level: %d %+v", recorder.Code, result.CriticalIssues)
+	}
+
+	// A cycle through a saved pipeline: agent → pipeline → the agent.
+	flow := seedPubValAgent(t, pool, "cycle flow", "a fixture pipeline long enough to pass the floor")
+	if _, err := pool.Exec(ctx, `UPDATE p_1.application_versions SET agent_type = 'pipeline' WHERE id = $1`, flow.versionID); err != nil {
+		t.Fatal(err)
+	}
+	planner := seedPubValAgent(t, pool, "cycle planner", "a fixture agent long enough to pass the floor")
+	attachPubValSubAgent(t, pool, planner.appID, planner.versionID, flow.appID, flow.versionID, "cycle flow")
+	attachPubValSubAgent(t, pool, flow.appID, flow.versionID, planner.appID, planner.versionID, "cycle planner")
+	recorder, result = doPubValValidate(t, router, planner.versionID, "rel-cycle")
+	if recorder.Code != http.StatusUnprocessableEntity || len(result.CriticalIssues) != 1 ||
+		!containsFold(result.CriticalIssues[0].Issue, "circular") {
+		t.Fatalf("a cycle through a pipeline: %d %+v", recorder.Code, result.CriticalIssues)
+	}
+}

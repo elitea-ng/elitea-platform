@@ -66,7 +66,7 @@ import { mapAssociationError } from '../lib/associationError';
  *     `AssociateAgentOutcome.message` instead; the caller decides how (or
  *     whether) to surface it.
  *
- * `associateAgent`'s guard checks (swarm/container/duplicate) are split into
+ * `associateAgent`'s guard checks (swarm/duplicate) are split into
  * their own functions purely to stay under the §3.5 cyclomatic-complexity
  * budget (12) — the baseline's inline shape had a complexity of 19.
  * `getToolIcon`'s hard-coded `fill="#FFFFFF"` becomes
@@ -142,25 +142,6 @@ function checkSwarmGuard(candidateVersion: ApplicationVersionDetail | undefined,
   };
 }
 
-/**
- * Block "container" agents from being nested (issue #5680). A non-pipeline agent that itself
- * uses other agents (has an 'application'-type tool) may only run at the top as a direct chat
- * participant — nesting it would create an unsupported extra nesting level. Pipelines are the
- * sanctioned deep-composition primitive and are exempt from this rule.
- */
-function checkContainerGuard(
-  candidateVersion: ApplicationVersionDetail | undefined,
-  candidateName: string,
-  entityLabel: 'agent' | 'pipeline',
-): AssociateAgentOutcome | null {
-  const candidateIsContainer = (candidateVersion?.tools ?? []).some((tool) => tool.type === 'application');
-  if (candidateVersion?.agent_type === 'pipeline' || !candidateIsContainer) return null;
-  return {
-    ok: false,
-    message: mapAssociationError('uses other agents and cannot be added as a sub-agent', candidateName, { action: 'add', entityLabel }),
-  };
-}
-
 function checkDuplicateGuard(
   currentTools: readonly FilterableToolRef[],
   selectedApplicationId: string,
@@ -195,10 +176,9 @@ async function performAssociation({ queryClient, projectId, applicationId, versi
   const selectedApplication = (detailResponse as { data: ApplicationDetail }).data;
   const candidateVersion = selectedApplication.version_details;
 
-  const guardFailure =
-    checkSwarmGuard(candidateVersion, candidate.name) ??
-    checkContainerGuard(candidateVersion, candidate.name, entityLabel) ??
-    checkDuplicateGuard(currentTools, selectedApplication.id, candidate.name, entityLabel);
+  // No client-side nesting guard: the 3-level rule and cycles (PLAN §8.8,
+  // FU-244) are Main's attach check, whose refusal names the path.
+  const guardFailure = checkSwarmGuard(candidateVersion, candidate.name) ?? checkDuplicateGuard(currentTools, selectedApplication.id, candidate.name, entityLabel);
   if (guardFailure) return guardFailure;
 
   if (candidateVersion?.id === undefined) {

@@ -239,9 +239,9 @@ func (s *countingSource) Version(ctx context.Context, id applicationcomposition.
 }
 
 // The save check's database budget: each saved version is read at most once
-// per walk, so one check costs at most MaxApplicationHops+1 version reads
-// (the root plus every entered attachment), each one version row plus its
-// attachment rows.
+// per check, and the cycle search reads at most MaxCycleVersions versions, so
+// one check costs at most MaxCycleVersions+1 version reads (each one version
+// row plus its attachment rows).
 func TestEachVersionIsReadAtMostOnceWithinTheHopBudget(t *testing.T) {
 	// A diamond: both pipelines run the same agent, which carries the same tool.
 	diamond := &countingSource{fakeSource: fakeSource{
@@ -269,7 +269,56 @@ func TestEachVersionIsReadAtMostOnceWithinTheHopBudget(t *testing.T) {
 	for _, reads := range wide.reads {
 		total += reads
 	}
-	if total > applicationcomposition.MaxApplicationHops+2 {
-		t.Fatalf("a refused walk read %d versions, budget %d", total, applicationcomposition.MaxApplicationHops+2)
+	for version, reads := range wide.reads {
+		if reads != 1 {
+			t.Fatalf("version %d read %d times", version, reads)
+		}
+	}
+	if total > applicationcomposition.MaxCycleVersions+1 {
+		t.Fatalf("a check read %d versions, budget %d", total, applicationcomposition.MaxCycleVersions+1)
+	}
+}
+
+// PLAN §8.8: Orchestrator → Sub-orchestrator → Leaf, with several
+// sub-orchestrators on one level, is the limit; a leaf with its own agent
+// below any of them is one level too many.
+func TestSeveralSubOrchestratorsOnOneLevelAreAllowed(t *testing.T) {
+	source := fakeSource{
+		1: agent("Orchestrator", 2, 3),
+		2: agent("Research", 4, 5), 3: agent("Writing", 6),
+		4: agent("Search"), 5: agent("Summarize"), 6: agent("Draft"),
+	}
+	if violation := check(t, source, 1); violation != nil {
+		t.Fatalf("three levels with parallel sub-orchestrators must save: %v", violation)
+	}
+	source[6] = agent("Draft", 7)
+	source[7] = agent("Spell check")
+	violation := check(t, source, 1)
+	expect(t, violation, applicationcomposition.BoundAgentTiers)
+	if !strings.Contains(violation.Error(), `"Orchestrator" → "Writing" → "Draft" → "Spell check"`) {
+		t.Fatalf("the refusal names the level: %s", violation)
+	}
+}
+
+// A cycle through an attachment no Agent node runs is still a cycle.
+func TestACycleThroughAnUnusedPipelineAttachmentIsRefused(t *testing.T) {
+	unused := pipeline("Flow")
+	unused.Attachments = attachments([]int64{1})
+	unused.AgentNodes = nil
+	source := fakeSource{1: agent("Planner", 2), 2: unused}
+	expect(t, check(t, source, 1), applicationcomposition.BoundCycle)
+}
+
+// A version switch is checked as the version the parent would point to.
+func TestAVersionSwitchThatClosesACycleIsRefused(t *testing.T) {
+	source := fakeSource{1: agent("Parent", 2), 2: agent("Child v1"), 3: agent("Child v2", 1)}
+	if violation := check(t, source, 1); violation != nil {
+		t.Fatalf("v1 is valid: %v", violation)
+	}
+	switched := source[1]
+	switched.Attachments = []applicationcomposition.Attachment{{Alias: "a3", Identity: id(3)}}
+	err := applicationcomposition.Check(context.Background(), source, id(1), &switched)
+	if refusal := applicationcomposition.Refusal(err); refusal == nil || !strings.Contains(refusal.Message, "circular") {
+		t.Fatalf("switching to v2 closes a cycle: %v", err)
 	}
 }
