@@ -106,13 +106,9 @@ const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_REASONING_EFFORT = 'medium';
 
 // ---------------------------------------------------------------------------
-// isParticipantOKForChat — ported verbatim from old-app line 8-13
+// isSkippedContainerParticipant — ported from EliteaUI participants.helpers.js
 // ---------------------------------------------------------------------------
 
-/**
- * Returns `true` if the participant entity type is valid for inclusion in a
- * chat. Ported from `addParticipants.helpers.js:8-13`.
- */
 /**
  * participants.helpers.js `isSkippedContainerParticipant` (EliteaUI, issue
  * #5778), on this feature's snake_case shape: an agent the chat model is not
@@ -135,6 +131,14 @@ export function isSkippedContainerParticipant(participant: Record<string, unknow
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// isParticipantOKForChat — ported verbatim from old-app line 8-13
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` if the participant entity type is valid for inclusion in a
+ * chat. Ported from `addParticipants.helpers.js:8-13`.
+ */
 export function isParticipantOKForChat(participant: { entity_name?: string }): boolean {
   return (
     participant.entity_name === ChatParticipantType.Users ||
