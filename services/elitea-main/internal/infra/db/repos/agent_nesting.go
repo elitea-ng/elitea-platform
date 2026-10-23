@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -347,9 +348,15 @@ func currentApplicationAgentTierContribution(agentType string) int {
 	return 1
 }
 
+// filterCurrentAdhocApplicationNesting answers the tools an ad-hoc turn offers
+// its chat model. An agent or pipeline participant that is valid as a root but
+// does not fit one level below the chat model (applicationcomposition.ChatToolFit,
+// PLAN §8.8) is not offered: it runs only when selected directly, and the
+// participant list says so (meta.agent_subtree_tiers, enrichParticipantNesting).
 func filterCurrentAdhocApplicationNesting(
 	ctx context.Context,
 	queries currentApplicationNestingQuerier,
+	source applicationcomposition.Source,
 	tools json.RawMessage,
 ) (json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(tools))
@@ -373,6 +380,21 @@ func filterCurrentAdhocApplicationNesting(
 		if toolType != "application" {
 			filtered = append(filtered, tool)
 			continue
+		}
+		if settings, ok := tool["settings"].(map[string]any); ok {
+			applicationID, validApplication := positiveCurrentApplicationNestingValue(settings["application_id"])
+			versionID, validVersion := positiveCurrentApplicationNestingValue(settings["application_version_id"])
+			if validApplication && validVersion {
+				_, fits, fitErr := applicationcomposition.ChatToolFit(ctx, source, applicationcomposition.Identity{
+					ApplicationID: int64(applicationID), VersionID: int64(versionID),
+				})
+				if fitErr != nil {
+					return nil, fitErr
+				}
+				if !fits {
+					continue
+				}
+			}
 		}
 		materialized, materializeErr := materializeCurrentApplicationToolNestedSkills(
 			ctx,

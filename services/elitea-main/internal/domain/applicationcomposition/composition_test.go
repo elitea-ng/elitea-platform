@@ -322,3 +322,56 @@ func TestAVersionSwitchThatClosesACycleIsRefused(t *testing.T) {
 		t.Fatalf("switching to v2 closes a cycle: %v", err)
 	}
 }
+
+// PLAN §8.8 (ad-hoc): a participant valid as a root is offered to the chat model
+// only when it also fits one level deeper; one that does not reports the limit.
+func TestChatToolFitOffersOnlyWhatFitsBelowTheChatModel(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   fakeSource
+		tiers int
+		fits  bool
+	}{
+		{"a leaf agent", agentChain(1), 1, true},
+		{"an orchestrator of leaves", agentChain(2), 2, true},
+		{"a three-level agent runs only when selected", agentChain(3), applicationcomposition.MaxAgentTiers, false},
+		{"an empty pipeline consumes no tier", fakeSource{1: pipeline("Flow")}, 0, true},
+		{"a pipeline of orchestrators", fakeSource{1: pipeline("Flow", 2), 2: agent("Planner", 3), 3: agent("Leaf")}, 2, true},
+		{"an agent through a pipeline", fakeSource{1: agent("Planner", 2), 2: pipeline("Flow", 3), 3: agent("Leaf")}, 2, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if violation := check(t, tc.src, 1); violation != nil {
+				t.Fatalf("each case is valid as a root: %v", violation)
+			}
+			tiers, fits, err := applicationcomposition.ChatToolFit(context.Background(), tc.src, id(1))
+			if err != nil || tiers != tc.tiers || fits != tc.fits {
+				t.Fatalf("ChatToolFit = (%d, %v, %v), want (%d, %v)", tiers, fits, err, tc.tiers, tc.fits)
+			}
+		})
+	}
+}
+
+func TestChatToolFitCountsTheChatModelsHop(t *testing.T) {
+	source := fakeSource{}
+	var attached []int64
+	for n := int64(2); n < int64(applicationcomposition.MaxApplicationHops)+2; n++ {
+		source[n] = agent(fmt.Sprintf("Leaf %d", n))
+		attached = append(attached, n)
+	}
+	source[1] = agent("Root", attached...)
+	if violation := check(t, source, 1); violation != nil {
+		t.Fatalf("the hop budget is valid as a root: %v", violation)
+	}
+	tiers, fits, err := applicationcomposition.ChatToolFit(context.Background(), source, id(1))
+	if err != nil || fits || tiers != applicationcomposition.MaxAgentTiers {
+		t.Fatalf("ChatToolFit = (%d, %v, %v), want the limit and no fit", tiers, fits, err)
+	}
+}
+
+func TestChatToolFitLeavesAnUnreadableVersionToTheTurn(t *testing.T) {
+	tiers, fits, err := applicationcomposition.ChatToolFit(context.Background(), fakeSource{}, id(9))
+	if err != nil || !fits || tiers != 0 {
+		t.Fatalf("ChatToolFit = (%d, %v, %v)", tiers, fits, err)
+	}
+}

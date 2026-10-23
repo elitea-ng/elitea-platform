@@ -148,20 +148,56 @@ func Check(ctx context.Context, source Source, root Identity, override *Version)
 		}
 		version = &read
 	}
-	w := walker{source: source, cache: map[Identity]Version{root: *version}}
+	_, err := check(ctx, source, root, *version, nil)
+	return err
+}
+
+// ChatToolFit answers whether the saved version id can be offered to a
+// conversation's chat model as a tool: walked as an attachment of an agent root,
+// one level below where it runs when selected directly (PLAN §8.8). A version
+// that fits reports its own agent subtree tiers (pipelines consume none); one
+// that does not reports MaxAgentTiers, the nesting limit, so a reader's
+// `1 + tiers > MaxAgentTiers` gate flags exactly the participants an ad-hoc
+// turn does not bind. A version that cannot be read fits (ok is false): the
+// turn's own resolution decides it.
+func ChatToolFit(ctx context.Context, source Source, id Identity) (tiers int, fits bool, err error) {
+	participant, ok, err := source.Version(ctx, id)
+	if err != nil || !ok {
+		return 0, true, err
+	}
+	chat := Version{Kind: KindAgent, Name: "chat", Attachments: []Attachment{{Identity: id}}}
+	maxTier, err := check(ctx, source, Identity{}, chat, map[Identity]Version{id: participant})
+	var refused *Violation
+	if errors.As(err, &refused) {
+		return MaxAgentTiers, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return maxTier - 1, true, nil
+}
+
+// check walks version as root and answers the deepest agent tier it reached;
+// known holds versions already read.
+func check(ctx context.Context, source Source, root Identity, version Version, known map[Identity]Version) (int, error) {
+	cache := map[Identity]Version{root: version}
+	for id, read := range known {
+		cache[id] = read
+	}
+	w := walker{source: source, cache: cache, maxTier: 1}
 	// A cycle through ANY attachment is refused (PLAN §8.8), whether or not a
 	// pipeline's Agent node runs it: an agent reaching itself is an authoring
 	// error even where today's run would not follow the edge.
-	if err := w.cycles(ctx, *version, map[Identity]int{root: visiting}, []string{label(version.Name)}); err != nil {
-		return err
+	if err := w.cycles(ctx, version, map[Identity]int{root: visiting}, []string{label(version.Name)}); err != nil {
+		return 0, err
 	}
 	start := path{ancestors: []Identity{root}, trail: []string{label(version.Name)}, tier: 1}
 	if version.Kind == KindPipeline {
 		start.depth = 1
 		start.graphRoot = true
-		return w.walkPipeline(ctx, *version, start, 0)
+		return w.maxTier, w.walkPipeline(ctx, version, start, 0)
 	}
-	return w.walkAgent(ctx, *version, start)
+	return w.maxTier, w.walkAgent(ctx, version, start)
 }
 
 // path is one branch's immutable ancestry; hops are shared by the walker.
@@ -182,9 +218,10 @@ func (p path) with(id Identity, name string) path {
 }
 
 type walker struct {
-	source Source
-	cache  map[Identity]Version
-	hops   int
+	source  Source
+	cache   map[Identity]Version
+	hops    int
+	maxTier int
 }
 
 func (w *walker) read(ctx context.Context, id Identity) (Version, bool, error) {
@@ -271,6 +308,7 @@ func (w *walker) enterAgent(p path, id Identity, child Version) (path, error) {
 	}
 	next, err := w.enter(p, id, child)
 	next.tier++
+	w.maxTier = max(w.maxTier, next.tier)
 	return next, err
 }
 

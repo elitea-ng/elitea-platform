@@ -793,7 +793,11 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 					!json.Valid(conversationMeta) {
 					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
 				}
-				tools, queryErr = filterCurrentAdhocApplicationNesting(ctx, nesting, tools)
+				tools, queryErr = filterCurrentAdhocApplicationNesting(
+					ctx, nesting,
+					CompositionSource{q: tx, schema: schema(strconv.FormatInt(request.ProjectID, 10))},
+					tools,
+				)
 				if queryErr != nil {
 					if contextErr := ctx.Err(); contextErr != nil {
 						return contextErr

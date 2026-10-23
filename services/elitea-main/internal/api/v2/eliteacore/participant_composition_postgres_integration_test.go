@@ -151,3 +151,44 @@ VALUES (gen_random_uuid(), 'composition', 7, 'agent', now() AT TIME ZONE 'UTC') 
 	}
 	return conversation
 }
+
+// PLAN §8.8 (ad-hoc): a three-level agent is still addable (it is a valid root),
+// and the participant read tells the list it runs only when selected: it does
+// not fit one level below the chat model. A two-level agent fits.
+func TestTheParticipantReadFlagsAnAgentThatRunsOnlyWhenSelected(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	repo := repos.NewConversationsRepo(pool)
+	conversation := seedCompositionConversation(t, pool)
+	ctx := context.Background()
+
+	top, middle, leaf := seedComposedVersion(t, pool, "Top"), seedComposedVersion(t, pool, "Middle"), seedComposedVersion(t, pool, "Leaf")
+	attachForTest(t, pool, top, middle, "Middle")
+	attachForTest(t, pool, middle, leaf, "Leaf")
+	if _, err := repo.AddParticipants(ctx, "1", conversation, []map[string]any{participantBody(top), participantBody(middle), participantBody(leaf)}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	participants, err := repo.ListParticipants(ctx, "1", conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[float64][2]any{
+		float64(top.app):    {applicationcomposition.MaxAgentTiers, true},
+		float64(middle.app): {2, true},
+		float64(leaf.app):   {1, false},
+	}
+	seen := 0
+	for _, participant := range participants {
+		expected, ok := want[participant.EntityMeta["id"].(float64)]
+		if participant.EntityName != "application" || !ok {
+			continue
+		}
+		seen++
+		if participant.Meta["agent_subtree_tiers"] != expected[0] || participant.Meta["is_container"] != expected[1] ||
+			participant.Meta["max_agent_nesting_tiers"] != applicationcomposition.MaxAgentTiers {
+			t.Fatalf("participant %v meta = %v, want tiers %v container %v", participant.EntityMeta["id"], participant.Meta, expected[0], expected[1])
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("saw %d of %d agent participants", seen, len(want))
+	}
+}

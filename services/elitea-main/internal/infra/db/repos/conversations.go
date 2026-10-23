@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
@@ -292,7 +293,45 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	}
 	r.enrichAgentParticipantTools(ctx, s, items)
 	r.enrichAgentParticipantPublication(ctx, s, items)
+	r.enrichParticipantNesting(ctx, s, items)
 	return items, nil
+}
+
+// enrichParticipantNesting tells the participant list which agents and
+// pipelines an ad-hoc turn cannot offer to the chat model (PLAN §8.8): a
+// participant valid as a root that breaks a bound one level below the chat
+// model runs only when selected directly. The fields are the ones the legacy
+// read served (EliteaUI's isSkippedContainerParticipant gate, `1 + tiers > max`):
+//   - meta.agent_subtree_tiers: the participant's own agent tiers (pipelines
+//     consume none), or max_agent_nesting_tiers when it does not fit;
+//   - meta.max_agent_nesting_tiers: applicationcomposition.MaxAgentTiers;
+//   - meta.is_container: it reaches other agents, or it does not fit.
+//
+// The answer is applicationcomposition.ChatToolFit read in the conversation's
+// schema, the same check filterCurrentAdhocApplicationNesting applies at the
+// turn's start, so the warning and the turn cannot disagree. A failed read
+// leaves the participant as read (the keys absent), like the enrichments above.
+func (r *ConversationsRepo) enrichParticipantNesting(ctx context.Context, s string, items []conversations.Participant) {
+	source := NewCompositionSource(r.pool, s)
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		applicationID, okApplication := positiveInteger(items[i].EntityMeta["id"])
+		versionID, okVersion := participantVersionID(items[i].EntitySettings)
+		if !okApplication || !okVersion {
+			continue
+		}
+		tiers, fits, err := applicationcomposition.ChatToolFit(ctx, source, applicationcomposition.Identity{
+			ApplicationID: applicationID, VersionID: int64(versionID),
+		})
+		if err != nil {
+			continue
+		}
+		items[i].Meta["agent_subtree_tiers"] = tiers
+		items[i].Meta["max_agent_nesting_tiers"] = applicationcomposition.MaxAgentTiers
+		items[i].Meta["is_container"] = !fits || tiers > 1
+	}
 }
 
 // enrichAgentParticipantPublication answers, for each agent participant,
