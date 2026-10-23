@@ -1195,6 +1195,7 @@ mod tests {
     /// request in the checkpoint, the compacted request is the one persisted,
     /// and its history snapshot is kept so the next turn starts from it.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One story: compact, persist, restore, then the next turn starts from the summary.
     async fn step_compaction_persists_the_compacted_request_and_its_history() {
         use super::super::context_budget::{
             ModelRequestBudget, RequestContextBudget, RequestContextUsage,
