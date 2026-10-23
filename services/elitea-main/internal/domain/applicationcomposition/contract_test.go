@@ -2,6 +2,8 @@ package applicationcomposition_test
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +30,7 @@ func TestBoundsMatchTheSharedContract(t *testing.T) {
 		MaxOrdinaryGraphScopes int    `json:"max_ordinary_graph_scopes"`
 		MaxApplicationHops     int    `json:"max_application_hops"`
 		PublicCode             string `json:"public_code"`
+		RuntimeMessage         string `json:"runtime_message"`
 	}
 	if err := json.Unmarshal(raw, &contract); err != nil {
 		t.Fatalf("decode the composition contract: %v", err)
@@ -36,7 +39,20 @@ func TestBoundsMatchTheSharedContract(t *testing.T) {
 		contract.MaxPipelineDepth != applicationcomposition.MaxPipelineDepth ||
 		contract.MaxOrdinaryGraphScopes != applicationcomposition.MaxOrdinaryGraphScopes ||
 		contract.MaxApplicationHops != applicationcomposition.MaxApplicationHops ||
-		contract.PublicCode != applicationcomposition.Code {
+		contract.PublicCode != applicationcomposition.Code ||
+		contract.RuntimeMessage != applicationcomposition.RuntimeMessage {
 		t.Fatalf("contract %+v drifted from the save check", contract)
+	}
+}
+
+// A refused start is the typed composition refusal: 422, the public code and
+// the registered data-free message, through Refusal like a save refusal.
+func TestARefusedStartIsTheTypedCompositionRefusal(t *testing.T) {
+	refusal := applicationcomposition.Refusal(fmt.Errorf("start: %w", applicationcomposition.ErrAtStart))
+	if refusal == nil || refusal.Status != 422 || refusal.Code != applicationcomposition.Code || refusal.Message != applicationcomposition.RuntimeMessage {
+		t.Fatalf("refusal = %+v", refusal)
+	}
+	if applicationcomposition.Refusal(errors.New("other")) != nil {
+		t.Fatal("an unrelated error is not a composition refusal")
 	}
 }

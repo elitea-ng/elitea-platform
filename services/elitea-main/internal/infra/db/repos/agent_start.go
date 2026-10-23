@@ -12,6 +12,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -439,6 +440,9 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 				); validationErr != nil {
 					if contextErr := ctx.Err(); contextErr != nil {
 						return contextErr
+					}
+					if errors.Is(validationErr, errCurrentApplicationCompositionBound) {
+						return applicationcomposition.ErrAtStart
 					}
 					if errors.Is(validationErr, errInvalidCurrentApplicationNesting) {
 						return agentexecutionapp.ErrUnsupportedCurrentAgentStart

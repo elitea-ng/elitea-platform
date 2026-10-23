@@ -157,6 +157,11 @@ func TestValidateCurrentApplicationNestingMatchesCurrentTierRules(t *testing.T) 
 			if test.wantErr && !errors.Is(err, errInvalidCurrentApplicationNesting) {
 				t.Fatalf("error=%v", err)
 			}
+			// FU-244: every one of these refusals is a composition bound, which
+			// the start answers with the typed composition refusal.
+			if test.wantErr && !errors.Is(err, errCurrentApplicationCompositionBound) {
+				t.Fatalf("not marked as a composition bound: %v", err)
+			}
 			if !test.wantErr && err != nil {
 				t.Fatal(err)
 			}
@@ -169,9 +174,11 @@ func TestValidateCurrentApplicationNestingEnforcesRawHopBackstop(t *testing.T) {
 	for versionID := int32(1); versionID <= currentMaxApplicationNestingHops+2; versionID++ {
 		children := []currentApplicationNestingReference(nil)
 		if versionID <= currentMaxApplicationNestingHops+1 {
+			// The child's own application id: the fixture used the parent's,
+			// which a mismatch refusal caught before the hop bound did.
 			children = append(children, currentApplicationNestingTestReference(
 				versionID+100,
-				versionID+1000,
+				versionID+1+1000,
 				versionID+1,
 			))
 		}
@@ -189,7 +196,7 @@ func TestValidateCurrentApplicationNestingEnforcesRawHopBackstop(t *testing.T) {
 		1,
 		1,
 	)
-	if !errors.Is(err, errInvalidCurrentApplicationNesting) {
+	if !errors.Is(err, errInvalidCurrentApplicationNesting) || !errors.Is(err, errCurrentApplicationCompositionBound) {
 		t.Fatalf("error=%v", err)
 	}
 }

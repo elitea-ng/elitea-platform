@@ -48,6 +48,17 @@ const (
 // Code is the public refusal code; the Worker's run-time refusal maps to it too.
 const Code = "APPLICATION_COMPOSITION_INVALID"
 
+// RuntimeMessage is the registered, data-free text of a run refused for its
+// stored composition (application-composition-limits-v1.json runtime_message):
+// the Worker sends it, and Main's start refusal (ErrAtStart) answers it.
+const RuntimeMessage = "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule."
+
+// ErrAtStart refuses a run whose stored composition Main's start validation
+// rejects for a bound (a circular reference, the hop or tier bound): a
+// composition saved before the save check, or broken later by an edit of a
+// descendant. Data-free; the save check names the attachment.
+var ErrAtStart error = &apierr.APIError{Status: http.StatusUnprocessableEntity, Code: Code, Message: RuntimeMessage}
+
 // Bound names which rule a composition broke; data-free.
 type Bound string
 
@@ -112,8 +123,12 @@ type Violation struct {
 
 func (v *Violation) Error() string { return v.message }
 
-// Refusal answers the 400 a save writes for err when err is a Violation, else nil.
+// Refusal answers the 400 a save writes for err when err is a Violation, ErrAtStart
+// for a refused start, else nil.
 func Refusal(err error) *apierr.APIError {
+	if errors.Is(err, ErrAtStart) {
+		return ErrAtStart.(*apierr.APIError)
+	}
 	var violation *Violation
 	if !errors.As(err, &violation) {
 		return nil

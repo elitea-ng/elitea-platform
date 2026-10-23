@@ -1127,7 +1127,7 @@ const nodeTypeNotAvailableSafeMessage = "This pipeline uses a node type that is 
 // (applicationcomposition) name the attachment, so this text stays data-free;
 // it is libs/proto/contracts/application-composition-limits-v1.json
 // runtime_message.
-const applicationCompositionInvalidSafeMessage = "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule."
+const applicationCompositionInvalidSafeMessage = applicationcomposition.RuntimeMessage
 
 const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."
 

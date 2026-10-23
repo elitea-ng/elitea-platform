@@ -23,6 +23,12 @@ const (
 
 var errInvalidCurrentApplicationNesting = errors.New("invalid current application nesting")
 
+// errCurrentApplicationCompositionBound marks the nesting refusals that are a
+// bound of the saved composition (a circular reference, the raw hop bound, a
+// container past the tier bound), not a broken row: the start answers them
+// with the typed composition refusal (FU-244), the rest stay unsupported.
+var errCurrentApplicationCompositionBound = errors.New("application composition bound")
+
 type currentApplicationNestingQuerier interface {
 	ResolveCurrentApplicationNestingNode(
 		context.Context,
@@ -165,16 +171,16 @@ func walkCurrentApplicationNesting(
 	key := currentApplicationNestingKey{applicationID: applicationID, versionID: versionID}
 	if _, exists := path[key]; exists {
 		return fmt.Errorf(
-			"%w: circular reference to application %d version %d",
-			errInvalidCurrentApplicationNesting,
+			"%w: %w: circular reference to application %d version %d",
+			errInvalidCurrentApplicationNesting, errCurrentApplicationCompositionBound,
 			applicationID,
 			versionID,
 		)
 	}
 	if rawDepth > currentMaxApplicationNestingHops {
 		return fmt.Errorf(
-			"%w: application nesting exceeds %d raw hops",
-			errInvalidCurrentApplicationNesting,
+			"%w: %w: application nesting exceeds %d raw hops",
+			errInvalidCurrentApplicationNesting, errCurrentApplicationCompositionBound,
 			currentMaxApplicationNestingHops,
 		)
 	}
@@ -196,8 +202,8 @@ func walkCurrentApplicationNesting(
 	if node.agentType != "pipeline" && len(node.children) > 0 &&
 		currentAgentTiers >= currentMaxAgentNestingTiers {
 		return fmt.Errorf(
-			"%w: agent version %d is a container at tier %d",
-			errInvalidCurrentApplicationNesting,
+			"%w: %w: agent version %d is a container at tier %d",
+			errInvalidCurrentApplicationNesting, errCurrentApplicationCompositionBound,
 			versionID,
 			currentAgentTiers,
 		)
