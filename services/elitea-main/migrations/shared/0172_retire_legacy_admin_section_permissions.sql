@@ -8,10 +8,17 @@
 -- `configuration.roles.permissions.view` and `projects.projects.projects.view`,
 -- which the administration-mode seeds grant. The admin nav also accepted the
 -- two section names, so that a legacy-runtime deployment would see the items.
--- No such deployment remains, the nav stopped naming them in the same change
--- as this file, and no route gate, grant or worker ever checked either one.
--- No migration in this corpus seeds them, so the only rows are ones the legacy
--- runtime wrote into a database that was later migrated.
+-- No route gate, grant or worker ever checked either one, and the nav stopped
+-- naming them in the same change as this file. No migration in this corpus
+-- seeds them, so the only rows are ones the legacy runtime wrote.
+--
+-- THE LEGACY RUNTIME STILL CHECKS THEM. As 0136 says of the bare nodes:
+-- legacy/plugins/admin/module.py registers its Roles and Projects sections
+-- with these names. Where the legacy admin UI still runs against this
+-- database, those two sections disappear for every central admin after this
+-- file runs, until the legacy runtime re-seeds its roles on restart. The rows
+-- then come back, and only the admin Roles catalogue (retiredPermissions)
+-- hides them. The Go admin console checks neither name.
 --
 -- internal/api/router_permission_retired_gate_test.go reads the
 -- dead_permission array here and in 0136, and checks that together they equal
@@ -23,6 +30,13 @@
 -- role whose override held only dead strings does not fall back to the full
 -- central default-mode set. The central and user rows are plain sets.
 --
+-- "Live" excludes 0136's strings as well as this file's. The legacy runtime
+-- re-seeds 0136's bare nodes, so a pair can hold `projects` and
+-- `projects.projects` and nothing else. Counting `projects` as live would
+-- delete `projects.projects` and leave the pair one later cleanup away from
+-- the central fallback. `retired_earlier` copies 0136's array; it is not
+-- named dead_permission, so the gate test reads only this file's own list.
+--
 -- WRITTEN AS 0172 AND RENUMBERED AT MERGE IF NEEDED.
 --
 -- Idempotent: a second run finds nothing to delete.
@@ -31,6 +45,23 @@ DECLARE
     dead_permission text[] := ARRAY[
         'configuration.roles',
         'projects.projects'
+    ];
+    retired_earlier text[] := ARRAY[
+        'projects',
+        'configuration',
+        'runtime',
+        'modes',
+        'migration',
+        'invites',
+        'invites.platform',
+        'admin',
+        'configurations',
+        'models.chat.conversations.list_custom',
+        'models.promptlib_shared.collection.details',
+        'models.promptlib_shared.collections.list',
+        'models.promptlib_shared.public_collection.details',
+        'models.promptlib_shared.approve_collection.post',
+        'models.promptlib_shared.reject_collection.delete'
     ];
 BEGIN
 
@@ -57,6 +88,7 @@ IF to_regclass('public.auth_core__project_role_permission') IS NOT NULL THEN
           WHERE live.project_id = dead.project_id
             AND live.role_id IS NOT DISTINCT FROM dead.role_id
             AND NOT (live.permission = ANY (dead_permission))
+            AND NOT (live.permission = ANY (retired_earlier))
       );
 END IF;
 

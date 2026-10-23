@@ -32,36 +32,51 @@ import (
 	v2admin "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 )
 
-// retiredPermissionsMigrations are the shared migrations that retire names. A
-// later retirement adds its file here.
-var retiredPermissionsMigrations = []string{
-	"migrations/shared/0136_project_settings_permission_and_dead_permissions.sql",
-	"migrations/shared/0172_retire_legacy_admin_section_permissions.sql",
-}
+// projectSettingsMigration is 0136, which also carries the admin-only
+// `models.project_settings.edit` grant checked below.
+const projectSettingsMigration = "migrations/shared/0136_project_settings_permission_and_dead_permissions.sql"
 
 var (
 	deadPermissionArray = regexp.MustCompile(`(?s)dead_permission text\[\] := ARRAY\[(.*?)\];`)
 	quotedLiteral       = regexp.MustCompile(`'([^']+)'`)
 )
 
-// migrationRetiredPermissions reads the dead_permission arrays of every
-// retiring migration, as one sorted list.
+// migrationRetiredPermissions reads the dead_permission array of every shared
+// migration that declares one, as one sorted list. The files are found by
+// their array, so a new retirement needs no edit here. A name retired by two
+// files is an error: the second file deletes nothing the first did not.
 func migrationRetiredPermissions(t *testing.T, root string) []string {
 	t.Helper()
-	var names []string
-	for _, migration := range retiredPermissionsMigrations {
-		source := stripSQLComments(readFile(t, filepath.Join(root, migration)))
+	files, err := filepath.Glob(filepath.Join(root, "migrations/shared/*.sql"))
+	if err != nil {
+		t.Fatalf("list shared migrations: %v", err)
+	}
+	retiredBy := map[string]string{}
+	for _, file := range files {
+		source := stripSQLComments(readFile(t, file))
 		match := deadPermissionArray.FindStringSubmatch(source)
 		if match == nil {
-			t.Fatalf("%s carries no `dead_permission text[] := ARRAY[...]`; this test's premise is gone", migration)
+			continue
 		}
+		migration := filepath.Base(file)
 		literals := quotedLiteral.FindAllStringSubmatch(match[1], -1)
 		if len(literals) == 0 {
 			t.Fatalf("%s retires no permission; the array was emptied or its shape changed", migration)
 		}
 		for _, literal := range literals {
-			names = append(names, literal[1])
+			if earlier, ok := retiredBy[literal[1]]; ok {
+				t.Fatalf("%q is retired by both %s and %s; keep it in the earlier file only",
+					literal[1], earlier, migration)
+			}
+			retiredBy[literal[1]] = migration
 		}
+	}
+	if _, ok := retiredBy["projects"]; !ok {
+		t.Fatalf("no shared migration retires `projects`; 0136's dead_permission array was not found, so this test's premise is gone")
+	}
+	names := make([]string, 0, len(retiredBy))
+	for name := range retiredBy {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -234,7 +249,7 @@ func TestProjectSettingsPermissionIsGrantedToAdminOnly(t *testing.T) {
 		t.Fatalf("no route gates on %q; the grant in 0136 would widen nothing and buy nothing", permission)
 	}
 
-	source := stripSQLComments(readFile(t, filepath.Join(root, retiredPermissionsMigrations[0])))
+	source := stripSQLComments(readFile(t, filepath.Join(root, projectSettingsMigration)))
 	for _, block := range insertBlocks(source) {
 		if !slices.Contains(permissionLiterals(block), permission) {
 			continue

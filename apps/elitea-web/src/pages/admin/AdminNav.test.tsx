@@ -270,7 +270,7 @@ describe('permission gates name permissions the platform issues', () => {
 
   it('leaves every item visible to the operator this platform seeds', () => {
     // The end-to-end consequence of the two tests above: a Go-native
-    // administrator sees all ten. A NARROWER deployment can still hide an item
+    // administrator sees every item. A NARROWER deployment can still hide an item
     // — that is the feature — but a name no seed grants cannot.
     const groups = visibleAdminNavGroups((permission) => PLATFORM_ISSUED_PERMISSIONS.has(permission));
     const visible = groups.flatMap((group) => group.items.map((item) => item.id));

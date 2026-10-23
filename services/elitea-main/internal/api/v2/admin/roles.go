@@ -243,7 +243,7 @@ ORDER BY 1`)
 //
 // A retired name is left out even when a row still carries it. The legacy
 // runtime re-seeds some of them on every start while it shares the database, so
-// a row can come back after shared migration 0136 removed it. Leaving the name
+// a row can come back after shared migration 0136 or 0172 removed it. Leaving the name
 // out of the catalogue keeps it off the Roles matrix, and parseMatrixBody then
 // refuses a save that names it.
 func catalogueFrom(granted []string) []string {
@@ -296,7 +296,8 @@ var retiredPermissions = map[string]struct{}{
 }
 
 // RetiredPermissions returns the retired names, sorted. It exists for the
-// source gate in internal/api, which compares it with shared migration 0136.
+// source gate in internal/api, which compares it with the shared migrations
+// that retire names (0136, 0172).
 func RetiredPermissions() []string {
 	names := make([]string, 0, len(retiredPermissions))
 	for name := range retiredPermissions {

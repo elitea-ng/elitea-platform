@@ -35,6 +35,20 @@ ON CONFLICT DO NOTHING`); err != nil {
 	seedOverrideRows(t, pool, 3, editorRole, "models.chat.messages.list", "projects.projects")
 	viewerRole := seedProjectRole(t, pool, 17202, 3, "viewer")
 	seedOverrideRows(t, pool, 3, viewerRole, "configuration.roles")
+	// A pair holding only dead strings from BOTH retirements: 0136's re-seeded
+	// `projects` must not count as the live row that lets 0172 delete.
+	mixedRole := seedProjectRole(t, pool, 17203, 3, "tester")
+	seedOverrideRows(t, pool, 3, mixedRole, "projects", "projects.projects")
+
+	// A direct user grant, which the resolver reads as a plain set.
+	seedNamedUser(t, pool, 17204, "sections@example.com")
+	if _, err := pool.Exec(ctx, `
+WITH scope AS (INSERT INTO public.auth_core__scope (name) VALUES ('0172') RETURNING id)
+INSERT INTO public.auth_core__user_permission (user_id, scope_id, permission)
+SELECT 17204, scope.id, grant_row.permission
+FROM scope CROSS JOIN (VALUES ('projects.projects'), ('models.chat.messages.list')) AS grant_row(permission)`); err != nil {
+		t.Fatalf("seed user rows: %v", err)
+	}
 
 	body, err := os.ReadFile(legacyAdminSectionsMigration)
 	if err != nil {
@@ -47,7 +61,7 @@ ON CONFLICT DO NOTHING`); err != nil {
 		}
 	}
 
-	rows, err := pool.Query(ctx, `
+	centralRows, err := pool.Query(ctx, `
 SELECT grant_row.permission
 FROM public.auth_core__role_permission AS grant_row
 JOIN public.auth_core__role AS role ON role.id = grant_row.role_id
@@ -56,15 +70,16 @@ ORDER BY 1`)
 	if err != nil {
 		t.Fatalf("read central administration grants: %v", err)
 	}
+	defer centralRows.Close()
 	var central []string
-	for rows.Next() {
+	for centralRows.Next() {
 		var permission string
-		if err := rows.Scan(&permission); err != nil {
+		if err := centralRows.Scan(&permission); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
 		central = append(central, permission)
 	}
-	if err := rows.Err(); err != nil {
+	if err := centralRows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
 	for _, dead := range []string{"configuration.roles", "projects.projects"} {
@@ -84,5 +99,19 @@ ORDER BY 1`)
 	if rows := overrideRowsFor(t, pool, 3, viewerRole); !slices.Equal(rows, []string{"configuration.roles"}) {
 		t.Errorf("project 3 viewer rows = %v; the only-dead pair must keep its row so the "+
 			"viewer does not fall back to the central set", rows)
+	}
+	if rows := overrideRowsFor(t, pool, 3, mixedRole); !slices.Equal(rows, []string{"projects", "projects.projects"}) {
+		t.Errorf("project 3 tester rows = %v; 0136's `projects` is dead too, so the pair "+
+			"holds no live row and must keep both", rows)
+	}
+
+	var userGrants []string
+	if err := pool.QueryRow(ctx, `
+SELECT coalesce(array_agg(permission ORDER BY permission), '{}')
+FROM public.auth_core__user_permission WHERE user_id = 17204`).Scan(&userGrants); err != nil {
+		t.Fatalf("read user grants: %v", err)
+	}
+	if !slices.Equal(userGrants, []string{"models.chat.messages.list"}) {
+		t.Errorf("user 17204 grants = %v, want only the live row", userGrants)
 	}
 }
