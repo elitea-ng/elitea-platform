@@ -805,7 +805,8 @@ impl PipelineNativeAgentAssembler {
         )
         .await?;
         // The pipeline PARENT admits no pipeline CHILD through this path (it
-        // builds those itself), so the skipped list is always empty here.
+        // builds those itself); what is skipped here is a direct Agent's own
+        // unbuildable attachment, which degrades as on an ordinary root (#990).
         let (direct_runtime, _) = direct_runtime;
         let (mut participants, mut projection) = direct_runtime.map_or_else(
             || Ok((BTreeMap::new(), ApplicationRuntimeProjection::default())),
@@ -1230,7 +1231,7 @@ impl PipelineNativeAgentAssembler {
                     | super::runtime::PipelineNativeStart::Regenerate
             ) {
                 fresh_start
-            } else if !resumes_a_stored_conversation(&start) {
+            } else if !continues_a_decided_pause(&start) {
                 ApplicationContinuation::Scoped
             } else {
                 let checkpoint = state
@@ -1833,17 +1834,18 @@ pub(super) async fn materialize_saved_pipeline_tool(
     Ok((definition, bound.runtimes, bound.presentations))
 }
 
-/// Whether this start resumes a stored conversation, so its resolver is read from the
-/// checkpoint (`continuation_for_checkpoint`). A decided pause does, and so does a recovery:
-/// a recovery of a conversation an older worker continued has no receipt and an application
-/// node on its frontier, and only the resolver that paused it can continue that call without
-/// running its child again from the task input. A recovery of a new conversation that died
-/// before its first receipt revision takes that resolver too: its child never started, so the
-/// call simply starts, as it would on either resolver.
-pub(super) fn resumes_a_stored_conversation(start: &super::runtime::PipelineNativeStart) -> bool {
+/// Whether this start continues a pause the user decided, the only start an older worker's
+/// unscoped call can be waiting on. A recovery (`Checkpoint`) never has an application node
+/// on its frontier: model-checkpoint and node recovery admit only deterministic, model and
+/// Code nodes (`graph/compiler.rs` `recovery_frontier_supported`, checked in
+/// `session.rs` before any recovery start), so a missing receipt there is a crash before the
+/// first receipt revision and the start stays scoped. A Worker lost mid-continuation is
+/// re-claimed as the same decided-pause start, which reads its resolver from the checkpoint.
+pub(super) fn continues_a_decided_pause(start: &super::runtime::PipelineNativeStart) -> bool {
     !matches!(
         start,
-        super::runtime::PipelineNativeStart::Fresh
+        super::runtime::PipelineNativeStart::Checkpoint
+            | super::runtime::PipelineNativeStart::Fresh
             | super::runtime::PipelineNativeStart::Regenerate
     )
 }
@@ -2103,8 +2105,16 @@ async fn bind_scoped_agent(
         Some(&selected),
     )
     .await?;
+    // The selected alias is an `agent` child, so it is never itself a skipped
+    // pipeline child: every entry here is the bound Agent's own unbuildable
+    // attachment. It degrades as on an ordinary root (#990): the Agent runs
+    // without it, and the run never fails for an attachment it may not call.
     if !skipped.is_empty() {
-        return Err(unsupported_pipeline_runtime());
+        tracing::info!(
+            event = "pipeline_agent_attachment_skipped",
+            skipped = skipped.len(),
+            "a pipeline Agent node runs without its unbuildable attachments"
+        );
     }
     let materialized = materialized.ok_or_else(invalid_pipeline_tool_scope)?;
     let fingerprint = materialized

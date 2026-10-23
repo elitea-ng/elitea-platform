@@ -3831,17 +3831,119 @@ fn a_sub_agents_static_pipeline_pause_is_the_acked_completed_terminal() {
 
 /// One streamed model step calling the static pipeline tool and `ask_user`.
 fn two_call_static_and_ask_response() -> http::Response<tonic::body::Body> {
-    let call = |index: usize, id: &str, name: &str, arguments: &str| json!({"index":index,"id":id,"type":"function","function":{"name":name,"arguments":arguments}});
     let ask = r#"{"questions":[{"question":"Which environment?","header":"Environment","options":[{"label":"Staging"},{"label":"Production"}]}]}"#;
-    let chunk = json!({"choices":[{"delta":{"tool_calls":[
-        call(0, "inner-call", "elitea_agent_7_v_8", r#"{"task":"inner work"}"#),
-        call(1, "ask-call", "ask_user", ask)]},"finish_reason":null}]});
+    two_call_response(
+        (
+            "inner-call",
+            "elitea_agent_7_v_8",
+            r#"{"task":"inner work"}"#,
+        ),
+        ("ask-call", "ask_user", ask),
+    )
+}
+
+/// One streamed model step with two tool calls `(call id, tool name, JSON arguments)`.
+fn two_call_response(
+    first: (&str, &str, &str),
+    second: (&str, &str, &str),
+) -> http::Response<tonic::body::Body> {
+    let call = |index: usize, (id, name, arguments): (&str, &str, &str)| json!({"index":index,"id":id,"type":"function","function":{"name":name,"arguments":arguments}});
+    let chunk = json!({"choices":[{"delta":{"tool_calls":[call(0, first), call(1, second)]},"finish_reason":null}]});
     let raw = format!(
         "data: {chunk}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
     );
     crate::transport::openai_compatible_facade::test_model_gateway_response(tonic::body::Body::new(
         http_body_util::Full::<bytes::Bytes>::from(raw),
     ))
+}
+
+/// One model step calling two sub-Agents: one reaches a saved pipeline's static
+/// pause, the other raises an `ask_user` card inside itself. The root projector
+/// then holds a static inventory AND a pause card, which no single terminal can
+/// carry (Main stores one or the other): the turn ends with the registered
+/// unsupported-capability failure, settled and acknowledged, with no result
+/// message and no paused terminal (the streamed card is live progress only).
+async fn static_pause_beside_a_nested_card_lifecycle_case() {
+    use crate::agents::pipeline_tests::scoped_tests::{
+        STATIC_GRAPH, asking_agent, plain_agent, reference, saved_version, tool_call_response,
+    };
+    let ask = r#"{"questions":[{"question":"Which environment?","header":"Environment","options":[{"label":"Staging"},{"label":"Production"}]}]}"#;
+    let frames = static_lifecycle_frames_with(
+        BTreeMap::from([
+            (
+                (5, 6),
+                plain_agent(vec![reference((7, 8), "pipeline", "inner")]),
+            ),
+            (
+                (7, 8),
+                saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
+            ),
+            ((9, 10), asking_agent()),
+        ]),
+        vec![
+            reference((5, 6), "agent", "helper"),
+            reference((9, 10), "agent", "asker"),
+        ],
+        vec![
+            two_call_response(
+                ("helper-call", "elitea_agent_5_v_6", r#"{"task":"help"}"#),
+                ("asker-call", "elitea_agent_9_v_10", r#"{"task":"ask"}"#),
+            ),
+            tool_call_response(
+                "inner-call",
+                "elitea_agent_7_v_8",
+                &json!({"task":"inner work"}),
+            ),
+            tool_call_response(
+                "ask-call",
+                "ask_user",
+                &serde_json::from_str::<serde_json::Value>(ask).expect("ask"),
+            ),
+        ],
+    )
+    .await;
+    // No result message carries the inventory. The card streamed as live
+    // progress before the step ended; Main stores a pause only from a PAUSED
+    // terminal bound to its `hitl-interrupt` artifact, so this failed terminal
+    // leaves no decidable card.
+    assert!(
+        frames.iter().all(|frame| !matches!(
+            frame.payload.as_ref(),
+            Some(execution_output_frame_v1::Payload::NodeEvent(event))
+                if event.r#type == "full_message"
+        )),
+        "the static inventory is not published"
+    );
+    assert!(frames.iter().all(|frame| !matches!(
+        frame.payload.as_ref(),
+        Some(execution_output_frame_v1::Payload::AgentExecution(_))
+    )));
+    let Some(execution_output_frame_v1::Payload::RuntimeError(error)) =
+        frames.last().and_then(|frame| frame.payload.as_ref())
+    else {
+        panic!("the mixed pause ends with a typed runtime failure");
+    };
+    assert_eq!(
+        RuntimeErrorCodeV1::try_from(error.code),
+        Ok(RuntimeErrorCodeV1::UnsupportedCapability)
+    );
+}
+
+#[test]
+fn a_static_pause_beside_a_nested_card_fails_typed_settled_and_acked() {
+    std::thread::Builder::new()
+        .name("static-beside-card-4mib-stack".to_owned())
+        .stack_size(4 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("bounded mixed pause test runtime")
+                .block_on(static_pause_beside_a_nested_card_lifecycle_case());
+        })
+        .expect("bounded mixed pause test thread")
+        .join()
+        .expect("mixed pause lifecycle fits the bounded thread stack");
 }
 
 /// The production lifecycle over the production assembler composition, with one

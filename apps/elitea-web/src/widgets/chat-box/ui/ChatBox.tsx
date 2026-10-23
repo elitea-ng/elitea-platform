@@ -1,4 +1,4 @@
-import { useStaticPauseCards } from './StaticPipelineContinueControls';
+import { sendTypedStaticContinuation, useStaticPauseCards } from './StaticPipelineContinueControls';
 import { stopChatGeneration } from './hooks/useEditorTestTransport';
 /**
  * ChatBox — composition root for the chat experience. Composes entities/conversation
@@ -270,8 +270,7 @@ const ChatBoxInner = memo(function ChatBox({
   // pause with the text (the durable static continuation), not a new turn.
   const sendNow = useCallback((question: string) => {
     if (!staticPause) return handleSend(question);
-    chatInputRef.current?.reset?.();
-    staticPause.onSendText(question);
+    void sendTypedStaticContinuation(staticPause, question, () => chatInputRef.current?.reset?.());
   }, [staticPause, handleSend]);
 
   // A17: while a turn is open the composer QUEUES instead of sending; the queue

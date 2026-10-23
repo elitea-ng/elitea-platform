@@ -28,8 +28,21 @@ export interface StaticPauseCardsBinding {
   readonly busy: boolean;
   readonly error?: string | undefined;
   readonly onContinue: (pauseId: string | undefined) => void;
-  /** Continue the current pause with a message typed in the chat input. */
-  readonly onSendText: (text: string) => void;
+  /** Continue the current pause with a message typed in the chat input; `true` once it started. */
+  readonly onSendText: (text: string) => Promise<boolean>;
+}
+
+/**
+ * Continue the current pause with typed text, clearing the chat input only once
+ * the continuation has started: a refused or unavailable continuation keeps the
+ * text where the user typed it.
+ */
+export async function sendTypedStaticContinuation(
+  binding: StaticPauseCardsBinding,
+  text: string,
+  resetInput: () => void,
+): Promise<void> {
+  if (await binding.onSendText(text)) resetInput();
 }
 
 /** Shared composition for main chat and Pipeline Test. */
@@ -43,10 +56,10 @@ export function useStaticPauseCards({ editorTest, ...params }: HostProps): Stati
     [submit],
   );
   const onSendText = useCallback(
-    (text: string) => {
-      if (!pause) return;
-      void submit(text, pause.kind === 'root' ? [] : pause.inventory.pauses.map((leaf) => leaf.proof.pause_id));
-    },
+    (text: string) =>
+      pause
+        ? submit(text, pause.kind === 'root' ? [] : pause.inventory.pauses.map((leaf) => leaf.proof.pause_id))
+        : Promise.resolve(false),
     [submit, pause],
   );
   return useMemo(

@@ -13,7 +13,10 @@ import {
   useStaticPipelineContinuation,
   type StaticContinuationParams,
 } from "./useStaticPipelineContinuation";
-import { useStaticPauseCards } from "../StaticPipelineContinueControls";
+import {
+  sendTypedStaticContinuation,
+  useStaticPauseCards,
+} from "../StaticPipelineContinueControls";
 import { StaticPauseCard } from "@/features/chat-messages/ui/chat-box/StaticPauseCard";
 import { renderWithTheme } from "@/shared/ui/lib/testTheme";
 import type { StreamStartOutcome } from "./useChatBoxHandlers.helpers";
@@ -188,10 +191,14 @@ describe("static Continue controls", () => {
         editorTest: undefined,
       }),
     );
-    act(() => {
-      result.current?.onSendText("go ahead");
+    let reset = 0;
+    await act(async () => {
+      await sendTypedStaticContinuation(result.current!, "go ahead", () => {
+        reset++;
+      });
     });
-    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls).toHaveLength(1);
+    expect(reset).toBe(1);
     expect(calls[0]).toMatchObject({
       contract: "agent.continue.static.v1",
       body: {
@@ -202,6 +209,37 @@ describe("static Continue controls", () => {
         ],
       },
     });
+  });
+  it("keeps the typed text when the continuation does not start", async () => {
+    let calls = 0;
+    const { result } = renderHook(() =>
+      useStaticPauseCards({
+        ...base(() => {
+          calls++;
+          return Promise.resolve({
+            started: false,
+            reason: "rejected",
+            message: "stale",
+          } as StreamStartOutcome);
+        }),
+        editorTest: undefined,
+      }),
+    );
+    let reset = 0;
+    const resetInput = () => {
+      reset++;
+    };
+    // Refused before any request: the text exceeds the 8 KiB continuation bound.
+    await act(async () => {
+      await sendTypedStaticContinuation(result.current!, "x".repeat(8193), resetInput);
+    });
+    expect(calls).toBe(0);
+    // Refused by Main: the request was sent but nothing started.
+    await act(async () => {
+      await sendTypedStaticContinuation(result.current!, "go ahead", resetInput);
+    });
+    expect(calls).toBe(1);
+    expect(reset).toBe(0);
   });
   it("refuses a stale closure after generation/context changes", async () => {
     let calls = 0;

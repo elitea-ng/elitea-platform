@@ -117,7 +117,7 @@ pub(crate) fn saved_version(
             "reasoning_effort":null,"temperature":0.2,"openai_compatible":true}})
 }
 
-pub(super) fn asking_agent() -> Value {
+pub(crate) fn asking_agent() -> Value {
     saved_version(
         "agent",
         "Resolve the release.",
@@ -645,8 +645,59 @@ async fn an_unbuildable_pipeline_of_a_nested_agent_is_skipped_and_the_root_still
     );
 }
 
+/// The pipeline-root twin: a graph `agent` node whose Agent has one
+/// unbuildable pipeline attachment still runs; the attachment is not offered.
 #[tokio::test(flavor = "current_thread")]
-async fn a_graph_root_refuses_a_static_saved_pipeline_tool_before_any_model_call() {
+async fn an_unbuildable_attachment_of_a_pipeline_agent_node_is_skipped_and_the_node_answers() {
+    const UNBUILDABLE: &str = "state:\n  answer: str\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"missing\"\n    input_mapping:\n      task: {type: fixed, value: 'Summarize'}\n    output: [answer, messages]\n    transition: END\n";
+    let (sessions, checkpointer) = state();
+    let versions = BTreeMap::from([
+        (
+            (5, 6),
+            plain_agent(vec![reference((7, 8), "pipeline", "broken-flow")]),
+        ),
+        (
+            (7, 8),
+            saved_version("pipeline", UNBUILDABLE, &json!({}), Vec::new()),
+        ),
+    ]);
+    let (assembler, captured, _) = process(
+        &sessions,
+        &checkpointer,
+        &versions,
+        vec![text("node answer")],
+    );
+    let request = root_request(
+        &root_yaml("worker"),
+        vec![reference((5, 6), "agent", "worker")],
+    );
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("an unbuildable nested attachment never fails the pipeline at assembly");
+    let browser = collect_pipeline_completion(invocation).await;
+    assert!(
+        browser
+            .iter()
+            .any(|event| event["content"] == "node answer"),
+        "the Agent node answers: {browser:?}"
+    );
+    assert_eq!(model_calls(&captured), 1);
+    assert!(
+        !offered_tools(&captured, 0)
+            .iter()
+            .any(|tool| tool.starts_with("elitea_agent_7")),
+        "the unbuildable attachment is not offered: {:?}",
+        offered_tools(&captured, 0)
+    );
+}
+
+/// A static-pausing saved pipeline attached to a graph `agent` node's Agent
+/// cannot be projected beneath a graph root (one checkpoint owner): it is not
+/// offered, and the node still answers, as every other unbuildable attachment
+/// degrades (#990); the run never fails for a tool the Agent may not call.
+#[tokio::test(flavor = "current_thread")]
+async fn a_graph_root_does_not_offer_a_static_saved_pipeline_tool_and_the_node_answers() {
     let (sessions, checkpointer) = state();
     let versions = BTreeMap::from([
         (
@@ -658,20 +709,33 @@ async fn a_graph_root_refuses_a_static_saved_pipeline_tool_before_any_model_call
             saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
         ),
     ]);
-    let (assembler, captured, _) =
-        process(&sessions, &checkpointer, &versions, vec![text("never")]);
+    let (assembler, captured, _) = process(
+        &sessions,
+        &checkpointer,
+        &versions,
+        vec![text("node answer")],
+    );
     let request = root_request(
         &root_yaml("worker"),
         vec![reference((5, 6), "agent", "worker")],
     );
-    let Err(error) = assembler.assemble(authorized(&request)).await else {
-        panic!("a tool-owned static pause beneath a graph root cannot be projected");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("the static attachment degrades instead of failing the run");
+    let browser = collect_pipeline_completion(invocation).await;
+    assert!(
+        browser
+            .iter()
+            .any(|event| event["content"] == "node answer"),
+        "{browser:?}"
     );
-    assert_eq!(model_calls(&captured), 0);
+    assert_eq!(model_calls(&captured), 1);
+    assert!(
+        !offered_tools(&captured, 0).contains(&"elitea_agent_7_v_8".to_owned()),
+        "{:?}",
+        offered_tools(&captured, 0)
+    );
 }
 
 /// A root with one agent node per alias, in a row.
@@ -1185,21 +1249,21 @@ async fn a_three_call_batch_with_one_sensitive_call_resumes_after_approval() {
 }
 
 #[test]
-fn a_recovery_start_reads_its_resolver_from_the_checkpoint() {
-    use crate::agents::pipeline::resumes_a_stored_conversation;
+fn a_recovery_start_never_takes_the_older_conversation_resolver() {
+    use crate::agents::pipeline::continues_a_decided_pause;
     use crate::agents::runtime::PipelineNativeStart;
-    // A recovery resumes a stored conversation: an older one recovers on the resolver
-    // that paused it (no receipt, an application node on the frontier), never re-running
-    // its child from the task input. Only a new turn starts on the scoped resolver unasked.
-    assert!(resumes_a_stored_conversation(
-        &PipelineNativeStart::Checkpoint
-    ));
-    assert!(resumes_a_stored_conversation(
+    // A recovery re-runs an unfinished node: a missing receipt there is a crash before the
+    // first receipt revision, never an older worker's in-flight call, so it stays scoped.
+    for start in [
+        PipelineNativeStart::Checkpoint,
+        PipelineNativeStart::Fresh,
+        PipelineNativeStart::Regenerate,
+    ] {
+        assert!(!continues_a_decided_pause(&start));
+    }
+    assert!(continues_a_decided_pause(
         &PipelineNativeStart::StaticTools(Vec::new())
     ));
-    for start in [PipelineNativeStart::Fresh, PipelineNativeStart::Regenerate] {
-        assert!(!resumes_a_stored_conversation(&start));
-    }
 }
 
 /// Agent -> sub-Agent -> static saved pipeline (depth 2): the root's terminal
