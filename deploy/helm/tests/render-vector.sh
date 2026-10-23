@@ -55,7 +55,7 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # values-standalone.yaml turns the runtime plane on, which vector needs.
 # vector.enabled adds the 2-connection token-introspection pool to every
 # elitea-main replica (44 instead of 42); the profile's 4 replicas still fit
-# its 255 available connections (4 x 44 + gateway 8 + scheduler 4 = 188).
+# its 395 available connections (4 x 44 + gateway 32 + scheduler 8 = 216).
 COMPLETE="\
 -f $CHART/values-standalone.yaml \
 --set llmGateway.egressPosture=allowlist \
@@ -218,11 +218,22 @@ main_target="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTO
 main_cert="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE')"
 main_key="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE')"
 main_ca="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CA_FILE')"
-[ "$main_target" = "elitea-vector:9470" ] && [ "$main_cert" = "/run/elitea-vector-client/tls.crt" ] \
+[ "$main_target" = "elitea-vector-grpc:9470" ] && [ "$main_cert" = "/run/elitea-vector-client/tls.crt" ] \
   && [ "$main_key" = "/run/elitea-vector-client/tls.key" ] && [ "$main_ca" = "/run/elitea-vector-client/ca.crt" ] \
-  && note "elitea-main dials elitea-vector:9470 with the mounted certificate" \
+  && note "elitea-main dials the headless elitea-vector-grpc:9470 with the mounted certificate" \
   || fail "elitea-main vector client env: target='$main_target' cert='$main_cert' key='$main_key' ca='$main_ca'"
-
+# round_robin needs one DNS address per replica: the target is headless, and
+# elitea-main verifies the certificate against the ClusterIP name it carries.
+main_sni="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_SERVER_NAME')"
+[ "$main_sni" = "elitea-vector" ] && note "elitea-main verifies the server name elitea-vector (the certificate's SAN)" \
+  || fail "ELITEA_VECTOR_GRPC_SERVER_NAME is '$main_sni', want elitea-vector"
+headless_ip="$(select_one "$on" Service elitea-vector-grpc '.spec.clusterIP')"
+headless_port="$(select_one "$on" Service elitea-vector-grpc '.spec.ports[0].port')"
+headless_sel="$(select_one "$on" Service elitea-vector-grpc '.spec.selector | to_entries | map(.key + "=" + .value) | join(",")')"
+cluster_sel="$(select_one "$on" Service elitea-vector '.spec.selector | to_entries | map(.key + "=" + .value) | join(",")')"
+[ "$headless_ip" = "None" ] && [ "$headless_port" = "9470" ] && [ -n "$headless_sel" ] && [ "$headless_sel" = "$cluster_sel" ] \
+  && note "the headless Service elitea-vector-grpc selects the same pods on port 9470" \
+  || fail "headless elitea-vector-grpc: clusterIP='$headless_ip' port='$headless_port' selector='$headless_sel' (ClusterIP selector '$cluster_sel')"
 main_mount="$(select_one "$on" Deployment elitea-main '.spec.template.spec.containers[] | select(.name == "elitea-main") | .volumeMounts[] | select(.name == "vector-client-material") | .mountPath')"
 main_secret="$(select_one "$on" Deployment elitea-main '.spec.template.spec.volumes[] | select(.name == "vector-client-material") | .secret.secretName')"
 [ "$main_mount" = "/run/elitea-vector-client" ] && [ "$main_secret" = "elitea-main-vector-client-tls" ] \
@@ -383,11 +394,20 @@ expect_refusal "a Qdrant left on with elitea-vector off" "set qdrant.enabled=fal
   --set vector.enabled=false --set main.runtime.indexIngestDispatch.enabled=false
 expect_refusal "one replica" "minReplicas must be at least 2" \
   --set vector.autoscaling.minReplicas=1
-# 23 primary + 36 runtime + 2 introspection = 61 per replica, 244 for four,
-# plus the gateway's 8 and the scheduler's 4 = 256: over 255, while the same
-# primary without vector (59, 236 + 12 = 248) fits.
-expect_refusal "the introspection pool is in the connection budget" "61 per elitea-main replica" \
-  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=23
+# The profile has 395 connections (420 minus 25 reserved). 51 primary + 36
+# runtime + 2 introspection = 89 per replica, 356 for four, plus the
+# gateway's 32 (8 x 4) and the scheduler's 8 (4 x 2) = 396: over 395. The same
+# primary without vector (87 per replica, 348 + 40 = 388) fits.
+expect_refusal "the introspection pool is in the connection budget" "89 per elitea-main replica" \
+  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=51
+if out="$(render -f $CHART/values-standalone.yaml \
+    --set llmGateway.egressPosture=allowlist --set llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=elitea.invalid:8000 \
+    --set vector.enabled=false --set qdrant.enabled=false --set main.runtime.indexIngestDispatch.enabled=false \
+    --set-string main.env.ELITEA_DATABASE_MAX_CONNS=51)"; then
+  note "the same primary pool without elitea-vector fits"
+else
+  fail "the same primary pool without elitea-vector is refused: $(printf '%s' "$out" | grep -m1 Error)"
+fi
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'
 expect_refusal "elitea-main's identity equal to elitea-vector's own" "must differ" \

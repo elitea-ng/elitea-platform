@@ -103,9 +103,14 @@ each once.
 {{- join "," ($identities | uniq) -}}
 {{- end }}
 
-{{/* elitea-vector's gRPC target as elitea-main dials it: <service>:<port>. */}}
+{{/*
+elitea-vector's gRPC target as elitea-main dials it: <headless service>:<port>
+(vector.service.grpcName), so its round_robin reaches every replica. The
+certificate names vector.service.name, which the main ConfigMap sets as
+ELITEA_VECTOR_GRPC_SERVER_NAME.
+*/}}
 {{- define "elitea-vector.grpcTarget" -}}
-{{- printf "%s:%v" .Values.vector.service.name .Values.vector.service.port -}}
+{{- printf "%s:%v" (.Values.vector.service.grpcName | default .Values.vector.service.name) .Values.vector.service.port -}}
 {{- end }}
 
 {{/*

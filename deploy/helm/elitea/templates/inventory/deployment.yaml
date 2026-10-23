@@ -2,17 +2,20 @@
 {{- $env := .Values.inventory.env | default dict }}
 {{- /*
   Sensitive values, resolved in the shape every other component in this chart
-  uses. The HOST container gets inventory.secrets (the identity key) and never
-  the database URL; the ENGINE sidecar gets only the database URL (from
+  uses. The HOST container gets inventory.secrets (the identity key) and the
+  database URL; the ENGINE sidecar gets only the database URL (from
   inventory.secrets.ELITEA_INVENTORY_DATABASE_URL, else postgresql.
   existingSecret, the same resolution the migrate Job uses) and never the
   identity key. The database is the engine's own (ADR-0027): the graph lives in
   the inventory_graph schema, migrated by the engine image's `migrate`.
 
-  `urlKey` is not passed for the host: no database URL belongs there.
+  The host reads the same database for its invocation store
+  (inventory_graph.invocations, engine migration 0009): every replica shares
+  it, so a poll, a cancel or a deletion is served by any replica (scaling).
 */ -}}
 {{- $secrets := omit (.Values.inventory.secrets | default dict) "ELITEA_INVENTORY_DATABASE_URL" }}
 {{- $dbSecrets := fromJson (include "elitea-inventory.databaseSecrets" .) }}
+{{- $hostDbSecrets := fromJson (include "elitea-inventory.hostStoreSecrets" .) }}
 {{- include "elitea-inventory.validateGuards" . -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -48,15 +51,19 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-inventory.serviceAccountName" . }}
-      # Long enough for an in-flight invocation to be recorded as terminal
-      # before the process goes. It does not have to outlast an INGESTION:
-      # a lost run is redone, and draining forever would be the wrong trade.
+      # Long enough for a running ingestion to FINISH on this replica
+      # (scaling). On SIGTERM the host leaves the Services, stops admitting
+      # new invocations, and waits up to
+      # ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS (default 3600) for its invocations;
+      # the engine sidecar keeps serving until it is idle too. A poll or a
+      # cancel for them reaches a sibling, which reads the shared store. What
+      # is left at the deadline is cancelled and recorded terminal.
       #
-      # The host stops its gRPC listener (up to 10s), waits for running
-      # invocations for ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS, then cancels and records
-      # what is left; 10s more for the store and NATS to close.
+      # One clock: the preStop sleep, the gRPC listener's stop (up to 10s), the
+      # drain, then 10s for the store and NATS to close.
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.inventory) }}
       {{- $drain := include "elitea.integer" (dict "field" "inventory.env.ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" "value" (get $env "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" | default "30" | toString) "min" 0) | int }}
-      {{- include "elitea.scaling.validateGrace" (dict "field" "inventory" "grace" .Values.inventory.terminationGracePeriodSeconds "parts" (list (list "gRPC stop" 10) (list "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "inventory" "grace" .Values.inventory.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "gRPC stop" 10) (list "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
       terminationGracePeriodSeconds: {{ int .Values.inventory.terminationGracePeriodSeconds }}
       {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.inventory "selector" (include "elitea-inventory.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.inventory.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -81,10 +88,12 @@ spec:
               protocol: TCP
           env:
             {{- range $key, $value := $env }}
-            {{- if not (hasKey $secrets $key) }}
+            {{- if not (or (hasKey $secrets $key) (hasKey $dbSecrets $key) (eq $key "ELITEA_INVENTORY_DATABASE_URL")) }}
             # Skipped when the same name is secret-backed below: emitting both
             # puts one name twice in this list, and only ordering decides which
-            # wins.
+            # wins. The host's database URL comes only from hostStoreSecrets
+            # (a plain inventory.env value would reach a host whose tables no
+            # Job creates).
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
@@ -137,6 +146,14 @@ spec:
             - name: ELITEA_INVENTORY_CALLBACK_KEY_FILE
               value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.key
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+            # The invocation store (inventory_graph.invocations): the engine's
+            # database, from the same secret the engine and the migrate Job
+            # read, and only while that Job renders (it creates the tables).
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $hostDbSecrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          # The native sleep (Kubernetes 1.30+): DNS and the endpoints drop this
+          # replica before the host stops its listener, so elitea-main's
+          # round_robin sends no new call to a process that stopped taking them.
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
           # httpGet on the admin port: the gRPC listener requires and verifies a
           # client certificate, and the kubelet presents none. Liveness is
           # /healthz (the process is up); readiness is /readyz, which fails
@@ -173,6 +190,15 @@ spec:
               mountPath: {{ include "elitea-inventory.callbackClientPath" . }}
               readOnly: true
         {{- if include "elitea-inventory.sidecar" . }}
+      # A NATIVE sidecar (an init container with restartPolicy Always,
+      # Kubernetes 1.29+; this chart needs 1.30). The kubelet starts it before
+      # the host, and on termination it stops it only AFTER the host container
+      # has exited. The host drains its invocations (up to
+      # ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS), and an invocation calls the
+      # engine many times; the engine serves every one of those calls, because
+      # it gets no SIGTERM while the host runs. Then the engine drains its own
+      # open streams (none by then) and exits.
+      initContainers:
         # The engine sidecar (ADR-0023 H2, ADR-0027): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
         # identity — the socket directory is the only way in. One distroless
@@ -183,6 +209,7 @@ spec:
         - name: engine
           image: "{{ .Values.inventory.engine.image.repository }}:{{ include "elitea-inventory.engineTag" . }}"
           imagePullPolicy: {{ .Values.inventory.engine.image.pullPolicy }}
+          restartPolicy: Always
           {{- with .Values.inventory.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

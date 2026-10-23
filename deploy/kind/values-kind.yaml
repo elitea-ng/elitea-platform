@@ -268,6 +268,15 @@ inventory:
     requests:
       cpu: 50m
       memory: 128Mi
+  # The same KEDA proof for Inventory: its host keeps its invocations in
+  # inventory_graph.invocations (engine migration 0009), so it can run more
+  # than one replica, and KEDA's postgresql trigger counts those rows.
+  # maxReplicas 2 keeps the second pod off this small node.
+  autoscaling:
+    enabled: true
+    source: auto
+    minReplicas: 1
+    maxReplicas: 2
 
 # elitea-vector and the bundled Qdrant run on the chart's defaults (one node,
 # REST and gRPC over TLS from the elitea-runtime-ca issuer). Only the volume is

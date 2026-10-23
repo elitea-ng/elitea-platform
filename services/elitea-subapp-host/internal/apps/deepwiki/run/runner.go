@@ -91,7 +91,13 @@ var (
 //
 // A generation whose wiki the host could not name (its label is empty)
 // matches EVERY wiki of its project: stopping one generation too many is the
-// safe side of a deletion.
+// safe side of a deletion. A generation with no project label (the row of a
+// replica from before the fleet labels) matches every project, for the
+// same reason (spi.StopFence).
+//
+// Until ctx ends, a new matching generation is refused on every replica
+// (the stop fence, spi.Manager.StopMatching). So the caller passes the
+// context of the deletion and cancels it when the deletion ends.
 func (r *Runner) StopGenerations(ctx context.Context, wikiID string) error {
 	if r.manager == nil {
 		return nil
@@ -104,12 +110,9 @@ func (r *Runner) StopGenerations(ctx context.Context, wikiID string) error {
 	if wait <= 0 {
 		wait = DefaultStopWait
 	}
-	remaining := r.manager.StopMatching(ctx, func(run spi.RunningInvocation) bool {
-		if run.Tool != generateTool || run.Labels[labelProject] != project {
-			return false
-		}
-		wiki := run.Labels[labelWiki]
-		return wikiID == "" || wiki == "" || wiki == wikiID
+	remaining := r.manager.StopMatching(ctx, spi.StopFence{
+		Tool:   generateTool,
+		Labels: map[string]string{labelProject: project, labelWiki: wikiID},
 	}, wait)
 	if remaining > 0 {
 		r.logger().Warn("generations are still running after the wait; the deletion is refused",
@@ -140,7 +143,9 @@ func (r *Runner) DeleteProject(ctx context.Context, projectID int32) (*spi.Proje
 	if !ok {
 		return nil, spi.Failf(spi.KindValue, "%d is not a project id", projectID)
 	}
-	ctx = withProject(ctx, projectResolution{id: project})
+	// The stop fence lives until the deletion returns.
+	ctx, done := context.WithCancel(withProject(ctx, projectResolution{id: project}))
+	defer done()
 	if err := r.StopGenerations(ctx, ""); err != nil {
 		return nil, err
 	}
@@ -197,6 +202,17 @@ func projectDeletionOf(project int32, result map[string]any) *spi.ProjectDeletio
 
 var _ spi.PlatformOps = (*Runner)(nil)
 var _ spi.Labeler = (*Runner)(nil)
+var _ spi.SlotHolder = (*Runner)(nil)
+
+// HoldsSlot names the calls that take one of the generation slots: a wiki
+// generation (generate_wiki of a family other than query), the same test
+// Labels applies. A question, a page read or a deletion takes none. The
+// host admits a generation only while the fleet has a free slot, and the
+// slots report counts the generations, so the UI's can_start and the
+// admission agree.
+func (r *Runner) HoldsSlot(call spi.Invoke) bool {
+	return call.Tool == generateTool && call.Family.Name != "query"
+}
 
 // Labels names the project and wiki a generation publishes into, for the
 // server to put on the invocation AT REGISTRATION (spi.Manager.SubmitLabelled),

@@ -55,9 +55,18 @@ func AdminHandler(server *Server) http.Handler {
 // that accepted it, start to end, and nothing queues it anywhere else, so the
 // load of a replica is its own in-flight count. A Prometheus scaler divides
 // the sum over the replicas by the slots of one.
+//
+// Admission refuses a slot holder when every slot of the fleet is busy, so
+// the in-flight sum never goes above the fleet's slots: alone it cannot ask
+// for one more replica. The refusal counter has a `reason` label
+// (RefusalReasons). Only reason="fleet_full" is demand that was turned
+// away; the scaler adds its recent increase to the in-flight sum. A
+// draining refusal is a replica that goes away, and local_full happens only
+// without a durable store (one replica); neither is demand.
 const (
 	MetricInvocationsInFlight = "elitea_subapp_invocations_in_flight"
 	MetricInvocationSlots     = "elitea_subapp_invocation_slots"
+	MetricSlotRefusals        = "elitea_subapp_slot_refusals_total"
 )
 
 // MetricsText is the admin port's /metrics body, in the Prometheus text
@@ -69,5 +78,10 @@ func (s *Server) MetricsText() string {
 		MetricInvocationsInFlight, MetricInvocationsInFlight, MetricInvocationsInFlight, app, s.manager.InFlight())
 	fmt.Fprintf(&b, "# HELP %s Invocations one replica runs at once: <PREFIX>MAX_PARALLEL_WORKERS, the total its slots report.\n# TYPE %s gauge\n%s{app=%s} %d\n",
 		MetricInvocationSlots, MetricInvocationSlots, MetricInvocationSlots, app, s.settings.MaxParallelWorkers)
+	fmt.Fprintf(&b, "# HELP %s Slot-holding invocations this replica refused, by reason: fleet_full (every slot of the fleet was busy), draining (this replica was shutting down), local_full (every slot of this replica was busy, without a durable store).\n# TYPE %s counter\n",
+		MetricSlotRefusals, MetricSlotRefusals)
+	for _, reason := range RefusalReasons {
+		fmt.Fprintf(&b, "%s{app=%s,reason=%s} %d\n", MetricSlotRefusals, app, strconv.Quote(reason), s.manager.RefusalsFor(reason))
+	}
 	return b.String()
 }

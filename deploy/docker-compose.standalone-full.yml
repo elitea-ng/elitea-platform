@@ -1541,6 +1541,10 @@ services:
       # One second between fixture progress steps: long enough for a browser
       # to see the run in flight and stop it, short enough for a CI job.
       ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "${DEEPWIKI_FIXTURE_STEP_SECONDS:-1}"
+      # The host admits a generation only while a slot is free, and refuses
+      # the next one (service_busy). The fixture runner costs nothing, and
+      # the browser journeys run in parallel workers, so give it room.
+      ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS: "8"
       ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
       ELITEA_DEEPWIKI_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
       # The build-space owner. A container's hostname is its id, which

@@ -184,6 +184,7 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 	}
 	conn, err := grpc.NewClient(cfg.Target,
 		grpc.WithTransportCredentials(creds),
+		mtlsclient.Balanced(),
 		// A response is a collection count; nothing legitimate is larger. The
 		// calls FAIL FAST: a call made while the connection is down (the
 		// route's best-effort attempt, a sweep during an outage) returns

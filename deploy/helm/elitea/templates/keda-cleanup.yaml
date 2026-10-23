@@ -1,0 +1,113 @@
+{{- /*
+  The KEDA uninstall hook. With keda.enabled this release installs KEDA's
+  operator and CRDs AND the ScaledObjects that use them. `helm uninstall`
+  deletes them all at once: the operator can go before it has run the
+  finalizer of a ScaledObject, and then the ScaledObject, its CRD and the
+  namespace stay in Terminating.
+
+  This pre-delete hook runs BEFORE Helm deletes anything. It deletes this
+  release's ScaledObjects and TriggerAuthentications (selected by
+  app.kubernetes.io/instance) and waits for the operator to run their
+  finalizers (the operator is still there). When the operator does not finish
+  in kedaCleanup.timeoutSeconds, it removes the finalizers itself, so the
+  uninstall never hangs. Code: services/elitea-main/cmd/elitea-keda-cleanup,
+  in the elitea-main image.
+
+  Not rendered with an external KEDA (scaling.keda.clusterInstalled): that
+  operator outlives the release and runs the finalizers itself.
+*/ -}}
+{{- if .Values.keda.enabled }}
+{{- $name := printf "%s-keda-cleanup" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- $c := .Values.kedaCleanup | default dict }}
+{{- $timeout := include "elitea.integer" (dict "field" "kedaCleanup.timeoutSeconds" "value" ($c.timeoutSeconds | default 120) "min" 10) | int }}
+{{- $hook := dict "helm.sh/hook" "pre-delete" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded,hook-failed" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-10") $hook) | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-10") $hook) | nindent 4 }}
+rules:
+  # Exactly what the tool does: delete the collection, list until it is
+  # gone, and patch the finalizers away when the operator is gone.
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects", "triggerauthentications"]
+    verbs: ["list", "deletecollection", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-10") $hook) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "0") $hook) | nindent 4 }}
+spec:
+  backoffLimit: 2
+  # The tool's own wait, plus room for the finalizer patch and a retry.
+  activeDeadlineSeconds: {{ add $timeout 120 }}
+  template:
+    metadata:
+      labels:
+        {{- include "elitea.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: keda-cleanup
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      {{- include "elitea.imagePullSecrets" (dict "local" .Values.main.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keda-cleanup
+          image: "{{ .Values.main.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.main.image.pullPolicy }}
+          command: ["/elitea-keda-cleanup"]
+          env:
+            - name: ELITEA_KEDA_CLEANUP_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ELITEA_KEDA_CLEANUP_SELECTOR
+              value: {{ printf "app.kubernetes.io/instance=%s" .Release.Name | quote }}
+            - name: ELITEA_KEDA_CLEANUP_TIMEOUT
+              value: {{ printf "%ds" $timeout | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml ($c.resources | default (dict "requests" (dict "cpu" "10m" "memory" "32Mi") "limits" (dict "memory" "64Mi"))) | nindent 12 }}
+{{- end }}

@@ -19,6 +19,7 @@
 //! | `ELITEA_VECTOR_INTROSPECTION_SERVER_NAME` | TLS server name of elitea-main | the URL host |
 //! | `ELITEA_VECTOR_INTROSPECTION_TIMEOUT_MS` | per-call timeout | `2000` |
 //! | `ELITEA_VECTOR_INTROSPECTION_CACHE_MAX_SECONDS` | longest a verified engine callback token is cached (a worker claim token: 5 s); above 300 it is clamped to 300 and logged | `60` |
+//! | `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS` | age at which the server asks a client connection to close (HTTP/2 GOAWAY), so that the client connects again and kube-proxy can send it to a different replica; the calls in progress on it complete (1 to 86400) | `300` |
 //!
 //! A Qdrant served over `https://` with a private CA is trusted through
 //! `SSL_CERT_FILE`: the Qdrant client reads the platform trust store only.
@@ -61,7 +62,13 @@ pub struct Config {
     pub introspection_server_name: Option<String>,
     pub introspection_timeout: Duration,
     pub introspection_cache_max_seconds: i64,
+    /// The age at which a client connection is closed gracefully
+    /// (`ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS`).
+    pub max_connection_age: Duration,
 }
+
+/// The default of `ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS`: 5 minutes.
+pub const DEFAULT_MAX_CONNECTION_AGE: Duration = Duration::from_secs(300);
 
 impl Config {
     /// Reads the configuration through `lookup` (the process environment in
@@ -163,6 +170,11 @@ impl Config {
                 86_400,
             )?)
             .map_or(DEFAULT_MAX_TTL_SECONDS, clamp_cache_seconds),
+            max_connection_age: Duration::from_secs(number(
+                "ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS",
+                DEFAULT_MAX_CONNECTION_AGE.as_secs(),
+                86_400,
+            )?),
         })
     }
 }
@@ -257,6 +269,21 @@ mod tests {
         assert!(config.allowed_spaces.is_none());
         assert_eq!(config.introspection_timeout, Duration::from_secs(2));
         assert_eq!(config.introspection_cache_max_seconds, 60);
+        assert_eq!(config.max_connection_age, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn the_connection_age_is_read() {
+        let mut env = base();
+        env.insert("ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS", "60");
+        assert_eq!(
+            load(&env).expect("valid").max_connection_age,
+            Duration::from_secs(60)
+        );
+        for bad in ["0", "-1", "x", "86401"] {
+            env.insert("ELITEA_VECTOR_MAX_CONNECTION_AGE_SECONDS", bad);
+            assert!(load(&env).is_err(), "{bad}");
+        }
     }
 
     #[test]

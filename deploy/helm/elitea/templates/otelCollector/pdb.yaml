@@ -1,0 +1,4 @@
+{{- if .Values.otelCollector.enabled }}
+{{- /* Rendered only while the floor is above one replica (elitea.scaling.pdb). */}}
+{{- include "elitea.scaling.pdb" (dict "ctx" . "v" .Values.otelCollector "name" (include "otel-collector.fullname" .) "labels" (include "otel-collector.labels" .) "selector" (include "otel-collector.selectorLabels" .)) }}
+{{- end }}

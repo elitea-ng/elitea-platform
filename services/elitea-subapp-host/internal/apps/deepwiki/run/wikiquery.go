@@ -216,6 +216,9 @@ func (q *wikiQuery) deleteWiki(ctx context.Context, arguments map[string]any, tc
 	// Stop the wiki's running generations FIRST, and delete nothing while one
 	// is still running: a generation that outlives the deletion publishes the
 	// wiki's index back, for artifacts that are gone.
+	// The stop fence lives until this deletion returns.
+	ctx, done := context.WithCancel(ctx)
+	defer done()
 	if q.deps.StopGenerations != nil {
 		if err := q.deps.StopGenerations(ctx, wikiID); err != nil {
 			return nil, err

@@ -31,7 +31,7 @@
 #   component                    replicas   cpu each   mem each      cpu    mem
 #   elitea-main                         2     400m      768Mi       800m   1536Mi
 #   elitea-web                          2      10m       32Mi        20m     64Mi
-#   elitea-scheduler                    1      50m       64Mi        50m     64Mi
+#   elitea-scheduler                    2      50m       64Mi       100m    128Mi
 #   elitea-llm-gateway                  1     250m      512Mi       250m    512Mi
 #   agent worker                        1    1500m        3Gi      1500m   3072Mi
 #   elitea-vector                       2     100m      128Mi       200m    256Mi
@@ -41,16 +41,16 @@
 #   OTel collector                      1      50m      128Mi        50m    128Mi
 #   NATS server (JetStream)             1     200m      512Mi       200m    512Mi
 #   ─────────────────────────────────────────────────────────────────────────
-#   STEADY STATE                                                   3670m   8704Mi
-#                                                               (3.67 vCPU, 8.5 GiB)
+#   STEADY STATE                                                   3720m   8768Mi
+#                                                               (3.72 vCPU, 8.6 GiB)
 #
 #   + the largest rollout surge. elitea-main and the worker do NOT surge
 #     here (rollingUpdate maxSurge 0 / maxUnavailable 1): a surge worker
 #     alone (+1500m/+3Gi) would take the peak to 5.2 vCPU / 11.5 GiB.
 #     The largest remaining surges are the gateway (+250m) and DeepWiki
 #     (+1152Mi), one Deployment at a time:
-#   = PEAK DURING A ROLLOUT, at most                               3920m   9856Mi
-#                                                               (3.92 vCPU, 9.6 GiB)
+#   = PEAK DURING A ROLLOUT, at most                               3970m   9920Mi
+#                                                               (3.97 vCPU, 9.7 GiB)
 #
 # Not counted, and why:
 #   * the hook Jobs (migrations, workload-session, nats-bootstrap at 50m/64Mi)
@@ -68,9 +68,11 @@
 #     release's, so its operator, metrics server and webhook (about 300m and
 #     300Mi of requests together) come out of the cluster's add-on capacity;
 #   * the autoscalers above their floors: the worker (KEDA, up to 4), DeepWiki
-#     (KEDA, up to 3) and the gateway (CPU, up to 3) start at one replica each,
-#     and their scale-out, like elitea-main's, is what the headroom above the
-#     reservation is for.
+#     and Inventory (KEDA, up to 3 each), the gateway (CPU, up to 3) and the
+#     OTel collector (CPU, up to 3) start at one replica each, elitea-web and
+#     elitea-vector (CPU, up to 6) at two, and their scale-out, like
+#     elitea-main's, is what the headroom above the reservation is for. Each
+#     autoscaler is in the Scaling page's table.
 # deploy/helm/tests/render-gke-budget.sh renders this file, sums the requests
 # of every Deployment and StatefulSet at their replica counts and adds the
 # largest rendered surge, so a change here that breaks 4 vCPU / 10 GiB, at
@@ -118,15 +120,17 @@ postgresql:
   # Every component at its replica ceiling (the chart checks the sum):
   #   elitea-main       3 x (6 primary + 36 runtime + 2 vector)   = 132
   #   llm-gateway       3 x GATEWAY_DATABASE_MAX_CONNS 8          =  24
-  #   scheduler         1 x 4                                     =   4
+  #   scheduler         2 x 4                                     =   8
   #   deepwiki host     3 x (4 + 1 owner claim)                   =  15
   #   deepwiki engine   3 x (2 + 2 + query pool 8 + 4 x 1)        =  48
-  #   inventory engine  1 x POOL_SIZE 8                           =   8
-  #   worker AgentState 4 x delivery_max_concurrency 32           = 128
+  #   inventory host    3 x (2 + 1 owner claim)                   =   9
+  #   inventory engine  3 x POOL_SIZE 8                           =  24
+  #   worker AgentState 4 x agentstate_max_connections 8          =  32
   #                                                               -----
-  #                                                                 359
-  # against 500 - 25 reserved = 475: 116 to spare, which is a fourth
-  # elitea-main replica (44) with room, or a worker ceiling of 7.
+  #                                                                 292
+  # against 500 - 25 reserved = 475: 183 to spare, which is four more
+  # elitea-main replicas (44 each). The worker's ceiling of 4 is the node
+  # budget's choice (1500m each), not the database's.
   maxConnections: 500
   reservedConnections: 25
 
@@ -386,7 +390,8 @@ llmGateway:
 worker:
   replicaCount: 1
   # The JetStream backlog, through the cluster's KEDA (scaling above). Four
-  # is the connection budget's choice (postgresql above), not KEDA's.
+  # is the node budget's choice (1500m CPU each), not KEDA's or the
+  # database's (8 connections a replica, postgresql above).
   autoscaling:
     enabled: true
     minReplicas: 1

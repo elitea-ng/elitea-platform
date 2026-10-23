@@ -58,6 +58,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "elitea-scheduler.serviceAccountName" . }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.scheduler "selector" (include "elitea-scheduler.selectorLabels" .)) | nindent 6 }}
       terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.scheduler.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:

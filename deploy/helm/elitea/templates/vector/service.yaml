@@ -21,6 +21,34 @@ spec:
       appProtocol: grpc
   selector:
     {{- include "elitea-vector.selectorLabels" . | nindent 4 }}
+{{- if .Values.vector.service.grpcName }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # The headless Service elitea-main dials (ELITEA_VECTOR_GRPC_TARGET). DNS
+  # answers with one address per READY replica, and elitea-main sends its
+  # calls to them in turn (round_robin, mtlsclient.Balanced). elitea-main
+  # still verifies the ClusterIP Service's name as the certificate SAN
+  # (ELITEA_VECTOR_GRPC_SERVER_NAME), so no certificate changes. Not
+  # reachable from outside the cluster: a headless Service has no address of
+  # its own, and the NetworkPolicy admits the same callers.
+  name: {{ .Values.vector.service.grpcName }}
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: grpc
+      port: {{ .Values.vector.service.port }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+  selector:
+    {{- include "elitea-vector.selectorLabels" . | nindent 4 }}
+{{- end }}
 ---
 {{- if .Values.vector.serviceAccount.create }}
 apiVersion: v1

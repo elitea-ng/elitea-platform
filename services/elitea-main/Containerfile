@@ -111,7 +111,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/cutover-ctl ./cmd/cutover-ctl && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/elitea-grpc-health ./cmd/elitea-grpc-health
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-grpc-health ./cmd/elitea-grpc-health && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-keda-cleanup ./cmd/elitea-keda-cleanup
 
 # ── Vulnerability scan: NOT a stage here. Do not add one back. ────────────────
 # A `FROM aquasec/trivy:latest AS scanner` stage used to sit at this point. No

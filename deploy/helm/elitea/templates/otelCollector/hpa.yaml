@@ -1,0 +1,4 @@
+{{- if .Values.otelCollector.enabled }}
+{{- /* Stateless (OTLP in, batch, export out): CPU is its load. */}}
+{{- include "elitea.scaling.cpuHpa" (dict "v" .Values.otelCollector "field" "otelCollector" "name" (include "otel-collector.fullname" .) "labels" (include "otel-collector.labels" .)) }}
+{{- end }}

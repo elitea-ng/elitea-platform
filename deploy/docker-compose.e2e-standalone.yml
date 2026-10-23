@@ -454,6 +454,10 @@ services:
       ELITEA_SUBAPP: deepwiki
       ELITEA_DEEPWIKI_RUNNER: "fixture"
       ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "1"
+      # The host admits a generation only while a slot is free, and refuses
+      # the next one (service_busy). The fixture runner costs nothing, and
+      # the browser journeys run in parallel workers, so give it room.
+      ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS: "8"
       ELITEA_DEEPWIKI_TLS_CERTFILE: /certs/deepwiki-server.crt
       ELITEA_DEEPWIKI_TLS_KEYFILE: /certs/deepwiki-server.key
       ELITEA_DEEPWIKI_TLS_CA_FILE: /certs/ca.crt

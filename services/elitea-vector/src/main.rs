@@ -155,7 +155,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         admins = config.admin_identities.len(),
         "elitea-vector serving"
     );
+    // Each client (elitea-main, the engines, the worker) keeps one long-lived
+    // HTTP/2 connection, and kube-proxy selects a replica only when a
+    // connection opens. Thus, without a maximum age, a client sends all its
+    // calls to one replica, and a replica added by the autoscaler gets no
+    // traffic. At the age, tonic starts a graceful shutdown of the
+    // connection (HTTP/2 GOAWAY): it accepts no new call on it, the calls in
+    // progress complete, and the client opens a new connection for the next
+    // call. Do not set `max_connection_age_grace`: in tonic 0.14.6 that
+    // replaces the graceful shutdown with a forced close at age + grace,
+    // which stops the calls in progress.
+    //
+    // SIGTERM (`shutdown`): tonic stops accepting connections, sends GOAWAY
+    // on each connection and waits until each one closes, so the calls in
+    // progress complete (the kubelet kills the process at the end of the
+    // termination grace period).
     Server::builder()
+        .max_connection_age(config.max_connection_age)
         .add_service(
             VectorServiceServer::new(service)
                 .max_decoding_message_size(MAX_MESSAGE_BYTES)

@@ -146,8 +146,8 @@ func TestStopMatchingStopsOnlyTheMatchingRunsAndWaitsForThem(t *testing.T) {
 	_ = a
 	_ = b
 
-	match := func(project string) func(spi.RunningInvocation) bool {
-		return func(r spi.RunningInvocation) bool { return r.Labels["project"] == project }
+	match := func(project string) spi.StopFence {
+		return spi.StopFence{Tool: "tool", Labels: map[string]string{"project": project}}
 	}
 	// Project 2's run honours the stop and leaves; nothing else is touched.
 	if left := manager.StopMatching(t.Context(), match("2"), 2*time.Second); left != 0 {

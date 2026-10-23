@@ -136,7 +136,7 @@ func (p *providerService) Slots(ctx context.Context, _ *subappv1.SlotsRequest) (
 	if _, err := p.server.verifiedIdentity(ctx, false); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(p.server.SlotsDocument())
+	body, err := json.Marshal(p.server.SlotsDocument(ctx))
 	if err != nil {
 		return nil, status.Error(codes.Internal, "the slots report could not be encoded")
 	}

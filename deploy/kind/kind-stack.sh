@@ -443,20 +443,28 @@ cmd_verify() {
   # The migrate Job's pod carries the same name label, so the component is
   # excluded: with it included the selector's first item is whichever pod the
   # API returns first, and a green run would be luck.
+  # The engine is a NATIVE sidecar: an init container with restartPolicy
+  # Always, so the kubelet stops it only after the host has exited. Its
+  # status must say it is running beside the host, not that it completed.
+  local engine_policy engine_running
   containers="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{.items[0].spec.containers[*].name}')"
-  if [ "$containers" != "elitea-deepwiki engine" ]; then
-    fail "the provider pod's containers are '${containers}'; expected 'elitea-deepwiki engine'"
+      -o jsonpath='{.items[0].spec.containers[*].name} {.items[0].spec.initContainers[*].name}')"
+  engine_policy="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
+      -o jsonpath='{.items[0].spec.initContainers[?(@.name=="engine")].restartPolicy}')"
+  engine_running="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
+      -o jsonpath='{.items[0].status.initContainerStatuses[?(@.name=="engine")].state.running.startedAt}')"
+  if [ "$containers" != "elitea-deepwiki engine" ] || [ "$engine_policy" != "Always" ] || [ -z "$engine_running" ]; then
+    fail "the provider pod's containers are '${containers}' (engine restartPolicy '${engine_policy}', running since '${engine_running}'); expected 'elitea-deepwiki engine' with the engine a running native sidecar"
   else
     kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{range .items[0].spec.containers[*]}   {.name}{"\t"}{.image}{"\n"}{end}'
-    pass "containers: ${containers}"
+      -o jsonpath='{range .items[0].spec.containers[*]}   {.name}{"\t"}{.image}{"\n"}{end}{range .items[0].spec.initContainers[*]}   {.name}{"\t"}{.image} (native sidecar){"\n"}{end}'
+    pass "containers: ${containers} (the engine is a running native sidecar)"
   fi
   local host_runner engine_runner
   host_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
       -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   engine_runner="$(kc -n "$NS" get pod -l 'app.kubernetes.io/name=elitea-deepwiki,app.kubernetes.io/component!=deepwiki-migrate' \
-      -o jsonpath='{.items[0].spec.containers[1].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
+      -o jsonpath='{.items[0].spec.initContainers[0].env[?(@.name=="ELITEA_DEEPWIKI_RUNNER")].value}')"
   if [ "$host_runner" != "native" ] || [ "$engine_runner" != "fixture" ]; then
     fail "runners are host=${host_runner} engine=${engine_runner}; expected native/fixture"
   else
@@ -552,35 +560,72 @@ for o in (b.get("items") or b.get("objects") or []):
   fi
   stop_port_forward
 
-  # ── 5. the bundled KEDA scales DeepWiki (S11) ──────────────────────────────
-  say "5. the ScaledObject created on the first install is Ready"
+  # ── 5. the bundled KEDA scales DeepWiki and Inventory (S11) ────────────────
+  say "5. the ScaledObjects created on the first install are Ready"
   # keda.enabled installs KEDA's CRDs in this same release, so on the FIRST
   # install the ScaledObject is a post-install hook (the CRDs did not exist
   # when Helm mapped the release). Ready=True means all of it worked: the
   # CRDs, the operator, the hook, and a postgresql scaler that connected with
   # the TriggerAuthentication's credential and ran its query. Polled: the
   # operator reconciles on its own schedule after it starts.
-  local so_ready="" so_hpa=""
-  for attempt in $(seq 1 60); do
-    so_ready="$(kc -n "$NS" get scaledobject elitea-deepwiki \
-        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-    [ "$so_ready" = "True" ] && break
+  # Inventory's postgresql trigger reads inventory_graph.invocations: Ready
+  # also proves the host's invocation tables exist (engine migration 0009).
+  local so_ready="" so_hpa="" so
+  for so in elitea-deepwiki elitea-inventory; do
+    so_ready=""
+    for attempt in $(seq 1 60); do
+      so_ready="$(kc -n "$NS" get scaledobject "$so" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+      [ "$so_ready" = "True" ] && break
+      sleep 3
+    done
+    if [ "$so_ready" != "True" ]; then
+      kc -n "$NS" get scaledobject -o wide >&2 || true
+      kc -n "$NS" describe scaledobject "$so" >&2 || true
+      fail "ScaledObject ${so} is Ready='${so_ready:-<absent>}', not True"
+    else
+      pass "ScaledObject ${so} is Ready=True (bundled KEDA, postgresql trigger)"
+    fi
+    # KEDA drives the Deployment through an HPA it owns; the chart rendered
+    # no replicas: field, so nothing fights it.
+    so_hpa="$(kc -n "$NS" get hpa "keda-hpa-${so}" -o jsonpath='{.spec.scaleTargetRef.name}' 2>/dev/null || true)"
+    if [ "$so_hpa" != "$so" ]; then
+      fail "KEDA's HPA keda-hpa-${so} targets '${so_hpa:-<absent>}', not ${so}"
+    else
+      pass "KEDA's HPA keda-hpa-${so} scales ${so}"
+    fi
+  done
+
+  # ── 6. helm uninstall with the bundled KEDA does not hang ──────────────────
+  # The LAST check: it removes the release. The pre-delete hook
+  # (templates/keda-cleanup.yaml) deletes the ScaledObjects and waits for
+  # KEDA's operator to run their finalizers BEFORE Helm deletes the
+  # operator and its CRDs. Without it the CRDs (and the namespace) stay in
+  # Terminating. Proof: the uninstall returns, no ScaledObject is left, and
+  # the scaledobjects CRD is gone, not Terminating.
+  say "6. helm uninstall removes the ScaledObjects first, and KEDA's CRDs go"
+  if helm --kube-context "kind-${CLUSTER}" -n "$NS" uninstall "$RELEASE" --timeout 5m; then
+    pass "helm uninstall returned"
+  else
+    fail "helm uninstall failed or timed out"
+  fi
+  local left="" crd=""
+  for attempt in $(seq 1 40); do
+    crd="$(kc get crd scaledobjects.keda.sh -o jsonpath='{.metadata.deletionTimestamp}{"|"}{.metadata.name}' 2>/dev/null || true)"
+    [ -z "$crd" ] && break
     sleep 3
   done
-  if [ "$so_ready" != "True" ]; then
-    kc -n "$NS" get scaledobject -o wide >&2 || true
-    kc -n "$NS" describe scaledobject elitea-deepwiki >&2 || true
-    fail "ScaledObject elitea-deepwiki is Ready='${so_ready:-<absent>}', not True"
+  left="$(kc -n "$NS" get scaledobjects.keda.sh -o name 2>/dev/null || true)"
+  if [ -n "$left" ]; then
+    fail "ScaledObjects left after the uninstall: ${left}"
   else
-    pass "ScaledObject elitea-deepwiki is Ready=True (bundled KEDA, postgresql trigger)"
+    pass "no ScaledObject is left in ${NS}"
   fi
-  # KEDA drives the Deployment through an HPA it owns; the chart rendered no
-  # replicas: field, so nothing fights it.
-  so_hpa="$(kc -n "$NS" get hpa keda-hpa-elitea-deepwiki -o jsonpath='{.spec.scaleTargetRef.name}' 2>/dev/null || true)"
-  if [ "$so_hpa" != "elitea-deepwiki" ]; then
-    fail "KEDA's HPA keda-hpa-elitea-deepwiki targets '${so_hpa:-<absent>}', not elitea-deepwiki"
+  if [ -n "$crd" ]; then
+    kc get crd scaledobjects.keda.sh -o yaml >&2 || true
+    fail "the scaledobjects.keda.sh CRD is still there (${crd}): the uninstall left it Terminating"
   else
-    pass "KEDA's HPA keda-hpa-elitea-deepwiki scales elitea-deepwiki"
+    pass "the scaledobjects.keda.sh CRD is gone"
   fi
 
   echo
@@ -612,7 +657,10 @@ usage: $0 {up|verify|down}
           bootstrap, the chart, and seed the fixtures
   verify  prove: every pod Ready; the provider pod is the host + engine
           sidecar; the facade registered the provider; a fixture generation
-          completes and its pages land in the artifact bucket
+          completes and its pages land in the artifact bucket; the bundled
+          KEDA scales DeepWiki and Inventory; then `helm uninstall` (the
+          last check, it removes the release) does not leave KEDA's CRDs
+          in Terminating
   down    delete the cluster
 USAGE
      exit 2 ;;

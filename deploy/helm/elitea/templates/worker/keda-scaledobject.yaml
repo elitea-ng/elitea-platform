@@ -29,7 +29,7 @@
   deploy/helm/tests/render-worker-autoscaling.sh and render-scaling.sh check
   each source and the refusal without one.
 */}}
-{{- include "elitea.scaling.requireKeda" (dict "ctx" . "field" "worker.autoscaling.enabled=true" "why" "The worker scales on JetStream consumer lag, which no native HorizontalPodAutoscaler can read, so there is no CPU fallback: set worker.autoscaling.enabled=false and size worker.replicaCount by hand if there is no KEDA.") }}
+{{- if eq (include "elitea.scaling.workerSource" . | trim) "keda" }}
 {{- $a := .Values.worker.autoscaling }}
 {{- if lt (int $a.maxReplicas) (int $a.minReplicas) }}
 {{- fail (printf "worker.autoscaling.maxReplicas (%d) is below minReplicas (%d)." (int $a.maxReplicas) (int $a.minReplicas)) }}
@@ -126,5 +126,9 @@ spec:
         lagThreshold: {{ $lag | toString | quote }}
         activationLagThreshold: {{ include "elitea.integer" (dict "field" "worker.autoscaling.activationLagThreshold" "value" $a.activationLagThreshold "min" 0) | quote }}
         useHttps: "false"
+    # CPU next to the lag: the HPA takes the higher of the two, so the fleet
+    # still scales when the scaler cannot read /jsz (elitea.scaling.kedaCpuTrigger).
+    {{- include "elitea.scaling.kedaCpuTrigger" $a | nindent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}
