@@ -32,6 +32,8 @@ impl ApprovalChannel for Approving {
 
 struct Fixture {
     _dir: tempfile::TempDir,
+    // Read only by the macOS (Seatbelt) test below.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     home: PathBuf,
     session: Arc<LocalSession>,
 }
