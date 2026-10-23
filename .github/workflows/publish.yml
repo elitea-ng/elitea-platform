@@ -247,7 +247,7 @@ jobs:
           - name: elitea-main
             context: .
             dockerfile: ./services/elitea-main/Containerfile
-            # The Containerfile is multi-target (hybrid / e2e / final). Name the
+            # The Containerfile is multi-target (e2e / final). Name the
             # shipping one instead of relying on "last stage wins", so adding a
             # stage can never silently change what is released.
             target: final
