@@ -46,10 +46,9 @@ import (
 // scheduleCronParser is the FIVE-FIELD parser, without `cron.Descriptor`.
 //
 // It is the parser that will RUN the row (schedulerun.go uses the same
-// variable), and it gates the write for the reason
-// internal/api/v2/scheduling/schedules.go records for `centry.schedule`: an
-// expression the runner cannot parse would not error at run time, it would
-// silently never fire — which on an unattended job looks exactly like a job
+// variable), and it gates the write for the reason that
+// matters for any unattended schedule: an expression the runner cannot parse
+// would not error at run time, it would silently never fire — which on an unattended job looks exactly like a job
 // with nothing to do.
 var scheduleCronParser = cron.NewParser(
 	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,

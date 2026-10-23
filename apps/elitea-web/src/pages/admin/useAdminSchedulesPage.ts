@@ -1,33 +1,24 @@
 /**
- * State, data and write handlers for `pages/admin/SchedulesTasks.tsx` (unit A14).
+ * State, data and write handlers for `pages/admin/SchedulesTasks.tsx`
+ * (issue #1369).
  *
- * Split out of the page for the same reason `useAdminRolesPage` is: the page
- * component stays a render, and the branching that decides WHICH controls exist
- * lives in one place.
- *
- * ## Sorting and filtering are CLIENT-side here, deliberately
- *
- * `centry.schedule` is a platform table with tens of rows, not a tenant table,
- * and the endpoint is unpaginated in the legacy runtime and in the Go handler
- * alike. Adding server-side search would be inventing a contract; sorting a
- * fully-materialised list in the browser is the whole of it. This is the
- * opposite call from the admin Projects page, where the server pages and
- * therefore must also sort.
+ * Sorting and filtering are CLIENT-side: the registry holds a dozen rows, and
+ * the endpoint is unpaginated.
  */
 import { useCallback, useMemo, useState } from 'react';
 
 import { adminUiShowsControlFor } from './adminUiConfig';
 import {
   scheduleFailureReason,
-  useAdminSchedules,
-  useUpdateAdminSchedule,
-  type AdminScheduleRow,
+  useAdminRoutines,
+  useUpdateAdminRoutine,
+  type AdminRoutineRow,
 } from './api/adminSchedulesApi';
 
 /** The permission the (hardcoded) admin-panel config advertises for editing. */
 const PERMISSION_SCHEDULES_EDIT = 'configuration.scheduling.schedules.edit';
 
-export type ScheduleSortField = 'name' | 'rpc_func' | 'last_run';
+export type ScheduleSortField = 'id' | 'last_run_at' | 'next_run_at';
 type SortDirection = 'asc' | 'desc';
 
 export interface ScheduleSort {
@@ -37,7 +28,7 @@ export interface ScheduleSort {
 
 export interface AdminSchedulesPageState {
   readonly search: string;
-  readonly rows: readonly AdminScheduleRow[] | undefined;
+  readonly rows: readonly AdminRoutineRow[] | undefined;
   readonly sort: ScheduleSort;
   readonly isFetching: boolean;
   readonly isError: boolean;
@@ -47,68 +38,58 @@ export interface AdminSchedulesPageState {
   readonly errorMessage: string;
   readonly savedMessage: string;
 
-  /** Presentation only — the server authorises the write on its own. */
+  /** Presentation only - the server authorises the write on its own. */
   readonly canEdit: boolean;
-
-  /** The schedule whose execution history is open, or `null`. */
-  readonly historySchedule: AdminScheduleRow | null;
 
   readonly onSearchChange: (value: string) => void;
   readonly onSort: (field: ScheduleSortField) => void;
   readonly onDismissError: () => void;
   readonly onDismissSaved: () => void;
-  readonly onOpenHistory: (schedule: AdminScheduleRow) => void;
-  readonly onCloseHistory: () => void;
-  /** `undefined` ⇒ the switch renders disabled, because the server would refuse. */
-  readonly onToggleActive: ((schedule: AdminScheduleRow) => void) | undefined;
-  /** `undefined` ⇒ the cron cell is not editable. */
-  readonly onCronChange: ((schedule: AdminScheduleRow, cron: string) => void) | undefined;
+  /** `undefined` => the switch renders disabled, because the server would refuse. */
+  readonly onToggleEnabled: ((routine: AdminRoutineRow) => void) | undefined;
+  /** `undefined` => the schedule cell is not editable. An empty value resets to the default. */
+  readonly onScheduleChange: ((routine: AdminRoutineRow, schedule: string) => void) | undefined;
 }
 
-function compareRows(
-  left: AdminScheduleRow,
-  right: AdminScheduleRow,
-  field: ScheduleSortField,
-): number {
-  if (field === 'last_run') {
-    // A schedule that has never run sorts LAST in both directions rather than
-    // as the epoch: "never" is not "a very long time ago", and treating it as
-    // the oldest timestamp buries the rows an operator most wants to notice.
-    if (left.last_run === null && right.last_run === null) return 0;
-    if (left.last_run === null) return 1;
-    if (right.last_run === null) return -1;
-    return left.last_run.localeCompare(right.last_run);
-  }
-  return left[field].localeCompare(right[field]);
+function compareRows(left: AdminRoutineRow, right: AdminRoutineRow, field: ScheduleSortField): number {
+  if (field === 'id') return left.id.localeCompare(right.id);
+  const a = left[field];
+  const b = right[field];
+  // "Never" and "not planned" sort LAST in both directions rather than as the
+  // epoch: absence is not "a very long time ago".
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a.localeCompare(b);
 }
 
 export function useAdminSchedulesPage(): AdminSchedulesPageState {
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<ScheduleSort>({ field: 'name', direction: 'asc' });
+  const [sort, setSort] = useState<ScheduleSort>({ field: 'id', direction: 'asc' });
   const [errorMessage, setErrorMessage] = useState('');
   const [savedMessage, setSavedMessage] = useState('');
-  const [historySchedule, setHistorySchedule] = useState<AdminScheduleRow | null>(null);
 
-  const schedulesQuery = useAdminSchedules();
-  const updateSchedule = useUpdateAdminSchedule();
+  const routinesQuery = useAdminRoutines();
+  const updateRoutine = useUpdateAdminRoutine();
 
   const canEdit = adminUiShowsControlFor(PERMISSION_SCHEDULES_EDIT);
+  const serverRows = routinesQuery.data;
 
-  const serverRows = schedulesQuery.data;
-
-  const rows = useMemo((): readonly AdminScheduleRow[] | undefined => {
+  const rows = useMemo((): readonly AdminRoutineRow[] | undefined => {
     if (!serverRows) return undefined;
     const needle = search.trim().toLowerCase();
     const filtered = needle
       ? serverRows.filter(
           (row) =>
-            row.name.toLowerCase().includes(needle) || row.rpc_func.toLowerCase().includes(needle),
+            row.id.toLowerCase().includes(needle) || row.description.toLowerCase().includes(needle),
         )
       : serverRows;
-    // A copy: `Array.prototype.sort` mutates, and the array here is the query
-    // cache's own.
     const sorted = [...filtered].sort((left, right) => compareRows(left, right, sort.field));
-    return sort.direction === 'asc' ? sorted : sorted.reverse();
+    if (sort.direction === 'asc') return sorted;
+    // Descending reverses the comparator but keeps absent timestamps last.
+    if (sort.field === 'id') return sorted.reverse();
+    const present = sorted.filter((row) => row[sort.field] !== null).reverse();
+    return [...present, ...sorted.filter((row) => row[sort.field] === null)];
   }, [serverRows, search, sort]);
 
   const reportFailure = useCallback((error: unknown) => {
@@ -116,30 +97,32 @@ export function useAdminSchedulesPage(): AdminSchedulesPageState {
   }, []);
 
   const applyUpdate = useCallback(
-    (update: { id: number; cron?: string; active?: boolean }) => {
+    (update: { id: string; enabled?: boolean; schedule?: string }) => {
       setErrorMessage('');
       setSavedMessage('');
-      updateSchedule.mutate(update, {
+      updateRoutine.mutate(update, {
         onSuccess: () => setSavedMessage('saved'),
         onError: reportFailure,
       });
     },
-    [updateSchedule, reportFailure],
+    [updateRoutine, reportFailure],
   );
 
-  const onToggleActive = useCallback(
-    (schedule: AdminScheduleRow) => applyUpdate({ id: schedule.id, active: !schedule.active }),
+  const onToggleEnabled = useCallback(
+    (routine: AdminRoutineRow) => applyUpdate({ id: routine.id, enabled: !routine.enabled }),
     [applyUpdate],
   );
 
-  const onCronChange = useCallback(
-    (schedule: AdminScheduleRow, cron: string) => {
-      const next = cron.trim();
-      // An unchanged cron is not a save. Sending it anyway would report success
-      // for an edit the operator abandoned, and would stamp the audit trail
-      // with a change that did not happen.
-      if (next === '' || next === schedule.cron) return;
-      applyUpdate({ id: schedule.id, cron: next });
+  const onScheduleChange = useCallback(
+    (routine: AdminRoutineRow, schedule: string) => {
+      const next = schedule.trim();
+      // An unchanged schedule is not a save: it would report success for an edit
+      // the operator abandoned and stamp the audit trail with a change that did
+      // not happen. An empty value is a deliberate reset, but only when there is
+      // an override to remove.
+      if (next === routine.schedule) return;
+      if (next === '' && routine.schedule_override === null) return;
+      applyUpdate({ id: routine.id, schedule: next });
     },
     [applyUpdate],
   );
@@ -156,21 +139,18 @@ export function useAdminSchedulesPage(): AdminSchedulesPageState {
     search,
     rows,
     sort,
-    isFetching: schedulesQuery.isFetching,
-    isError: schedulesQuery.isError,
-    unavailableReason: scheduleFailureReason(schedulesQuery.error),
-    isSaving: updateSchedule.isPending,
+    isFetching: routinesQuery.isFetching,
+    isError: routinesQuery.isError,
+    unavailableReason: scheduleFailureReason(routinesQuery.error),
+    isSaving: updateRoutine.isPending,
     errorMessage,
     savedMessage,
     canEdit,
-    historySchedule,
     onSearchChange: setSearch,
     onSort,
     onDismissError: useCallback(() => setErrorMessage(''), []),
     onDismissSaved: useCallback(() => setSavedMessage(''), []),
-    onOpenHistory: useCallback((schedule: AdminScheduleRow) => setHistorySchedule(schedule), []),
-    onCloseHistory: useCallback(() => setHistorySchedule(null), []),
-    onToggleActive: canEdit ? onToggleActive : undefined,
-    onCronChange: canEdit ? onCronChange : undefined,
+    onToggleEnabled: canEdit ? onToggleEnabled : undefined,
+    onScheduleChange: canEdit ? onScheduleChange : undefined,
   };
 }

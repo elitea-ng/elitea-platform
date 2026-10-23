@@ -34,6 +34,10 @@ func scheduledJobs(
 			Schedule: indexSchedule,
 			Timeout:  currentIndexScheduleHandlerTimeout,
 			Handler:  indexHandler,
+
+			Description: "Scans every project for index schedules that are due and admits their runs.",
+			Cadence:     currentIndexScheduleCadence,
+			MinInterval: time.Minute,
 		},
 	}
 	if retentionHandler != nil && retentionSchedule != nil {
@@ -44,6 +48,10 @@ func scheduledJobs(
 			Schedule: retentionSchedule,
 			Timeout:  artifactRetentionSweepHandlerTimeout,
 			Handler:  retentionHandler,
+
+			Description: "Reclaims expired artifacts, abandoned chunked uploads and unused transfer grants.",
+			Cadence:     artifactRetentionSweepCadence,
+			MinInterval: time.Minute,
 		})
 	}
 	// #940 A3. Registered on the same terms as the retention sweep: a nil
@@ -57,6 +65,10 @@ func scheduledJobs(
 			Schedule: patExpirySchedule,
 			Timeout:  patExpirySweepHandlerTimeout,
 			Handler:  patExpiryHandler,
+
+			Description: "Notifies users whose personal access tokens are about to expire.",
+			Cadence:     patExpirySweepCadence,
+			MinInterval: time.Minute,
 		})
 	}
 	return jobs

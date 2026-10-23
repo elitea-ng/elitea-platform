@@ -1930,6 +1930,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 					schedulerErr,
 				)
 			}
+			// The operator registry (#1369): switch a job off or change its
+			// schedule without a restart.
+			routineControls, controlsErr := repos.NewPlatformRoutineControls(
+				dependencies.AdmissionPool,
+			)
+			if controlsErr != nil {
+				return nil, fmt.Errorf(
+					"construct platform routine controls: %w",
+					controlsErr,
+				)
+			}
+			scheduler.WithControls(routineControls)
 			indexPublishers = append(indexPublishers, scheduler)
 		}
 		publisherRoot, err = newPublisherSet(indexPublishers...)

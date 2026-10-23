@@ -5565,6 +5565,71 @@ components:
             The per-source scan window was full, so older rows exist that this
             page cannot reach.
 
+    PlatformRoutine:
+      type: object
+      description: >
+        One recurring routine the platform runs: a scheduled job of
+        elitea-main or a worker of elitea-scheduler. `schedule` is what is in
+        force now - the operator's override when there is one, else the
+        default the code or chart supplies.
+      required:
+        - id
+        - owner
+        - description
+        - default_schedule
+        - schedule
+        - min_interval_seconds
+        - enabled
+        - updated_at
+      properties:
+        id: { type: string }
+        owner:
+          type: string
+          description: "`main` (elitea-main's scheduler) or `scheduler` (elitea-scheduler)."
+        description: { type: string }
+        default_schedule:
+          type: string
+          description: A Go duration (`30m`) or a five-field cron expression.
+        schedule_override:
+          type: string
+          nullable: true
+        schedule: { type: string }
+        min_interval_seconds:
+          type: integer
+          format: int64
+          description: The shortest gap an override may set. Zero means no bound.
+        enabled: { type: boolean }
+        last_run_at: { type: string, format: date-time, nullable: true }
+        last_outcome:
+          type: string
+          nullable: true
+          description: "`ok`, `error` or `maintenance`."
+        next_run_at: { type: string, format: date-time, nullable: true }
+        updated_by: { type: string, nullable: true }
+        updated_at: { type: string, format: date-time }
+
+    PlatformRoutineListResponse:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformRoutine'
+
+    PlatformRoutineUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        Absent fields are left alone. An empty `schedule` removes the override
+        and puts the default back in force.
+      properties:
+        enabled: { type: boolean }
+        schedule:
+          type: string
+          maxLength: 64
+
     OkResponse:
       type: object
       required: [ok]
@@ -15390,6 +15455,86 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: This deployment has no store for this job kind
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/platform_routines/administration:
+    get:
+      operationId: listPlatformRoutines
+      summary: List the platform's recurring routines
+      description: >
+        The admin Schedules page. One row per routine registered by
+        elitea-main's scheduler and elitea-scheduler's workers. Gated on
+        `configuration.scheduling.schedules.view`.
+      tags: [admin]
+      responses:
+        '200':
+          description: Every registered routine
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformRoutineListResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The registry could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no routine registry configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/platform_routines/administration/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: updatePlatformRoutine
+      summary: Switch a routine on or off, or change its schedule
+      description: >
+        Takes effect on the owner's next tick or poll, without a restart.
+        Gated on `configuration.scheduling.schedules.edit`; audited.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformRoutineUpdate'
+      responses:
+        '200':
+          description: The routine as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformRoutine'
+        '400':
+          description: >
+            No field supplied, or a schedule that does not parse or fires more
+            often than the routine allows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such routine
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The routine changed while it was being edited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no routine registry configured
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

@@ -48,3 +48,4 @@ clients generated from it.
 | Offline cache (encrypted copy on the device) | n-a: the browser keeps no copy of the workspace data | n-a: the desktop webview keeps no copy of the workspace data | shipped | Mobile delta sync (`changes_since`) and the offline outbox. |
 | Home screen widgets and Live Activities | n-a: no home screen surface in a browser | n-a: no widget surface in the desktop host | shipped | |
 | QR connect to a workspace | n-a: the browser opens the workspace URL | n-a: the connect screen takes the workspace URL | shipped | |
+| Admin Schedules: switch platform routines on or off and change their schedules (#1369) | shipped | n-a: platform administration is the web console's job | n-a: platform administration is the web console's job | Admin routes are outside the client contract, which stays at 1.18. |

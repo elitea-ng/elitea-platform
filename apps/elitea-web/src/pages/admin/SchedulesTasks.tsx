@@ -1,49 +1,25 @@
 /**
- * Admin › Schedules & Tasks — unit A14, issue #200.
+ * Admin > Schedules (issue #1369).
  *
- * Reference (read-only): `frontends/admin_ui/frontend/src/pages/SchedulesTasksPage/`.
- * Rewritten against this app's stack: Redux Toolkit → TanStack Query
- * (`./api/adminSchedulesApi`), axios → `eliteaFetch`, react-router → TanStack
- * Router (`./router`), MUI 7 → 9. State and handlers live in
- * `./useAdminSchedulesPage`.
+ * Lists the recurring routines the platform really runs - elitea-main's
+ * scheduled jobs (index schedule scan, pipeline schedule scan, artifact
+ * retention, token expiry notices) and elitea-scheduler's workers (price sync,
+ * audit/sync/auth retention) - and lets an operator switch one off or give it
+ * another schedule. A change reaches the owning process on its next tick or
+ * poll; nothing restarts.
  *
- * ## What this page schedules, and where that lives
- *
- * Rows of `centry.schedule`: a cron expression bound to the name of an internal
- * platform RPC. This is live and executing: `services/elitea-scheduler` polls
- * that exact table every minute and dispatches the due rows. It is also the
- * mechanism the indexing transition depends on — the `index_scheduling` row is
- * DISABLED in favour of elitea-main's own `index.schedule.scan.v1`, and
- * disabling a row is exactly this page's switch. Ported in full, with a real
- * read and a real write.
- *
- * The reference page also had "Tasks" and "Active Tasks" tabs over a plugin
- * runtime's in-process task registry. This platform has no such registry, so
- * those tabs are not ported. What they asked — what is running and can it be
- * stopped — is answered from this platform's own tables by Admin › Tasks
- * (`./Tasks.tsx`).
- *
- * Scheduled PIPELINE execution — the thing one might expect a page called
- * "Schedules & Tasks" to offer — is a fourth system again, and issue #193 records
- * that it has no home in the Go stack at all. Nothing on this page claims to
- * offer it, and no control here was invented to.
- *
- * ## The run-as identity of the one write
- *
- * A scheduled run has no interactive principal. The scheduler publishes
- * `rpc_func` onto the Arbiter bus fire-and-forget, and the handler at the other
- * end is an internal platform function with full privilege — there is no user to
- * run "as". That makes `rpc_func`/`rpc_kwargs` the security boundary of the
- * table rather than ordinary fields, so the write path accepts `name`, `cron`
- * and `active` only and REFUSES a body carrying either with a 400. A schedule's
- * timing can be changed here; what it invokes cannot.
+ * It replaces the earlier table over `centry.schedule`, which nothing
+ * executes. What a routine DOES is fixed in code and cannot be edited here;
+ * only whether it runs, and when.
  *
  * ## Authorisation
  *
- * `window.admin_ui_config.permissions` is presentation state and never a gate —
- * see `./adminUiConfig`. The read is gated server-side on
- * `configuration.scheduling.schedules.view` and the write on `…edit`, resolved
- * from `auth_core__user_role` per request.
+ * `window.admin_ui_config.permissions` is presentation state and never a gate
+ * (see `./adminUiConfig`). The read is gated server-side on
+ * `configuration.scheduling.schedules.view` and the write on `...edit`.
+ *
+ * "What is running right now, and can it be stopped" is Admin > Tasks
+ * (`./Tasks.tsx`).
  */
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -54,7 +30,6 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
-import { ScheduleHistoryDrawer } from './ScheduleHistoryDrawer';
 import { SchedulesTable } from './SchedulesTable';
 import { useAdminSchedulesPage, type AdminSchedulesPageState } from './useAdminSchedulesPage';
 
@@ -86,16 +61,15 @@ function SchedulesBody({ state }: { readonly state: AdminSchedulesPageState }) {
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           'pages.admin.schedules.description',
-          'Background jobs that run on a cron timer. Each one calls an internal platform function; what a schedule calls is fixed and cannot be changed here. Click a name for its execution history.',
+          'Recurring routines the platform runs. Switch one off, or give it another schedule; the change applies within a minute, without a restart. What a routine does is fixed and cannot be changed here.',
         )}
       </Typography>
       <SchedulesTable
         rows={state.rows}
         sort={state.sort}
         onSort={state.onSort}
-        onOpenHistory={state.onOpenHistory}
-        onToggleActive={state.onToggleActive}
-        onCronChange={state.onCronChange}
+        onToggleEnabled={state.onToggleEnabled}
+        onScheduleChange={state.onScheduleChange}
         isSaving={state.isSaving}
       />
     </>
@@ -142,7 +116,6 @@ export function AdminSchedulesTasks() {
 
       <SchedulesBody state={state} />
 
-      <ScheduleHistoryDrawer schedule={state.historySchedule} onClose={state.onCloseHistory} />
     </DrawerPage>
   );
 }

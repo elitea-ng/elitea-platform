@@ -93,6 +93,9 @@ import type {
   NativeClientWriteResult,
   NativeOAuthError,
   OkResponse,
+  PlatformRoutine,
+  PlatformRoutineListResponse,
+  PlatformRoutineUpdate,
   PlatformSettings,
   ProjectCloudExecutorSwitch,
   ProjectCloudExecutorSwitchUpdate,
@@ -4443,6 +4446,482 @@ export function useCancelBackgroundJob<
     kind,
     jobID,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listPlatformRoutinesResponse200 = {
+  data: PlatformRoutineListResponse;
+  status: 200;
+};
+
+export type listPlatformRoutinesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listPlatformRoutinesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listPlatformRoutinesResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type listPlatformRoutinesResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listPlatformRoutinesResponseSuccess =
+  listPlatformRoutinesResponse200 & {
+    headers: Headers;
+  };
+export type listPlatformRoutinesResponseError = (
+  | listPlatformRoutinesResponse401
+  | listPlatformRoutinesResponse403
+  | listPlatformRoutinesResponse500
+  | listPlatformRoutinesResponse503
+) & {
+  headers: Headers;
+};
+
+export type listPlatformRoutinesResponse =
+  listPlatformRoutinesResponseSuccess | listPlatformRoutinesResponseError;
+
+export const getListPlatformRoutinesUrl = () => {
+  return `/admin/platform_routines/administration`;
+};
+
+/**
+ * The admin Schedules page. One row per routine registered by elitea-main's scheduler and elitea-scheduler's workers. Gated on `configuration.scheduling.schedules.view`.
+ * @summary List the platform's recurring routines
+ */
+export const listPlatformRoutines = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listPlatformRoutinesResponse> => {
+  return eliteaFetch<listPlatformRoutinesResponse>(
+    getListPlatformRoutinesUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPlatformRoutinesQueryKey = () => {
+  return [`/admin/platform_routines/administration`] as const;
+};
+
+export const getListPlatformRoutinesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPlatformRoutines>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listPlatformRoutines>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPlatformRoutinesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPlatformRoutines>>
+  > = ({ signal }) => listPlatformRoutines({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPlatformRoutines>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListPlatformRoutinesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPlatformRoutines>>
+>;
+export type ListPlatformRoutinesQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useListPlatformRoutines<
+  TData = Awaited<ReturnType<typeof listPlatformRoutines>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPlatformRoutines>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPlatformRoutines>>,
+          TError,
+          Awaited<ReturnType<typeof listPlatformRoutines>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListPlatformRoutines<
+  TData = Awaited<ReturnType<typeof listPlatformRoutines>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPlatformRoutines>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPlatformRoutines>>,
+          TError,
+          Awaited<ReturnType<typeof listPlatformRoutines>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListPlatformRoutines<
+  TData = Awaited<ReturnType<typeof listPlatformRoutines>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPlatformRoutines>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the platform's recurring routines
+ */
+
+export function useListPlatformRoutines<
+  TData = Awaited<ReturnType<typeof listPlatformRoutines>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPlatformRoutines>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListPlatformRoutinesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updatePlatformRoutineResponse200 = {
+  data: PlatformRoutine;
+  status: 200;
+};
+
+export type updatePlatformRoutineResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type updatePlatformRoutineResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updatePlatformRoutineResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updatePlatformRoutineResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type updatePlatformRoutineResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type updatePlatformRoutineResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type updatePlatformRoutineResponseSuccess =
+  updatePlatformRoutineResponse200 & {
+    headers: Headers;
+  };
+export type updatePlatformRoutineResponseError = (
+  | updatePlatformRoutineResponse400
+  | updatePlatformRoutineResponse401
+  | updatePlatformRoutineResponse403
+  | updatePlatformRoutineResponse404
+  | updatePlatformRoutineResponse409
+  | updatePlatformRoutineResponse503
+) & {
+  headers: Headers;
+};
+
+export type updatePlatformRoutineResponse =
+  updatePlatformRoutineResponseSuccess | updatePlatformRoutineResponseError;
+
+export const getUpdatePlatformRoutineUrl = (id: string) => {
+  return `/admin/platform_routines/administration/${id}`;
+};
+
+/**
+ * Takes effect on the owner's next tick or poll, without a restart. Gated on `configuration.scheduling.schedules.edit`; audited.
+ * @summary Switch a routine on or off, or change its schedule
+ */
+export const updatePlatformRoutine = async (
+  id: string,
+  platformRoutineUpdate: PlatformRoutineUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updatePlatformRoutineResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updatePlatformRoutineResponse>(
+    getUpdatePlatformRoutineUrl(id),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(platformRoutineUpdate),
+    },
+  );
+};
+
+export const getUpdatePlatformRoutineQueryKey = (
+  id: string,
+  platformRoutineUpdate?: PlatformRoutineUpdate,
+) => {
+  return [
+    "PUT",
+    `/admin/platform_routines/administration/${id}`,
+    platformRoutineUpdate,
+  ] as const;
+};
+
+export const getUpdatePlatformRoutineQueryOptions = <
+  TData = Awaited<ReturnType<typeof updatePlatformRoutine>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  platformRoutineUpdate: PlatformRoutineUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updatePlatformRoutine>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdatePlatformRoutineQueryKey(id, platformRoutineUpdate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updatePlatformRoutine>>
+  > = ({ signal }) =>
+    updatePlatformRoutine(id, platformRoutineUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updatePlatformRoutine>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdatePlatformRoutineQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updatePlatformRoutine>>
+>;
+export type UpdatePlatformRoutineQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useUpdatePlatformRoutine<
+  TData = Awaited<ReturnType<typeof updatePlatformRoutine>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  platformRoutineUpdate: PlatformRoutineUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updatePlatformRoutine>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updatePlatformRoutine>>,
+          TError,
+          Awaited<ReturnType<typeof updatePlatformRoutine>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdatePlatformRoutine<
+  TData = Awaited<ReturnType<typeof updatePlatformRoutine>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  platformRoutineUpdate: PlatformRoutineUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updatePlatformRoutine>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updatePlatformRoutine>>,
+          TError,
+          Awaited<ReturnType<typeof updatePlatformRoutine>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdatePlatformRoutine<
+  TData = Awaited<ReturnType<typeof updatePlatformRoutine>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  platformRoutineUpdate: PlatformRoutineUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updatePlatformRoutine>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Switch a routine on or off, or change its schedule
+ */
+
+export function useUpdatePlatformRoutine<
+  TData = Awaited<ReturnType<typeof updatePlatformRoutine>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  platformRoutineUpdate: PlatformRoutineUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updatePlatformRoutine>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdatePlatformRoutineQueryOptions(
+    id,
+    platformRoutineUpdate,
     options,
   );
 

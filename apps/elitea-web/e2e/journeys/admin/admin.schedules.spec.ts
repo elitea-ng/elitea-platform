@@ -1,32 +1,23 @@
 /**
- * Journey 33: The admin Schedules tab shows the platform cron table the
- *             scheduler actually runs, and its switch really flips a row
- *             (JRNY-033)
+ * Journey 33: The admin Schedules tab shows the routines the platform really
+ *             runs, and its controls change them (JRNY-033, issue #1369)
  *
  * ## Why this journey needs to exist at all
  *
- * Before unit A14 this page's PUT had no route, and its GET read something else
- * entirely: it queried the TENANT schema for application versions carrying
- * `meta->'trigger'`, hardcoded `enabled: true`, swallowed every error into an
- * empty list, and short-circuited on `projectID == "0"` — the only projectID the
- * admin page ever sends. A journey that asserted "a schedules table is present"
- * would have passed against all of that, because the table would have been
- * present and empty.
+ * The tab used to list `centry.schedule`, a legacy table nothing executes: a
+ * journey asserting "a schedules table is present" passed against a screen of
+ * dead rows. The assertions here are against things only a working registry
+ * can produce:
  *
- * So the assertions here are against things only a working server can produce:
- *
- *  - `e2e_schedule_probe_<engine>` is seeded into `centry.schedule` by
- *    `scripts/e2e-stack.sh seed` and exists in no bundle. Seeing it proves the
- *    listing reads that table — the one `services/elitea-scheduler` polls — and
- *    not trigger metadata.
- *  - It is seeded INACTIVE, and the page must render it inactive. The pre-A14
- *    handler could not represent that state at all.
- *  - The write is verified by a RELOAD and a re-read, never by the toast. A
+ *  - `e2e.schedule.probe.<engine>` is seeded into
+ *    `elitea_runtime.platform_routines` by `scripts/e2e-stack.sh seed`. Seeing
+ *    it proves the listing reads the registry, not a constant.
+ *  - elitea-main registers its own jobs when it starts, so
+ *    `index.schedule.scan.v1` must be listed too.
+ *  - Each write is verified by a RELOAD and a re-read, never by the toast. A
  *    handler that answered 200 and wrote nothing is the exact defect #130/#180
  *    shipped twice.
- *  - `rpc_func` is asserted to be READ-ONLY. It names an internal platform RPC
- *    that runs unattended with full privilege and no caller identity, so the
- *    absence of an editor for it is a security property, not a layout detail.
+ *  - A schedule faster than the routine allows is refused by the SERVER.
  *
  * The journey restores what it changed, so it is re-runnable against a stack
  * that was not re-seeded.
@@ -38,189 +29,136 @@ import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 adminTest.use({ storageState: STORAGE_STATE.admin });
 
-// Serial, and not because these are slow. `fullyParallel` is on, and every test
-// below reads or writes this engine's ONE seeded row — J33c enables it and
-// disables it again, J33 and J33b assert it is disabled, J33d asserts its cron
-// is untouched. Run concurrently they would pass or fail on scheduling luck.
-// This orders them within a browser project; `seededSchedule` below is what
-// keeps the two projects out of each other's way.
+// Serial: every test reads or writes this engine's ONE seeded row. This orders
+// them within a browser project; the per-project row keeps the projects apart.
 adminTest.describe.configure({ mode: 'serial' });
 
-/**
- * Seeded by `scripts/e2e-stack.sh seed` — see its `centry.schedule` block.
- *
- * ONE ROW PER BROWSER PROJECT. `describe.configure({ mode: 'serial' })` above
- * orders these tests within a project; it does nothing across them, and
- * chromium and webkit run this file concurrently. Sharing a row would have one
- * engine's toggle land between the other's write and its re-read — a failure
- * that reproduces once in ten runs and blames the product.
- */
-function seededSchedule(projectName: string): string {
-  return `e2e_schedule_probe_${projectName}`;
+function probeRoutine(projectName: string): string {
+  return `e2e.schedule.probe.${projectName}`;
 }
-const SEEDED_FUNCTION = 'e2e_schedule_probe_noop';
-const SEEDED_CRON = '0 4 * * *';
+const SEEDED_SCHEDULE = '24h';
+const ROUTINES_PATH = '/admin/platform_routines/administration';
 
-async function openSchedules(page: Page, schedule: string): Promise<void> {
+async function openSchedules(page: Page, routine: string): Promise<void> {
   const response = await page.goto(BASE_URL + '/admin/app/schedules', { waitUntil: 'domcontentloaded' });
   expect(response?.status(), 'the admin SPA must serve the schedules route, not 404').toBeLessThan(400);
-  await expect(page.getByRole('button', { name: schedule })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(routine, { exact: true })).toBeVisible({ timeout: 20_000 });
 }
 
-function probeSwitch(page: Page, schedule: string) {
-  return page.getByRole('switch', { name: `Schedule enabled: ${schedule}` });
+function probeSwitch(page: Page, routine: string) {
+  return page.getByRole('switch', { name: `Schedule enabled: ${routine}` });
 }
 
-adminTest('J33: the listing is the platform cron table, read from the database', async ({ page }, testInfo) => {
-  const SEEDED_SCHEDULE = seededSchedule(testInfo.project.name);
-  await openSchedules(page, SEEDED_SCHEDULE);
+function isRoutineWrite(r: { url(): string; request(): { method(): string } }): boolean {
+  return r.url().includes(ROUTINES_PATH) && r.request().method() === 'PUT';
+}
 
-  // From `centry.schedule`. The read is gated on
-  // `configuration.scheduling.schedules.view`; the admin persona holds it via
-  // the seed, so a 403 here would mean the gate and the seed have drifted apart.
+adminTest('J33: the listing is the routine registry, read from the database', async ({ page }, testInfo) => {
+  const probe = probeRoutine(testInfo.project.name);
+  await openSchedules(page, probe);
   await expect(page.getByText('Failed to load schedules.')).toHaveCount(0);
 
-  const row = page.getByRole('row').filter({ hasText: SEEDED_SCHEDULE });
-  // The FUNCTION is on screen: it is the only thing that says what the schedule
-  // does, and the handler this replaced did not emit it at all.
-  await expect(row.getByText(SEEDED_FUNCTION)).toBeVisible();
-  await expect(row.getByText(SEEDED_CRON)).toBeVisible();
-  // Seeded inactive, and rendered inactive. The pre-A14 read pinned this to
-  // `true`, so a schedule that is off could not be shown as off.
-  await expect(probeSwitch(page, SEEDED_SCHEDULE)).not.toBeChecked();
-  // Never run, and said so rather than shown as a date.
-  await expect(row.getByText('Never')).toBeVisible();
+  // elitea-main registers its own jobs on start.
+  await expect(page.getByText('index.schedule.scan.v1', { exact: true })).toBeVisible();
+
+  const row = page.getByRole('row').filter({ hasText: probe });
+  await expect(row.getByText(SEEDED_SCHEDULE, { exact: true })).toBeVisible();
+  await expect(row.getByText('Default', { exact: true })).toBeVisible();
+  await expect(probeSwitch(page, probe)).toBeChecked();
 
   await checkA11y(page);
 });
 
-adminTest('J33b: what a schedule INVOKES cannot be edited from this page', async ({ page }, testInfo) => {
-  const SEEDED_SCHEDULE = seededSchedule(testInfo.project.name);
-  await openSchedules(page, SEEDED_SCHEDULE);
-  const row = page.getByRole('row').filter({ hasText: SEEDED_SCHEDULE });
-
-  // The cron IS editable — it is a button that opens an inline editor.
-  await expect(row.getByRole('button', { name: SEEDED_CRON })).toBeEnabled();
-
-  // `rpc_func` is NOT. A scheduled run has no interactive principal: the
-  // scheduler dispatches this function name unattended, with full platform
-  // privilege and no caller identity. There is deliberately no control here,
-  // and the server refuses the field even if one is forged.
-  await expect(row.getByRole('button', { name: SEEDED_FUNCTION })).toHaveCount(0);
-  await expect(row.getByRole('textbox', { name: SEEDED_FUNCTION })).toHaveCount(0);
-
-  // The id is read back off the product's own listing, so the forged request
-  // targets the REAL row rather than a guess the server would 404 anyway.
-  const refused = await page.evaluate(async (id) => {
-    const response = await fetch('/api/v2/scheduling/schedules/administration/0', {
-      method: 'PUT',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, rpc_func: 'e2e_schedule_probe_hijacked' }),
-    });
-    return { status: response.status, body: await response.text() };
-  }, await scheduleId(page, SEEDED_SCHEDULE));
-
-  expect(
-    refused.status,
-    'retargeting what a schedule runs must be refused by the SERVER, not merely absent from the UI',
-  ).toBe(400);
-  expect(refused.body).toContain('rpc_func');
-
-  // And the function is unchanged after the attempt.
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: SEEDED_SCHEDULE })).toBeVisible({ timeout: 20_000 });
+adminTest('J33b: switching a routine off reaches the server and survives a reload', async ({ page }, testInfo) => {
+  const probe = probeRoutine(testInfo.project.name);
+  await openSchedules(page, probe);
   await expect(
-    page.getByRole('row').filter({ hasText: SEEDED_SCHEDULE }).getByText(SEEDED_FUNCTION),
-  ).toBeVisible();
-});
-
-adminTest('J33c: enabling a schedule reaches the server and survives a full reload', async ({ page }, testInfo) => {
-  const SEEDED_SCHEDULE = seededSchedule(testInfo.project.name);
-  await openSchedules(page, SEEDED_SCHEDULE);
-
-  // The seed leaves it DISABLED; a test that started from "already enabled"
-  // would prove nothing about the write.
-  await expect(probeSwitch(page, SEEDED_SCHEDULE)).not.toBeChecked();
-  await expect(
-    probeSwitch(page, SEEDED_SCHEDULE),
+    probeSwitch(page, probe),
     'the admin persona holds configuration.scheduling.schedules.edit, so the switch must be live',
   ).toBeEnabled();
 
-  // The response is what proves the request was AUTHORISED, not merely sent.
-  const [enableResponse] = await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.url().includes('/scheduling/schedules/administration/0') && r.request().method() === 'PUT',
-    ),
-    probeSwitch(page, SEEDED_SCHEDULE).click(),
+  const [off] = await Promise.all([
+    page.waitForResponse(isRoutineWrite),
+    probeSwitch(page, probe).click(),
   ]);
-  expect(enableResponse.status(), 'the schedule write must be authorised server-side').toBe(200);
+  expect(off.status(), 'the routine write must be authorised server-side').toBe(200);
 
-  // A FULL RELOAD, not a cache read. This is the assertion a handler that
-  // answers 200 and writes nothing cannot pass.
+  // A FULL RELOAD, not a cache read.
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: SEEDED_SCHEDULE })).toBeVisible({ timeout: 20_000 });
-  await expect(probeSwitch(page, SEEDED_SCHEDULE)).toBeChecked();
+  await expect(page.getByText(probe, { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(probeSwitch(page, probe)).not.toBeChecked();
 
-  // Put it back, and verify the revert the same way — a write that only ever
-  // goes one way is not a working switch.
-  const [disableResponse] = await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.url().includes('/scheduling/schedules/administration/0') && r.request().method() === 'PUT',
-    ),
-    probeSwitch(page, SEEDED_SCHEDULE).click(),
+  // Put it back and verify the revert the same way.
+  const [on] = await Promise.all([
+    page.waitForResponse(isRoutineWrite),
+    probeSwitch(page, probe).click(),
   ]);
-  expect(disableResponse.status()).toBe(200);
+  expect(on.status()).toBe(200);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: SEEDED_SCHEDULE })).toBeVisible({ timeout: 20_000 });
-  await expect(probeSwitch(page, SEEDED_SCHEDULE)).not.toBeChecked();
+  await expect(page.getByText(probe, { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(probeSwitch(page, probe)).toBeChecked();
 });
 
-adminTest('J33d: the server refuses a cron its own scheduler could not run', async ({ page }, testInfo) => {
-  const SEEDED_SCHEDULE = seededSchedule(testInfo.project.name);
-  await openSchedules(page, SEEDED_SCHEDULE);
-  const row = page.getByRole('row').filter({ hasText: SEEDED_SCHEDULE });
+adminTest('J33c: a new schedule is stored, shown as custom, and can be reset', async ({ page }, testInfo) => {
+  const probe = probeRoutine(testInfo.project.name);
+  await openSchedules(page, probe);
+  const row = page.getByRole('row').filter({ hasText: probe });
 
-  await row.getByRole('button', { name: SEEDED_CRON }).click();
-  const editor = page.getByRole('textbox', { name: 'Cron (5 fields)' });
-  await expect(editor).toBeVisible();
-  await editor.fill('@daily');
+  await row.getByRole('button', { name: SEEDED_SCHEDULE }).click();
+  const editor = page.getByRole('textbox', { name: 'Schedule (interval or cron)' });
+  await editor.fill('12h');
+  const [saved] = await Promise.all([page.waitForResponse(isRoutineWrite), editor.press('Tab')]);
+  expect(saved.status()).toBe(200);
 
-  // `@daily` parses only WITH robfig's `Descriptor` option, and the scheduler
-  // builds its parser without it. Accepting it would persist a schedule that
-  // silently never fires again — which on a platform job is indistinguishable
-  // from a job with nothing to do.
-  const [rejected] = await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.url().includes('/scheduling/schedules/administration/0') && r.request().method() === 'PUT',
-    ),
-    editor.press('Tab'),
-  ]);
-  expect(rejected.status(), 'an unrunnable cron must be refused, not stored').toBe(400);
-
-  // The operator is told WHICH input was wrong, not "failed to save".
-  await expect(page.getByTestId('admin-schedules-error')).toContainText('cron expression is invalid');
-
-  // And the stored cron is untouched.
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: SEEDED_SCHEDULE })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(probe, { exact: true })).toBeVisible({ timeout: 20_000 });
+  const reloaded = page.getByRole('row').filter({ hasText: probe });
+  await expect(reloaded.getByText('12h', { exact: true })).toBeVisible();
+  await expect(reloaded.getByText('Custom (default 24h)')).toBeVisible();
+
+  // An empty schedule restores the default.
+  await reloaded.getByRole('button', { name: '12h' }).click();
+  const reset = page.getByRole('textbox', { name: 'Schedule (interval or cron)' });
+  await reset.fill('');
+  const [restored] = await Promise.all([page.waitForResponse(isRoutineWrite), reset.press('Tab')]);
+  expect(restored.status()).toBe(200);
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(
-    page.getByRole('row').filter({ hasText: SEEDED_SCHEDULE }).getByText(SEEDED_CRON),
-  ).toBeVisible();
+    page.getByRole('row').filter({ hasText: probe }).getByText('Default', { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
 });
 
-/** Reads the seeded schedule's real id out of the listing the page just fetched. */
-async function scheduleId(page: Page, schedule: string): Promise<number> {
-  const id = await page.evaluate(async (name) => {
-    const response = await fetch('/api/v2/scheduling/schedules/administration/0', {
+adminTest('J33d: the server refuses a schedule faster than the routine allows', async ({ page }, testInfo) => {
+  const probe = probeRoutine(testInfo.project.name);
+  await openSchedules(page, probe);
+  const row = page.getByRole('row').filter({ hasText: probe });
+
+  await row.getByRole('button', { name: SEEDED_SCHEDULE }).click();
+  const editor = page.getByRole('textbox', { name: 'Schedule (interval or cron)' });
+  // The probe allows no more often than once a minute.
+  await editor.fill('10s');
+  const [rejected] = await Promise.all([page.waitForResponse(isRoutineWrite), editor.press('Tab')]);
+  expect(rejected.status(), 'a too-fast schedule must be refused, not stored').toBe(400);
+
+  // The operator is told WHICH limit was hit, not "failed to save".
+  await expect(page.getByTestId('admin-schedules-error')).toContainText('more often');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(
+    page.getByRole('row').filter({ hasText: probe }).getByText(SEEDED_SCHEDULE, { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
+});
+
+adminTest('J33e: an unknown routine id is a 404, not a silent success', async ({ page }, testInfo) => {
+  await openSchedules(page, probeRoutine(testInfo.project.name));
+  const result = await page.evaluate(async (path) => {
+    const response = await fetch(`/api/v2${path}/e2e.no.such.routine`, {
+      method: 'PUT',
       credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
     });
-    const body = (await response.json()) as { rows?: { id: number; name: string }[] };
-    return body.rows?.find((row) => row.name === name)?.id ?? null;
-  }, schedule);
-  expect(id, 'the seeded schedule must be present in the listing').not.toBeNull();
-  return id as number;
-}
+    return response.status;
+  }, ROUTINES_PATH);
+  expect(result).toBe(404);
+});

@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 )
 
 // Worker runs the price-sync pass on a fixed interval (design §8.8: ~24h). It is
@@ -48,15 +50,20 @@ func (w *Worker) Run(ctx context.Context) {
 
 // runOnce executes a single sync pass with its own bounded timeout so a hung
 // source fetch cannot wedge the worker until the next tick.
-func (w *Worker) runOnce(ctx context.Context) {
+func (w *Worker) runOnce(ctx context.Context) (string, error) {
 	passCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	n, err := w.syncer.Sync(passCtx)
 	if err != nil {
 		w.logger.Error("pricesync: sync pass failed", "err", err)
-		return
+		return routines.OutcomeError, err
 	}
 	if n > 0 {
 		w.logger.Info("pricesync: sync pass complete", "models", n)
 	}
+	return routines.OutcomeOK, nil
 }
+
+// Pass runs one pass and reports its outcome word; the routine registry loop
+// (libs/go/routines) calls it on the operator-configured schedule.
+func (w *Worker) Pass(ctx context.Context) (string, error) { return w.runOnce(ctx) }

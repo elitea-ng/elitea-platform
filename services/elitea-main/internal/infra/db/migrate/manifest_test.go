@@ -732,7 +732,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 172: shared/0172_retire_legacy_admin_section_permissions.sql, the removal
 	// of `configuration.roles` and `projects.projects`, two legacy admin
 	// section names no code checks (the same rule as 0136). No new permission.
-	require.EqualValues(t, 172, Head(shared))
+	//
+	// 173: shared/0173_platform_routines.sql, elitea_runtime.platform_routines,
+	// the registry of the Go platform's recurring routines that the admin
+	// Schedules tab edits (#1369). A new table, no data, no permission.
+	require.EqualValues(t, 173, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

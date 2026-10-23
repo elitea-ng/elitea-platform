@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -221,7 +222,7 @@ func (s *Sweeper) Run(ctx context.Context) {
 	}
 }
 
-func (s *Sweeper) runOnce(ctx context.Context) {
+func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 	timeout := s.cfg.Interval / 2
 	if timeout < time.Minute {
 		timeout = time.Minute
@@ -231,11 +232,11 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 	stats, err := s.Sweep(passCtx)
 	if err != nil {
 		s.logger.Error("authstateretention: sweep pass failed", "err", err)
-		return
+		return routines.OutcomeError, err
 	}
 	if stats.Suppressed {
 		s.logger.Info("authstateretention: maintenance mode is active; not sweeping")
-		return
+		return routines.OutcomeMaintenance, nil
 	}
 	attributes := make([]any, 0, 2*len(stats.Deleted)+4)
 	for name, count := range stats.Deleted {
@@ -251,4 +252,9 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 		s.logger.Warn("authstateretention: a table hit the batch ceiling with rows still expired",
 			"max_batches_per_pass", s.cfg.MaxBatchesPerPass, "batch_size", s.cfg.BatchSize)
 	}
+	return routines.OutcomeOK, nil
 }
+
+// Pass runs one pass and reports its outcome word; the routine registry loop
+// (libs/go/routines) calls it on the operator-configured schedule.
+func (s *Sweeper) Pass(ctx context.Context) (string, error) { return s.runOnce(ctx) }
