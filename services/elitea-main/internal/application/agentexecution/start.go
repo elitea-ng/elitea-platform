@@ -161,6 +161,16 @@ type CurrentApplicationStartRequest struct {
 	// their name (legacy issues 6802 and 6881). It never changes what the
 	// run does, who it runs as, or who pays for it.
 	TriggerOrigin executiondomain.TriggerOrigin
+	// ProjectSkillIDs are the project skills the composer's `~` menu picked,
+	// by id and nothing else (at most five, deduplicated by the route). The
+	// service reads each skill's base version itself under the caller's own
+	// visibility (CurrentProjectSkillResolver) and never takes skill text
+	// from the request. Empty for every turn that picked none.
+	ProjectSkillIDs []int64
+	// projectSkills is ProjectSkillIDs, read and frozen by the service for
+	// this one turn. Unexported so no caller can hand the service skill
+	// content of its own.
+	projectSkills []map[string]any
 }
 
 func (request CurrentApplicationStartRequest) Validate() error {
@@ -169,7 +179,8 @@ func (request CurrentApplicationStartRequest) Validate() error {
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentInput(request.UserInput, request.AllowEmptyUserInput) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
-		!validCurrentMCPTokens(request.MCPTokens) {
+		!validCurrentMCPTokens(request.MCPTokens) ||
+		!validProjectSkillIDs(request.ProjectSkillIDs) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -211,6 +222,10 @@ type CurrentApplicationStartService struct {
 	// it to embeds no image, which is the behaviour every test that predates
 	// it expects and the honest answer on a deployment with no object store.
 	attachmentImages CurrentAttachmentImageReader
+	// projectSkills is optional — attached via WithProjectSkills
+	// (project_skills.go). A service without it refuses a request that picks
+	// a project skill.
+	projectSkills CurrentProjectSkillResolver
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach
@@ -304,6 +319,12 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	// Project skills the composer picked: read here, by id, under the caller's
+	// visibility. A pick the caller cannot read refuses the turn.
+	request.projectSkills, err = service.resolveProjectSkills(ctx, request)
+	if err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	}
 	// #870: recalled BEFORE building the input so its text can ride the same
 	// `instructions` field the worker already decodes — see memories.go's
 	// CurrentMemoryRecallResolver comment for why this is not a new wire
@@ -392,7 +413,7 @@ func currentApplicationInput(
 	memoryText string,
 	projectContextText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
-	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails)
+	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails, request.projectSkills)
 	if err != nil {
 		return nil, err
 	}

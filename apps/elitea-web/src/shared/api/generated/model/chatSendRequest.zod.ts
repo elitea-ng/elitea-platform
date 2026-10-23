@@ -41,13 +41,23 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ChatProjectSkillPick } from "./chatProjectSkillPick.zod";
 import { ChatStartAttachment } from "./chatStartAttachment.zod";
+
+export const chatSendRequestPayloadSkillsMax = 5;
 
 export const ChatSendRequest = zod
   .object({
     payload: zod.object({
       user_input: zod.string().min(1),
       attachments: zod.array(ChatStartAttachment).optional(),
+      skills: zod
+        .array(ChatProjectSkillPick)
+        .max(chatSendRequestPayloadSkillsMax)
+        .optional()
+        .describe(
+          "Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. For `agent.execute.application.v1` only. A repeated id, more than five entries or another `source` answers 400.",
+        ),
     }),
     project_id: zod.int().describe("Must equal the path's project id."),
     participant_id: zod

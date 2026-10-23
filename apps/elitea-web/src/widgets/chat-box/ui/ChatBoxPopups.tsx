@@ -11,7 +11,9 @@ import type { ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import { SlashSuggestionList, UserMentionList } from '@/features/chat-input';
 import { RecommendationList } from '@/features/chat-recommendations';
+import { t } from '@/shared/i18n';
 import { MentionToolList } from '@/shared/ui/MentionToolList';
+import type { MentionTool } from '@/shared/ui/MentionToolList';
 
 import { optField } from './ChatBox.helpers';
 import { HashParticipantPopup } from './HashParticipantPopup';
@@ -170,7 +172,7 @@ export function ChatBoxPopups({ recommendations, hashPicker, userMentions, slash
       {skill.isActive && (
         <Box sx={{ mb: 1 }}>
           <MentionToolList
-            tools={skill.filteredItems.map((item) => ({ name: item.name, ...optField('description', item.description) }))}
+            tools={skillMenuTools(skill.filteredItems)}
             toolkitName="Skill"
             onSelectTool={skill.onSelectTool}
             highlightedIndex={skill.highlightedIndex}
@@ -179,4 +181,20 @@ export function ChatBoxPopups({ recommendations, hashPicker, userMentions, slash
       )}
     </>
   );
+}
+
+/**
+ * The "~" menu's rows. With project skills in play the rows carry a section
+ * ("Agent skills", then "Project skills", the second only for skills the agent
+ * version does not carry); without any, the list is flat as it always was.
+ */
+function skillMenuTools(items: ChatBoxPopupsSkill['filteredItems']): MentionTool[] {
+  const sectioned = items.some((item) => item.isProject);
+  return items.map((item) => ({
+    name: item.name,
+    ...optField('description', item.description),
+    ...(sectioned
+      ? { group: item.isProject ? t('widgets.chatBox.projectSkills', 'Project skills') : t('widgets.chatBox.agentSkills', 'Agent skills') }
+      : {}),
+  }));
 }

@@ -30,6 +30,7 @@ function renderActions(
         setIsMentioningEveryone: vi.fn(),
         setSelectedUsers: vi.fn(),
         slash: { resetSlash: vi.fn() },
+        skill: { projectSkillIdsFor: () => [] },
         ...mentionState,
       } as never,
       handlers: { sendQuestion } as never,
@@ -125,6 +126,7 @@ describe('issue 974: read-aloud stops when the answer it is reading goes away', 
           setIsMentioningEveryone: vi.fn(),
           setSelectedUsers: vi.fn(),
           slash: { resetSlash: vi.fn() },
+          skill: { projectSkillIdsFor: () => [] },
         } as never,
         handlers: {
           sendQuestion: vi.fn().mockResolvedValue({ success: true }),
@@ -198,6 +200,7 @@ describe('issue 980: an unchanged save retries rather than rewrites', () => {
           setIsMentioningEveryone: vi.fn(),
           setSelectedUsers: vi.fn(),
           slash: { resetSlash: vi.fn() },
+          skill: { projectSkillIdsFor: () => [] },
         } as never,
         handlers: { regenerateAnswer, sendQuestion: vi.fn() } as never,
         deleteAlert: {} as never,
@@ -272,6 +275,18 @@ describe('useChatBoxActions @mention routing', () => {
       isSendingToUser: true,
       userIds: ['11', '12'],
     });
+  });
+
+  it('sends the project skills the text mentions as ids', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const projectSkillIdsFor = vi.fn(() => ['9', '8']);
+    const { result } = renderActions(sendQuestion, vi.fn<OnConversationCreated>(), { skill: { projectSkillIdsFor } });
+
+    act(() => result.current.handleSend('use ~Triage and ~Build'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(projectSkillIdsFor).toHaveBeenCalledWith('use ~Triage and ~Build');
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({ projectSkillIds: ['9', '8'] });
   });
 
   it('drops a mention that carries no user id rather than sending a participant id', async () => {

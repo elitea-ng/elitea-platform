@@ -3,9 +3,12 @@
  * `apps/elitea-ui/src/[fsd]/features/chat/lib/hooks/
  * useChatSkillMention.hooks.js` — drives the "~" skill-mention dropdown and
  * highlight for the chat input. Mirrors the chat "/" mention stack
- * (`useSlashMention`) but for a single-level "~skill" reference. Sources
- * ONLY the skills attached to the conversation's active agent participant,
- * so the dropdown matches the Agent instructions UX.
+ * (`useSlashMention`) but for a single-level "~skill" reference. Sources the
+ * skills attached to the conversation's active agent participant (the server
+ * resolves a `~Name` of those against the version itself), then — as the
+ * desktop composer's "Project skills" — the project's other skills, which the
+ * send names by id (`projectSkillIdsFor`) and the server reads under the
+ * caller's permissions.
  *
  * **No skill-suggestion LIST component is ported in this unit** — the
  * baseline's own file list for this hook has no accompanying UI component
@@ -39,6 +42,8 @@ import type { SkillsList } from '@/shared/api/generated/model';
 import { MentionPhase, SKILL_TRIGGER } from '../constants/mention.constants';
 import type { MentionPhaseValue } from '../constants/mention.constants';
 import { parseMentionRanges } from '../utils/instructionsMention.utils';
+import { useProjectSkillList } from './useProjectSkillList';
+import type { ProjectSkillEntry } from './useProjectSkillList';
 import type { MentionableItem, MentionRange } from '../utils/instructionsMention.utils';
 import type { ChatInputHandle } from '../chatInputHandle';
 
@@ -54,6 +59,8 @@ interface SkillMentionItem extends MentionableItem {
   readonly skillId: string;
   readonly description?: string | undefined;
   readonly isToolkit: false;
+  /** One of the project's skills that the agent version does not carry: sent to the server by id (`payload.skills`), not resolved from the text. */
+  readonly isProject: boolean;
 }
 
 /** A committed "~skill" reference found in the current input text. Not exported beyond this module — same rationale as `SkillMentionItem` above. */
@@ -82,6 +89,7 @@ function toSkillMentionItems(skills: readonly Skill[]): SkillMentionItem[] {
         name: skill.name,
         skillId: skill.id,
         isToolkit: false,
+        isProject: false,
         ...(skill.description !== undefined ? { description: skill.description } : {}),
       }),
     )
@@ -116,6 +124,33 @@ export interface UseChatSkillMentionParams {
   readonly projectId?: string | undefined;
 }
 
+/** The agent version's skills first, then the project's other skills (not named like one of the version's, ignoring case), each group alphabetical. */
+function withProjectSkills(versionItems: readonly SkillMentionItem[], project: readonly ProjectSkillEntry[]): readonly SkillMentionItem[] {
+  if (project.length === 0) return versionItems;
+  const taken = new Set(versionItems.map((item) => item.name.trim().toLowerCase()));
+  const extra = project
+    .filter((skill) => !taken.has(skill.name.trim().toLowerCase()))
+    .map((skill): SkillMentionItem => ({ name: skill.name, skillId: skill.id, isToolkit: false, isProject: true, ...(skill.description !== undefined ? { description: skill.description } : {}) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return [...versionItems, ...extra];
+}
+
+/** Whether the "~" menu is open on an agent: the project's skills are read then, not before. */
+function readsProjectSkills(isAgent: boolean, phase: MentionPhaseValue): boolean {
+  return isAgent && phase !== MentionPhase.Idle;
+}
+
+/** The ids of the project skills `text` mentions as `~Name`, each once, in text order. */
+function mentionedProjectSkillIds(text: string, items: readonly SkillMentionItem[]): readonly string[] {
+  const byName = new Map(items.map((item) => [item.name, item]));
+  const ids: string[] = [];
+  for (const range of parseMentionRanges(text, items, SKILL_TRIGGER)) {
+    const item = byName.get(text.slice(range.start + 1, range.end));
+    if (item?.isProject === true && !ids.includes(item.skillId)) ids.push(item.skillId);
+  }
+  return ids;
+}
+
 export interface UseChatSkillMentionResult {
   readonly skillPhase: MentionPhaseValue;
   readonly filteredItems: readonly SkillMentionItem[];
@@ -126,6 +161,8 @@ export interface UseChatSkillMentionResult {
   readonly onSelectSkill: (item: SkillMentionItem) => void;
   readonly resetSkill: () => void;
   readonly skillHighlightRanges: readonly MentionRange[];
+  /** The ids of the project skills `text` mentions (`~Name`), each once: what the send puts in `payload.skills`. Empty when it names none. */
+  readonly projectSkillIdsFor: (text: string) => readonly string[];
 }
 
 export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppVersionId, projectId }: UseChatSkillMentionParams): UseChatSkillMentionResult {
@@ -144,7 +181,13 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
 
   const applicationSkillsQuery = useListApplicationSkills(participantProjectId ?? '', appVersionId ?? 0, { query: { enabled: skillsEnabled } });
 
-  const mentionableItems = useMemo<readonly SkillMentionItem[]>(() => {
+  // The project's skills are read once the "~" menu is first opened (the hook
+  // keeps the result after it closes, so a typed `~Name` still highlights).
+  // They belong to the CONVERSATION's project, which is the one the send's
+  // route reads them from, not to the agent's own (possibly public) project.
+  const projectSkills = useProjectSkillList(projectId, readsProjectSkills(isAgent, phase));
+
+  const versionItems = useMemo<readonly SkillMentionItem[]>(() => {
     // See `applicationParticipants.ts`'s header (this app's established
     // convention) for why `.data.data` is cast rather than narrowed — the
     // error-envelope arm is unreachable here (eliteaFetch throws instead).
@@ -157,6 +200,8 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     // (e.g. `entities/participant`'s `applicationParticipants.ts` header).
     return toSkillMentionItems(normaliseSkills(wire.items as unknown as readonly SkillWire[]));
   }, [applicationSkillsQuery.data]);
+
+  const mentionableItems = useMemo(() => withProjectSkills(versionItems, projectSkills), [versionItems, projectSkills]);
 
   const resetSkill = useCallback(() => {
     mentionAnchorRef.current = null;
@@ -231,6 +276,8 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     [phase, filteredItems, highlightedIndex, onSelectSkill, resetSkill],
   );
 
+  const projectSkillIdsFor = useCallback((text: string): readonly string[] => mentionedProjectSkillIds(text, mentionableItems), [mentionableItems]);
+
   const skillHighlightRanges = useMemo(() => parseMentionRanges(inputContent, mentionableItems, SKILL_TRIGGER), [inputContent, mentionableItems]);
 
   const committedMentions = useMemo<readonly CommittedSkillMention[]>(
@@ -248,5 +295,6 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     onSelectSkill,
     resetSkill,
     skillHighlightRanges,
+    projectSkillIdsFor,
   };
 }

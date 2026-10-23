@@ -39,9 +39,15 @@ type currentSkillMention struct {
 // while non-pipeline application skills remain available for the SDK-owned
 // load_skill tool. The stored chat question is intentionally left untouched;
 // only the immutable worker input receives the de-sigiled text.
+//
+// projectSkills are the project skills the request picked by id, already read
+// and frozen by resolveProjectSkills. They are invoked in addition to the
+// version's own, never added to the disclosable (`load_skill`) catalogue the
+// version's attached skills form.
 func projectCurrentApplicationSkills(
 	userInput string,
 	versionDetails json.RawMessage,
+	projectSkills []map[string]any,
 ) (currentSkillProjection, error) {
 	version, err := decodeCurrentApplicationVersion(versionDetails)
 	if err != nil {
@@ -52,7 +58,15 @@ func projectCurrentApplicationSkills(
 		return currentSkillProjection{}, ErrUnsupportedCurrentAgentStart
 	}
 
-	cleanedInput, invoked := consumeCurrentInvokedSkills(userInput, attached)
+	candidates, forced, err := mergeProjectSkills(attached, projectSkills)
+	if err != nil {
+		return currentSkillProjection{}, err
+	}
+	cleanedInput, invoked := consumeCurrentInvokedSkills(userInput, candidates)
+	invoked, err = withForcedSkills(invoked, forced)
+	if err != nil {
+		return currentSkillProjection{}, err
+	}
 	if strings.TrimSpace(cleanedInput) == "" {
 		cleanedInput = "continue"
 	}
@@ -227,14 +241,7 @@ func consumeCurrentInvokedSkills(
 		if !ok || strings.TrimSpace(instructions) == "" {
 			continue
 		}
-		invoked = append(invoked, currentSkillAuthorityProjection(map[string]any{
-			"skill_id":         skill["skill_id"],
-			"skill_version_id": skill["skill_version_id"],
-			"name":             skill["name"],
-			"version_name":     skill["version_name"],
-			"icon_meta":        skill["icon_meta"],
-			"instructions":     instructions,
-		}, skill))
+		invoked = append(invoked, currentInvokedSkillProjection(skill))
 		if len(invoked) == currentMaxInvokedSkills {
 			break
 		}
@@ -269,4 +276,17 @@ func currentSkillAuthorityProjection(projected, source map[string]any) map[strin
 		}
 	}
 	return projected
+}
+
+// currentInvokedSkillProjection is the shape an invoked skill takes on the
+// execution input, from its frozen snapshot.
+func currentInvokedSkillProjection(skill map[string]any) map[string]any {
+	return currentSkillAuthorityProjection(map[string]any{
+		"skill_id":         skill["skill_id"],
+		"skill_version_id": skill["skill_version_id"],
+		"name":             skill["name"],
+		"version_name":     skill["version_name"],
+		"icon_meta":        skill["icon_meta"],
+		"instructions":     skill["instructions"],
+	}, skill)
 }

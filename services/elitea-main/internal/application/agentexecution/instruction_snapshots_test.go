@@ -41,7 +41,7 @@ func TestCurrentInstructionSnapshotFreezesSourceAndPreservesSkillProjection(t *t
 	require.Equal(t, "apply when coding", snapshot.ActivationDescription)
 	reader.source.Content = "changed after admission"
 	require.NotEqual(t, reader.source.Content, snapshot.Content)
-	projection, err := projectCurrentApplicationSkills("~Build go", frozen)
+	projection, err := projectCurrentApplicationSkills("~Build go", frozen, nil)
 	require.NoError(t, err)
 	for _, raw := range []json.RawMessage{projection.attached, projection.invoked, projection.applied} {
 		var skills []map[string]any

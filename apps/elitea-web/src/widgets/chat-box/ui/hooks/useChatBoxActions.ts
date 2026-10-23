@@ -83,7 +83,7 @@ export function useChatBoxActions({
       chatInputRef.current?.reset?.();
       const pendingAttachments = data.attachments.state.attachments;
       data.attachments.state.onClearAttachments();
-      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone }).then((result) => {
+      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone, projectSkillIds: state.skill.projectSkillIdsFor(question) }).then((result) => {
         // Announced on `result.createdConversation` alone, NOT on `success`:
         // the row is committed before any transport is tried, so a turn that
         // then fails still leaves a conversation the route and the rail have

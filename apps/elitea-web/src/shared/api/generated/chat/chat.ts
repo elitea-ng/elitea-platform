@@ -6621,8 +6621,13 @@ export type sendChatMessageResponse401 = {
 };
 
 export type sendChatMessageResponse403 = {
-  data: N403Response;
+  data: ChatExecutionError;
   status: 403;
+};
+
+export type sendChatMessageResponse404 = {
+  data: ChatExecutionError;
+  status: 404;
 };
 
 export type sendChatMessageResponse409 = {
@@ -6667,6 +6672,7 @@ export type sendChatMessageResponseError = (
   | sendChatMessageResponse400
   | sendChatMessageResponse401
   | sendChatMessageResponse403
+  | sendChatMessageResponse404
   | sendChatMessageResponse409
   | sendChatMessageResponse413
   | sendChatMessageResponse415
@@ -6787,7 +6793,6 @@ export const getSendChatMessageQueryOptions = <
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6847,7 +6852,6 @@ export type SendChatMessageQueryResult = NonNullable<
 export type SendChatMessageQueryError =
   | ChatExecutionError
   | N401Response
-  | N403Response
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -6856,7 +6860,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6891,7 +6894,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6926,7 +6928,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6957,7 +6958,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(

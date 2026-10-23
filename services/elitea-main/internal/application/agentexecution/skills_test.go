@@ -20,6 +20,7 @@ func TestProjectCurrentApplicationSkillsPreservesCurrentAgentContract(t *testing
 	projected, err := projectCurrentApplicationSkills(
 		"Please use ~release-notes and ~RELEASE-NOTES; leave ~unknown.",
 		version,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("projectCurrentApplicationSkills() error = %v", err)
@@ -72,7 +73,7 @@ func TestProjectCurrentApplicationSkillsKeepsPipelinesDeterministic(t *testing.T
 		"skills":[{"skill_id":2,"skill_version_id":22,"name":"Release-Notes","version_name":"v2","description":"Ship safely","icon_meta":null,"instructions":"Exact steps"}]
 	}`)
 
-	projected, err := projectCurrentApplicationSkills("~release-notes", version)
+	projected, err := projectCurrentApplicationSkills("~release-notes", version, nil)
 	if err != nil {
 		t.Fatalf("projectCurrentApplicationSkills() error = %v", err)
 	}
@@ -114,7 +115,7 @@ func TestConsumeCurrentInvokedSkillsUsesStrictBoundariesAndCap(t *testing.T) {
 }
 
 func TestProjectCurrentApplicationSkillsRejectsMalformedRegistry(t *testing.T) {
-	_, err := projectCurrentApplicationSkills("hello", json.RawMessage(`{"skills":{}}`))
+	_, err := projectCurrentApplicationSkills("hello", json.RawMessage(`{"skills":{}}`), nil)
 	if err != ErrUnsupportedCurrentAgentStart {
 		t.Fatalf("error = %v", err)
 	}

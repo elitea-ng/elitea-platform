@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.18
+ * client contract:    1.19
  * operations sha256:  a3030f8415c02eae93cf271dec7ea12bb87198aaac3192ca70ea9ff3f6678270
  */
 export interface paths {
@@ -2007,7 +2007,7 @@ export interface components {
             user_declined_mcp_servers?: string[];
             user_input?: string;
         };
-        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
+        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `project_skills_limit`, `project_skills_too_large`, `project_skill_name_conflict`, `project_skill_unknown`, `project_skills_forbidden`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
         ChatExecutionError: {
             error: string;
             message?: string;
@@ -2025,6 +2025,16 @@ export interface components {
             response_message_id: string;
             /** @description Equal to `execution_id` (legacy name). */
             task_id: string;
+        };
+        /** @description A project skill picked for one turn, by id. */
+        ChatProjectSkillPick: {
+            /**
+             * Format: int64
+             * @description The skill's id (`listSkills`), at most 2147483647.
+             */
+            id: number;
+            /** @enum {string} */
+            source: "project";
         };
         /** @description NOTE(W2): internal/api/v2/agentexecution/route.go:183 (`currentRegenerationBody`). `message_id` and `stream_id` must both equal the path's message id. */
         ChatRegenerateRequest: {
@@ -2096,6 +2106,8 @@ export interface components {
             participant_id?: number;
             payload: {
                 attachments?: components["schemas"]["ChatStartAttachment"][];
+                /** @description Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. For `agent.execute.application.v1` only. A repeated id, more than five entries or another `source` answers 400. */
+                skills?: components["schemas"]["ChatProjectSkillPick"][];
                 user_input: string;
             };
             /**
@@ -5225,7 +5237,24 @@ export interface operations {
                 };
             };
             401: components["responses"]["401"];
-            403: components["responses"]["403"];
+            /** @description No permission to send in this project, or (`project_skills_forbidden`) the body picks project skills and the caller may not read the project's skills. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description `project_skill_unknown`: a picked project skill does not exist in this project or is hidden from the caller. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
             /** @description The `question_id` was already used with a different body. */
             409: {
                 headers: {
@@ -5253,7 +5282,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
-            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path. */
+            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path; or a refused skill pick: `project_skills_limit` (more than five skills in the turn), `project_skills_too_large` (more than 64 KiB of skill instructions) or `project_skill_name_conflict` (a picked skill shares its name with a different skill of the agent). */
             422: {
                 headers: {
                     [name: string]: unknown;

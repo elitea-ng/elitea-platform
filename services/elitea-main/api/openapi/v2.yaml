@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.18"
+  x-elitea-client-contract: "1.19"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3398,6 +3398,20 @@ components:
           type: string
           description: Display name; ignored by the server.
 
+    ChatProjectSkillPick:
+      type: object
+      required: [source, id]
+      description: A project skill picked for one turn, by id.
+      properties:
+        source:
+          type: string
+          enum: [project]
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The skill's id (`listSkills`), at most 2147483647.
+
     ChatSendRequest:
       type: object
       description: >
@@ -3418,6 +3432,24 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/ChatStartAttachment'
+            skills:
+              type: array
+              maxItems: 5
+              description: >-
+                Project skills picked in the composer's `~` menu (client
+                contract 1.19): skills of the path's project that the answering
+                agent version does not carry. Each entry names the skill by id
+                only. The server reads the skill's `base` version itself under
+                the caller's permissions (`models.applications.skills.details`
+                and folder access); no skill text is accepted from the client.
+                A picked skill is applied to this turn, counts toward the
+                five skills a turn may invoke (with the `~name` skills of the
+                version) and toward their 64 KiB of instructions, and is not
+                added to the agent's `load_skill` catalogue. For
+                `agent.execute.application.v1` only. A repeated id, more than
+                five entries or another `source` answers 400.
+              items:
+                $ref: '#/components/schemas/ChatProjectSkillPick'
         project_id:
           type: integer
           format: int64
@@ -4608,6 +4640,9 @@ components:
         internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and
         :601 (`writeUnsupported`). `error` is a machine code for 409 and 422
         (`agent_regeneration_pending`, `agent_hitl_already_resolved`,
+        `project_skills_limit`, `project_skills_too_large`,
+        `project_skill_name_conflict`, `project_skill_unknown`,
+        `project_skills_forbidden`,
         `agent_authorization_already_resolved`,
         `agent_output_limit_already_resolved`, `unsupported_agent_execution`)
         and a message otherwise; the idempotency conflict is a 409 whose
@@ -18365,7 +18400,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatExecutionError'
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403':
+          description: >-
+            No permission to send in this project, or (`project_skills_forbidden`)
+            the body picks project skills and the caller may not read the
+            project's skills.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '404':
+          description: '`project_skill_unknown`: a picked project skill does not exist in this project or is hidden from the caller.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
         '409':
           description: The `question_id` was already used with a different body.
           content:
@@ -18385,7 +18434,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatExecutionError'
         '422':
-          description: '`unsupported_agent_execution`: this turn cannot run on the current execution path.'
+          description: >-
+            `unsupported_agent_execution`: this turn cannot run on the current
+            execution path; or a refused skill pick: `project_skills_limit`
+            (more than five skills in the turn), `project_skills_too_large`
+            (more than 64 KiB of skill instructions) or
+            `project_skill_name_conflict` (a picked skill shares its name with a
+            different skill of the agent).
           content:
             application/json:
               schema:
