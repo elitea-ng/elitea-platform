@@ -1261,3 +1261,31 @@ fn assert_static_receipt_edges(
             .is_err()
     );
 }
+
+/// FU-244: the composition bounds and the registered refusal are the shared contract
+/// `libs/proto/contracts/application-composition-limits-v1.json`, which Main's save check
+/// asserts too, so the save never refuses what this Worker runs (or the other way round).
+#[test]
+fn composition_bounds_match_the_shared_contract() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../libs/proto/contracts/application-composition-limits-v1.json");
+    let text = std::fs::read_to_string(path).expect("the composition contract is readable");
+    let contract: Value = serde_json::from_str(&text).expect("the composition contract is JSON");
+    let limit = |key: &str| {
+        usize::try_from(contract[key].as_u64().expect("a numeric limit")).expect("a usize limit")
+    };
+    assert_eq!(limit("max_agent_tiers"), super::MAX_AGENT_TIERS);
+    assert_eq!(
+        limit("max_pipeline_depth"),
+        crate::agents::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH
+    );
+    assert_eq!(
+        limit("max_ordinary_graph_scopes"),
+        crate::agents::pipeline::scoped_applications::MAX_ORDINARY_GRAPH_SCOPES
+    );
+    assert_eq!(limit("max_application_hops"), super::MAX_APPLICATION_HOPS);
+    assert_eq!(
+        contract["runtime_message"],
+        crate::protocol::output::APPLICATION_COMPOSITION_INVALID_MESSAGE
+    );
+}

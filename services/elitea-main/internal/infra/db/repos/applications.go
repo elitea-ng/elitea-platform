@@ -15,6 +15,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
@@ -812,7 +813,7 @@ func (r *ApplicationsRepo) UpdateWithVersion(ctx context.Context, req applicatio
 	return app, ver, nil
 }
 
-func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
+func (r *ApplicationsRepo) updateVersion(ctx context.Context, q relationReader, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
 	s, err := tenantSchema(projectID)
 	if err != nil {
 		return applications.Version{}, err
@@ -825,6 +826,9 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, project
 	}
 	if v.Present.Instructions || v.Instructions != "" {
 		if err := checkPipelineInstructions(ctx, q, s, applicationID, versionID, v); err != nil {
+			return applications.Version{}, err
+		}
+		if err := checkPipelineComposition(ctx, q, s, applicationID, versionID, v); err != nil {
 			return applications.Version{}, err
 		}
 	} else if v.AgentType == pipelineAgentType {
@@ -982,6 +986,46 @@ func checkPipelineInstructions(ctx context.Context, q querier, schema, applicati
 		return nil
 	}
 	return refusal
+}
+
+// checkPipelineComposition refuses pipeline instructions whose Agent nodes
+// would break a composition bound the Worker enforces (FU-244): the version is
+// walked as it is about to be stored, with its stored attachments. Only a
+// write that carries pipeline instructions is checked, so an agent save never
+// pays for the walk and a stored version stays editable in its other fields.
+func checkPipelineComposition(ctx context.Context, q relationReader, schema, applicationID, versionID string, v applications.Version) error {
+	appID, appErr := strconv.ParseInt(applicationID, 10, 64)
+	verID, verErr := strconv.ParseInt(versionID, 10, 64)
+	if appErr != nil || verErr != nil {
+		return apierr.NotFound("version not found")
+	}
+	source := NewCompositionSource(q, schema)
+	id := applicationcomposition.Identity{ApplicationID: appID, VersionID: verID}
+	stored, ok, err := source.Version(ctx, id)
+	if err != nil {
+		return fmt.Errorf("applications: update version: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	agentType := v.AgentType
+	if agentType == "" && stored.Kind == applicationcomposition.KindPipeline {
+		agentType = pipelineAgentType
+	}
+	if agentType != pipelineAgentType {
+		return nil
+	}
+	saved := stored
+	saved.Kind = applicationcomposition.KindPipeline
+	saved.AgentNodes, saved.StaticPause = applicationcomposition.ReadPipeline(v.Instructions)
+	err = applicationcomposition.Check(ctx, source, id, &saved)
+	if refusal := applicationcomposition.Refusal(err); refusal != nil {
+		return refusal
+	}
+	if err != nil {
+		return fmt.Errorf("applications: update version: %w", err)
+	}
+	return nil
 }
 
 // checkStoredPipelineInstructions bounds the instructions a version already

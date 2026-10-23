@@ -1,0 +1,10 @@
+{
+  "schema": "elitea.application-composition-limits.v1",
+  "description": "Bounds of a saved composition of agents and pipelines (FU-244). The Worker refuses a violation at assembly with the registered message; Main refuses it at save (relation attach, pipeline save) naming the attachment. Both sides assert this file.",
+  "max_agent_tiers": 3,
+  "max_pipeline_depth": 3,
+  "max_ordinary_graph_scopes": 2,
+  "max_application_hops": 25,
+  "public_code": "APPLICATION_COMPOSITION_INVALID",
+  "runtime_message": "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule."
+}
