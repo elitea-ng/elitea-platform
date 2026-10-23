@@ -323,16 +323,19 @@ describe('EmbeddingsSection', () => {
     const user = userEvent.setup();
     const ipc = setup({ embeddingsAllowed: { remote: true }, embeddings: { w1: 'remote:8:m' } });
     const embeddings = await section(user);
-    const caps = await within(embeddings).findByTestId('index-embedding-caps');
-    const save = within(caps).getByRole('button', { name: 'Save limits' });
-    expect(save).toBeDisabled();
-    const day = within(caps).getByRole('textbox', { name: 'Tokens per day' });
-    await user.clear(day);
-    await user.type(day, '0');
-    expect(save).toBeDisabled();
-    await user.clear(day);
-    await user.type(day, '900000');
-    await user.click(save);
+    await within(embeddings).findByTestId('index-embedding-caps');
+    // Query the fields afresh each time: a refetched estimate re-renders the
+    // caps form, and a held element can be a detached node by the click.
+    const save = (): HTMLElement => within(within(embeddings).getByTestId('index-embedding-caps')).getByRole('button', { name: 'Save limits' });
+    const day = (): HTMLElement => within(within(embeddings).getByTestId('index-embedding-caps')).getByRole('textbox', { name: 'Tokens per day' });
+    expect(save()).toBeDisabled();
+    await user.clear(day());
+    await user.type(day(), '0');
+    expect(save()).toBeDisabled();
+    await user.clear(day());
+    await user.type(day(), '900000');
+    await waitFor(() => expect(save()).toBeEnabled());
+    await user.click(save());
     await waitFor(() => expect(ipc.embeddingCalls.caps).toEqual([{ workspaceId: 'w1', caps: { run: 2_000_000, day: 900_000 } }]));
     await waitFor(() => expect(within(embeddings).getByTestId('index-embedding-estimate')).toHaveTextContent('a day at 900,000'));
   });

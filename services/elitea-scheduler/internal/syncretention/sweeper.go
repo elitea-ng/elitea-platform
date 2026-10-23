@@ -204,24 +204,6 @@ func (s *Sweeper) tables(ctx context.Context) ([]pgx.Identifier, error) {
 	return tables, nil
 }
 
-// Run sweeps once now and then every Interval until ctx ends.
-func (s *Sweeper) Run(ctx context.Context) {
-	s.logger.Info("syncretention: sweeper started",
-		"window_days", s.cfg.RetentionDays, "interval", s.cfg.Interval,
-		"batch_size", s.cfg.BatchSize, "max_batches_per_pass", s.cfg.MaxBatchesPerPass)
-	s.runOnce(ctx)
-	ticker := time.NewTicker(s.cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.runOnce(ctx)
-		}
-	}
-}
-
 func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 	timeout := s.cfg.Interval / 2
 	if timeout < time.Minute {

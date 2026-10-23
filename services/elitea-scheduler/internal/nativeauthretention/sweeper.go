@@ -218,22 +218,6 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
-// Run sweeps once now and then every Interval until ctx ends.
-func (s *Sweeper) Run(ctx context.Context) {
-	s.logger.Info("nativeauthretention: sweeper started", "interval", s.cfg.Interval)
-	s.runOnce(ctx)
-	ticker := time.NewTicker(s.cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.runOnce(ctx)
-		}
-	}
-}
-
 func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 	timeout := s.cfg.Interval / 2
 	if timeout < time.Minute {

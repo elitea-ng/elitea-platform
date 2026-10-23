@@ -237,35 +237,6 @@ func (s *Sweeper) Window() time.Duration {
 	return time.Duration(s.cfg.RetentionDays) * 24 * time.Hour
 }
 
-// Run blocks until ctx is cancelled, sweeping once immediately and then on each
-// interval tick.
-//
-// The first pass is immediate rather than delayed by a whole interval: the
-// deployment this matters most to is the one upgrading with a table that has
-// never been swept, and making it wait an hour to start buys nothing. The pass
-// is bounded either way.
-func (s *Sweeper) Run(ctx context.Context) {
-	s.logger.Info("auditretention: sweeper started",
-		"window_days", s.cfg.RetentionDays,
-		"interval", s.cfg.Interval,
-		"batch_size", s.cfg.BatchSize,
-		"max_batches_per_pass", s.cfg.MaxBatchesPerPass)
-
-	s.runOnce(ctx)
-
-	ticker := time.NewTicker(s.cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Info("auditretention: sweeper stopping")
-			return
-		case <-ticker.C:
-			s.runOnce(ctx)
-		}
-	}
-}
-
 // runOnce executes one pass under its own timeout, so a pass that meets a
 // wedged database cannot hold the loop past the next tick.
 func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
