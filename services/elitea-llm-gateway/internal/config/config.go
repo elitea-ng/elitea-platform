@@ -8,7 +8,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -110,12 +112,17 @@ const (
 	// snapshot freshness (§8.5, LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN).
 	DefaultNATSDegradedMaxDuration = 10 * time.Minute
 
-	// DefaultNATSDegradedCapPct is the per-replica degraded-window overspend cap
+	// DefaultNATSDegradedCapPct is the FLEET-wide degraded-window overspend cap
 	// expressed as a percentage of hard_limit_usd when
 	// LLM_BUDGET_NATS_DEGRADED_CAP_USD is unset (§8.5, "default 10 % of
 	// hard_limit_usd"). A positive LLM_BUDGET_NATS_DEGRADED_CAP_USD overrides it
-	// with an absolute USD cap.
+	// with an absolute USD cap. Each replica's share is
+	// floor(cap / LLM_BUDGET_EXPECTED_REPLICAS) (failmode.PerReplicaShare).
 	DefaultNATSDegradedCapPct = 10
+
+	// DefaultNATSDegradedReservationUSD is the reservation per admitted
+	// NATS-down request (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD).
+	DefaultNATSDegradedReservationUSD = 0.10
 
 	// DefaultRealtimeBudgetRecheck is how often a LIVE realtime session re-asks
 	// the budget gate (LLM_REALTIME_BUDGET_RECHECK_SEC). It MUST equal
@@ -262,10 +269,16 @@ type Config struct {
 	// ExpectedReplicas is the operator-configured replica count that the
 	// NATS-down degraded allowance is divided by: the FRESH_NEAR remaining
 	// budget and the FRESH_SAFE degraded cap (§8.5, LLM_BUDGET_EXPECTED_REPLICAS,
-	// default 1). FromEnv reads a non-positive value as the default; main
-	// refuses to start on such a value first (expectedReplicas in
-	// cmd/elitea-llm-gateway).
+	// default 1). FromEnv returns an error for a set value that is not an
+	// integer of 1 or more (ExpectedReplicasFromEnv), and main refuses to start.
 	ExpectedReplicas int
+	// NATSDegradedReservationUSD is what one admitted NATS-down request
+	// reserves against this replica's share until its real cost is billed
+	// (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD, default 0.10). It bounds how
+	// many requests can be admitted at once against one share. Set it at or
+	// above the largest cost one request can have, and the degraded cap holds
+	// exactly; a request that costs more adds the difference.
+	NATSDegradedReservationUSD float64
 
 	// The mTLS material of the GatewayService gRPC listener (#1359): the
 	// server certificate and key, and the CA bundle client certificates must
@@ -405,7 +418,62 @@ type Config struct {
 
 // FromEnv builds a Config from environment variables, applying the §9.5
 // defaults for any value that is unset or invalid.
-func FromEnv() Config {
+//
+// It returns an error for the values that must never fall back to a default.
+// Today that is LLM_BUDGET_EXPECTED_REPLICAS: the NATS-down degraded cap is
+// divided by it, and a silent fallback to 1 gives every replica the whole
+// fleet's allowance (human decision, DECISIONS.md 2026-10-22). main refuses to
+// start on the error.
+func FromEnv() (Config, error) {
+	replicas, err := ExpectedReplicasFromEnv(os.LookupEnv)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := fromEnvDefaults()
+	cfg.ExpectedReplicas = replicas
+	return cfg, nil
+}
+
+// expectedReplicasPattern is the accepted form of LLM_BUDGET_EXPECTED_REPLICAS:
+// a base-10 integer of 1 or more, with no sign and no leading zero. It is the
+// chart's rule too (elitea.integer in deploy/helm/elitea/templates/_helpers.tpl,
+// min 1), so a value the chart renders is a value the gateway accepts, and
+// "+3", "007" and "0x2" are refused by both.
+var expectedReplicasPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
+
+// negativeOrZeroPattern recognises a whole number below 1, for a message that
+// names the minimum rather than the format.
+var negativeOrZeroPattern = regexp.MustCompile(`^(0|-[1-9][0-9]*)$`)
+
+// ExpectedReplicasFromEnv reads LLM_BUDGET_EXPECTED_REPLICAS strictly. Unset or
+// blank gives DefaultNATSReplicas (1). Leading and trailing spaces are
+// ignored, as the chart trims them. Any other value must match
+// expectedReplicasPattern and fit an int.
+func ExpectedReplicasFromEnv(lookup func(string) (string, bool)) (int, error) {
+	const key = "LLM_BUDGET_EXPECTED_REPLICAS"
+	raw, ok := lookup(key)
+	raw = strings.TrimSpace(raw)
+	if !ok || raw == "" {
+		return DefaultNATSReplicas, nil
+	}
+	if negativeOrZeroPattern.MatchString(raw) {
+		return 0, fmt.Errorf("%s must be at least 1, and it is %s. The NATS-down degraded budget cap is "+
+			"divided by it; set it to the most gateway replicas that can run", key, raw)
+	}
+	if !expectedReplicasPattern.MatchString(raw) {
+		return 0, fmt.Errorf("%s must be a whole number (digits only, no sign, no leading zero), and it is %q. "+
+			"Set it to the most gateway replicas that can run", key, raw)
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s is out of range: %q", key, raw)
+	}
+	return n, nil
+}
+
+// fromEnvDefaults is the lenient part of FromEnv: every value that falls back
+// to its default when unset or invalid.
+func fromEnvDefaults() Config {
 	return Config{
 		HTTPAddr:            envOr("GATEWAY_HTTP_ADDR", ":8083"),
 		GRPCAddr:            envOr("GATEWAY_GRPC_ADDR", DefaultGRPCAddr),
@@ -432,18 +500,19 @@ func FromEnv() Config {
 		PGFreshnessMin:           minutesOr("LLM_BUDGET_PG_FRESHNESS_MIN", DefaultPGFreshnessMin),
 		NATSDegradedMaxDuration:  minutesOr("LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN", DefaultNATSDegradedMaxDuration),
 		NATSDegradedCapUSD:       floatOr("LLM_BUDGET_NATS_DEGRADED_CAP_USD", 0),
-		ExpectedReplicas:         intOr("LLM_BUDGET_EXPECTED_REPLICAS", DefaultNATSReplicas),
-		TLSCertFile:              os.Getenv("GATEWAY_TLS_CERT_FILE"),
-		TLSKeyFile:               os.Getenv("GATEWAY_TLS_KEY_FILE"),
-		TLSCAFile:                os.Getenv("GATEWAY_TLS_CA_FILE"),
-		StreamGrace:              millisOr("LLM_STREAM_GRACE_MS", DefaultStreamGrace, MaxStreamGrace),
-		StreamDrainLimit:         intOr("LLM_STREAM_DRAIN_MAX_INFLIGHT", DefaultStreamDrainLimit),
-		SelfLLMOrigins:           csvOr("GATEWAY_SELF_LLM_ORIGINS"),
-		EgressAllowlist:          csvOr("GATEWAY_EGRESS_ALLOWLIST"),
-		LoopBreakerThreshold:     signedIntOr("LLM_LOOP_BREAKER_THRESHOLD", 0),
-		LoopBreakerWindow:        plainMillisOr("LLM_LOOP_BREAKER_WINDOW_MS", 0),
-		LoopBreakerOpenFor:       secondsOr("LLM_LOOP_BREAKER_OPEN_SEC", 0),
-		PublicProjectID:          intOr("ELITEA_AI_PROJECT_ID", 0),
+		NATSDegradedReservationUSD: floatOr("LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD",
+			DefaultNATSDegradedReservationUSD),
+		TLSCertFile:          os.Getenv("GATEWAY_TLS_CERT_FILE"),
+		TLSKeyFile:           os.Getenv("GATEWAY_TLS_KEY_FILE"),
+		TLSCAFile:            os.Getenv("GATEWAY_TLS_CA_FILE"),
+		StreamGrace:          millisOr("LLM_STREAM_GRACE_MS", DefaultStreamGrace, MaxStreamGrace),
+		StreamDrainLimit:     intOr("LLM_STREAM_DRAIN_MAX_INFLIGHT", DefaultStreamDrainLimit),
+		SelfLLMOrigins:       csvOr("GATEWAY_SELF_LLM_ORIGINS"),
+		EgressAllowlist:      csvOr("GATEWAY_EGRESS_ALLOWLIST"),
+		LoopBreakerThreshold: signedIntOr("LLM_LOOP_BREAKER_THRESHOLD", 0),
+		LoopBreakerWindow:    plainMillisOr("LLM_LOOP_BREAKER_WINDOW_MS", 0),
+		LoopBreakerOpenFor:   secondsOr("LLM_LOOP_BREAKER_OPEN_SEC", 0),
+		PublicProjectID:      intOr("ELITEA_AI_PROJECT_ID", 0),
 
 		RealtimeBudgetRecheck:  secondsOr("LLM_REALTIME_BUDGET_RECHECK_SEC", DefaultRealtimeBudgetRecheck),
 		GovernanceRefresh:      secondsOr("LLM_GOVERNANCE_REFRESH_SEC", DefaultGovernanceRefresh),

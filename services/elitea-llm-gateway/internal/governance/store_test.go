@@ -290,6 +290,7 @@ func newStore(nc *fakeNATS, db *fakeDB) *GovernanceStore {
 		ExpectedReplicas: 1,
 	}
 	gs := NewGovernanceStore(nc, fmStore, degraded, rec, params, nil)
+	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 	gs.Start(context.Background())
 	return gs
 }
@@ -872,6 +873,7 @@ func TestCheckBudget_OutageExceededMax_ForcedClosed(t *testing.T) {
 		DegradedMaxDuration: 10 * time.Millisecond, // very short for testing
 	}
 	gs := NewGovernanceStore(nc, fmStore, degraded, rec, params, nil)
+	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 	gs.Start(context.Background())
 
 	// Simulate the breaker going open.
@@ -948,6 +950,7 @@ func TestDrain_BlocksUntilInFlightPersistsComplete(t *testing.T) {
 		ExpectedReplicas: 1,
 	}
 	gs := NewGovernanceStore(nc, fmStore, degraded, rec, params, nil)
+	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 	gs.Start(context.Background())
 
 	const costNano = int64(3) * failmode.NanoUSD
@@ -1026,6 +1029,7 @@ func TestCheckBudget_OutageExceededMax_ResetsOnClosed(t *testing.T) {
 		DegradedMaxDuration: 10 * time.Millisecond,
 	}
 	gs := NewGovernanceStore(nc, fmStore, degraded, rec, params, nil)
+	gs.MarkNATSHealthy() // a production store is built only after NATS bound its assets
 	gs.Start(context.Background())
 
 	// Open the breaker, wait past the duration.

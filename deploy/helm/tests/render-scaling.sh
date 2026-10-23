@@ -452,6 +452,14 @@ expect_refusal "a negative LLM_BUDGET_EXPECTED_REPLICAS" "llmGateway.env.LLM_BUD
   --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=-2
 expect_refusal "a non-numeric LLM_BUDGET_EXPECTED_REPLICAS" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be a whole number" \
   --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=two
+# The gateway's own parser (config.ExpectedReplicasFromEnv) refuses these too;
+# the two rules must agree, or the chart renders a value the gateway rejects.
+expect_refusal "a signed LLM_BUDGET_EXPECTED_REPLICAS (+5)" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be a whole number" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=+5
+expect_refusal "a zero-padded LLM_BUDGET_EXPECTED_REPLICAS (007)" "llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS must be a whole number" \
+  --set-string llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS=007
+check default "LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD renders its 0.10 default" \
+  "env('elitea-llm-gateway','elitea-llm-gateway','LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD') == '0.10'"
 expect_refusal "the removed preStop.command" "llmGateway.preStop.command was removed" \
   --set 'llmGateway.preStop.command[0]=sleep'
 

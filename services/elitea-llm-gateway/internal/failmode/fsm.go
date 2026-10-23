@@ -176,7 +176,22 @@ type Params struct {
 	// DegradedMaxDuration — forces closed (§8.5). Set by GovernanceStore per
 	// request; never set by external callers of Decide directly.
 	OutageExceededMax bool
+	// JoinedDuringOutage reports this replica has not completed a NATS budget
+	// read or increment in its own process lifetime. The capped degraded
+	// states then give it no share and answer 503 (human decision, DECISIONS.md
+	// 2026-10-22). Set by GovernanceStore per request.
+	JoinedDuringOutage bool
+	// DegradedReservationNano is what one admitted capped degraded request
+	// reserves against the replica's share until it is billed
+	// (LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD). 0 means
+	// DefaultDegradedReservationNano. The reservation is never larger than the
+	// share. Used by GovernanceStore, not by Decide.
+	DegradedReservationNano int64
 }
+
+// DefaultDegradedReservationNano is the reservation per admitted degraded
+// request when none is configured: 0.10 USD.
+const DefaultDegradedReservationNano int64 = NanoUSD / 10
 
 // Decision is the FSM output: the enforcement verdict plus the state and the
 // per-request billable nano amount the caller must add to the in-process
@@ -207,6 +222,12 @@ type Decision struct {
 	// snapshot it read. The audio routes read it to refuse a model the catalog
 	// cannot price, rather than bill it zero against a budget (audio.go).
 	Budgeted bool
+	// Capped reports the decision came from a state where this replica may
+	// spend only its share of a fleet allowance (FRESH_SAFE, FRESH_NEAR).
+	Capped bool
+	// ReplicaShareNano is that share in nano-USD (valid when Capped). The
+	// caller reserves against it before it dispatches the request.
+	ReplicaShareNano int64
 }
 
 // natsHealthy is the sentinel the caller passes as authoritativeNano to signal
@@ -316,11 +337,9 @@ func decide(natsUp bool, authoritativeNano int64, replicaDegradedNano int64, sna
 
 	case accumulated >= softThreshold:
 		// FRESH_NEAR: allow up to the per-replica share of the remaining budget.
-		perReplicaCap := PerReplicaShare(limit-accumulated, p.ExpectedReplicas)
-		if overShare(replicaDegradedNano, reqCostNano, perReplicaCap) {
-			return Decision{Verdict: Block402, State: StateDownPGFreshNear, Degraded: true}
-		}
-		return Decision{Verdict: Allow, State: StateDownPGFreshNear, Degraded: true}
+		return cappedDecision(StateDownPGFreshNear,
+			PerReplicaShare(limit-accumulated, p.ExpectedReplicas),
+			replicaDegradedNano, reqCostNano, p)
 
 	default:
 		// FRESH_SAFE: allow, bounded by this replica's share of the FLEET
@@ -341,12 +360,36 @@ func decide(natsUp bool, authoritativeNano int64, replicaDegradedNano int64, sna
 		if fleetCap <= 0 {
 			fleetCap = max(1, limit/10)
 		}
-		perReplicaCap := PerReplicaShare(fleetCap, p.ExpectedReplicas)
-		if overShare(replicaDegradedNano, reqCostNano, perReplicaCap) {
-			return Decision{Verdict: Block402, State: StateDownPGFreshSafe, Degraded: true}
-		}
-		return Decision{Verdict: Allow, State: StateDownPGFreshSafe, Degraded: true}
+		return cappedDecision(StateDownPGFreshSafe,
+			PerReplicaShare(fleetCap, p.ExpectedReplicas),
+			replicaDegradedNano, reqCostNano, p)
 	}
+}
+
+// cappedDecision is the shared tail of FRESH_SAFE and FRESH_NEAR: the two
+// states where this replica may spend only its share of a fleet allowance.
+//
+// A replica that has not completed a NATS budget read or increment in its own
+// process lifetime (Params.JoinedDuringOutage) gets NO share and answers 503.
+// N in the share counts the replicas that were live when the outage began; a
+// pod that starts during the outage was not one of them, and a fresh share
+// for it would let each restart add one more share to the fleet total. 503
+// and not 402: the budget is not known to be exhausted, the replica cannot
+// tell.
+//
+// The Decision carries the share so the caller can reserve against it
+// (GovernanceStore.CheckBudget, DegradedCounters.TryReserve).
+func cappedDecision(state State, share, spentNano, reqCostNano int64, p Params) Decision {
+	if p.JoinedDuringOutage {
+		return Decision{Verdict: Block503, State: state, Degraded: true, Capped: true}
+	}
+	d := Decision{State: state, Degraded: true, Capped: true, ReplicaShareNano: share}
+	if overShare(spentNano, reqCostNano, share) {
+		d.Verdict = Block402
+		return d
+	}
+	d.Verdict = Allow
+	return d
 }
 
 // PerReplicaShare is the part of a fleet-wide degraded allowance that ONE
@@ -376,16 +419,24 @@ func PerReplicaShare(total int64, replicas int) int64 {
 	return total / n
 }
 
-// overShare reports that a degraded request must be refused: this replica has
-// no share at all, or its degraded spend plus the request's cost passes the
-// share.
+// overShare reports that a degraded request must be refused.
 //
-// The share-0 test is explicit because admission does not know the cost yet:
-// every CheckBudget call passes reqCostNano=0 (DECISIONS.md 2026-08-09). With
-// the sum test alone, a replica with a share of 0 would admit its first
-// request. For the same reason, a replica with a positive share can pass it by
-// the cost of the one request it admits at the crossing. That is the accepted
-// async-billing overshoot: one request per replica, not N x cap.
+//   - share <= 0: the replica has no share at all.
+//   - reqCostNano == 0 (the cost is not known, which is every admission
+//     check): refuse once spent >= share. A replica exactly AT its share has
+//     nothing left, so "spent+0 > share" would admit one more request.
+//   - reqCostNano > 0: refuse when spent + reqCostNano > share; a request that
+//     fits exactly is admitted.
+//
+// spentNano is billed + held (DegradedCounters.Get). The reservation that
+// actually bounds concurrent admissions is taken after this test, atomically,
+// by DegradedCounters.TryReserve.
 func overShare(spentNano, reqCostNano, shareNano int64) bool {
-	return shareNano <= 0 || spentNano+reqCostNano > shareNano
+	if shareNano <= 0 {
+		return true
+	}
+	if reqCostNano <= 0 {
+		return spentNano >= shareNano
+	}
+	return spentNano+reqCostNano > shareNano
 }

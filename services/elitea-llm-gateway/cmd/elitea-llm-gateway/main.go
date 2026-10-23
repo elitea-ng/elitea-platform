@@ -56,23 +56,20 @@ import (
 )
 
 func main() {
-	cfg := config.FromEnv()
+	cfg, cfgErr := config.FromEnv()
 
 	level := new(slog.LevelVar)
 	level.Set(parseLevel(cfg.LogLevel))
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
-	// The degraded-mode budget allowance is divided by this replica count
-	// (human decision, DECISIONS.md 2026-10-22). A set value that is not a
-	// positive integer stops the process: config.FromEnv would read it as 1,
-	// and every replica would then spend the whole fleet's allowance.
-	replicas, err := expectedReplicas(os.LookupEnv)
-	if err != nil {
-		slog.Error("FATAL: refusing to start", "err", err)
+	// A configuration value that must never fall back to a default is wrong:
+	// stop. Today that is LLM_BUDGET_EXPECTED_REPLICAS, which divides the
+	// NATS-down degraded cap (human decision, DECISIONS.md 2026-10-22).
+	if cfgErr != nil {
+		slog.Error("FATAL: refusing to start", "err", cfgErr)
 		os.Exit(1)
 	}
-	cfg.ExpectedReplicas = replicas
 
 	// The vault master key gate, before anything opens the database: the same
 	// rule elitea-main enforces (master_key_gate.go). A malformed key always
@@ -846,6 +843,12 @@ func buildGovernance(
 	if cfg.NATSDegradedCapUSD > 0 {
 		degradedCapNano = int64(math.Round(cfg.NATSDegradedCapUSD * float64(failmode.NanoUSD)))
 	}
+	// The per-request reservation against the share, same conversion. 0 makes
+	// GovernanceStore use failmode.DefaultDegradedReservationNano.
+	var degradedReservationNano int64
+	if cfg.NATSDegradedReservationUSD > 0 {
+		degradedReservationNano = int64(math.Round(cfg.NATSDegradedReservationUSD * float64(failmode.NanoUSD)))
+	}
 
 	db := failmode.NewPoolDB(pool)
 	fmStore := failmode.NewStore(db)
@@ -861,11 +864,13 @@ func buildGovernance(
 	rec := failmode.NewReconciler(db, counter, degraded, logger)
 
 	params := failmode.Params{
-		Mode:                failmode.FailMode(cfg.NATSFailMode),
-		PGFreshness:         cfg.PGFreshnessMin,
-		ExpectedReplicas:    cfg.ExpectedReplicas,
-		DegradedCapNano:     degradedCapNano,             // FIX #7
-		DegradedMaxDuration: cfg.NATSDegradedMaxDuration, // FIX #8 consumed by GovernanceStore
+		Mode:             failmode.FailMode(cfg.NATSFailMode),
+		PGFreshness:      cfg.PGFreshnessMin,
+		ExpectedReplicas: cfg.ExpectedReplicas,
+		DegradedCapNano:  degradedCapNano, // FIX #7
+		// DECISIONS.md 2026-10-22: what one admitted NATS-down request holds.
+		DegradedReservationNano: degradedReservationNano,
+		DegradedMaxDuration:     cfg.NATSDegradedMaxDuration, // FIX #8 consumed by GovernanceStore
 	}
 	if params.Mode == "" {
 		params.Mode = failmode.ModeTieredHybrid
@@ -882,6 +887,11 @@ func buildGovernance(
 	// are present (IncrBudget, IncrBudgetIdempotent, ReadBudget, PublishDelta,
 	// TryAlertCooldown, OnBreakerStateChange, BreakerState).
 	govStore := governance.NewGovernanceStore(nc, fmStore, degraded, rec, params, logger)
+	// nc reached here only after it dialled and bound its JetStream assets
+	// (server.New or server.RedialNATS), so this process has seen NATS
+	// healthy. Without the mark, a NATS outage that starts before this
+	// replica's first budget read would give it no degraded share.
+	govStore.MarkNATSHealthy()
 	govStore.Start(ctx)
 
 	calc := cost.New(cost.Config{

@@ -55,8 +55,20 @@ because each was a real bug found across 3 review rounds.
   `failmode.PerReplicaShare(cap, ExpectedReplicas)` = `floor(cap / N)`, minimum
   0, in FRESH_SAFE and FRESH_NEAR alike. Do NOT round up and do NOT add a
   positive minimum: either lets N replicas spend more than the cap. A set
-  `LLM_BUDGET_EXPECTED_REPLICAS` below 1 or not an integer refuses to start
-  (`expectedReplicas`); do not let it fall back to 1.
+  `LLM_BUDGET_EXPECTED_REPLICAS` that is not digits-only and ≥ 1 makes
+  `config.FromEnv` return an error and `main` refuse to start; do not let it
+  fall back to 1. A replica that never saw NATS healthy gets no share (503).
+- **A NATS-down admission RESERVES against the share** (human decision,
+  2026-10-22, supersedes 2026-08-09 for the degraded states only).
+  `CheckBudget` reserves with `DegradedCounters.TryReserve` (atomic); the
+  request carries the hold in `failmode.Holds` on its context. Release a hold
+  ONLY after the real cost is on the degraded counter (the billing goroutine),
+  or when the request ends with nothing to bill (the context-done backstop in
+  `buildContext`). A stream settler MUST adopt its holds before it cancels the
+  stream context. A mid-session re-check MUST stay check-only
+  (`recheckVerdict` wraps `failmode.CheckOnly`): it reserves nothing and does
+  not count the session's own hold. A new billing path MUST take the holds
+  (`failmode.HoldsFrom(ctx).Take()`) and release them after its bill.
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

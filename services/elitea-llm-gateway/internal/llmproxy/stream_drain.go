@@ -54,6 +54,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
@@ -384,6 +385,12 @@ type streamSettler struct {
 	// close is therefore the only happens-before edge that makes the read
 	// safe. Without this gate the money path carries a data race.
 	chanClosed bool
+	// holds are the request's degraded-mode reservations. The settler adopts
+	// them when it settles (adoptHolds), because the stream context is
+	// cancelled before report() bills, and the context-done backstop would
+	// otherwise release them first. report() releases whatever the billing
+	// path did not take.
+	holds *failmode.Holds
 }
 
 // newChatSettler builds the settler for the OpenAI chat SSE dialect.
@@ -558,6 +565,7 @@ func (s *streamSettler) settleClean() {
 		return // defence in depth: a stream is billed at most once
 	}
 	s.settled = true
+	s.adoptHolds()
 	// The SSE loop consumed the channel to closure, so the producer has
 	// finished. That is the happens-before edge accumulatedUsage() needs.
 	s.chanClosed = true
@@ -598,6 +606,7 @@ func (s *streamSettler) settleEarly(reason string) {
 		return
 	}
 	s.settled = true
+	s.adoptHolds()
 	// Record what is known now. The drain that follows runs after the row is
 	// written, so a count it recovers cannot reach the log.
 	s.recordLogTokens()
@@ -756,6 +765,9 @@ func (s *streamSettler) drain(grace time.Duration) string {
 // The partial is consulted ONLY when no trailer arrived, so a recovered
 // trailer always wins and can never be overwritten downward (issue #79).
 func (s *streamSettler) report(reason, outcome string) {
+	// Whatever the billing path below did not take is released when the
+	// settle ends: nothing to bill, a refused bill, or no usage at all.
+	defer s.holds.ReleaseAll()
 	partial := false
 	if !s.gotUsage {
 		if in, out, ok := s.accumulatedUsage(); ok {
@@ -1026,8 +1038,27 @@ func (h *Handler) publishStreamLossEvent(p unbilledStreamPayload) {
 // execution id has to be re-attached rather than re-read, because there is
 // nothing left to read it from.
 func (s *streamSettler) billingContext() context.Context {
-	if s.executionID == "" {
-		return context.Background()
+	base := context.Background()
+	// The holds ride the billing context so updateUsage can take them and
+	// release them after the cost is billed (human decision, DECISIONS.md
+	// 2026-10-22). They are the only request state this context carries
+	// besides the execution id.
+	if s.holds != nil {
+		base = failmode.WithHolds(base, s.holds)
 	}
-	return context.WithValue(context.Background(), contextKeyExecutionID, s.executionID)
+	if s.executionID == "" {
+		return base
+	}
+	return context.WithValue(base, contextKeyExecutionID, s.executionID)
+}
+
+// adoptHolds takes ownership of the request's degraded-mode reservations. It
+// runs before the settle cancels the stream context, so the context-done
+// backstop in buildContext sees the adoption and releases nothing.
+func (s *streamSettler) adoptHolds() {
+	if s.ctx == nil {
+		return
+	}
+	s.holds = failmode.HoldsFrom(s.ctx)
+	s.holds.Adopt()
 }

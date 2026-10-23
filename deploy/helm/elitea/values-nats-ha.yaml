@@ -10,8 +10,8 @@
 # themselves quorum-replicated (a replicas=1 asset on a 3-node cluster still
 # has no quorum; templates/natsBootstrap/guards.yaml refuses the mismatch).
 #
-# The gateway's LLM_BUDGET_EXPECTED_REPLICAS (it bounds the degraded
-# per-replica cap, design §8.5) is derived by the chart from the gateway's
+# The gateway's LLM_BUDGET_EXPECTED_REPLICAS (the fleet-wide degraded cap is
+# divided by it: each replica's share is cap / N, design §8.5) is derived by the chart from the gateway's
 # replica ceiling — autoscaling.maxReplicas, else replicaCount — so an HA
 # install sets nothing for it. An explicit value below that ceiling is refused.
 #

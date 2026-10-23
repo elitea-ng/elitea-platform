@@ -4541,6 +4541,12 @@ llmGateway:
     # Each replica admits floor(cap / LLM_BUDGET_EXPECTED_REPLICAS) of it, so
     # the share per replica shrinks as the replica ceiling grows.
     LLM_BUDGET_NATS_DEGRADED_CAP_USD: "0"
+    # What one request admitted while NATS is down reserves against its
+    # replica's share until its real cost is billed (USD). It bounds how many
+    # requests one share admits at once. Set it at or above the cost of your
+    # largest request, and the degraded cap holds exactly; a request that costs
+    # more than its reservation adds the difference. Never more than the share.
+    LLM_BUDGET_NATS_DEGRADED_RESERVATION_USD: "0.10"
     # Continuous NATS outage ceiling (integer minutes). Once NATS has been down longer
     # than this the FSM forces closed (503) regardless of snapshot freshness. Default: 10.
     LLM_BUDGET_NATS_DEGRADED_MAX_DURATION_MIN: "10"
