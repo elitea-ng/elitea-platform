@@ -12,15 +12,12 @@ package scheduling
 // tenant workload and not a pipeline. `services/elitea-scheduler` used to poll
 // this table once a minute and publish each due `rpc_func` onto the
 // Redis/Arbiter bus for the legacy runtime. Nothing in the Go stack consumed
-// that bus (issue #305), so that dispatcher was deleted; in a Go-only
-// deployment these rows are read and edited here and executed only by the
-// legacy scheduling plugin, where one still runs against the same database.
+// that bus (issue #305), so that dispatcher was deleted. These rows are read and
+// edited here, and nothing executes them: no legacy component shares this
+// database. Moving their execution onto the Go platform scheduler is #1369.
 //
-// So this table is live and shared. It is also the mechanism the
-// indexing transition itself depends on — services/elitea-scheduler/RETIREMENT.md
-// records that "the current `index_scheduling` row is disabled in the hybrid
-// deployment" in favour of elitea-main's own `index.schedule.scan.v1`, and
-// DISABLING a row is exactly the write below.
+// Indexing no longer runs from this table: elitea-main's own
+// `index.schedule.scan.v1` replaced the `index_scheduling` row.
 //
 // ## What was here before unit A14
 //

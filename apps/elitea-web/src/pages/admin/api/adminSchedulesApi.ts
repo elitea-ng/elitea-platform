@@ -48,8 +48,8 @@ const SCHEDULES_URL = `/scheduling/schedules/${ADMIN_MODE}/0`;
  * One row of `GET /scheduling/schedules/administration/0` — one `centry.schedule`
  * row.
  *
- * Every field is a REAL column of that table, checked against the SQLAlchemy
- * model that owns the write path in the hybrid deployment
+ * Every field is a REAL column of that table, checked against the legacy
+ * SQLAlchemy model the table came from
  * (`legacy/plugins/scheduling/models/schedule.py`) and against the DDL this unit
  * added to `001_initial.sql`. Nothing below is a constant dressed as data — the
  * handler this replaced hardcoded `enabled: true`, so its "active" column could
