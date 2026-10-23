@@ -129,7 +129,8 @@ async fn cargo_fixture_failure_reports_file_and_line() {
     );
     assert_eq!(
         (result["passed"].as_u64(), result["failed"].as_u64()),
-        (Some(1), Some(1))
+        (Some(1), Some(1)),
+        "{result}"
     );
     let failure = &result["failures"][0];
     assert_eq!(failure["name"], "tests::breaks", "{result}");
