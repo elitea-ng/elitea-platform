@@ -524,6 +524,21 @@ pub(crate) fn stamp_root_scope_projection(
     }
     Ok(())
 }
+/// An application event with the routing context of the invocation that re-sent it removed.
+///
+/// A resumed graph re-emits the original events of the calls it owns (start, leaf start, result)
+/// under their original id, content and timestamp, routed to the CURRENT root invocation: the
+/// root projection stamp and the descendant container edge name that invocation. Both are
+/// presentation routing, never identity or authority, so a stored event and its re-send are the
+/// same event when they agree after removing them.
+pub(crate) fn canonical_replay_form(event: &mut Event) {
+    for key in [
+        PIPELINE_ROOT_PROJECTION_METADATA_KEY,
+        DESCENDANT_CONTAINER_INVOCATION_KEY,
+    ] {
+        event.provider_metadata.remove(key);
+    }
+}
 pub(crate) fn project_root_scope_event(
     event: &Event,
     expected: Option<&str>,
@@ -886,6 +901,32 @@ pub(crate) fn route_from_event(
     }))
 }
 
+/// The events of the latest occurrence of one graph call.
+///
+/// A conversation re-runs the same activation (node, step, call id) on every turn, so the
+/// session holds one original start per turn under the same call id. Each original start has
+/// its own event id, and a resume re-sends it under that id. The occurrence therefore begins at
+/// the first event that carries the id of the latest start of the call; earlier turns are cut.
+fn current_occurrence<'a>(events: &'a [Event], call_id: &str) -> &'a [Event] {
+    let Some(latest) = events.iter().rev().find(|event| {
+        event
+            .tool_calls()
+            .iter()
+            .any(|call| call.call_id == Some(call_id))
+    }) else {
+        return events;
+    };
+    occurrence_from(events, &latest.id)
+}
+
+/// The events from the first copy of one original start event onward.
+fn occurrence_from<'a>(events: &'a [Event], start_id: &str) -> &'a [Event] {
+    events
+        .iter()
+        .position(|event| event.id == start_id)
+        .map_or(events, |start| &events[start..])
+}
+
 pub(crate) fn events_for_scope(
     events: &[Event],
     leaf: &Event,
@@ -894,7 +935,7 @@ pub(crate) fn events_for_scope(
 ) -> Result<Vec<Event>, NativeAgentAssemblyError> {
     let wanted = scope_for_catalog(root_thread, catalog, leaf)?.ok_or_else(invalid_scope)?;
     let mut selected = Vec::new();
-    for event in events {
+    for event in current_occurrence(events, wanted.activation.call_id()) {
         let Some(receipt) = event_scope_for_activation(event, &wanted.activation)? else {
             continue;
         };
@@ -1245,13 +1286,21 @@ impl PipelineApplicationScopeRegistry {
             .map_err(|_| unavailable_scope())?
             .ok_or_else(invalid_scope)?;
         if root.thread_id != root_thread
-            || root.checkpoint_id != binding.checkpoint_id()
+            || !super::scope_receipts::continues_pause_checkpoint(
+                &root,
+                binding.checkpoint_id(),
+                binding.pending_node_name(),
+            )
             || root.pending_nodes.as_slice() != [binding.pending_node_name()]
         {
             return Err(invalid_scope());
         }
         let mut checkpoints = BTreeMap::new();
-        for nested in binding.nested_checkpoints() {
+        for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
+            let pending = binding
+                .nested_checkpoints()
+                .get(index + 1)
+                .map_or(binding.node_name(), |next| next.node_name());
             let path = nested
                 .thread_id()
                 .strip_prefix(root_thread)
@@ -1266,7 +1315,11 @@ impl PipelineApplicationScopeRegistry {
                 .map_err(|_| unavailable_scope())?
                 .ok_or_else(invalid_scope)?;
             if checkpoint.thread_id != nested.thread_id()
-                || checkpoint.checkpoint_id != nested.checkpoint_id()
+                || !super::scope_receipts::continues_pause_checkpoint(
+                    &checkpoint,
+                    nested.checkpoint_id(),
+                    pending,
+                )
             {
                 return Err(invalid_scope());
             }
@@ -1310,7 +1363,7 @@ impl PipelineApplicationScopeRegistry {
         let receipt = super::scope_receipts::receipt_for_node(checkpoint, &route.leaf_node_name)
             .map_err(|_| invalid_scope())?
             .ok_or_else(invalid_scope)?;
-        let super::scope_receipts::GraphCallOutcome::Paused { result } = receipt.outcome() else {
+        let Some(result) = receipt.outcome().paused_result() else {
             return Err(invalid_scope());
         };
         let ids = crate::agents::application_tools::nested_application_interrupt_ids(result)
@@ -1451,7 +1504,7 @@ impl PipelineApplicationScopeRegistry {
         let receipt = super::scope_receipts::receipt_for_node(checkpoint, &route.leaf_node_name)
             .map_err(|_| invalid_scope())?
             .ok_or_else(invalid_scope)?;
-        let super::scope_receipts::GraphCallOutcome::Paused { result } = receipt.outcome() else {
+        let Some(result) = receipt.outcome().paused_result() else {
             return Err(invalid_scope());
         };
         let expected = crate::agents::application_tools::nested_application_interrupt_ids(result)
@@ -1588,7 +1641,17 @@ impl PipelineApplicationScopeRegistry {
         let mut selected = Vec::new();
         let mut call_events = BTreeSet::new();
         let mut root_branch = None;
-        for event in events {
+        // Earlier turns of the conversation ran the same activation; only this call's
+        // occurrence, from its checkpoint-owned original start, belongs to the proof.
+        let occurrence = occurrence_from(events, &original_receipt.original_start().id);
+        if occurrence.len() == events.len()
+            && events
+                .first()
+                .is_none_or(|first| first.id != original_receipt.original_start().id)
+        {
+            return Err(invalid_scope());
+        }
+        for event in occurrence {
             let Some(receipt) = event_scope_for_activation(event, &activation)? else {
                 continue;
             };
@@ -2115,6 +2178,44 @@ mod tests {
         let mut mismatched = originals.clone();
         mismatched[1].branch = format!("{APPLICATION_BRANCH_ROOT}.application_99");
         assert!(scope_local_events(&mismatched, &activation, &branch, "thread-1").is_err());
+    }
+    #[test]
+    fn replay_canonical_form_removes_the_current_routing_and_nothing_else() {
+        let (registry, _, _) = registry();
+        let activation = registry.activation("", "thread-1", "delegate", 7).unwrap();
+        let original = call(&activation);
+        let mut replay = original.clone();
+        stamp_root_scope_projection(&mut replay, &original.invocation_id, "resumed-root").unwrap();
+        replay.provider_metadata.insert(
+            DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+            "resumed-root".to_owned(),
+        );
+        assert_ne!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+        let mut canonical_replay = replay.clone();
+        let mut canonical_original = original.clone();
+        canonical_replay_form(&mut canonical_replay);
+        canonical_replay_form(&mut canonical_original);
+        assert_eq!(
+            serde_json::to_value(&canonical_replay).unwrap(),
+            serde_json::to_value(&canonical_original).unwrap()
+        );
+        // The activation receipt, call identity and every other key survive.
+        assert!(
+            canonical_replay
+                .provider_metadata
+                .contains_key(PIPELINE_APPLICATION_SCOPE_METADATA_KEY)
+        );
+        replay
+            .provider_metadata
+            .insert("lineage".to_owned(), "forged".to_owned());
+        canonical_replay_form(&mut replay);
+        assert_ne!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&canonical_original).unwrap()
+        );
     }
     #[test]
     fn root_projection_preserves_original_activation_and_rebinds_only_transient_routes() {

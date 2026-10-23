@@ -57,7 +57,7 @@ nodes:
 ";
 
 /// A real provider returns a distinct tool-call id for every `ask_user` call.
-fn ask_user_call_response(call_id: &str) -> http::Response<tonic::body::Body> {
+pub(super) fn ask_user_call_response(call_id: &str) -> http::Response<tonic::body::Body> {
     let raw = format!(
         "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":{call_id:?},\"type\":\"function\",\"function\":{{\"name\":\"ask_user\",\"arguments\":\"{{\\\"questions\\\":[{{\\\"question\\\":\\\"Which environment should I use?\\\",\\\"header\\\":\\\"Environment\\\",\\\"options\\\":[{{\\\"label\\\":\\\"Staging\\\"}},{{\\\"label\\\":\\\"Production\\\"}}]}}]}}\"}}}}]}},\"finish_reason\":null}}]}}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
     );
@@ -117,23 +117,28 @@ pub(crate) async fn connect(database: &str) -> sqlx::PgPool {
 }
 
 /// One saved-agent child version plus the fake model script for this process.
+///
+/// The platform fixture is keyed by saved identity: the scoped resolver binds one Agent per node,
+/// so the number and order of version reads is not a script this fixture can predict.
 fn process_runtime(
     outcomes: Vec<TestModelGatewayOutcome>,
 ) -> (PipelineChildRuntime, CapturedModelRequests) {
-    pipeline_runtime_cycles_with_capture(
-        &json!({
-            "agent_type": "agent", "instructions": "Resolve the release.",
-            "variables": [],
-            "meta": {"internal_tools": ["ask_user"]}, "tools": [],
-            "llm_settings": {"model_name": "child-model", "model_project_id": 23,
-                "max_tokens": 2048, "openai_compatible": true}
-        }),
-        outcomes,
-        6,
+    let versions =
+        std::collections::BTreeMap::from([((3, 4), super::scoped_tests::asking_agent())]);
+    let (platform, model_facade, captured, _) =
+        super::scoped_tests::saved_runtime(&versions, outcomes);
+    (
+        (
+            platform,
+            model_facade,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(Vec::new())),
+        ),
+        captured,
     )
 }
 
-fn pending_card(interrupts: &[Value]) -> Value {
+pub(super) fn pending_card(interrupts: &[Value]) -> Value {
     assert_eq!(
         interrupts.len(),
         1,
@@ -274,7 +279,7 @@ async fn postgres_nested_restart_child() {
 }
 
 /// A fresh Worker process: new pool users, platform client, model facade and assembler.
-fn assembler(
+pub(super) fn assembler(
     pool: &sqlx::PgPool,
     platform: Arc<PlatformClient>,
     model_facade: Arc<ModelFacade>,

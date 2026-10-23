@@ -110,7 +110,7 @@ fn summary_model_admission_keeps_limits_separate_and_rejects_authored_controls()
     }
 }
 
-pub(super) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionRequest {
+pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionRequest {
     let (llm, application) = match kind {
         AgentExecutionKind::Application => (
             object(json!({"kwargs": {"openai_compatible": true}})),

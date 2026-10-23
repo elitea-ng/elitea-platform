@@ -26,6 +26,8 @@ pub(crate) use map_authority::PipelineMapReceiptAuthority;
 
 pub(crate) const GRAPH_CALL_RECEIPTS_METADATA_KEY: &str = "elitea.pipeline.graph-calls.v1";
 pub(crate) const GRAPH_CALL_REVISION_METADATA_KEY: &str = "elitea.pipeline.graph-call-revision.v1";
+/// Written by `elitea_agent_runtime::graph::turn_checkpointer::TurnCheckpointer` on every append.
+const TURN_EXECUTION_METADATA_KEY: &str = "elitea.pipeline.execution.v1";
 const REVISION_SCHEMA: &str = "elitea.pipeline.graph-call-revision.v1";
 const RECEIPTS_SCHEMA: &str = "elitea.pipeline.graph-calls.v1";
 const MAX_RECEIPT_BYTES: usize = 256 * 1024;
@@ -36,8 +38,29 @@ const MAX_RECEIPTS: usize = 128;
 #[allow(clippy::large_enum_variant)] // Durable outcomes are bounded by the receipt codec, with at most one terminal event.
 pub(crate) enum GraphCallOutcome {
     Started,
-    Paused { result: Value },
-    Completed { result: Value, terminal: Event },
+    Paused {
+        result: Value,
+    },
+    /// A continuation that approves a sensitive-tool call started the paused child.
+    /// Written durably before the child runs, so it is the dispatch marker of an
+    /// approved effect: a later visit that finds it refuses instead of repeating.
+    Resuming {
+        result: Value,
+    },
+    Completed {
+        result: Value,
+        terminal: Event,
+    },
+}
+
+impl GraphCallOutcome {
+    /// The paused child's interrupt result, while it is paused or being resumed.
+    pub(crate) fn paused_result(&self) -> Option<&Value> {
+        match self {
+            Self::Paused { result } | Self::Resuming { result } => Some(result),
+            Self::Started | Self::Completed { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -86,7 +109,7 @@ impl PipelineGraphCallReceipt {
         }
         match &self.outcome {
             GraphCallOutcome::Started => {},
-            GraphCallOutcome::Paused { result } => {
+            GraphCallOutcome::Paused { result } | GraphCallOutcome::Resuming { result } => {
                 if crate::agents::application_tools::nested_application_interrupt_ids(result).is_none() { return Err(receipt_error()); }
             },
             GraphCallOutcome::Completed { result, terminal } => {
@@ -141,13 +164,51 @@ pub(crate) fn receipt_revision_parent(
     Ok(Some(revision.parent_checkpoint_id))
 }
 
+/// Whether a decided Application pause continues from `checkpoint`: the pause's
+/// own revision `pause_checkpoint_id`, or the one receipt revision of it that an
+/// earlier continuation wrote when it started the approved child (`node`'s call
+/// `Paused` → `Resuming`). A receipt revision keeps its parent's frontier and
+/// changes one receipt (`validate_graph_call_revision`), and only a paused call
+/// becomes `Resuming`, so nothing else moved. Whether that continuation belonged
+/// to this execution is the caller's `continuation_pause` check; any later
+/// revision is an advance. A malformed revision is not one.
+pub(crate) fn continues_pause_checkpoint(
+    checkpoint: &Checkpoint,
+    pause_checkpoint_id: &str,
+    node: &str,
+) -> bool {
+    checkpoint.checkpoint_id == pause_checkpoint_id
+        || is_resuming_revision_of(checkpoint, pause_checkpoint_id, node)
+}
+
+fn is_resuming_revision_of(
+    checkpoint: &Checkpoint,
+    parent_checkpoint_id: &str,
+    node: &str,
+) -> bool {
+    receipt_revision_parent(checkpoint)
+        .ok()
+        .flatten()
+        .is_some_and(|parent| parent == parent_checkpoint_id)
+        && read_receipts(checkpoint).is_ok_and(|receipts| {
+            receipts
+                .calls
+                .get(node)
+                .is_some_and(|call| matches!(call.outcome, GraphCallOutcome::Resuming { .. }))
+        })
+}
+
 fn graph_frontier(checkpoint: &Checkpoint) -> Result<Value, GraphError> {
     let mut core = checkpoint.clone();
     core.checkpoint_id.clear();
-    // Revision ID/time describe the append, not a change to graph execution state.
+    // Revision ID/time describe the append, not a change to graph execution state. So does the
+    // turn stamp: it names the execution that WROTE a checkpoint, and the turn checkpointer
+    // restamps every append with the executing turn. A resumed execution therefore appends the
+    // first receipt revision of a thread whose latest checkpoint an earlier execution wrote.
     core.created_at = chrono::DateTime::UNIX_EPOCH;
     core.metadata.remove(GRAPH_CALL_RECEIPTS_METADATA_KEY);
     core.metadata.remove(GRAPH_CALL_REVISION_METADATA_KEY);
+    core.metadata.remove(TURN_EXECUTION_METADATA_KEY);
     serde_json::to_value(core).map_err(|_| receipt_error())
 }
 
@@ -180,6 +241,11 @@ pub(crate) fn validate_graph_call_revision(
                     GraphCallOutcome::Paused { .. } | GraphCallOutcome::Completed { .. }
                 ) | (
                     GraphCallOutcome::Paused { .. },
+                    GraphCallOutcome::Paused { .. }
+                        | GraphCallOutcome::Resuming { .. }
+                        | GraphCallOutcome::Completed { .. }
+                ) | (
+                    GraphCallOutcome::Resuming { .. },
                     GraphCallOutcome::Paused { .. } | GraphCallOutcome::Completed { .. }
                 )
             )
@@ -463,6 +529,16 @@ impl Checkpointer for PipelineGraphReceiptCheckpointer {
                         // ADK may omit metadata; it cannot replace a completed receipt.
                         if matches!(receipt.outcome, GraphCallOutcome::Paused { .. })
                             && matches!(current.outcome, GraphCallOutcome::Started)
+                        {
+                            return Err(receipt_error());
+                        }
+                        // A dispatch marker is never dropped by a stale copy.
+                        if matches!(receipt.outcome, GraphCallOutcome::Resuming { .. })
+                            && !matches!(
+                                current.outcome,
+                                GraphCallOutcome::Resuming { .. }
+                                    | GraphCallOutcome::Completed { .. }
+                            )
                         {
                             return Err(receipt_error());
                         }
@@ -822,5 +898,97 @@ mod tests {
         let mut changed = old;
         changed.metadata.insert("edited".to_owned(), json!(true));
         assert!(checkpointer.save(&changed).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_decided_pause_continues_only_from_itself_or_its_resuming_revision() {
+        let inner: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+        let checkpointer = PipelineGraphReceiptCheckpointer::new(inner, Arc::new(Mutex::new(())));
+        checkpointer
+            .save(&Checkpoint::new(
+                "owned-root",
+                State::new(),
+                0,
+                vec!["child".to_owned()],
+            ))
+            .await
+            .unwrap();
+        let (started, _) = prepare(&checkpointer, 0, &json!({"task":"work"}))
+            .await
+            .unwrap();
+        let before_pause = checkpointer.load("owned-root").await.unwrap().unwrap();
+        let ids = std::collections::BTreeSet::from(["leaf-a".to_owned()]);
+        let result = crate::agents::application_tools::nested_interrupt_result(&ids);
+        let paused_receipt = finish_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context(0),
+            &started,
+            GraphCallOutcome::Paused {
+                result: result.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let paused = checkpointer.load("owned-root").await.unwrap().unwrap();
+        assert!(continues_pause_checkpoint(
+            &paused,
+            &paused.checkpoint_id,
+            "child"
+        ));
+        // A Started -> Paused revision is not a continuation of the pause before it.
+        assert!(!continues_pause_checkpoint(
+            &paused,
+            &before_pause.checkpoint_id,
+            "child"
+        ));
+        let resuming_receipt = finish_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context(0),
+            &paused_receipt,
+            GraphCallOutcome::Resuming {
+                result: result.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let resuming = checkpointer.load("owned-root").await.unwrap().unwrap();
+        assert!(continues_pause_checkpoint(
+            &resuming,
+            &paused.checkpoint_id,
+            "child"
+        ));
+        assert!(!continues_pause_checkpoint(
+            &resuming,
+            &paused.checkpoint_id,
+            "other"
+        ));
+        assert!(!continues_pause_checkpoint(
+            &resuming,
+            &before_pause.checkpoint_id,
+            "child"
+        ));
+        // The child re-paused: an advance past the decided pause.
+        finish_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context(0),
+            &resuming_receipt,
+            GraphCallOutcome::Paused { result },
+        )
+        .await
+        .unwrap();
+        let repaused = checkpointer.load("owned-root").await.unwrap().unwrap();
+        assert!(!continues_pause_checkpoint(
+            &repaused,
+            &paused.checkpoint_id,
+            "child"
+        ));
+        assert!(!continues_pause_checkpoint(
+            &repaused,
+            &resuming.checkpoint_id,
+            "child"
+        ));
     }
 }

@@ -78,12 +78,14 @@ use crate::transport::model_facade::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
-pub(super) use materialization::ApplicationMaterializationPath;
+#[cfg(test)]
+pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
+pub(super) use materialization::{ApplicationContinuation, ApplicationMaterializationPath};
 pub(crate) use static_resume::{
     install_static_application_resume, prepare_static_application_resume,
 };
 
-const MAX_APPLICATION_HOPS: usize = 25;
+pub(in crate::agents) const MAX_APPLICATION_HOPS: usize = 25;
 /// The one child `agent_type` this worker compiles as a nested `LlmAgent`.
 const SUPPORTED_APPLICATION_AGENT_TYPE: &str = "agent";
 /// The child `agent_type` compiled as a checkpointed graph tool (#973).
@@ -503,6 +505,24 @@ pub(super) enum ChildApplicationResumeAction {
     PipelineDescendants(Box<PreparedPipelineToolResume>),
 }
 
+impl ChildApplicationResumeAction {
+    fn approves_sensitive_call(&self) -> bool {
+        match self {
+            Self::Direct(decision) => decision.approves_sensitive_call(),
+            Self::Nested(children) => children
+                .values()
+                .any(|child| child.action.approves_sensitive_call()),
+            // Graph re-entry and retained results continue no tool replay here;
+            // their own nodes own their effects.
+            Self::Retained(_)
+            | Self::RetainedPipeline(_)
+            | Self::Pipeline(_)
+            | Self::PipelineStatic(_)
+            | Self::PipelineDescendants(_) => false,
+        }
+    }
+}
+
 impl ApplicationResumeCoordinator {
     pub(super) async fn observe_call_lineage(
         &self,
@@ -588,6 +608,24 @@ impl ApplicationResumeCoordinator {
             .root
             .as_ref()
             .is_some_and(|calls| calls.contains_key(call_id))
+    }
+
+    /// Whether the pending resume of this call approves a sensitive-tool call at
+    /// any depth: the one continuation that may dispatch an effect, and so the one
+    /// a graph node marks durably before it runs the child.
+    pub(crate) async fn approves_sensitive_call(
+        &self,
+        parent_invocation_id: &str,
+        call_id: &str,
+    ) -> bool {
+        let stored = self.inner.lock().await;
+        let calls = stored
+            .by_parent_invocation
+            .get(parent_invocation_id)
+            .or(stored.root.as_ref());
+        calls
+            .and_then(|calls| calls.get(call_id))
+            .is_some_and(|resume| resume.action.approves_sensitive_call())
     }
 
     pub(super) async fn take(
@@ -2902,7 +2940,7 @@ pub(crate) async fn materialize_application_runtime(
         selected_aliases,
     )
     .await?;
-    let mut materialized = materialize_application_tools(
+    let (mut materialized, skipped_nested) = materialize_application_tools(
         snapshot,
         platform,
         runtime_context,
@@ -2913,6 +2951,18 @@ pub(crate) async fn materialize_application_runtime(
     )
     .await?;
     materialized.extend(pipeline_children);
+    // A nested Agent's unbuildable pipeline attachment degrades the same way a
+    // root one does (#990): skipped and named on the root's notice, never a
+    // failed turn for the Agents that do not call it.
+    let mut skipped_pipeline_children = skipped_pipeline_children;
+    for child in skipped_nested {
+        if skipped_pipeline_children.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+            break;
+        }
+        if !skipped_pipeline_children.contains(&child) {
+            skipped_pipeline_children.push(child);
+        }
+    }
     // No TOOL means no descendant channel: `ApplicationEventStreamingAgent`
     // selects on a receiver whose only senders live in the tools, so installing
     // it with none would leave it selecting on a closed channel forever. The
@@ -3068,10 +3118,16 @@ pub(crate) async fn materialize_application_tools(
     fallback_profile: &OrdinaryNoToolProfile,
     dependencies: ApplicationToolDependencies<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
-) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
+) -> Result<
+    (
+        Vec<MaterializedApplicationTool>,
+        Vec<SkippedApplicationChild>,
+    ),
+    NativeAgentAssemblyError,
+> {
     let references = application_references(snapshot, selected_aliases)?;
     if references.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut state = ApplicationAssemblyState {
         platform,
@@ -3091,6 +3147,7 @@ pub(crate) async fn materialize_application_tools(
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
         materialization: dependencies.materialization,
+        skipped: Vec::new(),
     };
     let mut tools = Vec::with_capacity(references.len());
     for reference in references {
@@ -3115,7 +3172,7 @@ pub(crate) async fn materialize_application_tools(
             )),
         });
     }
-    Ok(tools)
+    Ok((tools, state.skipped))
 }
 
 struct ApplicationAssemblyState<'a> {
@@ -3136,6 +3193,9 @@ struct ApplicationAssemblyState<'a> {
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
     materialization: ApplicationMaterializationPath,
+    /// Nested pipeline attachments this Worker could not build, named on the
+    /// root's skipped notice (#990).
+    skipped: Vec<SkippedApplicationChild>,
 }
 
 impl ApplicationAssemblyState<'_> {
@@ -3315,11 +3375,13 @@ impl ApplicationAssemblyState<'_> {
     }
 
     async fn materialize_nested_pipeline_children(
-        &self,
+        &mut self,
         frozen: &AdmittedToolSnapshot<'_>,
         profile: &OrdinaryNoToolProfile,
     ) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
-        if !self.materialization.scoped_ready() {
+        // A conversation an older worker left paused never offered nested pipeline attachments;
+        // its Agent keeps the tool set it paused with.
+        if !self.materialization.is_scoped() {
             return Ok(Vec::new());
         }
         if self.conversation_thread_id.is_none()
@@ -3349,9 +3411,18 @@ impl ApplicationAssemblyState<'_> {
             None,
         )
         .await?;
-        // Scoped projection must contain every frozen pipeline attachment.
-        if !built.skipped.is_empty() {
-            return Err(unsupported_capability());
+        // One attachment this Worker cannot build is skipped and named (#990),
+        // as at the root: the nested Agent keeps every attachment it can run,
+        // and a turn that never calls it is unaffected. A conversation paused
+        // inside a child that can no longer be built is refused when it is
+        // continued (`validate_continuation`), not here.
+        for child in built.skipped {
+            if self.skipped.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+                break;
+            }
+            if !self.skipped.contains(&child) {
+                self.skipped.push(child);
+            }
         }
         Ok(built.tools)
     }

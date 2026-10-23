@@ -1303,6 +1303,16 @@ impl ResolvedDirectHitlDecision {
         self.dispatched || !self.dispatched_siblings.is_empty()
     }
 
+    /// Whether this decision approves a sensitive-tool call, the one decision
+    /// whose continuation may dispatch an effect. Authorization, clarifying and
+    /// child-pipeline decisions each have their own continuation.
+    pub(crate) fn approves_sensitive_call(&self) -> bool {
+        self.decision == ToolConfirmationDecision::Approve
+            && self.delegated_authorization.is_none()
+            && self.clarifying_question.is_none()
+            && self.pipeline.is_none()
+    }
+
     pub(crate) fn restore_authorization_scope(&self, catalog: &mut DelegatedAuthorizationCatalog) {
         for requirement in &self.prior_authorization_declines {
             catalog.decline(requirement);

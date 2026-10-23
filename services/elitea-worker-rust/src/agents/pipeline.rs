@@ -21,8 +21,8 @@ use sqlx::PgPool;
 use tracing::Instrument as _;
 
 use super::application_tools::{
-    ApplicationMaterializationPath, ApplicationToolDependencies, MaterializedApplicationRuntime,
-    materialize_application_runtime,
+    ApplicationContinuation, ApplicationMaterializationPath, ApplicationToolDependencies,
+    MaterializedApplicationRuntime, materialize_application_runtime,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
 use super::context_management::ContextManagementPlan;
@@ -71,9 +71,6 @@ use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::{ClaimScopedEliteaContext, SavedAgentFingerprint};
 
 pub(crate) mod composition;
-// Source integration gate, not a new public flag. Keep false until the assembled
-// producer/coordinator tests and durable/browser acceptance below pass.
-pub(super) const SCOPED_APPLICATION_CONTINUATION_READY: bool = false;
 pub(crate) mod scope_receipts;
 pub(crate) mod scoped_applications;
 pub(crate) mod scoped_runtime;
@@ -376,6 +373,10 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// A pipeline binds no chat model to a tool, so the Office tools that call
     /// a model refuse here with a sentence; the rest work.
     office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
+    /// Test seam: the continuation a fresh start takes, so a conversation an older worker
+    /// paused can be produced by the very resolver that paused it.
+    #[cfg(test)]
+    fresh_start_continuation: ApplicationContinuation,
 }
 
 impl PipelineNativeAgentAssembler {
@@ -426,6 +427,8 @@ impl PipelineNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
             office_runtime: None,
+            #[cfg(test)]
+            fresh_start_continuation: ApplicationContinuation::Scoped,
         }
     }
 
@@ -448,7 +451,19 @@ impl PipelineNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
             office_runtime: None,
+            #[cfg(test)]
+            fresh_start_continuation: ApplicationContinuation::Scoped,
         }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn with_fresh_start_continuation(
+        mut self,
+        continuation: ApplicationContinuation,
+    ) -> Self {
+        self.fresh_start_continuation = continuation;
+        self
     }
 
     #[must_use]
@@ -487,7 +502,7 @@ impl PipelineNativeAgentAssembler {
         model_scopes: ModelScopeSessions,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
         composition: &AdmittedPipelineComposition,
-        scoped_applications: bool,
+        continuation: ApplicationContinuation,
         conversation_thread_id: String,
         conversation_id: String,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
@@ -676,30 +691,30 @@ impl PipelineNativeAgentAssembler {
                     tool_policy: Arc::clone(tool_policy),
                     model_scopes: model_scopes.clone(),
                     conversation_thread_id,
-                    materialization: ApplicationMaterializationPath::native_graph(
-                        scoped_applications,
-                    ),
+                    materialization: ApplicationMaterializationPath::native_graph(continuation),
                 },
             );
-        let (application_resolver, application_runtime, application_scopes) = if scoped_applications
-        {
-            self.build_scoped_application_resolver(
-                profile,
-                &selected_snapshot,
-                runtime_context,
-                application_runtime,
-                composition,
-            )
-            .await?
-        } else {
-            self.build_application_resolver(
-                profile,
-                &selected_snapshot,
-                runtime_context,
-                application_runtime,
-                composition,
-            )
-            .await?
+        let (application_resolver, application_runtime, application_scopes) = match continuation {
+            ApplicationContinuation::Scoped => {
+                self.build_scoped_application_resolver(
+                    profile,
+                    &selected_snapshot,
+                    runtime_context,
+                    application_runtime,
+                    composition,
+                )
+                .await?
+            }
+            ApplicationContinuation::LegacyUnscoped => {
+                self.build_legacy_unscoped_application_resolver(
+                    profile,
+                    &selected_snapshot,
+                    runtime_context,
+                    application_runtime,
+                    composition,
+                )
+                .await?
+            }
         };
         let llm_factory = context.zip(model_facade).map(|(context, model_facade)| {
             Arc::new(NativePipelineLlmAgentFactory {
@@ -735,7 +750,11 @@ impl PipelineNativeAgentAssembler {
         })
     }
 
-    async fn build_application_resolver(
+    /// The resolver of a conversation an older worker left paused inside an application call.
+    ///
+    /// It resolves participants by alias and owns no call receipts, exactly as the worker that
+    /// paused the conversation did. Only `ApplicationContinuation::LegacyUnscoped` reaches it.
+    async fn build_legacy_unscoped_application_resolver(
         &self,
         profile: &PipelineExecutionProfile,
         snapshot: &AdmittedToolSnapshot<'_>,
@@ -786,7 +805,8 @@ impl PipelineNativeAgentAssembler {
         )
         .await?;
         // The pipeline PARENT admits no pipeline CHILD through this path (it
-        // builds those itself), so the skipped list is always empty here.
+        // builds those itself); what is skipped here is a direct Agent's own
+        // unbuildable attachment, which degrades as on an ordinary root (#990).
         let (direct_runtime, _) = direct_runtime;
         let (mut participants, mut projection) = direct_runtime.map_or_else(
             || Ok((BTreeMap::new(), ApplicationRuntimeProjection::default())),
@@ -842,7 +862,7 @@ impl PipelineNativeAgentAssembler {
         Ok((Some(resolver), projection, None))
     }
 
-    // Producer and scoped installer are wired; source gate awaits integrated compilation/runtime proof.
+    /// The resolver of every conversation this worker starts or continues.
     async fn build_scoped_application_resolver(
         &self,
         profile: &PipelineExecutionProfile,
@@ -1201,21 +1221,24 @@ impl PipelineNativeAgentAssembler {
             } else {
                 start
             };
-            let scoped_applications = if !SCOPED_APPLICATION_CONTINUATION_READY {
-                false
-            } else if matches!(
+            #[cfg(test)]
+            let fresh_start = self.fresh_start_continuation;
+            #[cfg(not(test))]
+            let fresh_start = ApplicationContinuation::Scoped;
+            let continuation = if matches!(
                 &start,
                 super::runtime::PipelineNativeStart::Fresh
                     | super::runtime::PipelineNativeStart::Regenerate
             ) {
-                true
+                fresh_start
+            } else if !continues_a_decided_pause(&start) {
+                ApplicationContinuation::Scoped
             } else {
-                // Existing admitted root conversations keep their original resolver and coordinator.
                 let checkpoint = state
                     .application_checkpoint(&plan)
                     .await?
                     .ok_or_else(invalid_pipeline_tool_scope)?;
-                scope_receipts::has_graph_call_receipts(&checkpoint)
+                continuation_for_checkpoint(&checkpoint, profile.definition())
                     .map_err(|_| invalid_pipeline_tool_scope())?
             };
             let mut node_runtimes = self
@@ -1231,7 +1254,7 @@ impl PipelineNativeAgentAssembler {
                         .zip(sandbox_authority.clone())
                         .map(|(factory, authority)| factory.bind(authority)),
                     &composition,
-                    scoped_applications,
+                    continuation,
                     plan.session_id().to_owned(),
                     plan.conversation_id().to_owned(),
                 )
@@ -1779,27 +1802,27 @@ pub(super) async fn materialize_saved_pipeline_tool(
     .await?;
     // Static and scoped ordinary descendants use their typed coordinators.
     // Direct graph sensitive, AskUser, and MCP pauses remain unsupported here.
-    let scoped_proof = if runtime.materialization.scoped_ready() {
-        let scopes = bound
+    // A tool-owned static pause is projected only beneath an ordinary root: a graph root already
+    // owns the checkpoint thread the static proof would have to name, and the projector refuses
+    // the second owner. Refuse it here, before any model call, instead of failing at the pause.
+    let graph_root = runtime.materialization.has_native_graph_root();
+    let scopes = bound
+        .runtimes
+        .application_scopes()
+        .ok_or_else(invalid_pipeline_tool_scope)?;
+    scopes.validate_catalog(
+        &definition,
+        bound
             .runtimes
-            .application_scopes()
-            .ok_or_else(invalid_pipeline_tool_scope)?;
-        scopes.validate_catalog(
-            &definition,
-            bound
-                .runtimes
-                .checkpoint_catalog()
-                .ok_or_else(invalid_pipeline_tool_scope)?,
-        )?;
-        scopes.has_ordinary_applications()
-    } else {
-        false
-    };
+            .checkpoint_catalog()
+            .ok_or_else(invalid_pipeline_tool_scope)?,
+    )?;
+    let scoped_proof = scopes.has_ordinary_applications();
     if bound
         .guarded_interrupt_kinds
         .iter()
         .any(|kind| match *kind {
-            "static continuation" => !runtime.materialization.scoped_ready(),
+            "static continuation" => graph_root,
             "ordinary child continuation" => !scoped_proof,
             _ => true,
         })
@@ -1809,6 +1832,49 @@ pub(super) async fn materialize_saved_pipeline_tool(
         ));
     }
     Ok((definition, bound.runtimes, bound.presentations))
+}
+
+/// Whether this start continues a pause the user decided, the only start an older worker's
+/// unscoped call can be waiting on. A recovery (`Checkpoint`) never has an application node
+/// on its frontier: model-checkpoint and node recovery admit only deterministic, model and
+/// Code nodes (`graph/compiler.rs` `recovery_frontier_supported`, checked in
+/// `session.rs` before any recovery start), so a missing receipt there is a crash before the
+/// first receipt revision and the start stays scoped. A Worker lost mid-continuation is
+/// re-claimed as the same decided-pause start, which reads its resolver from the checkpoint.
+pub(super) fn continues_a_decided_pause(start: &super::runtime::PipelineNativeStart) -> bool {
+    !matches!(
+        start,
+        super::runtime::PipelineNativeStart::Checkpoint
+            | super::runtime::PipelineNativeStart::Fresh
+            | super::runtime::PipelineNativeStart::Regenerate
+    )
+}
+
+/// Which application resolver a resumed conversation continues on.
+///
+/// Every conversation continues `Scoped`, except one an older worker left paused INSIDE an
+/// application call: that checkpoint holds no graph-call receipt, and its frontier is an
+/// application node. Such a conversation resumes on the resolver that paused it, because the
+/// call in flight has no original-call receipt to prove it against. A checkpoint with no receipt
+/// whose frontier is any other node (a printer, a HITL gate, a state modifier) has no application
+/// call in flight, so its remaining application calls start fresh and scoped.
+fn continuation_for_checkpoint(
+    checkpoint: &adk_rust::graph::Checkpoint,
+    definition: &PipelineDefinition,
+) -> Result<ApplicationContinuation, adk_rust::graph::GraphError> {
+    if scope_receipts::has_graph_call_receipts(checkpoint)? {
+        return Ok(ApplicationContinuation::Scoped);
+    }
+    let in_flight = checkpoint.pending_nodes.iter().any(|pending| {
+        definition
+            .application_nodes()
+            .any(|(node, _)| node == pending)
+    });
+    Ok(if in_flight {
+        ApplicationContinuation::LegacyUnscoped
+    } else {
+        ApplicationContinuation::Scoped
+    })
 }
 
 /// The one refusal that names WHAT the child could pause on.
@@ -1840,7 +1906,7 @@ async fn admit_saved_pipeline_child(
     identity: (u64, u64),
     project_id: Option<u64>,
 ) -> Result<(PipelineDefinition, BoundSavedPipeline), NativeAgentAssemblyError> {
-    let admitted = composition::admit_tool_composition_with_scoped(
+    let admitted = composition::admit_tool_composition(
         platform,
         runtime_context,
         runtime.context.resource_project_id(),
@@ -1848,7 +1914,6 @@ async fn admit_saved_pipeline_child(
         identity,
         project_id,
         fallback,
-        runtime.materialization.scoped_ready(),
     )
     .await?;
     let bound =
@@ -1916,7 +1981,8 @@ fn bind_admitted_saved_pipeline<'a>(
         let mut presented = BTreeSet::new();
         for (node, selection) in admitted.profile.definition().application_nodes() {
             let alias = selection.alias();
-            if runtime.materialization.scoped_ready() {
+            // A conversation an older worker left paused owns no call receipts.
+            if runtime.materialization.is_scoped() {
                 call_owners.insert(node.to_owned(), scopes.graph_call_owner(&graph_path, node)?);
             }
             let participant = if let Some(child) = admitted.children.get(alias) {
@@ -2039,8 +2105,16 @@ async fn bind_scoped_agent(
         Some(&selected),
     )
     .await?;
+    // The selected alias is an `agent` child, so it is never itself a skipped
+    // pipeline child: every entry here is the bound Agent's own unbuildable
+    // attachment. It degrades as on an ordinary root (#990): the Agent runs
+    // without it, and the run never fails for an attachment it may not call.
     if !skipped.is_empty() {
-        return Err(unsupported_pipeline_runtime());
+        tracing::info!(
+            event = "pipeline_agent_attachment_skipped",
+            skipped = skipped.len(),
+            "a pipeline Agent node runs without its unbuildable attachments"
+        );
     }
     let materialized = materialized.ok_or_else(invalid_pipeline_tool_scope)?;
     let fingerprint = materialized

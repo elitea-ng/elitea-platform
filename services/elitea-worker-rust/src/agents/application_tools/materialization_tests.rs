@@ -134,7 +134,20 @@ impl Fixture {
     async fn build(
         &self,
         root: Value,
-        scoped: bool,
+    ) -> Result<
+        (
+            Option<MaterializedApplicationRuntime>,
+            Vec<SkippedApplicationChild>,
+        ),
+        NativeAgentAssemblyError,
+    > {
+        self.build_continuing(root, ApplicationContinuation::Scoped)
+            .await
+    }
+    async fn build_continuing(
+        &self,
+        root: Value,
+        continuation: ApplicationContinuation,
     ) -> Result<
         (
             Option<MaterializedApplicationRuntime>,
@@ -177,11 +190,7 @@ impl Fixture {
             )
             .with_model_scopes(model_sessions)
             .with_conversation_thread(THREAD.to_owned())
-            .with_materialization(if scoped {
-                ApplicationMaterializationPath::new(true)
-            } else {
-                ApplicationMaterializationPath::default()
-            }),
+            .with_materialization(ApplicationMaterializationPath::new(continuation)),
             None,
         )
         .await
@@ -234,7 +243,7 @@ impl Fixture {
             model_sessions,
             None,
             THREAD.to_owned(),
-            ApplicationMaterializationPath::new(true),
+            ApplicationMaterializationPath::default(),
         )
         .await
         .unwrap();
@@ -361,7 +370,7 @@ async fn saved_agent_materialization_retains_sealed_identity_and_definition_dige
         BTreeMap::from([((32, 42), "12".repeat(32))]),
     );
     let (materialized, skipped) = fixture
-        .build(reference((32, 42), "agent", "worker alias"), true)
+        .build(reference((32, 42), "agent", "worker alias"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -386,7 +395,7 @@ async fn saved_agent_alias_does_not_replace_immutable_resolved_identity() {
             BTreeMap::from([((32, 42), "12".repeat(32))]),
         );
         let (runtime, _) = fixture
-            .build(reference((32, 42), "agent", alias), true)
+            .build(reference((32, 42), "agent", alias))
             .await
             .unwrap();
         fingerprints.push(runtime.unwrap().tools[0].saved_agent_fingerprint.unwrap());
@@ -409,7 +418,7 @@ async fn same_agent_alias_retains_distinct_saved_versions_and_definitions() {
             BTreeMap::from([(identity, digest)]),
         );
         let (runtime, _) = fixture
-            .build(reference(identity, "agent", "worker"), true)
+            .build(reference(identity, "agent", "worker"))
             .await
             .unwrap();
         let fingerprint = runtime.unwrap().tools[0].saved_agent_fingerprint.unwrap();
@@ -431,7 +440,7 @@ async fn legacy_saved_agent_materialization_retains_no_editable_fingerprint_auth
     child["meta"]["frozen_definition_sha256"] = json!("12".repeat(32));
     let fixture = Fixture::with_outcomes(BTreeMap::from([((32, 42), child)]), vec![]);
     let (runtime, _) = fixture
-        .build(reference((32, 42), "agent", "worker"), true)
+        .build(reference((32, 42), "agent", "worker"))
         .await
         .unwrap();
     assert!(runtime.unwrap().tools[0].saved_agent_fingerprint.is_none());
@@ -443,7 +452,7 @@ async fn legacy_saved_agent_materialization_retains_no_editable_fingerprint_auth
 async fn saved_graph_entry_builds_descendant_catalog_and_real_nested_static_tool() {
     let fixture = Fixture::new(versions());
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -479,7 +488,7 @@ async fn saved_graph_entry_builds_descendant_catalog_and_real_nested_static_tool
 async fn ordinary_agent_entry_materializes_its_frozen_pipeline_attachments() {
     let fixture = Fixture::new(versions());
     let (runtime, skipped) = fixture
-        .build(reference((32, 42), "agent", "worker"), true)
+        .build(reference((32, 42), "agent", "worker"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -513,7 +522,7 @@ async fn saved_graph_entry_keeps_actual_descendant_presentations_across_graph_wr
     );
     let fixture = Fixture::new(input);
     let (runtime, skipped) = fixture
-        .build(reference((30, 40), "pipeline", "outer"), true)
+        .build(reference((30, 40), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -530,7 +539,7 @@ async fn saved_graph_entry_keeps_actual_descendant_presentations_across_graph_wr
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
-async fn mixed_graph_agent_cycle_is_refused_before_provider_effects() {
+async fn mixed_graph_agent_cycle_edge_is_dropped_before_provider_effects() {
     let mut input = versions();
     input.insert(
         (32, 42),
@@ -542,16 +551,34 @@ async fn mixed_graph_agent_cycle_is_refused_before_provider_effects() {
     );
     let fixture = Fixture::new(input);
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
     assert_eq!(
         *fixture.reads.lock().unwrap(),
         vec![(31, 41), (32, 42), (31, 41)]
     );
+}
+/// A bound violation (cycle, graph depth, ordinary-scope budget) deep inside a
+/// saved pipeline is not built: the pipeline `agent` node whose Agent would reach
+/// it runs without that one edge (`bind_scoped_agent`), so the outer pipeline is
+/// still offered and nothing past the bound is read, built or called.
+fn assert_outer_offered_without_the_offending_edge(
+    runtime: Option<&MaterializedApplicationRuntime>,
+    skipped: &[SkippedApplicationChild],
+) {
+    let runtime = runtime.expect("the outer pipeline is offered");
+    assert_eq!(
+        runtime
+            .tools
+            .iter()
+            .map(|tool| tool.alias.as_str())
+            .collect::<Vec<_>>(),
+        ["outer"]
+    );
+    assert!(skipped.is_empty(), "{skipped:?}");
 }
 fn two_scope_versions() -> BTreeMap<Identity, Value> {
     let mut input = versions();
@@ -588,7 +615,7 @@ async fn second_ordinary_graph_scope_produces_bounded_exact_activation_chain() {
         vec![tool_call_response(), final_tool_call_response()],
     );
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -633,7 +660,7 @@ async fn second_ordinary_graph_scope_produces_bounded_exact_activation_chain() {
     assert_eq!(fixture.models.lock().unwrap().len(), 2);
 }
 #[tokio::test]
-async fn third_ordinary_graph_scope_is_refused_before_provider_effects() {
+async fn third_ordinary_graph_scope_is_dropped_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (35, 45),
@@ -646,16 +673,15 @@ async fn third_ordinary_graph_scope_is_refused_before_provider_effects() {
     input.insert((36, 46), version("agent", "Leaf", vec![]));
     let fixture = Fixture::new(input);
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
     assert!(!fixture.reads.lock().unwrap().contains(&(36, 46)));
 }
 #[tokio::test]
-async fn second_scope_mixed_cycle_is_refused_before_provider_effects() {
+async fn second_scope_mixed_cycle_edge_is_dropped_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (34, 44),
@@ -667,16 +693,15 @@ async fn second_scope_mixed_cycle_is_refused_before_provider_effects() {
     );
     let fixture = Fixture::new(input);
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
     assert_eq!(fixture.reads.lock().unwrap().last(), Some(&(31, 41)));
 }
 #[tokio::test]
-async fn second_scope_mixed_graph_depth_is_refused_before_provider_effects() {
+async fn second_scope_mixed_graph_depth_is_dropped_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (30, 40),
@@ -696,23 +721,10 @@ async fn second_scope_mixed_graph_depth_is_refused_before_provider_effects() {
     );
     let fixture = Fixture::new(input);
     let (runtime, skipped) = fixture
-        .build(reference((29, 39), "pipeline", "outer"), true)
+        .build(reference((29, 39), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
-    assert!(fixture.models.lock().unwrap().is_empty());
-}
-#[tokio::test]
-async fn production_gate_keeps_ordinary_graph_descendants_closed() {
-    let fixture = Fixture::new(versions());
-    let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), false)
-        .await
-        .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
-    assert_eq!(*fixture.reads.lock().unwrap(), vec![(31, 41)]);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
@@ -725,7 +737,7 @@ async fn direct_graph_ask_user_remains_refused_under_scoped_materialization() {
     graph["meta"] = json!({"internal_tools":["ask_user"]});
     let fixture = Fixture::new(BTreeMap::from([((33, 43), graph)]));
     let (runtime, skipped) = fixture
-        .build(reference((33, 43), "pipeline", "ask"), true)
+        .build(reference((33, 43), "pipeline", "ask"))
         .await
         .unwrap();
     assert!(runtime.is_none());
@@ -733,13 +745,17 @@ async fn direct_graph_ask_user_remains_refused_under_scoped_materialization() {
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
-async fn legacy_plain_saved_graph_remains_materialized_without_scoped_activation() {
+async fn a_conversation_an_older_worker_paused_keeps_its_plain_saved_graph_without_scoped_activation()
+ {
     let fixture = Fixture::new(BTreeMap::from([(
         (33, 43),
         version("pipeline", PLAIN_GRAPH, vec![]),
     )]));
     let (runtime, skipped) = fixture
-        .build(reference((33, 43), "pipeline", "plain"), false)
+        .build_continuing(
+            reference((33, 43), "pipeline", "plain"),
+            ApplicationContinuation::LegacyUnscoped,
+        )
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -759,7 +775,7 @@ fn text_response(text: &str) -> Response<Body> {
 async fn rebuilt_saved_graph_entry_consumes_real_static_family_without_replaying_tick() {
     let original_fixture = Fixture::new(versions());
     let (runtime, skipped) = original_fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -781,7 +797,7 @@ async fn rebuilt_saved_graph_entry_consumes_real_static_family_without_replaying
         .unwrap();
     let replacement = Fixture::with_outcome(versions(), text_response("ordinary resumed"));
     let (runtime, skipped) = replacement
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -831,7 +847,7 @@ async fn second_scope_fresh_builder_resumes_exact_static_leaf_and_reuses_complet
         vec![tool_call_response(), final_tool_call_response()],
     );
     let (runtime, skipped) = original_fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -859,7 +875,7 @@ async fn second_scope_fresh_builder_resumes_exact_static_leaf_and_reuses_complet
         ],
     );
     let (runtime, skipped) = replacement
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -919,7 +935,7 @@ async fn second_scope_proof_refuses_changed_start_child_edge_and_frame_order() {
         vec![tool_call_response(), final_tool_call_response()],
     );
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -1017,7 +1033,7 @@ async fn second_scope_resume_refuses_inner_frozen_graph_drift_before_leaf_execut
         vec![tool_call_response(), final_tool_call_response()],
     );
     let (runtime, skipped) = fixture
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);
@@ -1056,7 +1072,7 @@ async fn second_scope_resume_refuses_inner_frozen_graph_drift_before_leaf_execut
     let (_, rebuilt) = replacement.saved_tool_runtimes_for((33, 43)).await;
     assert!(rebuilt.checkpoint_catalog() != recorded.catalog());
     let (runtime, skipped) = replacement
-        .build(reference((31, 41), "pipeline", "outer"), true)
+        .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
     assert_eq!(skipped, []);

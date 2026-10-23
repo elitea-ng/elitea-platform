@@ -1264,15 +1264,13 @@ impl AgentEventProjector {
             }
             let static_pause = super::application_pipeline::static_pipeline_tool_pause(event)
                 .map_err(|_| AgentEventProjectionError::invalid_state())?;
-            let mut batch = self.project_descendant_event(event)?;
+            let batch = self.project_descendant_event(event)?;
             if let Some(pause) = static_pause {
+                // The turn ends at EOS as a completed result that carries the bounded
+                // inventory (`finish_after_eos`), as a root pipeline's static pause does;
+                // Main stores it on that message and continues from it.
                 self.collect_static_tool_inventory(&pause)?;
-                // The lifecycle stops on Paused at EOS. Emit the bounded root inventory
-                // during the ordered stream so Main persists it before the waiting receipt.
-                batch.push(self.event("full_message",&Value::String(STATIC_PAUSE_MESSAGE.to_owned()),None,
-                    &json!({"thread_id":self.context.thread_id,"chat_project_id":self.context.chat_project_id,
-                        "should_continue":true,"pipeline_static_tools_v1":{"revision":1,
-                            "pauses":self.static_tool_pauses.values().cloned().collect::<Vec<_>>()}}),event.timestamp)?)?;
+                self.pipeline_result = Some(STATIC_PAUSE_MESSAGE.to_owned());
             }
             return Ok(batch);
         }
@@ -1576,9 +1574,14 @@ impl AgentEventProjector {
                 execution_finished: false,
                 context_info: Value::Null,
             };
+            // Only the root owns the sole result-bearing `full_message`: the
+            // publisher refuses a second one after the first durable ACK, and
+            // the root emits its own (with the static inventory or at EOS).
             for event in descendant
                 .projector
                 .finish_after_eos(completion, child_event.timestamp)?
+                .into_iter()
+                .filter(|event| event.r#type != "full_message")
             {
                 batch.push(event)?;
             }
@@ -1777,7 +1780,7 @@ impl AgentEventProjector {
             && self
                 .descendants
                 .get(call_id)
-                .is_some_and(|child| child.projector.is_paused()))
+                .is_some_and(|child| child.projector.is_suspended()))
             || self
                 .descendants
                 .values()
@@ -2521,13 +2524,25 @@ impl AgentEventProjector {
         self.node_recovery_paused
     }
 
+    /// Whether the turn stops on a pause card. This Agent's own static
+    /// tool inventory is not one: it ends the turn as a completed result
+    /// (`has_static_tool_pause`). A descendant's still pauses it.
     pub(crate) fn is_paused(&self) -> bool {
         matches!(self.state, ProjectionState::Paused)
-            || !self.static_tool_pauses.is_empty()
             || self
                 .descendants
                 .values()
-                .any(|descendant| descendant.projector.is_paused())
+                .any(|descendant| descendant.projector.is_suspended())
+    }
+
+    fn is_suspended(&self) -> bool {
+        self.is_paused() || self.has_static_tool_pause()
+    }
+
+    /// Whether a tool-invoked saved pipeline of this Agent stopped at a static
+    /// pause. Main refuses a result that mixes it with a pause card.
+    pub(crate) fn has_static_tool_pause(&self) -> bool {
+        !self.static_tool_pauses.is_empty()
     }
 
     fn project_model_event(
@@ -3423,18 +3438,31 @@ impl AgentEventProjector {
         completion: CompletedAgentBrowserOutput,
         occurred_at: DateTime<Utc>,
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
-        let text_checkpoint = matches!(
-            self.state,
-            ProjectionState::PrinterComplete | ProjectionState::StaticComplete
-        );
+        // A static tool pause leaves its pipeline call open and the Agent's
+        // turn unanswered: the result is the static pause and its inventory.
+        let static_tools = self.has_static_tool_pause();
+        let text_checkpoint = static_tools
+            || matches!(
+                self.state,
+                ProjectionState::PrinterComplete | ProjectionState::StaticComplete
+            );
         let output_limited = match &self.state {
-            ProjectionState::Complete(turn) => turn.output_limited,
+            ProjectionState::Complete(turn) => turn.output_limited && !static_tools,
             ProjectionState::PrinterComplete | ProjectionState::StaticComplete => false,
+            ProjectionState::Active(_) | ProjectionState::Started if static_tools => false,
             _ => return Err(AgentEventProjectionError::invalid_state()),
         };
-        if !self.active_tools.is_empty() && !matches!(self.state, ProjectionState::StaticComplete) {
+        if !self.active_tools.is_empty()
+            && !static_tools
+            && !matches!(self.state, ProjectionState::StaticComplete)
+        {
             return Err(AgentEventProjectionError::invalid_state());
         }
+        let static_inventory = if static_tools {
+            json!({"revision": 1, "pauses": self.static_tool_pauses.values().cloned().collect::<Vec<_>>()})
+        } else {
+            Value::Null
+        };
         validate_public_text(&completion.thread_id)?;
         let CompletedAgentBrowserOutput {
             content,
@@ -3547,6 +3575,7 @@ impl AgentEventProjector {
                 "invoked_skills": self.context.applied_skills,
                 "result_ref_v1": result_ref,
                 "pipeline_static_v1": self.static_pause_proof,
+                "pipeline_static_tools_v1": static_inventory,
             }),
             occurred_at,
         )?)?;
@@ -3578,14 +3607,13 @@ impl AgentEventProjector {
                 .ok_or_else(AgentEventProjectionError::invalid_state)?
                 .remove("result_ref_v1");
         }
-        if response_metadata
-            .get("pipeline_static_v1")
-            .is_some_and(Value::is_null)
-        {
-            response_metadata
-                .as_object_mut()
-                .ok_or_else(AgentEventProjectionError::invalid_state)?
-                .remove("pipeline_static_v1");
+        for key in ["pipeline_static_v1", "pipeline_static_tools_v1"] {
+            if response_metadata.get(key).is_some_and(Value::is_null) {
+                response_metadata
+                    .as_object_mut()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?
+                    .remove(key);
+            }
         }
         // What the turn could not serve rides every event Main persists a turn
         // from: its start, a pause (human-in-the-loop or authorization) and its

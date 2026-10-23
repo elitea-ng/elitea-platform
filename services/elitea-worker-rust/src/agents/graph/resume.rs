@@ -642,34 +642,7 @@ impl PipelineContinuationDecision {
                 if let Ok(binding) =
                     pipeline_application_event_binding(interrupt, root_agent_name, thread_id)
                 {
-                    let checkpoint = checkpointer
-                        .load(thread_id)
-                        .await
-                        .map_err(|_| PipelineResumeError::dependency())?
-                        .ok_or_else(PipelineResumeError::stale)?;
-                    if checkpoint.thread_id != thread_id
-                        || checkpoint.checkpoint_id != binding.checkpoint_id()
-                        || checkpoint.pending_nodes.as_slice() != [binding.pending_node_name()]
-                    {
-                        return Err(PipelineResumeError::stale());
-                    }
-                    for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
-                        let checkpoint = checkpointer
-                            .load(nested.thread_id())
-                            .await
-                            .map_err(|_| PipelineResumeError::dependency())?
-                            .ok_or_else(PipelineResumeError::stale)?;
-                        let next = binding
-                            .nested_checkpoints()
-                            .get(index + 1)
-                            .map_or(binding.node_name(), |next| next.node_name());
-                        if checkpoint.thread_id != nested.thread_id()
-                            || checkpoint.checkpoint_id != nested.checkpoint_id()
-                            || checkpoint.pending_nodes.as_slice() != [next]
-                        {
-                            return Err(PipelineResumeError::stale());
-                        }
-                    }
+                    verify_bound_checkpoints(checkpointer, &binding, thread_id).await?;
                     let ResolvedDirectHitlStart::Nested(decisions) =
                         application
                             .resolve(session)
@@ -717,6 +690,49 @@ impl PipelineContinuationDecision {
             }
         }
     }
+}
+
+/// The pause's checkpoint and every nested one it names are still the bound
+/// revisions (or their one `Resuming` receipt revision): nothing advanced.
+async fn verify_bound_checkpoints(
+    checkpointer: &dyn Checkpointer,
+    binding: &crate::agents::events::PipelineApplicationHitlEventBinding,
+    thread_id: &str,
+) -> Result<(), PipelineResumeError> {
+    use crate::agents::pipeline::scope_receipts::continues_pause_checkpoint;
+    let checkpoint = checkpointer
+        .load(thread_id)
+        .await
+        .map_err(|_| PipelineResumeError::dependency())?
+        .ok_or_else(PipelineResumeError::stale)?;
+    if checkpoint.thread_id != thread_id
+        || !continues_pause_checkpoint(
+            &checkpoint,
+            binding.checkpoint_id(),
+            binding.pending_node_name(),
+        )
+        || checkpoint.pending_nodes.as_slice() != [binding.pending_node_name()]
+    {
+        return Err(PipelineResumeError::stale());
+    }
+    for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
+        let checkpoint = checkpointer
+            .load(nested.thread_id())
+            .await
+            .map_err(|_| PipelineResumeError::dependency())?
+            .ok_or_else(PipelineResumeError::stale)?;
+        let next = binding
+            .nested_checkpoints()
+            .get(index + 1)
+            .map_or(binding.node_name(), |next| next.node_name());
+        if checkpoint.thread_id != nested.thread_id()
+            || !continues_pause_checkpoint(&checkpoint, nested.checkpoint_id(), next)
+            || checkpoint.pending_nodes.as_slice() != [next]
+        {
+            return Err(PipelineResumeError::stale());
+        }
+    }
+    Ok(())
 }
 
 /// The cards of one pipeline Application pause, as the browser saw them.

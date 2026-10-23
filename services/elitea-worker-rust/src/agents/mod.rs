@@ -44,7 +44,7 @@ mod application_pipeline_tests;
 #[cfg(test)]
 mod approved_calls_pg_tests;
 #[cfg(test)]
-mod assembly_tests;
+pub(crate) mod assembly_tests;
 #[cfg(test)]
 mod client_frames_tests;
 #[cfg(test)]
@@ -62,7 +62,7 @@ mod ordinary_tests;
 #[cfg(test)]
 mod pause_frames_tests;
 #[cfg(test)]
-mod pipeline_tests;
+pub(crate) mod pipeline_tests;
 #[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]

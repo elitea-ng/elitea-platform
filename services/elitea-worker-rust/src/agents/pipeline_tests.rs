@@ -56,6 +56,10 @@ mod effect_pg_tests;
 mod model_scope_tests;
 #[path = "pipeline_restart_pg_tests.rs"]
 pub(super) mod restart_pg_tests;
+#[path = "pipeline_scoped_pg_tests.rs"]
+mod scoped_pg_tests;
+#[path = "pipeline_scoped_tests.rs"]
+pub(crate) mod scoped_tests;
 
 const PIPELINE: &str = r"
 state:
@@ -1302,6 +1306,21 @@ fn private_pipeline_session_id(request: &super::request::AgentExecutionRequest) 
     .to_owned()
 }
 
+/// The deterministic id of the graph call that `node` of `request` makes at `step`.
+fn graph_call_id(
+    request: &super::request::AgentExecutionRequest,
+    node: &str,
+    step: usize,
+) -> String {
+    let profile = PipelineExecutionProfile::validate(request, false).expect("pipeline profile");
+    super::pipeline::scoped_applications::scoped_graph_call_id(
+        &private_pipeline_session_id(request),
+        node,
+        step,
+        profile.definition().definition_digest(),
+    )
+}
+
 fn resume_request(interrupt_id: &str) -> super::request::AgentExecutionRequest {
     let mut request = pipeline_request();
     request.payload.should_continue = true;
@@ -1739,7 +1758,7 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
         assert!(
             path[0]["call_id"]
                 .as_str()
-                .is_some_and(|call_id| call_id.starts_with("pipeline:Agent1:"))
+                .is_some_and(|call_id| call_id.starts_with("pipeline-v2:Agent1:"))
         );
     }
     for event in &browser {
@@ -1799,7 +1818,7 @@ async fn direct_saved_agent_node_resumes_exact_descendant_confirmation_from_grap
         public["response_metadata"]["parent_agent_path"],
         json!([{
             "name": "release-agent",
-            "call_id": "pipeline:delegate:0",
+            "call_id": graph_call_id(&request, "delegate", 0),
             "sibling_ordinal": 1,
         }])
     );
@@ -1812,7 +1831,10 @@ async fn direct_saved_agent_node_resumes_exact_descendant_confirmation_from_grap
         pipeline_application_event_binding(&graph_interrupt, "elitea-agent", &private_thread)
             .expect("pipeline Application checkpoint binding");
     assert_eq!(binding.node_name(), "delegate");
-    assert_eq!(binding.application_call_id(), "pipeline:delegate:0");
+    assert_eq!(
+        binding.application_call_id(),
+        graph_call_id(&request, "delegate", 0)
+    );
     assert_eq!(binding.interrupt_ids(), [interrupt_id.as_str()]);
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
 
@@ -1866,11 +1888,11 @@ async fn pipeline_agent_node_resumes_parallel_nested_confirmations_without_ident
         paths,
         HashSet::from([
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_first", "sibling_ordinal": 1},
             ]),
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_last", "sibling_ordinal": 2},
             ]),
         ])
@@ -2143,11 +2165,11 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
         paths,
         HashSet::from([
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_first", "sibling_ordinal": 1},
             ]),
             json!([
-                {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+                {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
                 {"name": "name-resolver", "call_id": "call_last", "sibling_ordinal": 2},
             ]),
         ])
@@ -2168,7 +2190,10 @@ async fn run_pipeline_agent_node_nested_authorization(authorize: bool) {
     let binding =
         pipeline_application_event_binding(&graph_interrupt, "elitea-agent", &private_thread)
             .expect("pipeline Application authorization checkpoint binding");
-    assert_eq!(binding.application_call_id(), "pipeline:delegate:0");
+    assert_eq!(
+        binding.application_call_id(),
+        graph_call_id(&request, "delegate", 0)
+    );
     assert_eq!(
         binding
             .interrupt_ids()
@@ -2286,14 +2311,14 @@ async fn pipeline_agent_node_resumes_parallel_mixed_sensitive_and_authorization_
     assert_eq!(
         sensitive["response_metadata"]["parent_agent_path"],
         json!([
-            {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+            {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
             {"name": "sensitive-resolver", "call_id": "call_sensitive_child", "sibling_ordinal": 1},
         ])
     );
     assert_eq!(
         authorization["response_metadata"]["parent_agent_path"],
         json!([
-            {"name": "release-agent", "call_id": "pipeline:delegate:0", "sibling_ordinal": 1},
+            {"name": "release-agent", "call_id": graph_call_id(&request, "delegate", 0), "sibling_ordinal": 1},
             {"name": "auth-resolver", "call_id": "call_auth_child", "sibling_ordinal": 2},
         ])
     );
@@ -2507,7 +2532,7 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
         .expect("saved-pipeline wrapper start");
     assert_eq!(
         wrapper_start["response_metadata"]["parent_agent_call_id"],
-        "pipeline:delegate:0"
+        graph_call_id(&request, "delegate", 0)
     );
     assert_eq!(
         wrapper_start["response_metadata"]["metadata"]["toolkit_type"],
@@ -2524,13 +2549,13 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
         child_model["response_metadata"]["parent_agent_path"],
         json!([{
             "name": "release-agent",
-            "call_id": "pipeline:delegate:0",
+            "call_id": graph_call_id(&request, "delegate", 0),
             "sibling_ordinal": 1,
         }])
     );
     assert!(browser.iter().any(|event| {
         event["type"] == "agent_tool_end"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == graph_call_id(&request, "delegate", 0)
     }));
     assert!(
         browser
@@ -2569,12 +2594,12 @@ async fn saved_data_pipeline_emits_wrapper_progress_without_an_llm_node() {
     let browser = collect_pipeline_completion(invocation).await;
     assert!(browser.iter().any(|event| {
         event["type"] == "agent_tool_start"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == graph_call_id(&request, "delegate", 0)
             && event["response_metadata"]["metadata"]["toolkit_type"] == "pipeline"
     }));
     assert!(browser.iter().any(|event| {
         event["type"] == "agent_tool_end"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == graph_call_id(&request, "delegate", 0)
     }));
     assert!(
         browser
@@ -2596,6 +2621,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
     .with_runtime_clients(platform, model_facade);
     let mut request = agent_pipeline_request("release-agent", "pipeline");
     let private_thread = private_pipeline_session_id(&request);
+    let delegate_call_id = graph_call_id(&request, "delegate", 0);
     let invocation = assembler
         .assemble(authorized(&request))
         .await
@@ -2607,7 +2633,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
         .expect("nested pipeline HITL card");
     let expected_path = json!([{
         "name": "release-agent",
-        "call_id": "pipeline:delegate:0",
+        "call_id": delegate_call_id,
         "sibling_ordinal": 1,
     }]);
     assert_eq!(
@@ -2616,7 +2642,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
     );
     assert_eq!(
         interrupt["response_metadata"]["parent_agent_call_id"],
-        "pipeline:delegate:0"
+        delegate_call_id
     );
     assert_eq!(
         interrupt["response_metadata"]["hitl_interrupts"][0]["parent_agent_path"],
@@ -2658,7 +2684,7 @@ async fn saved_pipeline_hitl_projects_under_the_exact_wrapper_and_resumes() {
     );
     assert!(resumed.iter().any(|event| {
         event["type"] == "agent_tool_end"
-            && event["response_metadata"]["tool_run_id"] == "pipeline:delegate:0"
+            && event["response_metadata"]["tool_run_id"] == delegate_call_id
     }));
     assert_eq!(calls.load(Ordering::Acquire), 4);
 }
@@ -2697,7 +2723,7 @@ async fn saved_pipeline_sensitive_llm_keeps_call_identity_and_wrapper_hierarchy(
         .expect("nested sensitive-tool card");
     let expected_path = json!([{
         "name": "release-agent",
-        "call_id": "pipeline:delegate:0",
+        "call_id": graph_call_id(&request, "delegate", 0),
         "sibling_ordinal": 1,
     }]);
     assert_eq!(

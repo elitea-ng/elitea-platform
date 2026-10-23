@@ -1324,7 +1324,8 @@ async fn activate_pipeline_postgres(
         Arc::clone(&state_writer_lease),
     )
     .await
-    .map_err(|error| session_activation_error(&error))?;
+    .map_err(|error| session_activation_error(&error))?
+    .with_replay_equivalence(super::pipeline::scoped_applications::canonical_replay_form);
     let checkpointer = PostgresCheckpointer::activate(
         pool.clone(),
         checkpoint_writer,
@@ -1783,6 +1784,16 @@ where
             .map_err(|error| completed_output_error(&error))
     }
 
+    async fn select_static_pause(
+        mut self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        // The turn waits for the static pause to be continued: its work so far
+        // is published as at any pause.
+        self.paused().await?;
+        CompletedAgentBrowserOutput::ordinary(String::new(), self.thread_id)
+            .map_err(|error| completed_output_error(&error))
+    }
+
     async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
         if let Some(workspace) = &self.workspace {
             workspace
@@ -1808,6 +1819,14 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
         CompletedAgentBrowserOutput::ordinary(PIPELINE_COMPLETED_CONTENT.to_owned(), self.thread_id)
             .map_err(|error| completed_output_error(&error))
+    }
+
+    /// A pipeline root reports its own static pause through its graph result
+    /// (`pipeline_static_v1`), never through an Agent's static tool inventory.
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
     }
 }
 
@@ -2034,7 +2053,7 @@ async fn resolve_pipeline_start(
                     plan.session_id.as_ref(),
                     state.checkpointer.as_ref(),
                     &binding,
-                    &events,
+                    events_through_pause(&events, &interrupt.id)?,
                     decisions,
                 )
                 .await?;
@@ -2073,6 +2092,23 @@ async fn resolve_pipeline_start(
                 events,
             }) = application
             {
+                // Every paused sibling is decided in one resume, on either resolver: a partial
+                // set would run the approved siblings and then fail mid-stream on the rest.
+                let expected = binding
+                    .interrupt_ids()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let submitted = decisions
+                    .iter()
+                    .map(ResolvedDirectHitlDecision::interrupt_id)
+                    .collect::<std::collections::BTreeSet<_>>();
+                if submitted != expected {
+                    return Err(NativeAgentAssemblyError::new(
+                        NativeAgentAssemblyErrorCode::InvalidInput,
+                        "the checkpointed pipeline decision was rejected",
+                    ));
+                }
                 let card = decisions
                     .first()
                     .map(|decision| decision.interrupt_id().to_owned())
@@ -2083,27 +2119,12 @@ async fn resolve_pipeline_start(
                             plan.session_id.as_ref(),
                             state.checkpointer.as_ref(),
                             &binding,
-                            &events,
+                            events_through_pause(&events, &pause_id)?,
                             decisions,
                         )
                         .await?;
                 } else {
-                    // Preserve the legacy path's all-decisions rule and coordinator ownership.
-                    let expected = binding
-                        .interrupt_ids()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<std::collections::BTreeSet<_>>();
-                    let submitted = decisions
-                        .iter()
-                        .map(ResolvedDirectHitlDecision::interrupt_id)
-                        .collect::<std::collections::BTreeSet<_>>();
-                    if submitted != expected {
-                        return Err(NativeAgentAssemblyError::new(
-                            NativeAgentAssemblyErrorCode::InvalidInput,
-                            "the checkpointed pipeline decision was rejected",
-                        ));
-                    }
+                    // The legacy resolver keeps its coordinator ownership.
                     let coordinator = application_resume.ok_or_else(invalid_configuration)?;
                     install_nested_application_resume(
                         &events,
@@ -3473,6 +3494,23 @@ fn checkpoint_activation_error(error: &PostgresCheckpointError) -> NativeAgentAs
         }
     };
     NativeAgentAssemblyError::new(code, "the claim-bound pipeline checkpoint is unavailable")
+}
+
+/// The session a scoped continuation of the pause `pause_id` is rebuilt from:
+/// every event up to and including that pause. A dead continuation of this
+/// execution after it (`dispatch_journal::continuation_pause`) is set aside, as
+/// an ordinary root sets its own aside (`live_nested_events`). Its forwarded
+/// child events are not the child's history: a persisted result would make the
+/// decided call look finished. The journal facts are already in the decisions.
+fn events_through_pause<'a>(
+    events: &'a [adk_rust::Event],
+    pause_id: &str,
+) -> Result<&'a [adk_rust::Event], NativeAgentAssemblyError> {
+    events
+        .iter()
+        .position(|event| event.id == pause_id)
+        .map(|index| &events[..=index])
+        .ok_or_else(invalid_configuration)
 }
 
 fn pipeline_resume_error(error: &PipelineResumeError) -> NativeAgentAssemblyError {

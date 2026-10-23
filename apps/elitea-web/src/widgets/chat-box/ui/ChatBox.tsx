@@ -1,4 +1,4 @@
-import { useStaticPauseCards } from './StaticPipelineContinueControls';
+import { sendTypedStaticContinuation, useStaticPauseCards } from './StaticPipelineContinueControls';
 import { stopChatGeneration } from './hooks/useEditorTestTransport';
 /**
  * ChatBox — composition root for the chat experience. Composes entities/conversation
@@ -265,12 +265,20 @@ const ChatBoxInner = memo(function ChatBox({
     handleClear,
   } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated });
 
+  const staticPause = useStaticPauseCards({ messages, setChatHistory: data.setChatHistory, projectId, conversationUuid, continueExecution: continueStreamedExecution, editorTest, isStreaming });
+  // A message typed while an authored pipeline pause is current continues that
+  // pause with the text (the durable static continuation), not a new turn.
+  const sendNow = useCallback((question: string) => {
+    if (!staticPause) return handleSend(question);
+    void sendTypedStaticContinuation(staticPause, question, () => chatInputRef.current?.reset?.());
+  }, [staticPause, handleSend]);
+
   // A17: while a turn is open the composer QUEUES instead of sending; the queue
   // drains FIFO on settle down this same `sendQuestion` path, survives Stop and
   // a reload, and stamps its deliveries so the transcript can label them.
   const queued = useChatBoxQueuedMessages({
     conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming,
-    onSendNow: handleSend, send: handlers.sendQuestion, onConversationCreated,
+    onSendNow: sendNow, send: handlers.sendQuestion, onConversationCreated,
   });
 
   // Imperative handle (stable via refs, so identity never churns)
@@ -290,7 +298,6 @@ const ChatBoxInner = memo(function ChatBox({
     stopAll: stopGeneration,
   }), [handleClearRef, stopGeneration]);
 
-  const staticPause = useStaticPauseCards({ messages, setChatHistory: data.setChatHistory, projectId, conversationUuid, continueExecution: continueStreamedExecution, editorTest, isStreaming });
 
   // Early return
   if (hidden) return null;

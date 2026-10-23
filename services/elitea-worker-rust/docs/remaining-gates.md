@@ -834,7 +834,7 @@ Those acceptance gates remain open.
 The later outer static-scope assembly passes 1,539 tests, with zero failures and the same 55 ignored integrations.
 The reviewed materialization assembly passes 1,548 tests on 2026-10-04, with zero failures and the same 55 ignored integrations.
 Formatting, strict Clippy across all targets and features, and documentation with warnings denied pass.
-Scoped continuation admission remains disabled. Deeper activation chains and deployed replacement recovery remain open.
+Scoped continuation admission was later turned on for every graph conversation (Point 5 Wave 2a-1, `docs/source-mapping/scoped-application-continuation-admitted-20261012.md`); deeper activation chains remain open.
 Separate selections pass 40 PostgreSQL integrations, six Docker integrations, and one native mTLS transfer integration.
 Both required graph-receipt tests and Main shared-store conformance also pass.
 Seven Kubernetes integrations and one manual timing measurement remain. These component results do not close deployed product acceptance.

@@ -76,6 +76,15 @@ where
         }
     }
 
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        match self {
+            Self::Direct(completion) => completion.select_static_pause().await,
+            Self::Pipeline(completion) => completion.select_static_pause().await,
+        }
+    }
+
     async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
         match self {
             Self::Direct(completion) => completion.paused().await,

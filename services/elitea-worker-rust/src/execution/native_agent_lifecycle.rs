@@ -514,6 +514,15 @@ where
             return Box::pin(run.close_no_ack("agent_lifecycle.node_recovery_suspended", false))
                 .await;
         }
+        // A static tool pause ends the turn as a completed result, a pause card as a
+        // paused one. One model step that stops on both (a static-pausing pipeline tool
+        // and a sensitive tool in the same batch) has no single terminal Main can store
+        // and continue (Main refuses the mix), so the turn ends with the registered
+        // unsupported-capability failure: settled, acknowledged and readable, never a
+        // half-published pause.
+        NativeStreamOutcome::Paused if projector.has_static_tool_pause() => {
+            Some(RuntimeFailureKind::UnsupportedCapability)
+        }
         NativeStreamOutcome::Paused => {
             let pause = match pauses.finish() {
                 Ok(pause) => pause,
@@ -593,8 +602,10 @@ where
 
     if failure.is_none() && matches!(successful_terminal, FreshAgentTerminalSelection::Completed) {
         tracing::info!(event = "agent_completion_selection_started");
-        let (next_run, completion_result) =
-            Box::pin(run.select_native_completion(completion_selector)).await;
+        let (next_run, completion_result) = Box::pin(
+            run.select_native_completion(completion_selector, projector.has_static_tool_pause()),
+        )
+        .await;
         run = next_run;
         let completion = match completion_result {
             Ok(Ok(completion)) => completion,

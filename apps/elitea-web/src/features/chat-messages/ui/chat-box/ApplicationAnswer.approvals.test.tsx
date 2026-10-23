@@ -127,7 +127,7 @@ describe('ApplicationAnswer approvals placement', () => {
     const onContinue = vi.fn();
     renderAnswer(answerWith([]), vi.fn(), { staticPause: { pause, busy: false, onContinue } });
     const card = screen.getByTestId('chat-static-pause-panel');
-    expect(card.textContent).toContain('tick');
+    expect(card.textContent).toContain('Execution paused at static interrupt. Choose the action to proceed or type the continuation message in chat.');
     expect(card.textContent).not.toMatch(/before|root|child/);
     expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.click(screen.getByTestId('chat-static-pause-continue-button'));
